@@ -1,18 +1,20 @@
-"""Unit tests for semantic_query_rewrite() in search/service.py.
+"""Unit tests for async_semantic_query_rewrite() in search/service.py.
 
 All tests are pure-unit: no DB, no HTTP client, no real OpenAI call.
-OpenAI is mocked at the openai_client / call_openai_with_retry layer.
+OpenAI is mocked at the get_async_openai_client / async_call_openai_with_retry
+layer; DB-backed helpers get a mock AsyncSession whose execute() routes by
+the selected column.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from backend.core.config import settings
-from backend.search.service import semantic_query_rewrite
+from backend.search.service import async_semantic_query_rewrite
 
 
 # ---------------------------------------------------------------------------
@@ -37,58 +39,70 @@ def _make_openai_response(content: str) -> SimpleNamespace:
     )
 
 
+def _patch_rewrite_layer():
+    """Patch the async client factory and retry helper used by the rewrite.
+
+    Returns the context managers as a tuple suitable for ``with (...)``.
+    The retry helper is an AsyncMock because production code awaits it.
+    """
+    return (
+        patch("backend.search.service.get_async_openai_client"),
+        patch(
+            "backend.search.service.async_call_openai_with_retry",
+            new_callable=AsyncMock,
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Happy-path tests
 # ---------------------------------------------------------------------------
 
 class TestSemanticQueryRewriteHappyPath:
-    """semantic_query_rewrite() returns a clean English rewrite on success."""
+    """async_semantic_query_rewrite() returns a clean English rewrite on success."""
 
-    def test_returns_english_feature_rewrite(self):
+    @pytest.mark.asyncio
+    async def test_returns_english_feature_rewrite(self):
         """Basic happy path: LLM returns a clean single-line string."""
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             mock_retry.return_value = _make_openai_response(
                 "language detection multilingual bot settings"
             )
             mock_client.return_value = MagicMock()
 
-            result = semantic_query_rewrite(
+            result = await async_semantic_query_rewrite(
                 "Почему бот отвечает только по-английски?",
                 api_key="sk-test",
             )
 
         assert result == "language detection multilingual bot settings"
 
-    def test_strips_surrounding_whitespace(self):
+    @pytest.mark.asyncio
+    async def test_strips_surrounding_whitespace(self):
         """Trailing/leading whitespace in LLM response is stripped."""
-        with (
-            patch("backend.search.service.get_openai_client"),
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch, retry_patch as mock_retry:
             mock_retry.return_value = _make_openai_response(
                 "  widget troubleshooting embed setup  "
             )
-            result = semantic_query_rewrite(
+            result = await async_semantic_query_rewrite(
                 "Мой виджет завис и не реагирует на клики",
                 api_key="sk-test",
             )
 
         assert result == "widget troubleshooting embed setup"
 
-    def test_prompt_contains_user_question(self):
+    @pytest.mark.asyncio
+    async def test_prompt_contains_user_question(self):
         """The prompt sent to OpenAI includes the original user question."""
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             inner_client = MagicMock()
             mock_client.return_value = inner_client
             mock_retry.return_value = _make_openai_response("relevance guard topic configuration")
 
-            semantic_query_rewrite(
+            await async_semantic_query_rewrite(
                 "How do I stop the bot from going off-topic?",
                 api_key="sk-test",
             )
@@ -104,40 +118,38 @@ class TestSemanticQueryRewriteHappyPath:
         assert "How do I stop the bot from going off-topic?" in content
         assert "FEATURE or SETTING" in content  # prompt focuses on feature terminology
 
-    def test_curly_braces_in_query_do_not_crash(self):
+    @pytest.mark.asyncio
+    async def test_curly_braces_in_query_do_not_crash(self):
         """User input with {braces} must not raise KeyError from .format()."""
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             mock_client.return_value = MagicMock()
             mock_retry.return_value = _make_openai_response("feature settings config")
 
             # Would raise KeyError if .format() were used on the prompt template
-            result = semantic_query_rewrite(
+            result = await async_semantic_query_rewrite(
                 "What is {name} and {0} doing in my bot?",
                 api_key="sk-test",
             )
 
         assert result == "feature settings config"
 
-    def test_uses_gpt4o_mini(self):
+    @pytest.mark.asyncio
+    async def test_uses_gpt4o_mini(self):
         """Uses the configured query_rewrite_model for the rewrite."""
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             mock_retry.return_value = _make_openai_response("knowledge base indexing RAG retrieval")
             inner = MagicMock()
             mock_client.return_value = inner
 
-            semantic_query_rewrite(
+            await async_semantic_query_rewrite(
                 "Почему бот не находит ответ, хотя я загрузил документ?",
                 api_key="sk-test",
             )
 
             call_args = mock_retry.call_args
-            # call_openai_with_retry("label", lambda: ...) — extract lambda and call it
+            # async_call_openai_with_retry("label", lambda: ...) — extract lambda
             label, fn = call_args[0]
             assert label == "semantic_query_rewrite"
             # Call the lambda to trigger create() and inspect the model
@@ -164,22 +176,21 @@ class TestSemanticQueryRewriteDialogContext:
         fn()
         return inner_client.chat.completions.create.call_args[1]["messages"][0]["content"]
 
-    def test_prompt_includes_dialog_and_resolution_instruction(self):
+    @pytest.mark.asyncio
+    async def test_prompt_includes_dialog_and_resolution_instruction(self):
         dialog = (
             "User: как подключить домен?\n"
             "Assistant: Настройте делегацию. Хотите помогу проверить?"
         )
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             inner = MagicMock()
             mock_client.return_value = inner
             mock_retry.return_value = _make_openai_response(
                 "проверка настройки делегации домена"
             )
 
-            result = semantic_query_rewrite(
+            result = await async_semantic_query_rewrite(
                 "да, как проверить?",
                 api_key="sk-test",
                 dialog_context=dialog,
@@ -193,16 +204,15 @@ class TestSemanticQueryRewriteDialogContext:
         assert "self-contained, ignore the conversation" in content
         assert "FEATURE or SETTING" in content
 
-    def test_prompt_without_dialog_context_is_unchanged(self):
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+    @pytest.mark.asyncio
+    async def test_prompt_without_dialog_context_is_unchanged(self):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             inner = MagicMock()
             mock_client.return_value = inner
             mock_retry.return_value = _make_openai_response("widget setup embed")
 
-            semantic_query_rewrite(
+            await async_semantic_query_rewrite(
                 "как настроить виджет",
                 api_key="sk-test",
                 dialog_context=None,
@@ -212,15 +222,14 @@ class TestSemanticQueryRewriteDialogContext:
         assert content.startswith("A customer asked a product support chatbot:")
         assert "conversation" not in content
 
-    def test_curly_braces_in_dialog_do_not_crash(self):
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+    @pytest.mark.asyncio
+    async def test_curly_braces_in_dialog_do_not_crash(self):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             mock_client.return_value = MagicMock()
             mock_retry.return_value = _make_openai_response("feature settings config")
 
-            result = semantic_query_rewrite(
+            result = await async_semantic_query_rewrite(
                 "yes {please}",
                 api_key="sk-test",
                 dialog_context="Assistant: use {placeholders} like {0}",
@@ -234,79 +243,81 @@ class TestSemanticQueryRewriteDialogContext:
 # ---------------------------------------------------------------------------
 
 class TestSemanticQueryRewriteFailures:
-    """semantic_query_rewrite() returns None gracefully on all failures."""
+    """async_semantic_query_rewrite() returns None gracefully on all failures."""
 
-    def test_returns_none_on_openai_exception(self):
+    @pytest.mark.asyncio
+    async def test_returns_none_on_openai_exception(self):
         """Any OpenAI exception results in None (never propagates)."""
         with (
-            patch("backend.search.service.get_openai_client"),
+            patch("backend.search.service.get_async_openai_client"),
             patch(
-                "backend.search.service.call_openai_with_retry",
+                "backend.search.service.async_call_openai_with_retry",
+                new_callable=AsyncMock,
                 side_effect=Exception("openai timeout"),
             ),
         ):
-            result = semantic_query_rewrite("some question", api_key="sk-test")
+            result = await async_semantic_query_rewrite("some question", api_key="sk-test")
 
         assert result is None
 
-    def test_returns_none_on_empty_content(self):
+    @pytest.mark.asyncio
+    async def test_returns_none_on_empty_content(self):
         """Empty string from LLM → None (sanity check guards)."""
-        with (
-            patch("backend.search.service.get_openai_client"),
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch, retry_patch as mock_retry:
             mock_retry.return_value = _make_openai_response("")
-            result = semantic_query_rewrite("some question", api_key="sk-test")
+            result = await async_semantic_query_rewrite("some question", api_key="sk-test")
 
         assert result is None
 
-    def test_returns_none_on_multiline_response(self):
+    @pytest.mark.asyncio
+    async def test_returns_none_on_multiline_response(self):
         """Multi-line LLM response is rejected (sanity check)."""
-        with (
-            patch("backend.search.service.get_openai_client"),
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch, retry_patch as mock_retry:
             mock_retry.return_value = _make_openai_response(
                 "language detection\nmultilingual settings"
             )
-            result = semantic_query_rewrite("some question", api_key="sk-test")
+            result = await async_semantic_query_rewrite("some question", api_key="sk-test")
 
         assert result is None
 
-    def test_returns_none_on_oversized_response(self):
+    @pytest.mark.asyncio
+    async def test_returns_none_on_oversized_response(self):
         """Response longer than 200 chars is rejected."""
-        with (
-            patch("backend.search.service.get_openai_client"),
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch, retry_patch as mock_retry:
             mock_retry.return_value = _make_openai_response("x" * 201)
-            result = semantic_query_rewrite("some question", api_key="sk-test")
+            result = await async_semantic_query_rewrite("some question", api_key="sk-test")
 
         assert result is None
 
-    def test_returns_none_on_empty_query(self):
+    @pytest.mark.asyncio
+    async def test_returns_none_on_empty_query(self):
         """Empty query short-circuits before any API call."""
-        with patch("backend.search.service.get_openai_client") as mock_client:
-            result = semantic_query_rewrite("", api_key="sk-test")
+        with patch("backend.search.service.get_async_openai_client") as mock_client:
+            result = await async_semantic_query_rewrite("", api_key="sk-test")
 
         mock_client.assert_not_called()
         assert result is None
 
-    def test_returns_none_on_empty_api_key(self):
+    @pytest.mark.asyncio
+    async def test_returns_none_on_empty_api_key(self):
         """Empty API key short-circuits before any API call."""
-        with patch("backend.search.service.get_openai_client") as mock_client:
-            result = semantic_query_rewrite("some question", api_key="")
+        with patch("backend.search.service.get_async_openai_client") as mock_client:
+            result = await async_semantic_query_rewrite("some question", api_key="")
 
         mock_client.assert_not_called()
         assert result is None
 
-    def test_returns_none_on_get_client_exception(self):
-        """Exception from get_openai_client → None."""
+    @pytest.mark.asyncio
+    async def test_returns_none_on_get_client_exception(self):
+        """Exception from get_async_openai_client → None."""
         with patch(
-            "backend.search.service.get_openai_client",
+            "backend.search.service.get_async_openai_client",
             side_effect=RuntimeError("bad key"),
         ):
-            result = semantic_query_rewrite("some question", api_key="sk-test")
+            result = await async_semantic_query_rewrite("some question", api_key="sk-test")
 
         assert result is None
 
@@ -350,245 +361,254 @@ class TestSemanticRewriteDeduplication:
 
 
 # ---------------------------------------------------------------------------
-# detect_tenant_kb_script
+# async_detect_tenant_kb_script
 # ---------------------------------------------------------------------------
 
+def _make_async_db(
+    *,
+    language_rows: list[tuple[str]] | None = None,
+    has_unlabeled: bool = False,
+    chunk_rows: list[tuple[str]] | None = None,
+) -> MagicMock:
+    """Mock AsyncSession whose execute() routes by the selected column.
+
+    The async KB-script helpers issue three distinct statements:
+    - ``select(Document.language)`` → labeled-language counts (``.all()``)
+    - ``select(Document.id) ... language IS NULL limit 1`` → unlabeled
+      presence probe (``.scalar()``)
+    - ``select(Embedding.chunk_text) join ...`` → legacy chunk sampling
+      (``.all()``)
+
+    ``db.executed_columns`` records which paths actually ran so tests can
+    assert e.g. that chunk sampling was skipped.
+    """
+    languages = language_rows or []
+    chunks = chunk_rows or []
+    db = MagicMock()
+    db.executed_columns = []
+
+    async def _execute(stmt):
+        column = list(stmt.selected_columns)[0].key
+        db.executed_columns.append(column)
+        result = MagicMock()
+        if column == "language":
+            result.all.return_value = languages
+        elif column == "id":
+            result.scalar.return_value = object() if has_unlabeled else None
+        elif column == "chunk_text":
+            result.all.return_value = chunks
+        else:  # pragma: no cover — no other statements expected
+            raise AssertionError(f"unexpected statement selecting {column!r}")
+        return result
+
+    db.execute = MagicMock(side_effect=_execute)
+    return db
+
+
+def _clear_kb_script_caches(tenant_id) -> None:
+    from backend.search.service import (
+        _TENANT_KB_SCRIPT_CACHE,
+        _TENANT_KB_SCRIPTS_CACHE,
+    )
+
+    _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+    _TENANT_KB_SCRIPTS_CACHE.pop(str(tenant_id), None)
+
+
 class TestDetectTenantKbScript:
-    """detect_tenant_kb_script() reads Document.language stored at parse time."""
+    """async_detect_tenant_kb_script() reads Document.language stored at parse time."""
 
-    @staticmethod
-    def _mock_db_with_languages(languages):
-        """Build a MagicMock db whose Document.language query returns ``languages``."""
-        from unittest.mock import MagicMock
-
-        rows = [(lang,) for lang in languages]
-        mock_db = MagicMock()
-        # Path used by _kb_bucket_counts_from_languages:
-        # db.query(Document.language).filter(...).filter(...).all()
-        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = rows
-        return mock_db
-
-    def _clear_caches(self, tenant_id):
-        from backend.search.service import (
-            _TENANT_KB_SCRIPT_CACHE,
-            _TENANT_KB_SCRIPTS_CACHE,
-        )
-
-        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
-        _TENANT_KB_SCRIPTS_CACHE.pop(str(tenant_id), None)
-
-    def test_returns_cyrillic_for_russian_documents(self):
+    @pytest.mark.asyncio
+    async def test_returns_cyrillic_for_russian_documents(self):
         import uuid
-        from backend.search.service import detect_tenant_kb_script
+        from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
-        mock_db = self._mock_db_with_languages(["ru", "ru", "ru"])
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(language_rows=[("ru",), ("ru",), ("ru",)])
 
-        assert detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
 
-    def test_returns_latin_for_english_documents(self):
+    @pytest.mark.asyncio
+    async def test_returns_latin_for_english_documents(self):
         import uuid
-        from backend.search.service import detect_tenant_kb_script
+        from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
-        mock_db = self._mock_db_with_languages(["en", "en"])
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(language_rows=[("en",), ("en",)])
 
-        assert detect_tenant_kb_script(tenant_id, mock_db) == "latin"
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "latin"
 
-    def test_dominant_wins_for_mixed_kb(self):
+    @pytest.mark.asyncio
+    async def test_dominant_wins_for_mixed_kb(self):
         """Dominant bucket is returned even when KB has multiple scripts."""
         import uuid
-        from backend.search.service import detect_tenant_kb_script
+        from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
-        mock_db = self._mock_db_with_languages(["en", "en", "en", "ru"])
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(language_rows=[("en",), ("en",), ("en",), ("ru",)])
 
-        assert detect_tenant_kb_script(tenant_id, mock_db) == "latin"
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "latin"
 
-    def test_returns_none_for_empty_kb(self):
-        from unittest.mock import MagicMock
+    @pytest.mark.asyncio
+    async def test_returns_none_for_empty_kb(self):
         import uuid
-        from backend.search.service import detect_tenant_kb_script
+        from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
+        _clear_kb_script_caches(tenant_id)
 
-        mock_db = MagicMock()
         # No documents with language set, no chunks indexed either.
-        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
-        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = []
+        mock_db = _make_async_db(language_rows=[], chunk_rows=[])
 
-        assert detect_tenant_kb_script(tenant_id, mock_db) is None
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) is None
 
-    def test_falls_back_to_chunk_sampling_when_no_language_set(self):
+    @pytest.mark.asyncio
+    async def test_falls_back_to_chunk_sampling_when_no_language_set(self):
         """Legacy KBs (Document.language all NULL) fall back to chunk sampling."""
-        from unittest.mock import MagicMock
         import uuid
-        from backend.search.service import detect_tenant_kb_script
+        from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
+        _clear_kb_script_caches(tenant_id)
 
-        mock_db = MagicMock()
-        # Language path returns no rows → fallback kicks in
-        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
-        # Chunk-sampling path returns Russian text
-        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = [
-            ("Сайт не открывается после подключения к CDN.",),
-            ("Проверьте NS-пропагацию.",),
-        ]
+        # Language path returns no rows → fallback kicks in with Russian text.
+        mock_db = _make_async_db(
+            language_rows=[],
+            chunk_rows=[
+                ("Сайт не открывается после подключения к CDN.",),
+                ("Проверьте NS-пропагацию.",),
+            ],
+        )
 
-        assert detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
 
-    def test_partial_labeling_augments_labeled_with_chunk_sample(self):
+    @pytest.mark.asyncio
+    async def test_partial_labeling_augments_labeled_with_chunk_sample(self):
         """Partial labeling must not blind us to unlabeled legacy documents.
 
         Regression: a single new EN doc on top of 100 legacy RU docs (all
         with language=NULL) used to misclassify the KB as Latin-only,
         making the cyrillic half unreachable for cross-lingual rewrite.
         """
-        from unittest.mock import MagicMock
         import uuid
-        from backend.search.service import detect_tenant_kb_script
+        from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
+        _clear_kb_script_caches(tenant_id)
 
-        mock_db = MagicMock()
-        # One labeled English document.
-        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [
-            ("en",),
-        ]
-        # _tenant_has_unlabeled_documents → at least one row with NULL.
-        mock_db.query.return_value.filter.return_value.filter.return_value.limit.return_value.first.return_value = MagicMock()
-        # Chunk sampling sees the legacy Russian content.
-        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = [
-            ("Сайт не открывается после подключения к CDN.",),
-            ("Проверьте NS-пропагацию.",),
-            ("A-запись домена должна указывать на IP-адреса CDN.",),
-        ]
+        mock_db = _make_async_db(
+            # One labeled English document.
+            language_rows=[("en",)],
+            # _async_tenant_has_unlabeled_documents → at least one NULL row.
+            has_unlabeled=True,
+            # Chunk sampling sees the legacy Russian content.
+            chunk_rows=[
+                ("Сайт не открывается после подключения к CDN.",),
+                ("Проверьте NS-пропагацию.",),
+                ("A-запись домена должна указывать на IP-адреса CDN.",),
+            ],
+        )
 
         # Russian sample dominates → KB is classified as cyrillic, not latin.
-        assert detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
 
-    def test_full_labeling_skips_chunk_sampling(self):
+    @pytest.mark.asyncio
+    async def test_full_labeling_skips_chunk_sampling(self):
         """When every document has language set, sampling is not invoked."""
-        from unittest.mock import MagicMock
         import uuid
-        from backend.search.service import detect_tenant_kb_script
+        from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
+        _clear_kb_script_caches(tenant_id)
 
-        mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [
-            ("en",),
-            ("en",),
-        ]
         # No unlabeled rows → sampling must be skipped.
-        mock_db.query.return_value.filter.return_value.filter.return_value.limit.return_value.first.return_value = None
+        mock_db = _make_async_db(language_rows=[("en",), ("en",)], has_unlabeled=False)
 
-        assert detect_tenant_kb_script(tenant_id, mock_db) == "latin"
-        # join() is the entry point for chunk sampling; assert it never runs.
-        mock_db.query.return_value.join.assert_not_called()
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "latin"
+        # chunk_text is the entry point for chunk sampling; assert it never ran.
+        assert "chunk_text" not in mock_db.executed_columns
 
-    def test_uses_cache_on_second_call(self):
+    @pytest.mark.asyncio
+    async def test_uses_cache_on_second_call(self):
         import uuid
-        from backend.search.service import detect_tenant_kb_script
+        from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
-        mock_db = self._mock_db_with_languages(["ru"])
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(language_rows=[("ru",)])
 
-        detect_tenant_kb_script(tenant_id, mock_db)
-        calls_after_first = mock_db.query.call_count
-        detect_tenant_kb_script(tenant_id, mock_db)
+        await async_detect_tenant_kb_script(tenant_id, mock_db)
+        calls_after_first = mock_db.execute.call_count
+        await async_detect_tenant_kb_script(tenant_id, mock_db)
 
         # Second call must hit the cache and issue no further queries.
-        assert mock_db.query.call_count == calls_after_first
+        assert mock_db.execute.call_count == calls_after_first
 
 
 class TestDetectTenantKbScripts:
-    """detect_tenant_kb_scripts() returns the full set of buckets in the KB."""
+    """async_detect_tenant_kb_scripts() returns the full set of buckets in the KB."""
 
-    @staticmethod
-    def _mock_db_with_languages(languages):
-        from unittest.mock import MagicMock
-
-        rows = [(lang,) for lang in languages]
-        mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = rows
-        return mock_db
-
-    def _clear_caches(self, tenant_id):
-        from backend.search.service import (
-            _TENANT_KB_SCRIPT_CACHE,
-            _TENANT_KB_SCRIPTS_CACHE,
-        )
-
-        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
-        _TENANT_KB_SCRIPTS_CACHE.pop(str(tenant_id), None)
-
-    def test_mixed_kb_returns_both_buckets(self):
+    @pytest.mark.asyncio
+    async def test_mixed_kb_returns_both_buckets(self):
         """EN+RU KB → {cyrillic, latin}, so cross-lingual rewrite reaches both."""
         import uuid
-        from backend.search.service import detect_tenant_kb_scripts
+        from backend.search.service import async_detect_tenant_kb_scripts
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
-        mock_db = self._mock_db_with_languages(["en", "ru", "en"])
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(language_rows=[("en",), ("ru",), ("en",)])
 
-        assert detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
+        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
             {"cyrillic", "latin"}
         )
 
-    def test_single_language_returns_single_bucket(self):
+    @pytest.mark.asyncio
+    async def test_single_language_returns_single_bucket(self):
         import uuid
-        from backend.search.service import detect_tenant_kb_scripts
+        from backend.search.service import async_detect_tenant_kb_scripts
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
-        mock_db = self._mock_db_with_languages(["en", "es", "fr"])
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(language_rows=[("en",), ("es",), ("fr",)])
 
-        assert detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset({"latin"})
+        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
+            {"latin"}
+        )
 
-    def test_empty_kb_returns_empty_set(self):
-        from unittest.mock import MagicMock
+    @pytest.mark.asyncio
+    async def test_empty_kb_returns_empty_set(self):
         import uuid
-        from backend.search.service import detect_tenant_kb_scripts
+        from backend.search.service import async_detect_tenant_kb_scripts
 
         tenant_id = uuid.uuid4()
-        self._clear_caches(tenant_id)
-        mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
-        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = []
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(language_rows=[], chunk_rows=[])
 
-        assert detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset()
+        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset()
 
 
 # ---------------------------------------------------------------------------
-# semantic_query_rewrite_for_kb
+# async_semantic_query_rewrite_for_kb
 # ---------------------------------------------------------------------------
 
 class TestSemanticQueryRewriteForKb:
-    """semantic_query_rewrite_for_kb() produces a KB-language rewrite."""
+    """async_semantic_query_rewrite_for_kb() produces a KB-language rewrite."""
 
-    def test_returns_russian_rewrite_for_cyrillic_kb(self):
-        from backend.search.service import semantic_query_rewrite_for_kb
+    @pytest.mark.asyncio
+    async def test_returns_russian_rewrite_for_cyrillic_kb(self):
+        from backend.search.service import async_semantic_query_rewrite_for_kb
 
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             mock_retry.return_value = _make_openai_response(
                 "диагностика подключения CDN NS-пропагация A-запись SSL"
             )
             mock_client.return_value = MagicMock()
 
-            result = semantic_query_rewrite_for_kb(
+            result = await async_semantic_query_rewrite_for_kb(
                 "The site doesn't open after connecting — what should I check?",
                 kb_script="cyrillic",
                 api_key="sk-test",
@@ -596,27 +616,27 @@ class TestSemanticQueryRewriteForKb:
 
         assert result == "диагностика подключения CDN NS-пропагация A-запись SSL"
 
-    def test_returns_none_for_unknown_script(self):
-        from backend.search.service import semantic_query_rewrite_for_kb
+    @pytest.mark.asyncio
+    async def test_returns_none_for_unknown_script(self):
+        from backend.search.service import async_semantic_query_rewrite_for_kb
 
-        result = semantic_query_rewrite_for_kb(
+        result = await async_semantic_query_rewrite_for_kb(
             "Some question",
             kb_script="other",
             api_key="sk-test",
         )
         assert result is None
 
-    def test_returns_none_on_llm_failure(self):
-        from backend.search.service import semantic_query_rewrite_for_kb
+    @pytest.mark.asyncio
+    async def test_returns_none_on_llm_failure(self):
+        from backend.search.service import async_semantic_query_rewrite_for_kb
 
-        with (
-            patch("backend.search.service.get_openai_client") as mock_client,
-            patch("backend.search.service.call_openai_with_retry") as mock_retry,
-        ):
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
             mock_retry.side_effect = RuntimeError("LLM error")
             mock_client.return_value = MagicMock()
 
-            result = semantic_query_rewrite_for_kb(
+            result = await async_semantic_query_rewrite_for_kb(
                 "The site doesn't open after connecting",
                 kb_script="cyrillic",
                 api_key="sk-test",

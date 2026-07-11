@@ -375,14 +375,6 @@ def _patch_process_chat_dependencies(
     detection_map: dict[str, LanguageDetectionResult],
 ) -> None:
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: _FakeTrace())
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda *args, **kwargs: type(
-            "InjectionResult",
-            (),
-            {"detected": False, "level": None, "method": None, "score": None},
-        )(),
-    )
     async def _fake_async_pipeline(*args, **kwargs):
         return _make_pipeline_result_for_language(
             kwargs["language_context"].response_language

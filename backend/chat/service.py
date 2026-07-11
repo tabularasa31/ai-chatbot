@@ -116,13 +116,9 @@ from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.injection_detector import (
-    async_detect_injection,  # noqa: F401
-    detect_injection,  # noqa: F401
-)
+from backend.guards.injection_detector import async_detect_injection  # noqa: F401
 from backend.guards.relevance_checker import (
     async_check_relevance_with_profile,  # noqa: F401
-    check_relevance_with_profile,  # noqa: F401
 )
 from backend.models import (
     Bot,
@@ -139,9 +135,7 @@ from backend.search.service import (
     async_embed_queries,  # noqa: F401
     async_semantic_query_rewrite,  # noqa: F401
     async_semantic_query_rewrite_for_kb,  # noqa: F401
-    embed_queries,  # noqa: F401
     expand_query,  # noqa: F401
-    semantic_query_rewrite,  # noqa: F401
 )
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]

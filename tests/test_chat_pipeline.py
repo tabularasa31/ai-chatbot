@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -270,10 +269,6 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     api_key = cl_resp.json()["api_key"]
     session_id = uuid.uuid4()
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda *args, **kwargs: Mock(detected=False, level=None, method=None, score=None),
-    )
     async def _fake_async_pipeline(*args, **kwargs):
         return _make_pipeline_result(
             final_answer="Which domain provider are you trying to configure?",

@@ -85,7 +85,7 @@ from backend.gap_analyzer.schemas import (
     PublishResult,
     RecalculateCommandResult,
 )
-from backend.guards.injection_detector import detect_injection
+from backend.guards.injection_detector import async_detect_injection
 from backend.models import (
     GapCluster,
     GapDismissal,
@@ -748,7 +748,7 @@ class GapAnalyzerOrchestrator:
         cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
         return self._draft_payload_from_cluster(cluster)
 
-    def start_draft_generation(self, *, tenant_id: UUID, gap_id: UUID) -> DraftPayload:
+    async def start_draft_generation(self, *, tenant_id: UUID, gap_id: UUID) -> DraftPayload:
         """Generate a fresh FAQ draft for a Mode B cluster and persist it.
 
         Does NOT publish — the result lives on draft_* columns until the admin
@@ -773,7 +773,7 @@ class GapAnalyzerOrchestrator:
         # caller's transaction is left dirty and we'd risk persisting a
         # half-state on a later commit. We flip to ``in_review`` only after a
         # clean LLM result + injection-guard pass.
-        content = self._generate_with_injection_guard(
+        content = await self._generate_with_injection_guard(
             tenant_id=tenant_id,
             encrypted_api_key=encrypted_api_key,
             label=label,
@@ -793,7 +793,7 @@ class GapAnalyzerOrchestrator:
         db.flush()
         return self._draft_payload_from_cluster(cluster)
 
-    def refine_draft(
+    async def refine_draft(
         self,
         *,
         tenant_id: UUID,
@@ -817,7 +817,7 @@ class GapAnalyzerOrchestrator:
         label = (cluster.label or "Untitled gap").strip()
         language = cluster.draft_language or self._resolve_draft_language(tenant_id=tenant_id)
 
-        content = self._refine_with_injection_guard(
+        content = await self._refine_with_injection_guard(
             tenant_id=tenant_id,
             encrypted_api_key=encrypted_api_key,
             current_title=cluster.draft_title or "",
@@ -951,7 +951,7 @@ class GapAnalyzerOrchestrator:
         db.flush()
         return DiscardDraftResponse(gap_id=cluster.id, status=cluster.status.value)
 
-    def _generate_with_injection_guard(
+    async def _generate_with_injection_guard(
         self,
         *,
         tenant_id: UUID,
@@ -963,7 +963,7 @@ class GapAnalyzerOrchestrator:
         language: str,
     ) -> DraftContent:
         for attempt in (1, 2):
-            content = llm_generate_draft(
+            content = await llm_generate_draft(
                 encrypted_api_key=encrypted_api_key,
                 label=label,
                 example_questions=example_questions,
@@ -971,7 +971,7 @@ class GapAnalyzerOrchestrator:
                 signal_weight=signal_weight,
                 language=language,
             )
-            if not self._draft_triggers_injection(tenant_id=tenant_id, encrypted_api_key=encrypted_api_key, content=content):
+            if not await self._draft_triggers_injection(tenant_id=tenant_id, encrypted_api_key=encrypted_api_key, content=content):
                 return content
             logger.warning(
                 "gap_analyzer_draft_injection_detected tenant_id=%s attempt=%s", tenant_id, attempt
@@ -980,7 +980,7 @@ class GapAnalyzerOrchestrator:
             "Generated draft was rejected by the injection guard. Please edit manually."
         )
 
-    def _refine_with_injection_guard(
+    async def _refine_with_injection_guard(
         self,
         *,
         tenant_id: UUID,
@@ -994,7 +994,7 @@ class GapAnalyzerOrchestrator:
         language: str,
     ) -> DraftContent:
         for attempt in (1, 2):
-            content = llm_refine_draft(
+            content = await llm_refine_draft(
                 encrypted_api_key=encrypted_api_key,
                 current_title=current_title,
                 current_question=current_question,
@@ -1004,7 +1004,7 @@ class GapAnalyzerOrchestrator:
                 example_questions=example_questions,
                 language=language,
             )
-            if not self._draft_triggers_injection(tenant_id=tenant_id, encrypted_api_key=encrypted_api_key, content=content):
+            if not await self._draft_triggers_injection(tenant_id=tenant_id, encrypted_api_key=encrypted_api_key, content=content):
                 return content
             logger.warning(
                 "gap_analyzer_draft_injection_detected tenant_id=%s attempt=%s mode=refine", tenant_id, attempt
@@ -1013,7 +1013,7 @@ class GapAnalyzerOrchestrator:
             "Refined draft was rejected by the injection guard. Please edit manually."
         )
 
-    def _draft_triggers_injection(
+    async def _draft_triggers_injection(
         self,
         *,
         tenant_id: UUID,
@@ -1023,7 +1023,7 @@ class GapAnalyzerOrchestrator:
         # Check every LLM-authored surface (title and canonical question are
         # admin-visible and the question gets embedded for the FAQ matcher).
         combined = f"{content.title}\n{content.question}\n{content.markdown}"
-        result = detect_injection(
+        result = await async_detect_injection(
             combined,
             tenant_id=str(tenant_id),
             api_key=encrypted_api_key,

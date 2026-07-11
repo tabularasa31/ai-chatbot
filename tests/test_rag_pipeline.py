@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -119,16 +118,6 @@ def test_embedding_once(
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
-    )
-    monkeypatch.setattr(
         "backend.chat.service.should_escalate",
         lambda *_, **__: (False, None),
     )
@@ -191,16 +180,6 @@ def test_faq_context_in_prompt(
     cl_row, api_key = _create_client(tenant, db_session, email="faq-prompt@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="Some docs chunk.")
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
-    )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
     # Keep retrieval deterministic and fast.
@@ -272,16 +251,6 @@ def test_langfuse_faq_match_span(
     cl_row, api_key = _create_client(tenant, db_session, email="faq-span@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
-    )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
     monkeypatch.setattr(
@@ -361,16 +330,6 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
     cl_row, api_key = _create_client(tenant, db_session, email="embed-span@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
-    )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
     monkeypatch.setattr(
@@ -440,16 +399,6 @@ def test_faq_direct_skips_retrieval_and_generation(
 ) -> None:
     cl_row, api_key = _create_client(tenant, db_session, email="faq-direct@example.com")
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
-    )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
     faq_answer = "Direct FAQ answer"
@@ -510,16 +459,6 @@ def test_guard_error_degrades_to_context(
     cl_row, api_key = _create_client(tenant, db_session, email="guard-error@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
-    )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
     top = FAQRow(

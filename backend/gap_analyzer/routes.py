@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -167,9 +168,11 @@ def draft_mode_a_gap(
         raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
-def _handle_draft_errors(call):
+@contextmanager
+def _map_draft_errors():
+    """Translate orchestrator draft errors to HTTP responses (sync and async routes)."""
     try:
-        return call()
+        yield
     except GapResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except DraftGenerationNotAvailableError as exc:
@@ -184,23 +187,27 @@ def _handle_draft_errors(call):
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
+def _handle_draft_errors(call):
+    with _map_draft_errors():
+        return call()
+
+
 @gap_analyzer_router.post("/mode_b/{gap_id}/draft", response_model=DraftPayload)
-def generate_mode_b_draft(
+async def generate_mode_b_draft(
     gap_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
-    payload = _handle_draft_errors(
-        lambda: orchestrator.start_draft_generation(tenant_id=tenant_id, gap_id=gap_id)
-    )
+    with _map_draft_errors():
+        payload = await orchestrator.start_draft_generation(tenant_id=tenant_id, gap_id=gap_id)
     db.commit()
     return payload
 
 
 @gap_analyzer_router.post("/mode_b/{gap_id}/draft/refine", response_model=DraftPayload)
-def refine_mode_b_draft(
+async def refine_mode_b_draft(
     gap_id: uuid.UUID,
     payload: RefineDraftRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
@@ -208,11 +215,10 @@ def refine_mode_b_draft(
 ) -> DraftPayload:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
-    result = _handle_draft_errors(
-        lambda: orchestrator.refine_draft(
+    with _map_draft_errors():
+        result = await orchestrator.refine_draft(
             tenant_id=tenant_id, gap_id=gap_id, guidance=payload.guidance
         )
-    )
     db.commit()
     return result
 

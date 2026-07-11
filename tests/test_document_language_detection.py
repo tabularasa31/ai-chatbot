@@ -1,8 +1,8 @@
 """Tests for parse-time document language detection.
 
 The detection lives in ``backend.documents.language_detection`` and is the
-seed for :func:`detect_tenant_kb_script` / ``detect_tenant_kb_scripts`` in
-``backend.search.service`` — those rely on accurate per-document language
+seed for :func:`async_detect_tenant_kb_script` / ``async_detect_tenant_kb_scripts``
+in ``backend.search.service`` — those rely on accurate per-document language
 labels instead of query-time chunk sampling.
 """
 

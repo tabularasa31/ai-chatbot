@@ -110,20 +110,10 @@ def _stub_pre_retrieval(
 ) -> None:
     """Common monkeypatches: injection clean, FAQ no-match, no escalation, no rewrites."""
     monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        ),
-    )
-    monkeypatch.setattr(
         "backend.chat.service.async_detect_injection",
         _as_async(lambda *_a, **_kw: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         )),
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **_kw: relevance,
     )
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",

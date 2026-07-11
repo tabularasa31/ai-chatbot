@@ -25,12 +25,12 @@ from backend.search.service import (
     _async_rewrite_query_for_retrieval,
     apply_script_boost,
     async_bm25_search_chunks,
+    async_embed_queries,
     async_embed_queries_with_stats,
     build_reliability_assessment,
     build_reliability_projection,
     cosine_similarity,
     detect_metadata_contradictions,
-    embed_queries,
     detect_query_script_bucket,
     detect_source_overlaps,
     expand_query,
@@ -759,25 +759,29 @@ async def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
     assert legacy_boost_key not in serialized_trace
 
 
-def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
-    """embed_query calls OpenAI with correct model name."""
-    from backend.search.service import embed_query
+@pytest.mark.asyncio
+async def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
+    """async_embed_query calls OpenAI with correct model name."""
+    from backend.search.service import async_embed_query
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    embed_query("test query", api_key="sk-test")
+    await async_embed_query("test query", api_key="sk-test")
     mock_openai_client.embeddings.create.assert_called_once()
     call_kwargs = mock_openai_client.embeddings.create.call_args
     assert call_kwargs.kwargs.get("model") == "text-embedding-3-small"
     assert call_kwargs.kwargs.get("input") == "test query"
 
 
-def test_embed_queries_batches_variants_into_single_openai_call(mock_openai_client: Mock) -> None:
+@pytest.mark.asyncio
+async def test_embed_queries_batches_variants_into_single_openai_call(
+    mock_openai_client: Mock,
+) -> None:
     mock_openai_client.embeddings.create.return_value.data = [
         Mock(embedding=[0.1] * 3),
         Mock(embedding=[0.2] * 3),
     ]
 
-    vectors = embed_queries(["first", "second"], api_key="sk-test")
+    vectors = await async_embed_queries(["first", "second"], api_key="sk-test")
 
     assert vectors == [[0.1] * 3, [0.2] * 3]
     mock_openai_client.embeddings.create.assert_called_once()
@@ -2852,7 +2856,7 @@ def test_search_single_embedding_match(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """Create user, tenant, document, embedding; mock embed_query to return similar vector."""
+    """Create user, tenant, document, embedding; mock the embedding call to return a similar vector."""
     vec = [0.1] * 1536
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 

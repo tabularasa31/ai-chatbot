@@ -22,84 +22,107 @@ from backend.chat.service import (
     _resolve_fallback_locale,
 )
 from backend.core.config import Settings, settings
-from backend.guards.reject_response import RejectReason, build_reject_response
+from backend.guards.reject_response import RejectReason, build_reject_response_result
 
 
 # ---------------------------------------------------------------------------
-# build_reject_response — new formulations
+# build_reject_response_result — canonical formulations
 # ---------------------------------------------------------------------------
 
 
-def test_build_reject_response_not_relevant_no_profile() -> None:
-    text = build_reject_response(reason=RejectReason.NOT_RELEVANT, profile=None)
-    assert "Sorry" in text
-    assert "this product" in text
-    assert "Я отвечаю только" not in text
+@pytest.mark.asyncio
+async def test_build_reject_response_not_relevant_no_profile() -> None:
+    result = await build_reject_response_result(reason=RejectReason.NOT_RELEVANT, profile=None)
+    assert "Sorry" in result.text
+    assert "this product" in result.text
+    assert "Я отвечаю только" not in result.text
 
 
-def test_build_reject_response_not_relevant_with_product_name() -> None:
+@pytest.mark.asyncio
+async def test_build_reject_response_not_relevant_with_product_name() -> None:
     profile = Mock()
     profile.product_name = "WidgetPro"
     profile.topics = []
-    text = build_reject_response(reason=RejectReason.NOT_RELEVANT, profile=profile)
-    assert "WidgetPro" in text
-    assert "Sorry" in text
-    assert "Я отвечаю только" not in text
+    result = await build_reject_response_result(reason=RejectReason.NOT_RELEVANT, profile=profile)
+    assert "WidgetPro" in result.text
+    assert "Sorry" in result.text
+    assert "Я отвечаю только" not in result.text
 
 
-def test_build_reject_response_not_relevant_with_topic_hint() -> None:
+@pytest.mark.asyncio
+async def test_build_reject_response_not_relevant_with_topic_hint() -> None:
     profile = Mock()
     profile.product_name = "WidgetPro"
     profile.topics = ["API", "Billing", "Auth"]
-    text = build_reject_response(reason=RejectReason.NOT_RELEVANT, profile=profile)
-    assert "API" in text or "Billing" in text
-    assert "WidgetPro" in text
+    result = await build_reject_response_result(reason=RejectReason.NOT_RELEVANT, profile=profile)
+    assert "API" in result.text or "Billing" in result.text
+    assert "WidgetPro" in result.text
 
 
-def test_build_reject_response_injection_detected() -> None:
-    text = build_reject_response(reason=RejectReason.INJECTION_DETECTED, profile=None)
-    assert "Sorry" in text
-    assert "Я не могу выполнить" not in text
+@pytest.mark.asyncio
+async def test_build_reject_response_injection_detected() -> None:
+    result = await build_reject_response_result(
+        reason=RejectReason.INJECTION_DETECTED, profile=None
+    )
+    assert "Sorry" in result.text
+    assert "Я не могу выполнить" not in result.text
 
 
-def test_build_reject_response_localizes_to_question_language(
+@pytest.mark.asyncio
+async def test_build_reject_response_localizes_to_question_language(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from backend.guards import reject_localization_cache
+
+    reject_localization_cache.clear()
+
+    async def fake_localize(**kwargs: object) -> LocalizationResult:
+        return LocalizationResult(
+            text="Je ne peux pas aider avec cette demande.", tokens_used=0
+        )
+
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_language",
-        lambda **kwargs: "Je ne peux pas aider avec cette demande.",
+        "backend.guards.reject_response.async_localize_text_to_language_result",
+        fake_localize,
     )
-    text = build_reject_response(
+    result = await build_reject_response_result(
         reason=RejectReason.INJECTION_DETECTED,
         profile=None,
         fallback_locale="fr-FR",
         api_key="sk-test",
     )
-    assert text == "Je ne peux pas aider avec cette demande."
+    assert result.text == "Je ne peux pas aider avec cette demande."
 
 
-def test_build_reject_response_insufficient_confidence_no_profile() -> None:
-    text = build_reject_response(reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=None)
-    assert "don't have enough information" in text
-    assert "clarify your question" in text
+@pytest.mark.asyncio
+async def test_build_reject_response_insufficient_confidence_no_profile() -> None:
+    result = await build_reject_response_result(
+        reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=None
+    )
+    assert "don't have enough information" in result.text
+    assert "clarify your question" in result.text
 
 
-def test_build_reject_response_insufficient_confidence_with_hint() -> None:
+@pytest.mark.asyncio
+async def test_build_reject_response_insufficient_confidence_with_hint() -> None:
     profile = Mock()
     profile.product_name = "WidgetPro"
     profile.topics = ["Webhooks", "Auth"]
-    text = build_reject_response(reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=profile)
-    assert "don't have enough information" in text
-    assert "Webhooks" in text or "Auth" in text
+    result = await build_reject_response_result(
+        reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=profile
+    )
+    assert "don't have enough information" in result.text
+    assert "Webhooks" in result.text or "Auth" in result.text
 
 
-def test_build_reject_response_uses_canonical_english_without_question() -> None:
-    text = build_reject_response(
+@pytest.mark.asyncio
+async def test_build_reject_response_uses_canonical_english_without_question() -> None:
+    result = await build_reject_response_result(
         reason=RejectReason.NOT_RELEVANT,
         profile=None,
     )
-    assert "Sorry" in text
-    assert "this product" in text
+    assert "Sorry" in result.text
+    assert "this product" in result.text
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +235,8 @@ def test_deprecated_shim_still_works(
     assert result == LocalizationResult(text="Bonjour", tokens_used=5)
 
 
-def test_localize_skips_when_text_already_in_target_ru(
+@pytest.mark.asyncio
+async def test_localize_skips_when_text_already_in_target_ru(
     monkeypatch: pytest.MonkeyPatch,
     mock_openai_client: Mock,
 ) -> None:
@@ -221,7 +245,7 @@ def test_localize_skips_when_text_already_in_target_ru(
         lambda _text: LanguageDetectionResult("ru", 0.99, True),
     )
 
-    result = localize_text_result(
+    result = await localize_text_result(
         canonical_text="Привет, мир",
         response_language="ru",
         api_key="sk-test",
@@ -231,7 +255,8 @@ def test_localize_skips_when_text_already_in_target_ru(
     mock_openai_client.chat.completions.create.assert_not_called()
 
 
-def test_localize_still_calls_llm_when_language_unknown(
+@pytest.mark.asyncio
+async def test_localize_still_calls_llm_when_language_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -240,7 +265,7 @@ def test_localize_still_calls_llm_when_language_unknown(
         class chat:
             class completions:
                 @staticmethod
-                def create(**kwargs: object) -> Mock:
+                async def create(**kwargs: object) -> Mock:
                     captured.update(kwargs)
                     return Mock(
                         choices=[Mock(message=Mock(content="Bonjour"))],
@@ -252,11 +277,11 @@ def test_localize_still_calls_llm_when_language_unknown(
         lambda _text: LanguageDetectionResult("unknown", 0.0, False),
     )
     monkeypatch.setattr(
-        "backend.chat.language.get_openai_client",
+        "backend.chat.language.get_async_openai_client",
         lambda _api_key: FakeClient(),
     )
 
-    result = localize_text_result(
+    result = await localize_text_result(
         canonical_text="abc",
         response_language="fr",
         api_key="sk-test",
@@ -266,7 +291,8 @@ def test_localize_still_calls_llm_when_language_unknown(
     assert captured["model"] == settings.localization_model
 
 
-def test_translate_skips_when_already_in_target(
+@pytest.mark.asyncio
+async def test_translate_skips_when_already_in_target(
     monkeypatch: pytest.MonkeyPatch,
     mock_openai_client: Mock,
 ) -> None:
@@ -275,7 +301,7 @@ def test_translate_skips_when_already_in_target(
         lambda _text: LanguageDetectionResult("fr", 0.99, True),
     )
 
-    result = language_module.translate_text_result(
+    result = await language_module.translate_text_result(
         source_text="Bonjour",
         target_language="fr-FR",
         api_key="sk-test",
@@ -285,7 +311,8 @@ def test_translate_skips_when_already_in_target(
     mock_openai_client.chat.completions.create.assert_not_called()
 
 
-def test_localize_skips_when_detection_confident_but_target_is_root_match(
+@pytest.mark.asyncio
+async def test_localize_skips_when_detection_confident_but_target_is_root_match(
     monkeypatch: pytest.MonkeyPatch,
     mock_openai_client: Mock,
 ) -> None:
@@ -294,7 +321,7 @@ def test_localize_skips_when_detection_confident_but_target_is_root_match(
         lambda _text: LanguageDetectionResult("zh", 0.95, True),
     )
 
-    result = localize_text_result(
+    result = await localize_text_result(
         canonical_text="你好",
         response_language="zh-Hant",
         api_key="sk-test",
@@ -374,7 +401,15 @@ def test_resolve_language_context_detector_failure_returns_english(
 # ---------------------------------------------------------------------------
 
 
-def test_render_direct_faq_answer_result_translates_when_detection_is_unreliable(
+def _async_translate_stub(text: str, tokens_used: int):
+    async def _fake(**kwargs: object) -> LocalizationResult:
+        return LocalizationResult(text=text, tokens_used=tokens_used)
+
+    return _fake
+
+
+@pytest.mark.asyncio
+async def test_render_direct_faq_answer_result_translates_when_detection_is_unreliable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -387,10 +422,10 @@ def test_render_direct_faq_answer_result_translates_when_detection_is_unreliable
     )
     monkeypatch.setattr(
         "backend.chat.language.translate_text_result",
-        lambda **kwargs: LocalizationResult(text="Bonjour", tokens_used=8),
+        _async_translate_stub("Bonjour", 8),
     )
 
-    result = render_direct_faq_answer_result(
+    result = await render_direct_faq_answer_result(
         answer_text="Direct FAQ answer",
         response_language="fr",
         api_key="sk-test",
@@ -399,7 +434,8 @@ def test_render_direct_faq_answer_result_translates_when_detection_is_unreliable
     assert result == LocalizationResult(text="Bonjour", tokens_used=8)
 
 
-def test_render_direct_faq_answer_result_translates_when_detection_throws(
+@pytest.mark.asyncio
+async def test_render_direct_faq_answer_result_translates_when_detection_throws(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -408,10 +444,10 @@ def test_render_direct_faq_answer_result_translates_when_detection_throws(
     )
     monkeypatch.setattr(
         "backend.chat.language.translate_text_result",
-        lambda **kwargs: LocalizationResult(text="Bonjour", tokens_used=5),
+        _async_translate_stub("Bonjour", 5),
     )
 
-    result = render_direct_faq_answer_result(
+    result = await render_direct_faq_answer_result(
         answer_text="Direct FAQ answer",
         response_language="fr",
         api_key="sk-test",
@@ -420,7 +456,8 @@ def test_render_direct_faq_answer_result_translates_when_detection_throws(
     assert result == LocalizationResult(text="Bonjour", tokens_used=5)
 
 
-def test_render_direct_faq_answer_result_translates_when_detected_differs_from_target(
+@pytest.mark.asyncio
+async def test_render_direct_faq_answer_result_translates_when_detected_differs_from_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Detection returns English reliably, but target is French → translate is called."""
@@ -434,10 +471,10 @@ def test_render_direct_faq_answer_result_translates_when_detected_differs_from_t
     )
     monkeypatch.setattr(
         "backend.chat.language.translate_text_result",
-        lambda **kwargs: LocalizationResult(text="Direct FAQ answer", tokens_used=0),
+        _async_translate_stub("Direct FAQ answer", 0),
     )
 
-    result = render_direct_faq_answer_result(
+    result = await render_direct_faq_answer_result(
         answer_text="Direct FAQ answer",
         response_language="fr",
         api_key="sk-test",
@@ -569,7 +606,8 @@ def test_detect_language_protects_short_ascii_english(text: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_localize_logs_tokens_with_operation_label(
+@pytest.mark.asyncio
+async def test_localize_logs_tokens_with_operation_label(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -579,7 +617,7 @@ def test_localize_logs_tokens_with_operation_label(
     )
 
     with caplog.at_level("INFO"):
-        result = localize_text_result(
+        result = await localize_text_result(
             canonical_text="Hello",
             response_language="ru",
             api_key="sk-test",
@@ -595,7 +633,8 @@ def test_localize_logs_tokens_with_operation_label(
     )
 
 
-def test_translate_logs_tokens_with_operation_label(
+@pytest.mark.asyncio
+async def test_translate_logs_tokens_with_operation_label(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     mock_openai_client: Mock,
@@ -610,7 +649,7 @@ def test_translate_logs_tokens_with_operation_label(
     )
 
     with caplog.at_level("INFO"):
-        result = language_module.translate_text_result(
+        result = await language_module.translate_text_result(
             source_text="Hello",
             target_language="fr",
             api_key="sk-test",
@@ -626,7 +665,8 @@ def test_translate_logs_tokens_with_operation_label(
     )
 
 
-def test_localization_model_overridden_via_env(
+@pytest.mark.asyncio
+async def test_localization_model_overridden_via_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LOCALIZATION_MODEL", "gpt-4o")
@@ -639,21 +679,21 @@ def test_localization_model_overridden_via_env(
         class chat:
             class completions:
                 @staticmethod
-                def create(**kwargs: object) -> Mock:
+                async def create(**kwargs: object) -> Mock:
                     captured.update(kwargs)
                     return Mock(
                         choices=[Mock(message=Mock(content="Bonjour"))],
                         usage=Mock(total_tokens=21),
                     )
 
-    monkeypatch.setattr(language_module, "get_openai_client", lambda _api_key: FakeClient())
+    monkeypatch.setattr(language_module, "get_async_openai_client", lambda _api_key: FakeClient())
     monkeypatch.setattr(
         language_module,
         "detect_language",
         lambda _text: LanguageDetectionResult("unknown", 0.0, False),
     )
 
-    result = localize_text_result(
+    result = await localize_text_result(
         canonical_text="Hello",
         response_language="fr",
         api_key="sk-test",

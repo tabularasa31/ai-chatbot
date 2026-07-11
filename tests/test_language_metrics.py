@@ -150,6 +150,50 @@ def test_invoke_localize_llm_emits_localized(captured_events):
     assert props["chat_id"] == "chat_test"
 
 
+@pytest.mark.asyncio
+async def test_async_invoke_localize_llm_emits_localized(captured_events):
+    """The async twin shares the result/telemetry post-processing with the
+    sync core; verify the event fires through the async path too."""
+    from backend.chat.language import _async_invoke_localize_llm
+
+    fake_response = type(
+        "R",
+        (),
+        {
+            "usage": type("U", (), {"total_tokens": 42})(),
+            "choices": [
+                type(
+                    "C",
+                    (),
+                    {"message": type("M", (), {"content": "Bonjour"})()},
+                )()
+            ],
+        },
+    )()
+
+    async def _fake_retry(_operation, _fn, **_kwargs):
+        return fake_response
+
+    with patch("backend.chat.language.get_async_openai_client", return_value=object()), patch(
+        "backend.chat.language.async_call_openai_with_retry", new=_fake_retry
+    ):
+        result = await _async_invoke_localize_llm(
+            canonical_text="Hello there",
+            target_language="fr",
+            api_key="sk-test",
+            operation="localize",
+            tenant_id="tnt_test",
+            bot_id="bot_test",
+            chat_id="chat_test",
+        )
+
+    assert isinstance(result, LocalizationResult)
+    assert result.text == "Bonjour"
+    localized = _events_named(captured_events, "language.localized")
+    assert len(localized) == 1
+    assert localized[0]["properties"]["target_lang"] == "fr"
+
+
 def test_invoke_localize_llm_skips_emit_when_no_identifiers(captured_events):
     fake_response = type(
         "R",

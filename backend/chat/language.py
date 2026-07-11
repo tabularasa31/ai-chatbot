@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import time
@@ -11,8 +10,8 @@ from functools import lru_cache
 from typing import Any
 
 from backend.core.config import settings
-from backend.core.openai_client import get_openai_client
-from backend.core.openai_retry import call_openai_with_retry
+from backend.core.openai_client import get_async_openai_client, get_openai_client
+from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
 from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
@@ -776,7 +775,7 @@ def _resolve_language_context_inner(
     )
 
 
-def generate_greeting_in_language_result(
+async def generate_greeting_in_language_result(
     *,
     product_name: str,
     target_language: str,
@@ -798,8 +797,8 @@ def generate_greeting_in_language_result(
         return LocalizationResult(text=fallback_text, tokens_used=0)
 
     try:
-        client = get_openai_client(api_key)
-        response = call_openai_with_retry(
+        client = get_async_openai_client(api_key)
+        response = await async_call_openai_with_retry(
             operation,
             lambda: client.chat.completions.create(
                 model=settings.localization_model,
@@ -836,7 +835,7 @@ def generate_greeting_in_language_result(
         return LocalizationResult(text=fallback_text, tokens_used=0)
 
 
-def localize_text_result(
+async def localize_text_result(
     *,
     canonical_text: str,
     response_language: str,
@@ -858,7 +857,7 @@ def localize_text_result(
         log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
         return LocalizationResult(text=canonical_text, tokens_used=0)
 
-    return _invoke_localize_llm(
+    return await _async_invoke_localize_llm(
         canonical_text=canonical_text,
         target_language=normalized_target,
         api_key=api_key,
@@ -869,7 +868,7 @@ def localize_text_result(
     )
 
 
-def translate_text_result(
+async def translate_text_result(
     *,
     source_text: str,
     target_language: str,
@@ -889,8 +888,8 @@ def translate_text_result(
         return LocalizationResult(text=source_text, tokens_used=0)
 
     try:
-        client = get_openai_client(api_key)
-        response = call_openai_with_retry(
+        client = get_async_openai_client(api_key)
+        response = await async_call_openai_with_retry(
             "chat_translate",
             lambda: client.chat.completions.create(
                 model=settings.localization_model,
@@ -926,7 +925,7 @@ def translate_text_result(
         return LocalizationResult(text=source_text, tokens_used=0)
 
 
-def render_direct_faq_answer_result(
+async def render_direct_faq_answer_result(
     *,
     answer_text: str,
     response_language: str,
@@ -936,31 +935,46 @@ def render_direct_faq_answer_result(
     if _already_in_target_language(answer_text, normalized_target):
         return LocalizationResult(text=answer_text, tokens_used=0)
 
-    return translate_text_result(
+    return await translate_text_result(
         source_text=answer_text,
         target_language=normalized_target,
         api_key=api_key,
     )
 
 
-async def async_render_direct_faq_answer_result(
-    *,
-    answer_text: str,
-    response_language: str,
-    api_key: str | None,
-) -> LocalizationResult:
-    """Async wrapper — runs ``render_direct_faq_answer_result`` in a worker thread.
-
-    The sync helper makes a translate OpenAI call (1-2 s) when source/target
-    languages diverge; calling it from ``async_run_chat_pipeline`` directly
-    would freeze the event loop and stall every other in-flight chat turn.
-    """
-    return await asyncio.to_thread(
-        render_direct_faq_answer_result,
-        answer_text=answer_text,
-        response_language=response_language,
-        api_key=api_key,
+def _resolve_localize_target(
+    target_language: str | None, fallback_locale: str | None
+) -> str:
+    return (
+        _normalize_language_tag(target_language)
+        or _normalize_language_tag(fallback_locale)
+        or "en"
     )
+
+
+def _localize_to_language_fast_path(
+    *,
+    canonical_text: str,
+    normalized_target: str,
+    api_key: str | None,
+    operation: str,
+) -> LocalizationResult | None:
+    """Shared no-LLM short-circuits for localize_text_to_language_result.
+
+    Returns the passthrough result when no provider call is needed
+    (empty input, missing key, English target, or text already in the
+    target language); returns None when the LLM must run.
+    """
+    if not canonical_text.strip():
+        return LocalizationResult(text=canonical_text, tokens_used=0)
+    if (
+        not api_key
+        or _language_matches(normalized_target, "en")
+        or _already_in_target_language(canonical_text, normalized_target)
+    ):
+        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
+        return LocalizationResult(text=canonical_text, tokens_used=0)
+    return None
 
 
 def localize_text_to_language_result(
@@ -974,23 +988,21 @@ def localize_text_to_language_result(
     bot_id: str | None = None,
     chat_id: str | None = None,
 ) -> LocalizationResult:
-    if not canonical_text.strip():
-        return LocalizationResult(text=canonical_text, tokens_used=0)
-
-    normalized_target = (
-        _normalize_language_tag(target_language)
-        or _normalize_language_tag(fallback_locale)
-        or "en"
+    """Sync variant, kept ONLY for sync HTTP endpoints that run in the
+    FastAPI threadpool (backend/widget/routes.py link-safety labels).
+    Everything on the async chat path must use
+    :func:`async_localize_text_to_language_result` instead — this one makes
+    a blocking OpenAI call and would freeze the event loop.
+    """
+    normalized_target = _resolve_localize_target(target_language, fallback_locale)
+    fast = _localize_to_language_fast_path(
+        canonical_text=canonical_text,
+        normalized_target=normalized_target,
+        api_key=api_key,
+        operation=operation,
     )
-    if not api_key:
-        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
-    if _language_matches(normalized_target, "en"):
-        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
-    if _already_in_target_language(canonical_text, normalized_target):
-        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
+    if fast is not None:
+        return fast
 
     return _invoke_localize_llm(
         canonical_text=canonical_text,
@@ -1003,25 +1015,36 @@ def localize_text_to_language_result(
     )
 
 
-def localize_text_to_language(
+async def async_localize_text_to_language_result(
     *,
     canonical_text: str,
     target_language: str | None,
     api_key: str | None,
     fallback_locale: str | None = None,
+    operation: str = "localize_to_language",
     tenant_id: str | None = None,
     bot_id: str | None = None,
     chat_id: str | None = None,
-) -> str:
-    return localize_text_to_language_result(
+) -> LocalizationResult:
+    normalized_target = _resolve_localize_target(target_language, fallback_locale)
+    fast = _localize_to_language_fast_path(
         canonical_text=canonical_text,
-        target_language=target_language,
+        normalized_target=normalized_target,
         api_key=api_key,
-        fallback_locale=fallback_locale,
+        operation=operation,
+    )
+    if fast is not None:
+        return fast
+
+    return await _async_invoke_localize_llm(
+        canonical_text=canonical_text,
+        target_language=normalized_target,
+        api_key=api_key,
+        operation=operation,
         tenant_id=tenant_id,
         bot_id=bot_id,
         chat_id=chat_id,
-    ).text
+    )
 
 
 def localize_text_to_question_language_result(
@@ -1067,7 +1090,95 @@ def _already_in_target_language(text: str, target: str) -> bool:
     return _language_matches(detection.detected_language, target)
 
 
+def _localize_llm_messages(canonical_text: str, target_language: str) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You localize assistant messages. Rewrite the assistant message strictly "
+                f"in {target_language}. Preserve meaning, tone, product names, module "
+                "names, placeholders, quoted config keys, commands, code snippets, links, "
+                "and ticket tokens exactly. Return only the localized assistant message."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Assistant message to localize:\n{canonical_text}",
+        },
+    ]
+
+
+def _localize_result_from_response(
+    response: Any,
+    *,
+    canonical_text: str,
+    target_language: str,
+    operation: str,
+    started_at: float,
+    tenant_id: str | None,
+    bot_id: str | None,
+    chat_id: str | None,
+) -> LocalizationResult:
+    tokens_used = response.usage.total_tokens if response.usage else 0
+    log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
+    if not response.choices:
+        return LocalizationResult(text=canonical_text, tokens_used=tokens_used)
+    localized = (response.choices[0].message.content or "").strip()
+    output_text = localized or canonical_text
+    _emit_localized_event_safely(
+        canonical_text=canonical_text,
+        output_text=output_text,
+        target_language=target_language,
+        operation=operation,
+        started_at=started_at,
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
+    )
+    return LocalizationResult(text=output_text, tokens_used=tokens_used)
+
+
 def _invoke_localize_llm(
+    *,
+    canonical_text: str,
+    target_language: str,
+    api_key: str | None,
+    operation: str,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
+    langfuse_observation: Any | None = None,
+) -> LocalizationResult:
+    """Blocking localization call — see localize_text_to_language_result for
+    why a sync path survives at all."""
+    started_at = time.monotonic()
+    try:
+        client = get_openai_client(api_key)
+        response = call_openai_with_retry(
+            operation,
+            lambda: client.chat.completions.create(
+                model=settings.localization_model,
+                temperature=0,
+                messages=_localize_llm_messages(canonical_text, target_language),
+            ),
+            langfuse_observation=langfuse_observation,
+        )
+        return _localize_result_from_response(
+            response,
+            canonical_text=canonical_text,
+            target_language=target_language,
+            operation=operation,
+            started_at=started_at,
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            chat_id=chat_id,
+        )
+    except Exception as exc:
+        logger.warning("Localization failed; using canonical text: %s", exc)
+        return LocalizationResult(text=canonical_text, tokens_used=0)
+
+
+async def _async_invoke_localize_llm(
     *,
     canonical_text: str,
     target_language: str,
@@ -1080,39 +1191,19 @@ def _invoke_localize_llm(
 ) -> LocalizationResult:
     started_at = time.monotonic()
     try:
-        client = get_openai_client(api_key)
-        response = call_openai_with_retry(
+        client = get_async_openai_client(api_key)
+        response = await async_call_openai_with_retry(
             operation,
             lambda: client.chat.completions.create(
                 model=settings.localization_model,
                 temperature=0,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You localize assistant messages. Rewrite the assistant message strictly "
-                            f"in {target_language}. Preserve meaning, tone, product names, module "
-                            "names, placeholders, quoted config keys, commands, code snippets, links, "
-                            "and ticket tokens exactly. Return only the localized assistant message."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Assistant message to localize:\n{canonical_text}",
-                    },
-                ],
+                messages=_localize_llm_messages(canonical_text, target_language),
             ),
             langfuse_observation=langfuse_observation,
         )
-        tokens_used = response.usage.total_tokens if response.usage else 0
-        log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
-        if not response.choices:
-            return LocalizationResult(text=canonical_text, tokens_used=tokens_used)
-        localized = (response.choices[0].message.content or "").strip()
-        output_text = localized or canonical_text
-        _emit_localized_event_safely(
+        return _localize_result_from_response(
+            response,
             canonical_text=canonical_text,
-            output_text=output_text,
             target_language=target_language,
             operation=operation,
             started_at=started_at,
@@ -1120,7 +1211,6 @@ def _invoke_localize_llm(
             bot_id=bot_id,
             chat_id=chat_id,
         )
-        return LocalizationResult(text=output_text, tokens_used=tokens_used)
     except Exception as exc:
         logger.warning("Localization failed; using canonical text: %s", exc)
         return LocalizationResult(text=canonical_text, tokens_used=0)

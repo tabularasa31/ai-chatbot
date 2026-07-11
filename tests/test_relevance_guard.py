@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.service import RetrievalContext, process_chat_message
-from backend.guards.reject_response import RejectReason, build_reject_response
+from backend.guards.reject_response import (
+    RejectReason,
+    _build_canonical_reject_response,
+)
 from backend.models import Tenant, TenantProfile
 from backend.search.service import build_reliability_assessment
 
@@ -78,7 +81,9 @@ def test_injection_rejects_before_rag(
     assert outcome.chat_ended is False
     assert outcome.document_ids == []
     assert outcome.tokens_used == 0
-    expected = build_reject_response(reason=RejectReason.INJECTION_DETECTED, profile=None)
+    expected = _build_canonical_reject_response(
+        reason=RejectReason.INJECTION_DETECTED, profile=None
+    )
     assert outcome.text == expected
 
 

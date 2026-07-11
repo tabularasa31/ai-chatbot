@@ -313,13 +313,13 @@ def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
 
     captured_kwargs: dict[str, object] = {}
 
-    def fake_localize_text_to_question_language_result(**kwargs: object) -> LocalizationResult:
+    async def fake_generate_greeting_in_language_result(**kwargs: object) -> LocalizationResult:
         captured_kwargs.update(kwargs)
         return LocalizationResult(text="Bonjour", tokens_used=4)
 
     monkeypatch.setattr(
         "backend.chat.handlers.greeting.generate_greeting_in_language_result",
-        fake_localize_text_to_question_language_result,
+        fake_generate_greeting_in_language_result,
     )
 
     outcome = process_chat_message(
@@ -345,12 +345,16 @@ async def test_complete_escalation_openai_turn_localizes_fallback_to_question_la
         "backend.escalation.openai_escalation.get_async_openai_client",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.localize_text_to_language_result",
-        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+
+    async def _fake_localize(**kwargs: object) -> LocalizationResult:
+        return LocalizationResult(
             text="Nous n'avons pas pu charger une reponse complete pour le moment.",
             tokens_used=17,
-        ),
+        )
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
+        _fake_localize,
     )
 
     result = await complete_escalation_openai_turn(

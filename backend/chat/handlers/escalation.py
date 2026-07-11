@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
-from backend.chat.language import localize_text_to_language_result
+from backend.chat.language import async_localize_text_to_language_result
 from backend.core.config import settings
 from backend.escalation.openai_escalation import pre_confirm_fallback_result
 from backend.escalation.service import (
@@ -662,13 +662,11 @@ class EscalationStateMachine(PipelineHandler):
     ) -> ChatTurnOutcome:
         _svc = _svc_lookup()
 
-        # The localization helper is still sync (language.py migration is a
-        # separate wave) and makes its own OpenAI call for non-English targets.
-        # We run inside a run_sync greenlet ON the event loop thread, so bridge
-        # it through a worker thread instead of freezing the loop.
+        # We run inside a run_sync greenlet ON the event loop thread; the
+        # localization helper is a coroutine, so bridge it back onto the loop
+        # with await_only.
         localized = await_only(
-            asyncio.to_thread(
-                localize_text_to_language_result,
+            async_localize_text_to_language_result(
                 canonical_text=_AWAITING_REQUEST_CANONICAL_TEXT,
                 target_language=ctx.language_context.response_language,
                 api_key=ctx.api_key,

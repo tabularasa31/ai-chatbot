@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import enum
 
 from backend.chat.language import (
     LocalizationResult,
+    async_localize_text_to_language_result,
     detect_language,
     localize_text_result,
-    localize_text_to_language,
-    localize_text_to_language_result,
 )
 from backend.guards import reject_localization_cache
 from backend.models import TenantProfile as TenantProfileModel
@@ -124,39 +122,7 @@ def _build_canonical_reject_response(
     )
 
 
-def build_reject_response(
-    *,
-    reason: RejectReason,
-    profile: TenantProfileModel | None,
-    response_language: str | None = None,
-    api_key: str | None = None,
-    question: str | None = None,
-    fallback_locale: str | None = None,
-) -> str:
-    canonical_text = _build_canonical_reject_response(
-        reason=reason,
-        profile=profile,
-        question=question,
-    )
-    if response_language is None:
-        target_language = _resolve_reject_target_language(
-            question=question,
-            fallback_locale=fallback_locale,
-        )
-        return localize_text_to_language(
-            canonical_text=canonical_text,
-            target_language=target_language,
-            api_key=api_key,
-            fallback_locale=fallback_locale,
-        )
-    return localize_text_result(
-        canonical_text=canonical_text,
-        response_language=response_language,
-        api_key=api_key,
-    ).text
-
-
-def build_reject_response_result(
+async def build_reject_response_result(
     *,
     reason: RejectReason,
     profile: TenantProfileModel | None,
@@ -187,7 +153,7 @@ def build_reject_response_result(
             return LocalizationResult(text=text, tokens_used=0)
 
     if response_language is None:
-        result = localize_text_to_language_result(
+        result = await async_localize_text_to_language_result(
             canonical_text=canonical_text,
             target_language=cache_language,
             api_key=api_key,
@@ -195,7 +161,7 @@ def build_reject_response_result(
             operation="reject_guard",
         )
     else:
-        result = localize_text_result(
+        result = await localize_text_result(
             canonical_text=canonical_text,
             response_language=response_language,
             api_key=api_key,
@@ -212,30 +178,3 @@ def build_reject_response_result(
             canonical_text, cache_language, result.text, result.tokens_used
         )
     return result
-
-
-async def async_build_reject_response_result(
-    *,
-    reason: RejectReason,
-    profile: TenantProfileModel | None,
-    response_language: str | None = None,
-    api_key: str | None = None,
-    question: str | None = None,
-    fallback_locale: str | None = None,
-) -> LocalizationResult:
-    """Async wrapper — runs ``build_reject_response_result`` in a worker thread.
-
-    The sync helper makes a localization OpenAI call (1-2 s); calling it from
-    ``async_run_chat_pipeline`` directly would freeze the event loop and stall
-    every other in-flight chat turn. Offloading via ``asyncio.to_thread`` keeps
-    the loop responsive under concurrency.
-    """
-    return await asyncio.to_thread(
-        build_reject_response_result,
-        reason=reason,
-        profile=profile,
-        response_language=response_language,
-        api_key=api_key,
-        question=question,
-        fallback_locale=fallback_locale,
-    )

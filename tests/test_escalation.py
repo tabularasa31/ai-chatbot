@@ -1937,7 +1937,7 @@ def test_notify_ticket_update_skips_yes_no_admin_replies_via_handler(
 # ("Ваш запрос передан … Хотите, чтобы я передал?"): the general escalation
 # LLM was leaking handoff-phase wording into the pre_confirm reply because
 # both phases shared one system prompt. The fix renders pre_confirm copy
-# from canonical English templates via ``localize_text_to_language_result``
+# from canonical English templates via ``async_localize_text_to_language_result``
 # and isolates the yes/no/unclear decision into a narrow classifier whose
 # output schema has no ``message_to_user`` slot at all.
 # ---------------------------------------------------------------------------
@@ -1959,12 +1959,12 @@ async def test_render_pre_confirm_text_initial_localizes_canonical_template(
 
     captured: dict[str, object] = {}
 
-    def _fake_localize(**kwargs: object) -> LocalizationResult:
+    async def _fake_localize(**kwargs: object) -> LocalizationResult:
         captured.update(kwargs)
         return LocalizationResult(text="LOCALIZED", tokens_used=7)
 
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.localize_text_to_language_result",
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
         _fake_localize,
     )
 
@@ -2003,12 +2003,12 @@ async def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonic
 
     seen: list[str] = []
 
-    def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
+    async def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
         seen.append(canonical_text)
         return LocalizationResult(text=canonical_text, tokens_used=0)
 
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.localize_text_to_language_result",
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
         _fake_localize,
     )
 
@@ -2063,12 +2063,12 @@ async def test_render_pre_confirm_text_caches_localization_per_variant_and_langu
 
     calls: list[tuple[str, str]] = []
 
-    def _fake_localize(*, canonical_text: str, target_language: str, **_kwargs: object) -> LocalizationResult:
+    async def _fake_localize(*, canonical_text: str, target_language: str, **_kwargs: object) -> LocalizationResult:
         calls.append((canonical_text, target_language))
         return LocalizationResult(text=f"[{target_language}] {canonical_text}", tokens_used=7)
 
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.localize_text_to_language_result",
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
         _fake_localize,
     )
 
@@ -2094,12 +2094,12 @@ async def test_render_pre_confirm_text_does_not_cache_degraded_localization(
 
     calls: list[str] = []
 
-    def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
+    async def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
         calls.append(canonical_text)
         return LocalizationResult(text=canonical_text, tokens_used=0)
 
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.localize_text_to_language_result",
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
         _fake_localize,
     )
 

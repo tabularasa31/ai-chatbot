@@ -502,10 +502,13 @@ def test_generate_answer_logs_tokens_with_operation_generate(
     # This test targets the *generate* token-log emission specifically. Disable
     # the post-gen language guard so its translation call (and its own log)
     # does not perturb the assertion under test.
+    async def _identity_enforce(text, *, response_language, api_key):
+        return (text, 0)
+
     monkeypatch.setattr(
         rag_handler,
         "_enforce_response_language",
-        lambda text, *, response_language, api_key: (text, 0),
+        _identity_enforce,
     )
     with caplog.at_level("INFO"):
         answer, tokens, *_ = asyncio.run(
@@ -592,15 +595,15 @@ def test_enforce_response_language_translates_when_language_drifts(
     )
     captured: dict[str, str | None] = {}
 
-    def _fake_translate(*, source_text: str, target_language: str, api_key: str | None) -> LocalizationResult:
+    async def _fake_translate(*, source_text: str, target_language: str, api_key: str | None) -> LocalizationResult:
         captured["source_text"] = source_text
         captured["target_language"] = target_language
         return LocalizationResult(text="TRANSLATED-EN", tokens_used=12)
 
     monkeypatch.setattr(rag_handler, "translate_text_result", _fake_translate)
-    text, extra_tokens = rag_handler._enforce_response_language(
+    text, extra_tokens = asyncio.run(rag_handler._enforce_response_language(
         russian_answer, response_language="en", api_key="sk-test"
-    )
+    ))
     assert text == "TRANSLATED-EN"
     assert extra_tokens == 12
     assert captured["target_language"] == "en"
@@ -618,9 +621,9 @@ def test_enforce_response_language_noop_when_languages_match(
 
     monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
     russian = "Я покажу вам, как настроить SSL-сертификат для основного домена."
-    text, extra_tokens = rag_handler._enforce_response_language(
+    text, extra_tokens = asyncio.run(rag_handler._enforce_response_language(
         russian, response_language="ru", api_key="sk-test"
-    )
+    ))
     assert text == russian
     assert extra_tokens == 0
 
@@ -628,9 +631,9 @@ def test_enforce_response_language_noop_when_languages_match(
 def test_enforce_response_language_skips_without_api_key() -> None:
     """No api_key → cannot translate → return original text unchanged, 0 tokens."""
     russian = "Я не знаю, как ответить на этот вопрос."
-    text, extra_tokens = rag_handler._enforce_response_language(
+    text, extra_tokens = asyncio.run(rag_handler._enforce_response_language(
         russian, response_language="en", api_key=None
-    )
+    ))
     assert text == russian
     assert extra_tokens == 0
 
@@ -645,9 +648,9 @@ def test_enforce_response_language_skips_unreliable_detection(
         raise AssertionError("translate_text_result must not be called for unreliable detection")
 
     monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
-    text, extra_tokens = rag_handler._enforce_response_language(
+    text, extra_tokens = asyncio.run(rag_handler._enforce_response_language(
         "OK.", response_language="ru", api_key="sk-test"
-    )
+    ))
     assert text == "OK."
     assert extra_tokens == 0
 
@@ -707,7 +710,7 @@ def test_generate_answer_adds_translation_tokens_to_total(
         usage=Mock(total_tokens=80, prompt_tokens=30, completion_tokens=50),
     )
 
-    def _fake_translate(**_kwargs: object) -> LocalizationResult:
+    async def _fake_translate(**_kwargs: object) -> LocalizationResult:
         return LocalizationResult(text="Translated answer in English.", tokens_used=25)
 
     monkeypatch.setattr(rag_handler, "translate_text_result", _fake_translate)

@@ -15,7 +15,11 @@ import pytest
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import HandlerContext
-from backend.chat.handlers.greeting import GreetingHandler, _resolve_product_name
+from backend.chat.handlers.greeting import (
+    GreetingHandler,
+    _build_greeting_result,
+    _resolve_product_name,
+)
 from backend.chat.language import LocalizationResult, ResolvedLanguageContext
 from backend.models import Chat, Message, MessageRole, Tenant, TenantProfile
 
@@ -169,15 +173,10 @@ def test_can_handle_returns_false_during_escalation_pre_confirm(db_session: Sess
 
 
 def test_handle_typed_greeting_persists_user_and_assistant(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
+    db_session: Session,
 ) -> None:
     tenant = _make_persisted_tenant(db_session, name="Acme")
     chat = _make_persisted_chat(db_session, tenant)
-
-    monkeypatch.setattr(
-        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
-        lambda **kwargs: LocalizationResult(text="Здравствуйте! Чем помочь?", tokens_used=5),
-    )
 
     ctx = _make_handler_context(
         db=db_session,
@@ -187,7 +186,11 @@ def test_handle_typed_greeting_persists_user_and_assistant(
         is_new_session=False,
         message_has_request_content=False,
     )
-    outcome = GreetingHandler()._handle_sync(ctx, db_session)
+    outcome = GreetingHandler()._handle_sync(
+        ctx,
+        db_session,
+        LocalizationResult(text="Здравствуйте! Чем помочь?", tokens_used=5),
+    )
 
     assert outcome.text == "Здравствуйте! Чем помочь?"
     # Both the user message and the assistant greeting are persisted. Use a set
@@ -199,14 +202,36 @@ def test_handle_typed_greeting_persists_user_and_assistant(
 
 
 def test_handle_produces_outcome_and_persists_only_assistant_message(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
+    db_session: Session,
 ) -> None:
     tenant = _make_persisted_tenant(db_session, name="Acme")
     chat = _make_persisted_chat(db_session, tenant)
 
+    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
+    outcome = GreetingHandler()._handle_sync(
+        ctx,
+        db_session,
+        LocalizationResult(text="Hello, I am the Acme assistant.", tokens_used=7),
+    )
+
+    assert outcome.text == "Hello, I am the Acme assistant."
+    assert outcome.tokens_used == 7
+    assert outcome.document_ids == []
+    assert outcome.chat_ended is False
+
+    # Only the assistant greeting is persisted — no empty user-message row.
+    persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
+    roles = [m.role for m in persisted]
+    assert roles == [MessageRole.assistant]
+
+
+@pytest.mark.asyncio
+async def test_build_greeting_result_passes_product_name_and_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured_kwargs: dict[str, Any] = {}
 
-    def fake_generate(**kwargs: Any) -> LocalizationResult:
+    async def fake_generate(**kwargs: Any) -> LocalizationResult:
         captured_kwargs.update(kwargs)
         return LocalizationResult(text="Hello, I am the Acme assistant.", tokens_used=7)
 
@@ -215,20 +240,16 @@ def test_handle_produces_outcome_and_persists_only_assistant_message(
         fake_generate,
     )
 
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
-    outcome = GreetingHandler()._handle_sync(ctx, db_session)
+    result = await _build_greeting_result(
+        product_name="Acme",
+        response_language="en",
+        api_key="sk-test",
+    )
 
-    assert outcome.text == "Hello, I am the Acme assistant."
-    assert outcome.tokens_used == 7
-    assert outcome.document_ids == []
-    assert outcome.chat_ended is False
+    assert result.text == "Hello, I am the Acme assistant."
     assert captured_kwargs["product_name"] == "Acme"
     assert captured_kwargs["target_language"] == "en"
-
-    # Only the assistant greeting is persisted — no empty user-message row.
-    persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
-    roles = [m.role for m in persisted]
-    assert roles == [MessageRole.assistant]
+    assert "Acme" in captured_kwargs["fallback_text"]
 
 
 def test_resolve_product_name_falls_back_to_default_when_tenant_missing(

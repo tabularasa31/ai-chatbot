@@ -154,6 +154,19 @@ class Settings(BaseSettings):
             "instead of stalling the turn (observed up to 21s without a cap)."
         ),
     )
+    escalation_openai_timeout_seconds: float = Field(
+        10.0,
+        alias="ESCALATION_OPENAI_TIMEOUT_SECONDS",
+        gt=0,
+        description=(
+            "HTTP read timeout (seconds) for escalation LLM calls (handoff "
+            "turn completions, pre-confirm classifier and context drafts). "
+            "Overrides the general 60s client read timeout: prod median is "
+            "~1s on gpt-4.1-mini but the tail reached 21.7s without a cap, "
+            "stalling the escalation turn. On timeout callers degrade to "
+            "their localized canonical fallbacks."
+        ),
+    )
     escalation_alert_threshold: int = Field(
         10,
         alias="ESCALATION_ALERT_THRESHOLD",

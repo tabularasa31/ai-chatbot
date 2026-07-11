@@ -2421,3 +2421,182 @@ async def test_classify_pre_confirm_reply_fails_safe_on_exception(
     )
     assert decision == "unclear"
     assert tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_escalation_turn_uses_dedicated_client_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Escalation LLM calls must request the dedicated short read timeout.
+
+    The general client default is 60s; without the override a single slow
+    OpenAI response stalls the escalation turn for up to a minute (observed
+    21.7s in prod before the cap).
+    """
+    from backend.core.config import settings
+    from backend.escalation.openai_escalation import complete_escalation_openai_turn
+    from backend.models import EscalationPhase
+
+    seen_timeouts: list[object] = []
+
+    class _FakeMessage:
+        content = '{"message_to_user": "ok", "followup_decision": null}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+        usage = None
+
+    class _FakeClient:
+        class chat:  # noqa: N801
+            class completions:  # noqa: N801
+                @staticmethod
+                async def create(**_kwargs: object) -> object:
+                    return _FakeResponse()
+
+    def _fake_get_client(*_a: object, **kwargs: object) -> object:
+        seen_timeouts.append(kwargs.get("timeout"))
+        return _FakeClient()
+
+    async def _fake_retry(_name, fn, **_k):
+        return await fn()
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client",
+        _fake_get_client,
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_call_openai_with_retry",
+        _fake_retry,
+    )
+
+    out = await complete_escalation_openai_turn(
+        phase=EscalationPhase.handoff_email_known,
+        chat_messages=[],
+        fact_json={},
+        latest_user_text="hi",
+        api_key="sk-test",
+    )
+    assert out.message_to_user == "ok"
+    assert seen_timeouts == [settings.escalation_openai_timeout_seconds]
+
+
+@pytest.mark.asyncio
+async def test_escalation_turn_fallback_localization_is_deadline_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the completion fails AND the fallback localization hangs, the turn
+    must still resolve within the escalation deadline with the canonical
+    English fallback — not stall for the localization client's 60s timeout.
+    """
+    from backend.escalation.openai_escalation import (
+        FALLBACK_EN_GENERIC,
+        complete_escalation_openai_turn,
+    )
+    from backend.models import EscalationPhase
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("openai down")
+
+    async def _hanging_localize(**_k: object) -> object:
+        await asyncio.sleep(30)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client", _boom
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
+        _hanging_localize,
+    )
+    monkeypatch.setattr(
+        "backend.core.config.settings.escalation_openai_timeout_seconds", 0.05
+    )
+
+    out = await asyncio.wait_for(
+        complete_escalation_openai_turn(
+            phase=EscalationPhase.handoff_ask_email,
+            chat_messages=[],
+            fact_json={},
+            latest_user_text="hi",
+            api_key="sk-test",
+            response_language="ru",
+        ),
+        timeout=5,
+    )
+    assert out.message_to_user == FALLBACK_EN_GENERIC
+    assert out.tokens_used == 0
+    assert out.followup_decision is None
+
+
+@pytest.mark.asyncio
+async def test_escalation_turn_empty_message_uses_bounded_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty message_to_user from the model goes through the same bounded
+    localized-fallback path as an API failure."""
+    from backend.escalation.openai_escalation import (
+        FALLBACK_EN_GENERIC,
+        complete_escalation_openai_turn,
+    )
+    from backend.models import EscalationPhase
+
+    class _FakeMessage:
+        content = '{"message_to_user": "", "followup_decision": null}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeUsage:
+        total_tokens = 7
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+        usage = _FakeUsage()
+
+    class _FakeClient:
+        class chat:  # noqa: N801
+            class completions:  # noqa: N801
+                @staticmethod
+                async def create(**_kwargs: object) -> object:
+                    return _FakeResponse()
+
+    async def _fake_retry(_name, fn, **_k):
+        return await fn()
+
+    async def _hanging_localize(**_k: object) -> object:
+        await asyncio.sleep(30)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client",
+        lambda *_a, **_k: _FakeClient(),
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_call_openai_with_retry",
+        _fake_retry,
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
+        _hanging_localize,
+    )
+    monkeypatch.setattr(
+        "backend.core.config.settings.escalation_openai_timeout_seconds", 0.05
+    )
+
+    out = await asyncio.wait_for(
+        complete_escalation_openai_turn(
+            phase=EscalationPhase.handoff_email_known,
+            chat_messages=[],
+            fact_json={},
+            latest_user_text="hi",
+            api_key="sk-test",
+            response_language="ru",
+        ),
+        timeout=5,
+    )
+    assert out.message_to_user == FALLBACK_EN_GENERIC
+    # Completion tokens are still counted; the degraded localization adds 0.
+    assert out.tokens_used == 7

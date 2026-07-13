@@ -24,6 +24,7 @@ from backend.knowledge.schemas import (
     KnowledgeProfileResponse,
 )
 from backend.models import Tenant, TenantFaq, TenantProfile, User
+from backend.tenants.cache import invalidate_tenant
 from backend.tenants.service import get_tenant_by_user
 
 knowledge_router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
@@ -127,6 +128,7 @@ def patch_knowledge_profile(
     db.add(profile)
     db.commit()
     db.refresh(profile)
+    invalidate_tenant(tenant.id)
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
         topics=list(profile.topics or []),

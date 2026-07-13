@@ -137,6 +137,12 @@ from backend.search.service import (
     async_semantic_query_rewrite_for_kb,  # noqa: F401
     expand_query,  # noqa: F401
 )
+from backend.tenants.cache import (
+    get_cached_tenant,
+    get_cached_tenant_profile,
+    set_cached_tenant,
+    set_cached_tenant_profile,
+)
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 
@@ -710,8 +716,15 @@ async def async_process_chat_message(
     """
     _turn_started_at = perf_counter()
 
-    tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
-    tenant_row = tenant_result.scalar_one_or_none()
+    # Tenant is near-static; a per-process TTL cache collapses this DB hop into
+    # a memory read on the hot path (item 1 of the chat-latency plan). A miss
+    # loads from DB and populates the cache; tenant-update routes invalidate it.
+    tenant_row = get_cached_tenant(tenant_id)
+    if tenant_row is None:
+        tenant_result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+        tenant_row = tenant_result.scalar_one_or_none()
+        if tenant_row is not None:
+            set_cached_tenant(tenant_row)
     optional_entity_types = _tenant_optional_entity_types(tenant_row)
     redacted_question = redact(question, optional_entity_types=optional_entity_types).redacted_text
 
@@ -759,14 +772,24 @@ async def async_process_chat_message(
     chat, effective_user_ctx = await _ensure_chat_async(
         db, tenant_id, session_id, bot_id, user_context, browser_locale
     )
-    # Re-attach tenant_row to the now-active session: db.close() above detached
-    # it. Today only loaded scalar columns are read downstream, but merging
+    # Bind tenant_row to the now-active session. It is detached either by the
+    # db.close() above (fresh DB load) or because it is a session-less cache
+    # clone; merge(load=False) yields a session-bound copy without SQL in both
+    # cases. Today only loaded scalar columns are read downstream, but merging
     # protects future lazy-loaded relationships from DetachedInstanceError.
     if tenant_row is not None:
         tenant_row = await db.merge(tenant_row, load=False)
-    tenant_profile = (
-        await db.get(TenantProfile, tenant_id) if tenant_row is not None else None
-    )
+    tenant_profile: TenantProfile | None = None
+    if tenant_row is not None:
+        # Same near-static TTL cache as Tenant (item 1). Absence of a profile
+        # row is not cached, so a profile created later is still picked up.
+        cached_profile = get_cached_tenant_profile(tenant_id)
+        if cached_profile is not None:
+            tenant_profile = await db.merge(cached_profile, load=False)
+        else:
+            tenant_profile = await db.get(TenantProfile, tenant_id)
+            if tenant_profile is not None:
+                set_cached_tenant_profile(tenant_profile)
     _setup_ms = round((perf_counter() - _setup_start) * 1000, 2)
     _setup_span.end(
         output={"is_new_session": not chat.messages, "chat_id": str(chat.id)},

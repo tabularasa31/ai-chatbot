@@ -565,6 +565,20 @@ def _clear_embedding_cache() -> Generator[None, None, None]:
     embedding_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _clear_tenant_cache() -> Generator[None, None, None]:
+    """Flush the per-process Tenant/TenantProfile TTL cache around each test.
+
+    Like the embedding cache above, it is a module-level singleton that would
+    otherwise leak a warmed tenant snapshot into a later test that mutates the
+    same tenant outside an invalidating route.
+    """
+    from backend.tenants import cache as tenant_cache
+    tenant_cache.clear_cache()
+    yield
+    tenant_cache.clear_cache()
+
+
 @pytest_asyncio.fixture(scope="function")
 async def async_db_session(async_engine_fx) -> "AsyncSession":  # type: ignore[name-defined]
     """AsyncSession bound to the per-test async engine."""

@@ -102,9 +102,14 @@ def _purge_once() -> None:
     try:
         purge_guard_events(db)
     except Exception:
-        # Best-effort maintenance — never let a purge failure crash the loop.
-        logger.exception("guard_events_purge failed")
+        # Roll back the failed batch and let the error propagate. PeriodicJob
+        # writes its durable "done today" marker only when _work() returns
+        # cleanly, so re-raising leaves the marker unset and the next hourly
+        # tick retries — instead of a transient DB blip suppressing the purge
+        # for the rest of the UTC day. Batches committed before the failure
+        # persist (partial progress is kept). The loop wrapper logs the raise.
         db.rollback()
+        raise
     finally:
         db.close()
 

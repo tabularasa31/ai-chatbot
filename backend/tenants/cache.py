@@ -9,11 +9,19 @@ path pays for them on every message.
 This module collapses those two reads into an in-memory hit, bounded by an LRU
 and a short TTL. Correctness is kept two ways:
 
-* **TTL backstop** — an entry older than ``_TTL_SECONDS`` is treated as absent,
-  so any missed invalidation self-heals within the window.
-* **Explicit invalidation** — the tenant- and profile-update code paths call
-  :func:`invalidate_tenant` right after they commit, so an admin edit takes
-  effect immediately rather than after the TTL.
+* **Explicit invalidation (the primary mechanism)** — every tenant/profile
+  writer calls :func:`invalidate_tenant` right after it commits. Invalidation
+  is *per-process*: the web tier runs as a single uvicorn process, so an admin
+  edit made through the web API self-invalidates in the same process that
+  serves chat and takes effect immediately, regardless of the TTL.
+* **TTL backstop** — an entry older than ``_TTL_SECONDS`` is treated as absent.
+  Because invalidation is per-process, it does *not* cross to another process:
+  a profile re-extracted in the background ``worker`` process clears only the
+  worker's cache, so the web process keeps serving the previous snapshot until
+  the TTL lapses. The TTL therefore bounds exactly one thing — how long a
+  background-updated profile takes to surface in chat — which is minutes-scale
+  tolerant since extraction itself is not real-time. It also self-heals any
+  write path that forgets to invalidate.
 
 Cached values are *detached clones* decoupled from any :class:`Session`: only
 mapped columns are copied (no relationships), so a cache hit can never trigger
@@ -37,10 +45,13 @@ from sqlalchemy.orm import class_mapper, make_transient_to_detached
 from backend.models import Tenant, TenantProfile
 from backend.models.base import Base
 
-# Rows are near-static; 30s collapses the repeated per-turn reads of a busy
-# session while bounding staleness for edits that slip past an invalidation
-# site (or the deliberately un-invalidated LLM-alert state writes).
-_TTL_SECONDS = 30.0
+# Rows are near-static and every manual edit invalidates in-process, so the TTL
+# is deliberately coarse: it only bounds cross-process propagation of a
+# background-re-extracted profile (worker -> web) and self-heals any missed
+# invalidation site. A short TTL would buy no correctness here — it would only
+# depress the hit rate on our low, spread-out traffic, where consecutive turns
+# of one tenant sit minutes apart. One hour.
+_TTL_SECONDS = 3600.0
 
 # Upper bound on distinct tenants held per cache. Far above any realistic
 # concurrent-tenant count; exists only to cap memory under pathological churn.

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.models import TenantProfile as TenantProfileModel
 from backend.tenant_knowledge.schemas import AliasEntry, GlossaryEntry
+from backend.tenants.cache import invalidate_tenant
 
 
 def _norm_term(value: str) -> str:
@@ -177,4 +178,5 @@ def merge_into_profile(
     db.add(row)
     db.commit()
     db.refresh(row)
+    invalidate_tenant(tenant_id)
     return row

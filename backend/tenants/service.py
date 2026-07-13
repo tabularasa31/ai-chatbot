@@ -19,6 +19,7 @@ from backend.tenants.api_keys_service import (
     find_active_tenant_by_plain_key,
     get_primary_active_key,
 )
+from backend.tenants.cache import invalidate_tenant
 
 DEFAULT_TENANT_NAME = "My Workspace"
 
@@ -165,6 +166,7 @@ def update_redaction_config_for_user(
     tenant.settings = with_redaction_config(tenant.settings if isinstance(tenant.settings, dict) else None, config)
     db.commit()
     db.refresh(tenant)
+    invalidate_tenant(tenant.id)
     return public_redaction_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
 
 
@@ -202,6 +204,7 @@ def update_support_settings_for_user(
     )
     db.commit()
     db.refresh(tenant)
+    invalidate_tenant(tenant.id)
     return get_support_settings_for_user(user_id, db)
 
 
@@ -230,6 +233,7 @@ def update_tenant(
             tenant.openai_api_key = encrypt_value(raw_key.strip())
     db.commit()
     db.refresh(tenant)
+    invalidate_tenant(tenant.id)
     return tenant
 
 
@@ -248,3 +252,4 @@ def delete_tenant(
     tenant = get_tenant_by_id(tenant_id, user_id, db, require_owner=True)
     db.delete(tenant)
     db.commit()
+    invalidate_tenant(tenant_id)

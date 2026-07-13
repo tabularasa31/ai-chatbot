@@ -19,6 +19,7 @@ because rate limiting is a security control.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from typing import TYPE_CHECKING
@@ -159,4 +160,48 @@ async def release_lock(key: str, token: str) -> bool:
         return bool(result)
     except Exception as exc:
         logger.debug("redis_lock_release_failed key=%s: %s", key, exc)
+        return False
+
+
+def acquire_lock_sync(key: str, ttl_seconds: int, *, timeout: float = 3.0) -> str | None:
+    """Blocking wrapper around :func:`acquire_lock` for daemon threads.
+
+    The shared async client is bound to the app's main event loop, so callers
+    running outside it (e.g. ``PeriodicJob`` daemon threads) must marshal the
+    coroutine back onto that loop with ``run_coroutine_threadsafe`` — the same
+    bridge ``crawl_url`` uses for its sync enqueue path.
+
+    Returns the lock token, or ``None`` when the lock is held elsewhere, the
+    main loop is unavailable (startup/shutdown edge), or Redis is unreachable.
+    """
+    from backend.core.queue import get_main_loop
+
+    loop = get_main_loop()
+    if loop is None or not loop.is_running():
+        return None
+    try:
+        future = asyncio.run_coroutine_threadsafe(acquire_lock(key, ttl_seconds), loop)
+        return future.result(timeout=timeout)
+    except Exception as exc:
+        logger.debug("redis_lock_acquire_sync_failed key=%s: %s", key, exc)
+        return None
+
+
+def release_lock_sync(key: str, token: str, *, timeout: float = 3.0) -> bool:
+    """Blocking wrapper around :func:`release_lock` for daemon threads.
+
+    See :func:`acquire_lock_sync` for why the coroutine is marshalled onto the
+    main loop. Returns ``False`` on any failure (best-effort release — an
+    unreleased lock simply expires at its TTL).
+    """
+    from backend.core.queue import get_main_loop
+
+    loop = get_main_loop()
+    if loop is None or not loop.is_running():
+        return False
+    try:
+        future = asyncio.run_coroutine_threadsafe(release_lock(key, token), loop)
+        return bool(future.result(timeout=timeout))
+    except Exception as exc:
+        logger.debug("redis_lock_release_sync_failed key=%s: %s", key, exc)
         return False

@@ -1,7 +1,9 @@
 """Daily background job: emit tenant_kb_language_snapshot events to PostHog.
 
-Runs once per calendar day (UTC). Idempotent within a day via an in-memory
-date guard — single-process safe (one Railway dyno).
+Runs once per calendar day (UTC). Idempotent within a process via an in-memory
+date guard; across workers a Redis distributed lock (keyed on the UTC date)
+ensures only one worker emits the snapshot per day. Without Redis (local dev)
+the in-memory guard alone applies — single-process safe.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from datetime import UTC, date, datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.jobs._periodic import PeriodicJob
+from backend.jobs._periodic import LockSpec, PeriodicJob
 from backend.models import Document, Tenant
 from backend.observability.metrics import capture_event
 from backend.search.service import CYRILLIC_LANGUAGE_PREFIXES, LATIN_LANGUAGE_PREFIXES
@@ -25,6 +27,11 @@ _last_run_date: date | None = None
 
 _STARTUP_DELAY_SECONDS = 60
 _CHECK_INTERVAL_SECONDS = 3600
+# TTL far exceeds the snapshot's runtime, so a crashed holder frees the lock
+# well before the next day while still blocking the hourly re-check across
+# workers. Held (not released) for the window: the date-scoped key plus this
+# TTL are what make the daily emit single-run cluster-wide.
+_LOCK_TTL_SECONDS = 6 * 3600
 
 
 def _lang_to_script(lang: str) -> str:
@@ -138,11 +145,21 @@ def _run_snapshot_once() -> None:
         db.close()
 
 
+def _daily_lock_key() -> str:
+    return f"lock:kb_snapshot:daily:{datetime.now(UTC).date().isoformat()}"
+
+
 _job = PeriodicJob(
     name="kb-language-snapshot",
     work=_run_snapshot_once,
     interval_seconds=_CHECK_INTERVAL_SECONDS,
     startup_delay_seconds=_STARTUP_DELAY_SECONDS,
+    lock=LockSpec(
+        job_kind="kb_snapshot_daily",
+        key_factory=_daily_lock_key,
+        ttl_seconds=_LOCK_TTL_SECONDS,
+        hold=True,
+    ),
 )
 
 

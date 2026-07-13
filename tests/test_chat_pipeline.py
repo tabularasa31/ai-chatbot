@@ -256,6 +256,144 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     assert fake_trace.update_calls[-1]["tags"] == ["variants:multi"]
 
 
+def test_trace_metadata_language_confidence_and_response_language_across_turns(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for ClickUp 86exmtu8h — confidence=0 on follow-up traces.
+
+    Two guarantees, checked across a 3-turn chat:
+
+    * ``response_language`` is present in the trace metadata of **every** turn,
+      not just the first.
+    * Language-detection confidence is recorded under the unambiguous
+      ``language_confidence`` key (the bare ``confidence`` key collided with the
+      RAG handler's retrieval ``best_confidence_score``). On follow-up turns the
+      chat is language-locked and detection is skipped, so the key is **omitted**
+      rather than written as a false-negative ``0.0``.
+    """
+    from backend.models import Tenant
+
+    class FakeSpan:
+        def end(self, **kwargs: object) -> None:
+            return None
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.update_calls: list[dict[str, object]] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            self.update_calls.append(kwargs)
+
+        def promote(self, **kwargs: object) -> None:
+            return None
+
+        @property
+        def merged_metadata(self) -> dict:
+            # Effective server-merged view: every update(metadata=...) this turn
+            # layered onto one dict, later keys winning — mirrors how Langfuse
+            # merges trace metadata across the pre-dispatch and handler writes.
+            merged: dict = {}
+            for call in self.update_calls:
+                md = call.get("metadata")
+                if isinstance(md, dict):
+                    merged.update(md)
+            return merged
+
+    token = register_and_verify_user(
+        tenant, db_session, email="trace-lang-conf@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace Lang Conf Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    traces: list[FakeTrace] = []
+
+    def _begin_trace(**kwargs: object) -> FakeTrace:
+        trace = FakeTrace()
+        traces.append(trace)
+        return trace
+
+    monkeypatch.setattr("backend.chat.service.begin_trace", _begin_trace)
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(
+            lambda *args, **kwargs: RetrievalContext(
+                chunk_texts=["Чтобы сбросить пароль, откройте настройки аккаунта."],
+                document_ids=[uuid.uuid4()],
+                scores=[0.9],
+                mode="hybrid",
+                best_rank_score=0.9,
+                best_confidence_score=0.88,
+                confidence_source="vector_similarity",
+                reliability=build_reliability_assessment(top_score=0.9, result_count=5),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(
+            lambda *args, **kwargs: ("Откройте настройки и сбросьте пароль.", 12)
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *args, **kwargs: (False, None),
+    )
+
+    # A single session drives all three turns so the chat's language lock (set on
+    # the first reliable Russian turn) carries into the follow-ups.
+    session_id = uuid.uuid4()
+    questions = [
+        "Как мне сбросить пароль от моего аккаунта?",
+        "А если я не помню электронную почту?",
+        "Сколько времени занимает восстановление доступа?",
+    ]
+    for question in questions:
+        process_chat_message(
+            client_row.id,
+            question,
+            session_id,
+            db_session,
+            api_key=cl_resp.json()["api_key"],
+        )
+
+    assert len(traces) == 3
+    metadatas = [trace.merged_metadata for trace in traces]
+
+    for md in metadatas:
+        # AC2: response_language present on every turn.
+        assert md.get("response_language") == "ru"
+        # The bare "confidence" key must never reappear at trace level.
+        assert "confidence" not in md
+        # Retrieval confidence keeps its own distinct key.
+        assert md.get("best_confidence_score") == 0.88
+        # AC1: language_confidence, when present, is a real measurement — never
+        # the false-negative sentinel 0.0.
+        if "language_confidence" in md:
+            assert md["language_confidence"] > 0.0
+
+    # Turn 1 runs detection → language_confidence recorded.
+    assert metadatas[0].get("language_confidence", 0.0) > 0.0
+    assert metadatas[0].get("language_is_reliable") is True
+
+    # Follow-up turns are language-locked → detection skipped → the confidence
+    # keys are omitted rather than written as 0.0.
+    assert "language_confidence" not in metadatas[1]
+    assert "language_is_reliable" not in metadatas[1]
+    assert "language_confidence" not in metadatas[2]
+    assert "language_is_reliable" not in metadatas[2]
+
+
 def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     tenant: TestClient,
     db_session: Session,

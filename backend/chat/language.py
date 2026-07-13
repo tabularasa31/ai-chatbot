@@ -111,6 +111,24 @@ class LanguageDetectionResult:
     is_reliable: bool
 
 
+# Resolution reasons where per-turn language detection did not run, so
+# ``confidence`` / ``is_reliable`` are placeholder zeros rather than a real
+# measurement: the locked fast path (follow-up turns on a locked chat),
+# bootstrap turns (no user text yet), and detector crashes. Surfacing
+# confidence=0 for these poisons trace-level confidence analytics with false
+# negatives — a locked follow-up looks like a zero-confidence detection — so
+# callers that record confidence for analytics must skip these branches.
+_CONFIDENCE_NOT_MEASURED_REASONS = frozenset(
+    {
+        "locked",
+        "bootstrap_user_locale",
+        "browser_locale",
+        "bootstrap_default_english",
+        "detector_failure",
+    }
+)
+
+
 @dataclass(frozen=True)
 class ResolvedLanguageContext:
     detected_language: str
@@ -124,6 +142,20 @@ class ResolvedLanguageContext:
     # "session_fallback" (unreliable turn backfilled from the chat's last
     # reliable detection — metadata only, never affects response_language).
     detected_language_resolution_reason: str = "detector"
+
+    @property
+    def detection_confidence_measured(self) -> bool:
+        """True when ``confidence`` / ``is_reliable`` reflect a real detection.
+
+        False in the locked / bootstrap / detector-failure fast paths, where
+        both fields are placeholder zeros. Analytics surfaces (Langfuse trace
+        metadata) must omit confidence entirely in that case rather than record
+        a misleading 0.0 — see ``trace.update`` in ``backend/chat/service.py``.
+        """
+        return (
+            self.response_language_resolution_reason
+            not in _CONFIDENCE_NOT_MEASURED_REASONS
+        )
 
 
 @dataclass(frozen=True)

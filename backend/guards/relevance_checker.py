@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
+from backend.guards.types import Verdict, VerdictReason
 from backend.models import TenantProfile as TenantProfileModel
 from backend.observability import TraceHandle, record_stage_ms
 from backend.observability.cache_metrics import record_hit, record_miss
@@ -165,6 +166,20 @@ _VALID_CATEGORIES = frozenset(
 )
 
 
+def _verdict_from_category(category: str) -> Verdict:
+    """Map an LLM classifier category token to a :class:`Verdict`.
+
+    The category tokens are the ``VerdictReason`` values verbatim, so
+    ``blocked`` follows the contract: only the non-relevant categories
+    (offtopic / support_complaint / social / social_question) block.
+    """
+    try:
+        reason = VerdictReason(category)
+    except ValueError:
+        reason = VerdictReason.RELEVANT
+    return Verdict.of(reason)
+
+
 def _build_prompts(
     profile: TenantProfileModel,
     user_question: str,
@@ -269,7 +284,8 @@ async def async_check_relevance_with_profile(
     trace: TraceHandle | None = None,
     force_llm_check: bool = False,
     dialog_context: str | None = None,
-) -> tuple[bool, str, TenantProfileModel | None]:
+    chat_id: uuid.UUID | str | None = None,
+) -> Verdict:
     """Relevance pre-check using an already-loaded profile (no DB access).
 
     The OpenAI call is bounded by ``asyncio.wait_for`` so the event loop is
@@ -284,21 +300,43 @@ async def async_check_relevance_with_profile(
     lets the classifier resolve anaphoric follow-ups against the preceding
     turns instead of judging the message in isolation.
 
-    Returns: (relevant, reason, profile_for_guard) — on a non-relevant LLM
-    verdict ``reason`` is the category token (offtopic / support_complaint /
-    social) so callers can route the reply shape.
+    When ``chat_id`` is given (a real chat turn, including the post-retrieval
+    ``force_llm_check`` re-classifications), the verdict is recorded to
+    ``guard_events`` with its cache-hit flag.
+
+    Returns a :class:`Verdict`. For a non-relevant LLM verdict ``reason`` is the
+    category token (offtopic / support_complaint / social / social_question) so
+    callers can route the reply shape; fail-open paths (no_profile / timeout /
+    circuit_open / …) surface their own reason with ``blocked=False``. The
+    caller owns the profile it passed in — it is no longer echoed back.
     """
+    _t0 = time.perf_counter()
+
+    def _finalize(verdict: Verdict, cache_hit: bool | None) -> Verdict:
+        if chat_id is not None:
+            from backend.guards.events import record_guard_event
+
+            record_guard_event(
+                tenant_id=tenant_id,
+                chat_id=chat_id,
+                kind="relevance",
+                verdict=verdict,
+                latency_ms=round((time.perf_counter() - _t0) * 1000, 2),
+                cache_hit=cache_hit,
+            )
+        return verdict
+
     if not profile or _profile_is_empty(profile):
-        return True, "no_profile", None
+        return _finalize(Verdict.of(VerdictReason.NO_PROFILE), None)
 
     if not force_llm_check:
         word_count = len(user_question.split())
         if word_count <= SHORT_QUERY_WORD_LIMIT:
-            return True, "short_query_bypass", profile
+            return _finalize(Verdict.of(VerdictReason.SHORT_QUERY_BYPASS), None)
 
         cb = _check_circuit_breaker()
         if cb is not None:
-            return cb[0], cb[1], None
+            return _finalize(Verdict.of(VerdictReason.CIRCUIT_OPEN), None)
 
     start = time.perf_counter()
     span = None
@@ -329,7 +367,7 @@ async def async_check_relevance_with_profile(
                 metadata={"cache_hit": True, "latency_ms": 0},
             )
         _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True, blocked=not relevant, score=reason)
-        return relevant, reason, profile
+        return _finalize(_verdict_from_category(reason), True)
 
     system_prompt, user_prompt = _build_prompts(profile, user_question, dialog_context)
 
@@ -369,13 +407,13 @@ async def async_check_relevance_with_profile(
         # regular relevance checks during an OpenAI outage.
         if not force_llm_check:
             _record_failure()
-        return True, "timeout", None
+        return _finalize(Verdict.of(VerdictReason.TIMEOUT), False)
     except Exception:
         if span is not None:
             span.end(output={"relevant": True, "reason": "error"}, metadata={"error": True})
         if not force_llm_check:
             _record_failure()
-        return True, "error", None
+        return _finalize(Verdict.of(VerdictReason.ERROR), False)
 
     if not force_llm_check:
         _record_success()
@@ -392,7 +430,7 @@ async def async_check_relevance_with_profile(
 
     _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False, blocked=not relevant, score=reason)
     _cache_set(cache_key, relevant, reason)
-    return relevant, reason, profile
+    return _finalize(_verdict_from_category(reason), False)
 
 
 async def async_check_relevance_precheck(
@@ -402,7 +440,7 @@ async def async_check_relevance_precheck(
     db: AsyncSession,
     api_key: str,
     trace: TraceHandle | None = None,
-) -> tuple[bool, str, TenantProfileModel | None]:
+) -> Verdict:
     """Relevance pre-check before RAG.
 
     Thin wrapper around :func:`async_check_relevance_with_profile` that loads

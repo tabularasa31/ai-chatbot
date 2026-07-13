@@ -315,15 +315,29 @@ async def injection_guard(run: PipelineRun) -> ChatPipelineResult | None:
     traffic mix).
     """
     from backend.chat import service as _svc
+    from backend.guards.types import VerdictReason
 
     _inj_start = perf_counter()
-    injection_result = await _svc.async_detect_injection(
+    # The guard records its own verdict to guard_events (co-located with the
+    # cache-hit flag it knows); chat_id marks this as a real chat turn.
+    injection_verdict = await _svc.async_detect_injection(
         run.question,
         tenant_id=str(run.tenant_id),
         api_key=run.api_key,
         trace=run.trace,
+        chat_id=str(run.chat_id) if run.chat_id is not None else None,
     )
     _inj_latency_s = perf_counter() - _inj_start
+
+    # Preserve the historical PostHog span property shape (level 1/2, method
+    # structural/semantic) derived from the unified verdict reason.
+    _inj_level: int | None = None
+    _inj_method: str | None = None
+    if injection_verdict.reason is VerdictReason.INJECTION_STRUCTURAL:
+        _inj_level, _inj_method = 1, "structural"
+    elif injection_verdict.reason is VerdictReason.INJECTION_SEMANTIC:
+        _inj_level, _inj_method = 2, "semantic"
+
     if run.tenant_public_id is not None or run.bot_public_id is not None:
         from backend.chat.events import _emit_ai_span_event
         _inj_trace_id = (
@@ -338,12 +352,12 @@ async def injection_guard(run: PipelineRun) -> ChatPipelineResult | None:
             span_id=uuid.uuid4().hex if _inj_trace_id else None,
             parent_id=_inj_trace_id,
             extra_properties={
-                "detected": injection_result.detected,
-                "level": injection_result.level,
-                "method": injection_result.method,
+                "detected": injection_verdict.blocked,
+                "level": _inj_level,
+                "method": _inj_method,
             },
         )
-    if injection_result.detected:
+    if injection_verdict.blocked:
         # Profile is not loaded for the reject render on this path
         # (historical behaviour: the refusal is generic, not product-branded).
         return await build_reject_result(
@@ -380,6 +394,7 @@ def launch_concurrent_tasks(run: PipelineRun) -> None:
             api_key=run.api_key,
             trace=run.trace,
             dialog_context=state.guard_dialog_context,
+            chat_id=str(run.chat_id) if run.chat_id is not None else None,
         )
     )
     state.base_embed_task = asyncio.create_task(
@@ -682,10 +697,32 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
     # relevance guard (an OpenAI call, 2-10 s).
     await run.db.close()
     assert state.rel_task is not None  # created by launch_concurrent_tasks
+    from backend.guards.types import Verdict, VerdictReason
+
+    # The relevance guard records its own verdict to guard_events (it was given
+    # this turn's chat_id at task creation). A cancelled task — superseded by a
+    # FAQ-direct hit — is not a real verdict and is intentionally not logged.
     try:
-        relevant, guard_reason, state.profile = await state.rel_task
+        rel_verdict = await state.rel_task
     except asyncio.CancelledError:
-        relevant, guard_reason, state.profile = True, "cancelled", state.guard_profile
+        rel_verdict = Verdict.of(VerdictReason.CANCELLED)
+    relevant = not rel_verdict.blocked
+    guard_reason = rel_verdict.reason.value
+    # The guard no longer echoes the profile back. Reconstruct the historical
+    # ``state.profile`` assignment: it is cleared to None only on fail-open
+    # paths that rendered no real judgment (no_profile / circuit_open / timeout
+    # / error); every other verdict keeps the profile the guard was given.
+    state.profile = (
+        None
+        if rel_verdict.reason
+        in (
+            VerdictReason.NO_PROFILE,
+            VerdictReason.CIRCUIT_OPEN,
+            VerdictReason.TIMEOUT,
+            VerdictReason.ERROR,
+        )
+        else state.guard_profile
+    )
     state.guard_bypassed_short_query = guard_reason == "short_query_bypass"
     _rel_latency_s = perf_counter() - state.rel_started_at
     if run.tenant_public_id is not None or run.bot_public_id is not None:

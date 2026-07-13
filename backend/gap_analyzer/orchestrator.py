@@ -1023,12 +1023,12 @@ class GapAnalyzerOrchestrator:
         # Check every LLM-authored surface (title and canonical question are
         # admin-visible and the question gets embedded for the FAQ matcher).
         combined = f"{content.title}\n{content.question}\n{content.markdown}"
-        result = await async_detect_injection(
+        verdict = await async_detect_injection(
             combined,
             tenant_id=str(tenant_id),
             api_key=encrypted_api_key,
         )
-        return bool(result.detected)
+        return bool(verdict.blocked)
 
     async def request_recalculation(
         self,

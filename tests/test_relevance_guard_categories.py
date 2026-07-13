@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from backend.chat.language import LocalizationResult
 from backend.chat.service import RetrievalContext, process_chat_message
 from backend.faq.faq_matcher import FAQMatchResult
+from backend.guards.types import Verdict, VerdictReason
 from backend.models import Chat, Message, MessageRole, Tenant
 from backend.search.service import build_reliability_assessment
 
@@ -65,9 +66,7 @@ def _stub_common(monkeypatch: pytest.MonkeyPatch) -> None:
     """Injection clean, FAQ no-match, no rewrites, no legacy escalation."""
     monkeypatch.setattr(
         "backend.chat.service.async_detect_injection",
-        _as_async(lambda *_a, **_kw: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        )),
+        _as_async(lambda *_a, **_kw: Verdict.of(VerdictReason.OK)),
     )
     monkeypatch.setattr(
         "backend.chat.service.should_escalate",
@@ -106,14 +105,23 @@ def _stub_common(monkeypatch: pytest.MonkeyPatch) -> None:
 _PROFILE_STUB = SimpleNamespace(product_name="Product", topics=["Topic"])
 
 
+def _as_verdict(verdict: Verdict | tuple[bool, str, object]) -> Verdict:
+    """Adapt a legacy (relevant, reason, profile) tuple into a Verdict."""
+    if isinstance(verdict, Verdict):
+        return verdict
+    _relevant, reason, _profile = verdict
+    return Verdict.of(VerdictReason(reason))
+
+
 def _stub_guard_verdict(
-    monkeypatch: pytest.MonkeyPatch, verdict: tuple[bool, str, object]
+    monkeypatch: pytest.MonkeyPatch, verdict: Verdict | tuple[bool, str, object]
 ) -> list[dict]:
     calls: list[dict] = []
+    resolved = _as_verdict(verdict)
 
     async def _guard(**kwargs):
         calls.append(kwargs)
-        return verdict
+        return resolved
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile", _guard
@@ -351,8 +359,8 @@ def test_short_social_question_classified_on_first_zero_hits_turn(
     # zero-hits re-check classifies it as a social question about the bot.
     async def _guard(**kwargs):
         if kwargs.get("force_llm_check"):
-            return (False, "social_question", _PROFILE_STUB)
-        return (True, "short_query_bypass", _PROFILE_STUB)
+            return Verdict.of(VerdictReason.SOCIAL_QUESTION)
+        return Verdict.of(VerdictReason.SHORT_QUERY_BYPASS)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile", _guard

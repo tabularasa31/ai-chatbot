@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.chat.language import ResolvedLanguageContext
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
+from backend.guards.types import Verdict
 from backend.models import Chat, TenantProfile
 from backend.observability import TraceHandle
 from backend.search.service import (
@@ -193,7 +194,7 @@ class PipelineState:
     # by later steps. Storing them on state (rather than closure variables)
     # is what lets the steps live in separate modules while preserving the
     # overlap between the relevance guard, embeddings and the rewrite calls.
-    rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] | None = None
+    rel_task: asyncio.Task[Verdict] | None = None
     rel_started_at: float = 0.0
     base_embed_task: asyncio.Task[list[list[float]]] | None = None
     rewrite_task: asyncio.Task[str | None] | None = None

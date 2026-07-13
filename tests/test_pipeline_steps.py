@@ -17,6 +17,7 @@ import pytest
 from backend.chat.language import ResolvedLanguageContext
 from backend.chat.steps import pre_retrieval, refusal, retrieval
 from backend.chat.types import PipelineRun, RetrievalContext
+from backend.guards.types import Verdict, VerdictReason
 
 
 def _language_context() -> ResolvedLanguageContext:
@@ -153,14 +154,8 @@ def test_build_reject_result_injection_skips_profile(
 def test_injection_guard_short_circuits_before_concurrent_tasks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    @dataclass
-    class _Detection:
-        detected: bool = True
-        level: int = 1
-        method: str = "structural"
-
     async def _fake_detect(question, **kwargs):
-        return _Detection()
+        return Verdict.of(VerdictReason.INJECTION_STRUCTURAL, evidence="x")
 
     async def _fake_reject(**kwargs):
         return _FakeLocalization(text="refused")
@@ -185,14 +180,8 @@ def test_injection_guard_short_circuits_before_concurrent_tasks(
 def test_injection_guard_passes_clean_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    @dataclass
-    class _Detection:
-        detected: bool = False
-        level: int = 0
-        method: str = "none"
-
     async def _fake_detect(question, **kwargs):
-        return _Detection()
+        return Verdict.of(VerdictReason.OK)
 
     monkeypatch.setattr(
         "backend.chat.service.async_detect_injection", _fake_detect
@@ -209,7 +198,7 @@ def test_injection_guard_passes_clean_question(
 @pytest.mark.parametrize(
     ("guard_reason", "expected_reject"),
     [
-        ("off_topic", "not_relevant"),
+        ("offtopic", "not_relevant"),
         ("social", "social"),
         ("social_question", "social_question"),
     ],
@@ -233,7 +222,7 @@ def test_relevance_guard_reject_routing(
 
     async def _scenario():
         async def _verdict():
-            return (False, guard_reason, None)
+            return Verdict.of(VerdictReason(guard_reason))
 
         run.state.rel_task = asyncio.ensure_future(_verdict())
         return await pre_retrieval.relevance_guard(run)
@@ -247,7 +236,6 @@ def test_relevance_guard_reject_routing(
 def test_relevance_guard_complaint_recommends_escalation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.guards.relevance_checker import CATEGORY_SUPPORT_COMPLAINT
     from backend.models import EscalationTrigger
 
     class _ClosableDB:
@@ -259,7 +247,7 @@ def test_relevance_guard_complaint_recommends_escalation(
 
     async def _scenario():
         async def _verdict():
-            return (False, CATEGORY_SUPPORT_COMPLAINT, None)
+            return Verdict.of(VerdictReason.SUPPORT_COMPLAINT)
 
         run.state.rel_task = asyncio.ensure_future(_verdict())
         return await pre_retrieval.relevance_guard(run)
@@ -282,10 +270,13 @@ def test_relevance_guard_pass_keeps_profile(monkeypatch: pytest.MonkeyPatch) -> 
     run = _make_run()
     run.db = _ClosableDB()  # type: ignore[assignment]
     profile = object()
+    # The guard no longer echoes a profile back; a relevant verdict keeps the
+    # profile the pipeline already loaded (state.guard_profile).
+    run.state.guard_profile = profile  # type: ignore[assignment]
 
     async def _scenario():
         async def _verdict():
-            return (True, "relevant", profile)
+            return Verdict.of(VerdictReason.RELEVANT)
 
         run.state.rel_task = asyncio.ensure_future(_verdict())
         return await pre_retrieval.relevance_guard(run)
@@ -325,7 +316,7 @@ def test_relevance_guard_reject_cancels_speculative_retrieval(
         run.state.spec_retrieval_task = asyncio.ensure_future(_never_finishes())
 
         async def _verdict():
-            return (False, "off_topic", None)
+            return Verdict.of(VerdictReason.OFFTOPIC)
 
         run.state.rel_task = asyncio.ensure_future(_verdict())
         return await pre_retrieval.relevance_guard(run)

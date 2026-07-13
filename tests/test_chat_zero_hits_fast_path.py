@@ -29,11 +29,31 @@ from backend.chat.service import (
     process_chat_message,
 )
 from backend.faq.faq_matcher import FAQMatchResult
+from backend.guards.types import Verdict, VerdictReason
 from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Tenant
 from backend.search.service import build_reliability_assessment
-
 from tests._async_utils import as_async as _as_async, as_async_generate
 from tests.conftest import register_and_verify_user, set_client_openai_key
+
+
+def _as_verdict(v: Verdict | tuple[bool, str, object]) -> Verdict:
+    """Adapt a legacy (relevant, reason, profile) tuple into a guard Verdict.
+
+    Falls back to relevant->RELEVANT / not-relevant->OFFTOPIC for reason tokens
+    that predate the VerdictReason enum (e.g. the old "ok"/"in_domain" stubs).
+    """
+    if isinstance(v, Verdict):
+        return v
+    relevant, reason, _profile = v
+    try:
+        r = VerdictReason(reason)
+    except ValueError:
+        r = VerdictReason.RELEVANT if relevant else VerdictReason.OFFTOPIC
+    return Verdict.of(r)
+
+
+def _rr(verdict: Verdict) -> tuple[bool, str]:
+    return not verdict.blocked, verdict.reason.value
 
 
 def _create_client(http: TestClient, db: Session, *, email: str) -> tuple[Tenant, str]:
@@ -112,13 +132,11 @@ def _stub_pre_retrieval(
     """Common monkeypatches: injection clean, FAQ no-match, no escalation, no rewrites."""
     monkeypatch.setattr(
         "backend.chat.service.async_detect_injection",
-        _as_async(lambda *_a, **_kw: SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        )),
+        _as_async(lambda *_a, **_kw: Verdict.of(VerdictReason.OK)),
     )
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
-        _as_async(lambda **_kw: relevance),
+        _as_async(lambda **_kw: _as_verdict(relevance)),
     )
     monkeypatch.setattr(
         "backend.chat.service.should_escalate",
@@ -212,7 +230,7 @@ def test_consecutive_zero_hits_relevant_escalates(
 
     async def _post_retrieval_relevance(**kwargs):
         consecutive_calls.append(kwargs)
-        return (True, "in_domain", profile_stub)
+        return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
@@ -280,7 +298,7 @@ def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
     _stub_pre_retrieval(monkeypatch, relevance=(True, "ok", profile_stub))
 
     async def _post_retrieval_relevance(**_kwargs):
-        return (True, "in_domain", profile_stub)
+        return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
@@ -342,7 +360,7 @@ def test_consecutive_zero_hits_not_relevant_emits_offtopic_reject(
     _stub_pre_retrieval(monkeypatch, relevance=(True, "ok", profile_stub))
 
     async def _post_retrieval_relevance(**_kwargs):
-        return (False, "off_topic", profile_stub)
+        return Verdict.of(VerdictReason.OFFTOPIC)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
@@ -492,7 +510,7 @@ def test_no_profile_relevance_verdict_does_not_escalate(
     _stub_pre_retrieval(monkeypatch)
 
     async def _no_profile_relevance(**_kwargs):
-        return (True, "no_profile", None)
+        return Verdict.of(VerdictReason.NO_PROFILE)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
@@ -555,7 +573,7 @@ def test_session_ended_event_stales_rephrase_flag(
                 "Force relevance check must not fire when the previous session "
                 "was already reported ended by the sweeper"
             )
-        return (True, "ok", kwargs.get("profile"))
+        return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
@@ -640,13 +658,13 @@ def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
     async def _run():
         # 10 forced calls all time out — counter must NOT advance.
         for _ in range(10):
-            relevant, reason, _p = await async_check_relevance_with_profile(
+            relevant, reason = _rr(await async_check_relevance_with_profile(
                 tenant_id=tid,
                 user_question="any short q",
                 profile=profile,
                 api_key="sk-test",
                 force_llm_check=True,
-            )
+            ))
             assert relevant is True
             assert reason == "timeout"
 

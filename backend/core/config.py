@@ -430,6 +430,15 @@ class Settings(BaseSettings):
         True,
         alias="INJECTION_SEMANTIC_ENABLED",
     )
+    guard_semantic_cache_ttl_seconds: int = Field(
+        600,
+        alias="GUARD_SEMANTIC_CACHE_TTL_SECONDS",
+        ge=0,
+        description=(
+            "TTL (seconds) for the Redis-backed semantic-injection verdict cache. "
+            "0 disables writes (cache misses on every turn)."
+        ),
+    )
 
     # ── Retrieval guards ─────────────────────────────────────────────────────
     relevance_retrieval_threshold: float = Field(

@@ -19,9 +19,11 @@ because rate limiting is a security control.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, TypeVar
 
 from backend.core.config import settings
 
@@ -160,3 +162,93 @@ async def release_lock(key: str, token: str) -> bool:
     except Exception as exc:
         logger.debug("redis_lock_release_failed key=%s: %s", key, exc)
         return False
+
+
+_T = TypeVar("_T")
+
+
+def _run_coro_sync(
+    make_coro: Callable[[], Coroutine[object, object, _T]],
+    *,
+    timeout: float,
+    default: _T,
+    label: str,
+) -> _T:
+    """Run a Redis coroutine to completion from a non-loop (daemon) thread.
+
+    The shared async client is bound to the app's main event loop, so callers
+    running outside it (e.g. ``PeriodicJob`` daemon threads) must marshal the
+    coroutine back onto that loop with ``run_coroutine_threadsafe`` — the same
+    bridge ``crawl_url`` uses for its sync enqueue path.
+
+    ``make_coro`` is a factory (not a coroutine) so nothing is scheduled when
+    the loop is unavailable, avoiding an un-awaited-coroutine warning. On
+    timeout the pending future is cancelled best-effort: if the underlying
+    ``SET``/``GET`` already ran on the loop the effect is harmless (a lock
+    self-heals at its TTL; a marker set is idempotent), but cancelling stops us
+    from leaking a holder whose token we've already discarded.
+    """
+    from backend.core.queue import get_main_loop
+
+    loop = get_main_loop()
+    if loop is None or not loop.is_running():
+        return default
+    future = None
+    try:
+        future = asyncio.run_coroutine_threadsafe(make_coro(), loop)
+        return future.result(timeout=timeout)
+    except Exception as exc:
+        if future is not None:
+            future.cancel()
+        logger.debug("%s failed: %s", label, exc)
+        return default
+
+
+def acquire_lock_sync(key: str, ttl_seconds: int, *, timeout: float = 3.0) -> str | None:
+    """Blocking :func:`acquire_lock` for daemon threads. See :func:`_run_coro_sync`.
+
+    Returns the lock token, or ``None`` when the lock is held elsewhere, the
+    main loop is unavailable, or Redis is unreachable.
+    """
+    return _run_coro_sync(
+        lambda: acquire_lock(key, ttl_seconds),
+        timeout=timeout,
+        default=None,
+        label=f"redis_lock_acquire_sync key={key}",
+    )
+
+
+def release_lock_sync(key: str, token: str, *, timeout: float = 3.0) -> bool:
+    """Blocking :func:`release_lock` for daemon threads. Best-effort: an
+    unreleased lock simply expires at its TTL."""
+    return bool(
+        _run_coro_sync(
+            lambda: release_lock(key, token),
+            timeout=timeout,
+            default=False,
+            label=f"redis_lock_release_sync key={key}",
+        )
+    )
+
+
+def cache_get_sync(key: str, *, timeout: float = 3.0) -> str | None:
+    """Blocking :func:`cache_get` for daemon threads. Returns ``None`` on miss
+    or any error (caller treats it as 'not present')."""
+    return _run_coro_sync(
+        lambda: cache_get(key),
+        timeout=timeout,
+        default=None,
+        label=f"redis_cache_get_sync key={key}",
+    )
+
+
+def cache_set_sync(key: str, value: str, ttl_seconds: int, *, timeout: float = 3.0) -> bool:
+    """Blocking :func:`cache_set_with_ttl` for daemon threads."""
+    return bool(
+        _run_coro_sync(
+            lambda: cache_set_with_ttl(key, value, ttl_seconds),
+            timeout=timeout,
+            default=False,
+            label=f"redis_cache_set_sync key={key}",
+        )
+    )

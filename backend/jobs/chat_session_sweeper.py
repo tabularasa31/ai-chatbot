@@ -10,8 +10,11 @@ turns to the escalation "chat already closed" handler, so a returning user
 would be told the chat is closed. Reporting a session as ended for analytics
 must leave the chat resumable, hence the dedicated marker.
 
-Runs as a :class:`~backend.jobs._periodic.PeriodicJob` daemon thread
-(single-process safe — one Railway dyno).
+Runs as a :class:`~backend.jobs._periodic.PeriodicJob` daemon thread. Across
+workers a Redis distributed lock gates each tick so only one worker sweeps per
+interval (the emit is already idempotent via the committed marker, but the lock
+avoids N concurrent duplicate scans). Without Redis (local dev) it runs
+unguarded — single-process safe.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
 from backend.core.config import settings
-from backend.jobs._periodic import PeriodicJob
+from backend.jobs._periodic import LockSpec, PeriodicJob
 from backend.models import Chat, Message
 from backend.models.base import _utcnow
 
@@ -32,6 +35,9 @@ logger = logging.getLogger(__name__)
 
 _CHECK_INTERVAL_SECONDS = 300
 _STARTUP_DELAY_SECONDS = 60
+# Comfortably above a bounded sweep (≤500 rows) yet below the interval, so a
+# crashed holder's lock expires and the next tick recovers within one cycle.
+_LOCK_TTL_SECONDS = 120
 # Cap rows per pass so a large backlog drains over several passes (oldest
 # first) instead of loading every inactive chat into memory at once.
 _MAX_SESSIONS_PER_SWEEP = 500
@@ -138,6 +144,11 @@ _job = PeriodicJob(
     work=_sweep_once,
     interval_seconds=_CHECK_INTERVAL_SECONDS,
     startup_delay_seconds=_STARTUP_DELAY_SECONDS,
+    lock=LockSpec(
+        job_kind="chat_session_sweeper",
+        key_factory=lambda: "lock:chat_session_sweeper",
+        ttl_seconds=_LOCK_TTL_SECONDS,
+    ),
 )
 
 

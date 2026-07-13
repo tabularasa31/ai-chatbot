@@ -144,6 +144,17 @@ def record_guard_event(
     except RuntimeError:
         # No running loop (sync context / tests) — skip the async DB write.
         return
+
+    # Only schedule the detached write on the app's main event loop, to which
+    # ``AsyncSessionLocal`` is bound. Under uvicorn the chat request runs there,
+    # so writes happen normally. In bare ``asyncio.run`` unit tests the running
+    # loop is ephemeral and different — a task left on it would be torn down
+    # with the loop ("Event loop is closed"); skip it (PostHog already emitted).
+    from backend.core.queue import get_main_loop
+
+    if loop is not get_main_loop():
+        return
+
     task = loop.create_task(
         _write_guard_event(
             tenant_id=tid,

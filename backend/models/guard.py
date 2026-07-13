@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, String
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from backend.models.base import Base, _utcnow
@@ -29,6 +29,21 @@ class GuardEvent(Base):
     # index is needed on either.
     __table_args__ = (
         Index("ix_guard_events_tenant_created", "tenant_id", "created_at"),
+        # The retention purge (backend/jobs/guard_events_purge.py) scans by
+        # created_at with NO tenant filter, so the composite above can't serve
+        # it. Unlabeled rows are the bulk of this table and the purge's hot
+        # branch; this partial index lets the daily job seek the oldest eligible
+        # rows instead of rescanning the whole table each batch. Its predicate
+        # (label IS NULL) mirrors the job's unlabeled cutoff exactly, and it
+        # only carries currently-unlabeled rows — a later manual label drops the
+        # row out of it. The sparse labeled branch (label IS NOT NULL, deleted
+        # only after the far longer window) is served by ix_guard_events_label.
+        Index(
+            "ix_guard_events_purge_unlabeled",
+            "created_at",
+            postgresql_where=text("label IS NULL"),
+            sqlite_where=text("label IS NULL"),
+        ),
     )
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

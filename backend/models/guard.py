@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from backend.models.base import Base, _utcnow
@@ -23,13 +23,19 @@ class GuardEvent(Base):
     """
 
     __tablename__ = "guard_events"
+    # Composite (tenant_id, created_at) serves the FP/FN dashboard's core
+    # access pattern — a tenant's events over a time window — and its
+    # tenant_id prefix covers plain tenant scans, so no separate single-column
+    # index is needed on either.
+    __table_args__ = (
+        Index("ix_guard_events_tenant_created", "tenant_id", "created_at"),
+    )
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     # Turn identifier. Nullable because the internal (non-chat) callers of the
     # injection guard — e.g. the Gap Analyzer vetting LLM-authored drafts — have
@@ -54,4 +60,4 @@ class GuardEvent(Base):
     # Manual FP/FN annotation, filled by the review tool: 'fp' | 'fn' | NULL.
     # Indexed: the review tool queries WHERE label IS NOT NULL (sparse).
     label = Column(String(16), nullable=True, index=True)
-    created_at = Column(DateTime, nullable=False, default=_utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)

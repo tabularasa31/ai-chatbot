@@ -51,14 +51,17 @@ def upgrade() -> None:
             ["chat_id"], ["chats.id"], ondelete="SET NULL"
         ),
     )
-    # Keep indexes lean on this write-heavy (2 rows/turn) table: only the
-    # columns FP/FN analysis and the review tool actually filter on. kind and
-    # blocked are low-cardinality; chat_id lookups are rare and stay within a
-    # tenant+time window.
-    op.create_index("ix_guard_events_tenant_id", "guard_events", ["tenant_id"])
+    # Keep indexes lean on this write-heavy (2 rows/turn) table: only what
+    # FP/FN analysis and the review tool actually filter on. A composite
+    # (tenant_id, created_at) covers the core "a tenant's events over a time
+    # window" query (and tenant-only scans via its prefix); reason slices by
+    # category; label serves the review tool's sparse WHERE label IS NOT NULL.
+    # kind/blocked are low-cardinality and chat_id lookups are rare — no index.
+    op.create_index(
+        "ix_guard_events_tenant_created", "guard_events", ["tenant_id", "created_at"]
+    )
     op.create_index("ix_guard_events_reason", "guard_events", ["reason"])
     op.create_index("ix_guard_events_label", "guard_events", ["label"])
-    op.create_index("ix_guard_events_created_at", "guard_events", ["created_at"])
 
 
 def downgrade() -> None:

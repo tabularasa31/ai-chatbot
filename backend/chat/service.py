@@ -826,8 +826,20 @@ async def async_process_chat_message(
             "has_user_context": bool(effective_user_ctx),
             "detected_language": language_context.detected_language,
             "detected_language_resolution_reason": language_context.detected_language_resolution_reason,
-            "confidence": language_context.confidence,
-            "is_reliable": language_context.is_reliable,
+            # Language-detection confidence, renamed from the bare "confidence"
+            # key: at trace level it collided with retrieval "best_confidence_score"
+            # (written by the RAG handler) and made per-trace confidence analytics
+            # ambiguous. Omitted entirely — not written as 0.0 — when detection did
+            # not run this turn (locked follow-ups, bootstrap), so those turns stop
+            # registering as false-negative zero-confidence detections.
+            **(
+                {
+                    "language_confidence": language_context.confidence,
+                    "language_is_reliable": language_context.is_reliable,
+                }
+                if language_context.detection_confidence_measured
+                else {}
+            ),
             "response_language": language_context.response_language,
             "response_language_resolution_reason": language_context.response_language_resolution_reason,
             "escalation_language": language_context.escalation_language,

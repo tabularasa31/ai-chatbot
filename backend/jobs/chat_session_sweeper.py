@@ -148,7 +148,6 @@ _job = PeriodicJob(
         job_kind="chat_session_sweeper",
         key_factory=lambda: "lock:chat_session_sweeper",
         ttl_seconds=_LOCK_TTL_SECONDS,
-        hold=False,
     ),
 )
 

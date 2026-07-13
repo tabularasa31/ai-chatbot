@@ -27,11 +27,14 @@ _last_run_date: date | None = None
 
 _STARTUP_DELAY_SECONDS = 60
 _CHECK_INTERVAL_SECONDS = 3600
-# TTL far exceeds the snapshot's runtime, so a crashed holder frees the lock
-# well before the next day while still blocking the hourly re-check across
-# workers. Held (not released) for the window: the date-scoped key plus this
-# TTL are what make the daily emit single-run cluster-wide.
-_LOCK_TTL_SECONDS = 6 * 3600
+# The lock only guards the run's duration (mutual exclusion). 10 min covers the
+# all-tenants scan with ample buffer; a crashed holder self-heals well before
+# the next hourly tick.
+_LOCK_TTL_SECONDS = 600
+# The durable "emitted today" marker is what makes the daily snapshot single-run
+# across the cluster. Keyed on the UTC date, so a new day is a fresh key; 26h
+# TTL is just to auto-clean stale keys (it outlasts the day comfortably).
+_DONE_MARKER_TTL_SECONDS = 26 * 3600
 
 
 def _lang_to_script(lang: str) -> str:
@@ -145,8 +148,16 @@ def _run_snapshot_once() -> None:
         db.close()
 
 
+def _today() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
 def _daily_lock_key() -> str:
-    return f"lock:kb_snapshot:daily:{datetime.now(UTC).date().isoformat()}"
+    return f"lock:kb_snapshot:daily:{_today()}"
+
+
+def _daily_done_marker() -> str:
+    return f"done:kb_snapshot:daily:{_today()}"
 
 
 _job = PeriodicJob(
@@ -158,7 +169,8 @@ _job = PeriodicJob(
         job_kind="kb_snapshot_daily",
         key_factory=_daily_lock_key,
         ttl_seconds=_LOCK_TTL_SECONDS,
-        hold=True,
+        done_marker_factory=_daily_done_marker,
+        done_ttl_seconds=_DONE_MARKER_TTL_SECONDS,
     ),
 )
 

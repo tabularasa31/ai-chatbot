@@ -35,26 +35,39 @@ logger = logging.getLogger(__name__)
 class LockSpec:
     """Cross-worker gate for a periodic job's tick.
 
+    The lock is a *mutual-exclusion* primitive only: exactly one worker runs the
+    work at a time, and the lock is ALWAYS released once the work returns (or
+    raises). Its TTL bounds crash recovery — a killed holder's lock self-heals
+    after ``ttl_seconds`` so a later tick can take over.
+
+    "Run at most once per window" (e.g. once per day) is a *separate* concern
+    handled by an optional durable done-marker, NOT by holding the lock: a
+    TTL-bounded lock cannot express "already done today" because it expires
+    mid-window, letting a worker that lost the earlier race re-run the work.
+    When ``done_marker_factory`` is set, a successful run writes the marker
+    (``done_ttl_seconds``) and each tick skips the work while the marker exists.
+
     Attributes:
         job_kind: stable label for logs/metrics (``lock_acquired job_kind=…``).
-        key_factory: produces the Redis lock key for the current tick. A
-            callable so time-scoped keys (``lock:kb_snapshot:daily:<date>``)
-            recompute each iteration.
+        key_factory: produces the mutual-exclusion lock key for the current
+            tick. A callable so time-scoped keys recompute each iteration.
         ttl_seconds: lock TTL. MUST exceed the job's worst-case runtime plus a
             buffer so a crashed holder's lock expires and a later tick takes
             over, yet be short enough that recovery lands within an acceptable
             window.
-        hold: when ``True`` the lock is NOT released after the work runs — it is
-            held until the TTL expires (claim-the-window semantics, e.g. a
-            once-daily job whose key already encodes the day). When ``False``
-            the lock is released immediately after the work, giving per-tick
-            mutual exclusion.
+        done_marker_factory: when set, produces a durable "already ran for this
+            window" key (e.g. ``done:kb_snapshot:daily:<date>``). Checked after
+            acquiring the lock; written after a successful run.
+        done_ttl_seconds: marker TTL. MUST outlast the window so a re-check
+            within it still sees "done"; the window boundary is encoded in the
+            key (a new day → a new key → the marker is absent again).
     """
 
     job_kind: str
     key_factory: Callable[[], str]
     ttl_seconds: int
-    hold: bool = False
+    done_marker_factory: Callable[[], str] | None = None
+    done_ttl_seconds: int = 0
 
 
 class PeriodicJob:
@@ -110,7 +123,13 @@ class PeriodicJob:
             self._work()
             return
 
-        from backend.core.redis import acquire_lock_sync, is_enabled, release_lock_sync
+        from backend.core.redis import (
+            acquire_lock_sync,
+            cache_get_sync,
+            cache_set_sync,
+            is_enabled,
+            release_lock_sync,
+        )
 
         if not is_enabled():
             # No Redis configured: local/dev single-process. Run unguarded and
@@ -129,11 +148,23 @@ class PeriodicJob:
 
         self._log_lock("lock_acquired", lock, key)
         try:
+            marker = lock.done_marker_factory() if lock.done_marker_factory else None
+            if marker is not None and cache_get_sync(marker) is not None:
+                # Already completed for this window (durable marker). Nothing to
+                # do — release the lock in finally and move on.
+                logger.debug("lock_window_done job_kind=%s marker=%s", lock.job_kind, marker)
+                return
             self._work()
+            # Marker is written only after a successful run, so a failed tick
+            # (exception below skips this) retries on the next interval.
+            if marker is not None:
+                cache_set_sync(marker, "1", lock.done_ttl_seconds)
         finally:
-            if not lock.hold:
-                if release_lock_sync(key, token):
-                    self._log_lock("lock_released", lock, key)
+            # Always release: the lock is mutual exclusion only, never the
+            # once-per-window guard. Releasing on failure lets the next tick
+            # retry instead of waiting out the TTL.
+            if release_lock_sync(key, token):
+                self._log_lock("lock_released", lock, key)
 
     def _log_lock(self, event: str, lock: LockSpec, key: str) -> None:
         logger.info(

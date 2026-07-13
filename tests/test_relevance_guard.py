@@ -50,7 +50,7 @@ def test_injection_rejects_before_rag(
 ) -> None:
     cl_row, api_key = _create_client(tenant, db_session, email="inj@example.com")
 
-    async def _async_inject_detected(_text, *, tenant_id, api_key, trace=None):
+    async def _async_inject_detected(_text, *, tenant_id, api_key, trace=None, **_kw):
         return Verdict.of(VerdictReason.INJECTION_STRUCTURAL, evidence="x")
 
     async def _async_relevance_unused(**kwargs):
@@ -97,7 +97,7 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
 ) -> None:
     cl_row, api_key = _create_client(tenant, db_session, email="lowmix@example.com")
 
-    async def _async_no_inject(_text, *, tenant_id, api_key, trace=None):
+    async def _async_no_inject(_text, *, tenant_id, api_key, trace=None, **_kw):
         return Verdict.of(VerdictReason.OK)
 
     monkeypatch.setattr(
@@ -164,7 +164,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
 ) -> None:
     cl_row, api_key = _create_client(tenant, db_session, email="lownone@example.com")
 
-    async def _async_no_inject(_text, *, tenant_id, api_key, trace=None):
+    async def _async_no_inject(_text, *, tenant_id, api_key, trace=None, **_kw):
         return Verdict.of(VerdictReason.OK)
 
     monkeypatch.setattr(

@@ -436,6 +436,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
                     trace=run.trace,
                     force_llm_check=True,
                     dialog_context=state.guard_dialog_context,
+                    chat_id=str(run.chat_id) if run.chat_id is not None else None,
                 )
                 _short_reason = _short_verdict.reason.value
                 if _short_reason in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
@@ -466,6 +467,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
             trace=run.trace,
             force_llm_check=True,
             dialog_context=state.guard_dialog_context,
+            chat_id=str(run.chat_id) if run.chat_id is not None else None,
         )
         relevant = not _rel_verdict.blocked
         relevance_reason = _rel_verdict.reason.value

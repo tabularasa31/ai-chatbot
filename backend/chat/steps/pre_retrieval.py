@@ -315,15 +315,17 @@ async def injection_guard(run: PipelineRun) -> ChatPipelineResult | None:
     traffic mix).
     """
     from backend.chat import service as _svc
-    from backend.guards.events import record_guard_event
     from backend.guards.types import VerdictReason
 
     _inj_start = perf_counter()
+    # The guard records its own verdict to guard_events (co-located with the
+    # cache-hit flag it knows); chat_id marks this as a real chat turn.
     injection_verdict = await _svc.async_detect_injection(
         run.question,
         tenant_id=str(run.tenant_id),
         api_key=run.api_key,
         trace=run.trace,
+        chat_id=str(run.chat_id) if run.chat_id is not None else None,
     )
     _inj_latency_s = perf_counter() - _inj_start
 
@@ -336,13 +338,6 @@ async def injection_guard(run: PipelineRun) -> ChatPipelineResult | None:
     elif injection_verdict.reason is VerdictReason.INJECTION_SEMANTIC:
         _inj_level, _inj_method = 2, "semantic"
 
-    record_guard_event(
-        tenant_id=run.tenant_id,
-        chat_id=run.chat_id,
-        kind="injection",
-        verdict=injection_verdict,
-        latency_ms=round(_inj_latency_s * 1000, 2),
-    )
     if run.tenant_public_id is not None or run.bot_public_id is not None:
         from backend.chat.events import _emit_ai_span_event
         _inj_trace_id = (
@@ -399,6 +394,7 @@ def launch_concurrent_tasks(run: PipelineRun) -> None:
             api_key=run.api_key,
             trace=run.trace,
             dialog_context=state.guard_dialog_context,
+            chat_id=str(run.chat_id) if run.chat_id is not None else None,
         )
     )
     state.base_embed_task = asyncio.create_task(
@@ -701,9 +697,11 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
     # relevance guard (an OpenAI call, 2-10 s).
     await run.db.close()
     assert state.rel_task is not None  # created by launch_concurrent_tasks
-    from backend.guards.events import record_guard_event
     from backend.guards.types import Verdict, VerdictReason
 
+    # The relevance guard records its own verdict to guard_events (it was given
+    # this turn's chat_id at task creation). A cancelled task — superseded by a
+    # FAQ-direct hit — is not a real verdict and is intentionally not logged.
     try:
         rel_verdict = await state.rel_task
     except asyncio.CancelledError:
@@ -727,13 +725,6 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
     )
     state.guard_bypassed_short_query = guard_reason == "short_query_bypass"
     _rel_latency_s = perf_counter() - state.rel_started_at
-    record_guard_event(
-        tenant_id=run.tenant_id,
-        chat_id=run.chat_id,
-        kind="relevance",
-        verdict=rel_verdict,
-        latency_ms=round(_rel_latency_s * 1000, 2),
-    )
     if run.tenant_public_id is not None or run.bot_public_id is not None:
         from backend.chat.events import _emit_ai_span_event
         _rel_trace_id = (

@@ -90,7 +90,10 @@ async def _write_guard_event(
                     kind=kind,
                     blocked=verdict.blocked,
                     reason=verdict.reason.value,
-                    score=verdict.score,
+                    # Relevance verdicts have no numeric score (always 0.0) —
+                    # store NULL rather than a misleading zero. Injection scores
+                    # (cosine similarity) are real and kept.
+                    score=verdict.score or None,
                     evidence_hash=_hash_evidence(verdict.evidence),
                     latency_ms=latency_ms,
                     cache_hit=cache_hit,

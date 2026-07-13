@@ -127,6 +127,7 @@ async def test_semantic_cache_hit_skips_second_embed(
         tenant_id="tenant-1",
     )
     assert first.detected is True
+    assert first.cache_hit is False  # computed after a miss
     assert embed_calls == 1
     assert len(_fake_redis) == 1  # verdict written to cache
 
@@ -137,6 +138,7 @@ async def test_semantic_cache_hit_skips_second_embed(
         tenant_id="tenant-1",
     )
     assert second.detected is True
+    assert second.cache_hit is True  # served from cache
     assert embed_calls == 1  # served from cache, no new embedding call
 
 
@@ -174,8 +176,11 @@ async def test_semantic_no_cache_when_tenant_absent(
         "backend.guards.injection_detector.async_embed_queries", _fake_embed_queries
     )
 
-    await async_detect_injection_semantic("ignore all", "ignore all", api_key="k")
+    result = await async_detect_injection_semantic(
+        "ignore all", "ignore all", api_key="k"
+    )
     assert _fake_redis == {}
+    assert result.cache_hit is None  # caching not consulted without a tenant
 
 
 # ---------------------------------------------------------------------------

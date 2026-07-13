@@ -15,7 +15,7 @@ import logging
 import re
 import threading
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from time import monotonic, perf_counter
 
 from backend.core.config import settings
@@ -46,6 +46,10 @@ class InjectionDetectionResult:
     pattern: str | None = None        # matched regex (level 1)
     score: float | None = None        # cosine similarity (level 2)
     normalized_input: str = ""
+    # Whether the semantic (level-2) verdict came from the Redis cache.
+    # True = cache hit, False = computed after a miss, None = level 2 not
+    # consulted / caching disabled (structural hit, no tenant, Redis off).
+    cache_hit: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +351,7 @@ async def async_detect_injection_semantic(
         if cached is not None:
             record_hit(_SEMANTIC_CACHE_NAME)
             _emit_semantic_cache_metric(tenant_id, True)
-            return cached
+            return replace(cached, cache_hit=True)
         record_miss(_SEMANTIC_CACHE_NAME)
         _emit_semantic_cache_metric(tenant_id, False)
 
@@ -388,7 +392,7 @@ async def async_detect_injection_semantic(
         # transient embedding hiccup doesn't pin a pass-through verdict.
         if cache_key is not None:
             await _semantic_cache_set(cache_key, result)
-        return result
+        return replace(result, cache_hit=False if cache_enabled else None)
     except Exception as e:
         _record_semantic_failure(api_key)
         if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
@@ -413,11 +417,9 @@ def _to_verdict(result: InjectionDetectionResult) -> Verdict:
             score=result.score if result.score is not None else 1.0,
             evidence=result.pattern,
         )
-    return Verdict.of(
-        VerdictReason.INJECTION_SEMANTIC,
-        score=result.score or 0.0,
-        evidence="semantic_similarity",
-    )
+    # Evidence is omitted for the semantic level — the cosine ``score`` is the
+    # signal; a constant string would hash to a useless constant.
+    return Verdict.of(VerdictReason.INJECTION_SEMANTIC, score=result.score or 0.0)
 
 
 async def async_detect_injection(
@@ -426,6 +428,7 @@ async def async_detect_injection(
     tenant_id: str,
     api_key: str,
     trace: TraceHandle | None = None,
+    chat_id: str | None = None,
 ) -> Verdict:
     """Two-level injection detection. Returns a :class:`Verdict`.
 
@@ -433,11 +436,16 @@ async def async_detect_injection(
     (~0 ms); if it triggers, level 2 is skipped. Level 2 (semantic) is gated
     by INJECTION_SEMANTIC_ENABLED and uses ``async_detect_injection_semantic``
     so the event loop is not blocked during the embedding HTTP call.
+
+    When ``chat_id`` is given (a real chat turn), the verdict is recorded to
+    ``guard_events`` with the level-2 cache-hit flag. Internal callers without
+    a chat context (e.g. the Gap Analyzer draft check) omit it and are not
+    logged as turns.
     """
+    _start = perf_counter()
     # Level 1: structural (~0 ms, CPU-bound — no await needed)
-    _l1_start = perf_counter()
     result = detect_injection_structural(text)
-    _l1_ms = round((perf_counter() - _l1_start) * 1000, 2)
+    _l1_ms = round((perf_counter() - _start) * 1000, 2)
     if trace is not None:
         _l1_span = trace.span(
             name="injection_l1",
@@ -450,7 +458,7 @@ async def async_detect_injection(
         record_stage_ms(trace, "injection_guard_ms", _l1_ms)
     if result.detected:
         _log_detection(tenant_id, result)
-        return _to_verdict(result)
+        return _finalize_injection(result, tenant_id, chat_id, _start)
 
     # Level 2: async semantic (~50-100 ms)
     if settings.injection_semantic_enabled:
@@ -472,7 +480,29 @@ async def async_detect_injection(
         if result.detected:
             _log_detection(tenant_id, result)
 
-    return _to_verdict(result)
+    return _finalize_injection(result, tenant_id, chat_id, _start)
+
+
+def _finalize_injection(
+    result: InjectionDetectionResult,
+    tenant_id: str,
+    chat_id: str | None,
+    start: float,
+) -> Verdict:
+    """Convert to a Verdict and, for real chat turns, log the guard event."""
+    verdict = _to_verdict(result)
+    if chat_id is not None:
+        from backend.guards.events import record_guard_event
+
+        record_guard_event(
+            tenant_id=tenant_id,
+            chat_id=chat_id,
+            kind="injection",
+            verdict=verdict,
+            latency_ms=round((perf_counter() - start) * 1000, 2),
+            cache_hit=result.cache_hit,
+        )
+    return verdict
 
 
 def _log_detection(tenant_id: str, result: InjectionDetectionResult) -> None:

@@ -101,6 +101,17 @@ def _window_spec(*, key: str = "lock:kb", marker: str = "done:kb") -> LockSpec:
     )
 
 
+def test_marker_without_ttl_is_rejected() -> None:
+    """A done-marker with no TTL would silently never persist — fail loudly."""
+    with pytest.raises(ValueError, match="done_ttl_seconds"):
+        LockSpec(
+            job_kind="misconfigured",
+            key_factory=lambda: "lock:x",
+            ttl_seconds=60,
+            done_marker_factory=lambda: "done:x",
+        )
+
+
 def test_no_lock_spec_always_runs() -> None:
     calls: list[int] = []
     job = _counting_job(calls=calls, lock=None)

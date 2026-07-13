@@ -69,6 +69,16 @@ class LockSpec:
     done_marker_factory: Callable[[], str] | None = None
     done_ttl_seconds: int = 0
 
+    def __post_init__(self) -> None:
+        # A marker with a non-positive TTL would silently never persist
+        # (cache_set with ttl<=0 is a no-op), so the once-per-window guard
+        # would be a no-op too. Fail loudly at construction instead.
+        if self.done_marker_factory is not None and self.done_ttl_seconds <= 0:
+            raise ValueError(
+                f"LockSpec(job_kind={self.job_kind!r}) sets done_marker_factory "
+                "but done_ttl_seconds<=0; the marker would never persist"
+            )
+
 
 class PeriodicJob:
     def __init__(
@@ -154,6 +164,10 @@ class PeriodicJob:
                 # do — release the lock in finally and move on.
                 logger.debug("lock_window_done job_kind=%s marker=%s", lock.job_kind, marker)
                 return
+            # Fail-open on the marker check: a Redis blip on GET reads as
+            # "not done" and runs the work, so at worst we re-emit once. That is
+            # deliberately preferred over fail-closed, which would skip a whole
+            # window (a missed daily snapshot) on a transient error.
             self._work()
             # Marker is written only after a successful run, so a failed tick
             # (exception below skips this) retries on the next interval.

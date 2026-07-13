@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import threading
@@ -18,7 +19,9 @@ from dataclasses import dataclass, field
 from time import monotonic, perf_counter
 
 from backend.core.config import settings
+from backend.guards.types import Verdict, VerdictReason
 from backend.observability import TraceHandle, record_stage_ms
+from backend.observability.cache_metrics import record_hit, record_miss
 from backend.search.service import (
     async_embed_queries,
     async_embed_query,
@@ -26,6 +29,10 @@ from backend.search.service import (
 )
 
 logger = logging.getLogger(__name__)
+
+# In-process cache name for the semantic-injection Redis cache (surfaced via the
+# admin cache-metrics endpoint alongside the relevance-guard cache).
+_SEMANTIC_CACHE_NAME = "injection_semantic"
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -241,11 +248,79 @@ def _passthrough_result(normalized: str) -> InjectionDetectionResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# Verdict cache for the (expensive) semantic level
+# ---------------------------------------------------------------------------
+# The semantic level is an embedding HTTP call on every turn. Repeated identical
+# messages (spam, demo scripts) recompute the same verdict, so the L2 result is
+# cached in Redis keyed by ``hash(tenant_id, guard_kind, normalized_input)``.
+# The structural level (L1) is a regex sweep and not worth caching.
+#
+# The semantic verdict depends only on the normalized text (the injection seeds
+# and threshold are global) — dialog context and tenant-profile version, which
+# the relevance-guard cache folds into its key, are not inputs here, so they are
+# deliberately absent from this key. Graceful: when Redis is unset/unreachable
+# the core helpers return miss/False and detection runs directly.
+
+
+def _semantic_cache_key(tenant_id: str, normalized: str) -> str:
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"guard:verdict:{VerdictReason.INJECTION_SEMANTIC.value}:{tenant_id}:{digest}"
+
+
+def _emit_semantic_cache_metric(tenant_id: str, cache_hit: bool) -> None:
+    """Mirror the relevance guard: emit a per-turn cache hit/miss signal."""
+    try:
+        from backend.observability.metrics import capture_event
+
+        capture_event(
+            "injection_semantic.cache",
+            distinct_id=tenant_id,
+            tenant_id=tenant_id,
+            properties={"cache_hit": cache_hit},
+        )
+    except Exception:
+        pass
+
+
+async def _semantic_cache_get(
+    key: str, normalized: str
+) -> InjectionDetectionResult | None:
+    from backend.core import redis as redis_mod
+
+    raw = await redis_mod.cache_get(key)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    detected = bool(data.get("d"))
+    return InjectionDetectionResult(
+        detected=detected,
+        level=2 if detected else None,
+        method="semantic" if detected else None,
+        pattern=None,
+        score=data.get("s"),
+        normalized_input=normalized,
+    )
+
+
+async def _semantic_cache_set(key: str, result: InjectionDetectionResult) -> None:
+    from backend.core import redis as redis_mod
+
+    payload = json.dumps({"d": result.detected, "s": result.score})
+    await redis_mod.cache_set_with_ttl(
+        key, payload, settings.guard_semantic_cache_ttl_seconds
+    )
+
+
 async def async_detect_injection_semantic(
     text: str,
     normalized: str,
     *,
     api_key: str,
+    tenant_id: str | None = None,
 ) -> InjectionDetectionResult:
     """Level 2: semantic similarity with injection seeds (async).
 
@@ -256,7 +331,26 @@ async def async_detect_injection_semantic(
     repeated failures the per-key circuit breaker opens and this level is
     skipped entirely (also pass-through) so a down embedding service does
     not add the timeout to every turn.
+
+    When ``tenant_id`` is given and Redis is configured, the verdict is served
+    from / written to the per-tenant verdict cache. The cache is consulted
+    *before* the circuit breaker so a previously-computed verdict is still
+    served (no embedding call needed) even while the breaker is open.
     """
+    from backend.core import redis as redis_mod
+
+    cache_enabled = tenant_id is not None and redis_mod.is_enabled()
+    cache_key = _semantic_cache_key(tenant_id, normalized) if cache_enabled else None
+
+    if cache_key is not None:
+        cached = await _semantic_cache_get(cache_key, normalized)
+        if cached is not None:
+            record_hit(_SEMANTIC_CACHE_NAME)
+            _emit_semantic_cache_metric(tenant_id, True)
+            return cached
+        record_miss(_SEMANTIC_CACHE_NAME)
+        _emit_semantic_cache_metric(tenant_id, False)
+
     if _circuit_is_open(api_key):
         return _passthrough_result(normalized)
     try:
@@ -272,7 +366,7 @@ async def async_detect_injection_semantic(
         )
         _record_semantic_success(api_key)
         if max_score >= settings.injection_semantic_threshold:
-            return InjectionDetectionResult(
+            result = InjectionDetectionResult(
                 detected=True,
                 level=2,
                 method="semantic",
@@ -280,14 +374,21 @@ async def async_detect_injection_semantic(
                 score=max_score,
                 normalized_input=normalized,
             )
-        return InjectionDetectionResult(
-            detected=False,
-            level=None,
-            method=None,
-            pattern=None,
-            score=max_score,
-            normalized_input=normalized,
-        )
+        else:
+            result = InjectionDetectionResult(
+                detected=False,
+                level=None,
+                method=None,
+                pattern=None,
+                score=max_score,
+                normalized_input=normalized,
+            )
+        # Deterministic for a given normalized input — safe to cache either
+        # outcome. Only failures (timeout/error below) are left uncached so a
+        # transient embedding hiccup doesn't pin a pass-through verdict.
+        if cache_key is not None:
+            await _semantic_cache_set(cache_key, result)
+        return result
     except Exception as e:
         _record_semantic_failure(api_key)
         if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
@@ -302,14 +403,31 @@ async def async_detect_injection_semantic(
 # Main entry points
 # ---------------------------------------------------------------------------
 
+def _to_verdict(result: InjectionDetectionResult) -> Verdict:
+    """Adapt the internal two-level result into the uniform guard contract."""
+    if not result.detected:
+        return Verdict.of(VerdictReason.OK, score=result.score or 0.0)
+    if result.level == 1:
+        return Verdict.of(
+            VerdictReason.INJECTION_STRUCTURAL,
+            score=result.score if result.score is not None else 1.0,
+            evidence=result.pattern,
+        )
+    return Verdict.of(
+        VerdictReason.INJECTION_SEMANTIC,
+        score=result.score or 0.0,
+        evidence="semantic_similarity",
+    )
+
+
 async def async_detect_injection(
     text: str,
     *,
     tenant_id: str,
     api_key: str,
     trace: TraceHandle | None = None,
-) -> InjectionDetectionResult:
-    """Two-level injection detection.
+) -> Verdict:
+    """Two-level injection detection. Returns a :class:`Verdict`.
 
     Level 1 (structural) runs first, is CPU-bound and executes synchronously
     (~0 ms); if it triggers, level 2 is skipped. Level 2 (semantic) is gated
@@ -332,13 +450,13 @@ async def async_detect_injection(
         record_stage_ms(trace, "injection_guard_ms", _l1_ms)
     if result.detected:
         _log_detection(tenant_id, result)
-        return result
+        return _to_verdict(result)
 
     # Level 2: async semantic (~50-100 ms)
     if settings.injection_semantic_enabled:
         _l2_start = perf_counter()
         result = await async_detect_injection_semantic(
-            text, result.normalized_input, api_key=api_key,
+            text, result.normalized_input, api_key=api_key, tenant_id=tenant_id,
         )
         _l2_ms = round((perf_counter() - _l2_start) * 1000, 2)
         if trace is not None:
@@ -353,10 +471,8 @@ async def async_detect_injection(
             record_stage_ms(trace, "injection_guard_ms", _l2_ms)
         if result.detected:
             _log_detection(tenant_id, result)
-            return result
-        return result
 
-    return result
+    return _to_verdict(result)
 
 
 def _log_detection(tenant_id: str, result: InjectionDetectionResult) -> None:

@@ -15,6 +15,7 @@ from backend.guards.reject_response import (
     RejectReason,
     _build_canonical_reject_response,
 )
+from backend.guards.types import Verdict, VerdictReason
 from tests._async_utils import as_async as _as_async, as_async_generate, async_assert_not_called
 from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -723,7 +724,7 @@ def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
-        _as_async_local(lambda **_kw: (True, "in_domain", _kw.get("profile"))),
+        _as_async_local(lambda **_kw: Verdict.of(VerdictReason.RELEVANT)),
     )
 
     token = register_and_verify_user(tenant, db_session, email="preconf-noyes@example.com")
@@ -977,8 +978,6 @@ def test_chat_injection_detected(
     """Injection guard rejects the turn → 200 with the canned reject response;
     background tasks (relevance, embeddings, FAQ, retrieval, generate_answer)
     must not run."""
-    from types import SimpleNamespace
-
     token = register_and_verify_user(tenant, db_session, email="chat-inject@example.com")
     cl_resp = tenant.post(
         "/tenants",
@@ -990,9 +989,7 @@ def test_chat_injection_detected(
     api_key = cl_resp.json()["api_key"]
 
     async def _async_inject_detected(*args, **kwargs):
-        return SimpleNamespace(
-            detected=True, level=1, method="structural", pattern="x", score=None,
-        )
+        return Verdict.of(VerdictReason.INJECTION_STRUCTURAL, evidence="x")
 
     async def _async_relevance_unused(**kwargs):
         raise AssertionError("relevance check must be cancelled before await")
@@ -1051,8 +1048,6 @@ def test_chat_injection_detected_skips_concurrent_llm_tasks(
     the injection-detected path — otherwise reject turns waste 2-5 s of
     relevance-LLM wall time that ``task.cancel()`` cannot reliably reclaim.
     """
-    from types import SimpleNamespace
-
     token = register_and_verify_user(tenant, db_session, email="chat-inject-fast@example.com")
     cl_resp = tenant.post(
         "/tenants",
@@ -1066,13 +1061,11 @@ def test_chat_injection_detected_skips_concurrent_llm_tasks(
     counters = {"relevance": 0, "embed": 0, "rewrite": 0, "rewrite_kb": 0}
 
     async def _async_inject_detected(*args, **kwargs):
-        return SimpleNamespace(
-            detected=True, level=1, method="structural", pattern="x", score=None,
-        )
+        return Verdict.of(VerdictReason.INJECTION_STRUCTURAL, evidence="x")
 
     async def _count_relevance(**kwargs):
         counters["relevance"] += 1
-        return (True, "ok", None)
+        return Verdict.of(VerdictReason.RELEVANT)
 
     async def _count_embed(*args, **kwargs):
         counters["embed"] += 1
@@ -1120,8 +1113,6 @@ def test_chat_injection_detected_skips_speculative_retrieval(
     invariant: if someone moves the speculative launch above the injection
     guard, retrieval would fire on injected input and this test fails.
     """
-    from types import SimpleNamespace
-
     token = register_and_verify_user(tenant, db_session, email="chat-inject-spec@example.com")
     cl_resp = tenant.post(
         "/tenants",
@@ -1133,9 +1124,7 @@ def test_chat_injection_detected_skips_speculative_retrieval(
     api_key = cl_resp.json()["api_key"]
 
     async def _async_inject_detected(*args, **kwargs):
-        return SimpleNamespace(
-            detected=True, level=1, method="structural", pattern="x", score=None,
-        )
+        return Verdict.of(VerdictReason.INJECTION_STRUCTURAL, evidence="x")
 
     monkeypatch.setattr("backend.chat.service.async_detect_injection", _async_inject_detected)
     monkeypatch.setattr(
@@ -1166,8 +1155,6 @@ def test_chat_faq_direct(
     """FAQ direct hit short-circuits before generation; the relevance task
     must be cancelled before its result is awaited (no relevance call should
     reach generate_answer)."""
-    from types import SimpleNamespace
-
     from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 
     token = register_and_verify_user(tenant, db_session, email="chat-faq-direct@example.com")
@@ -1181,15 +1168,13 @@ def test_chat_faq_direct(
     api_key = cl_resp.json()["api_key"]
 
     async def _async_no_inject(*args, **kwargs):
-        return SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        )
+        return Verdict.of(VerdictReason.OK)
 
     relevance_called = {"count": 0}
 
     async def _async_relevance(**kwargs):
         relevance_called["count"] += 1
-        return (True, "ok", SimpleNamespace(product_name="P", topics=["X"]))
+        return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
         "backend.chat.service.async_detect_injection",
@@ -1257,8 +1242,6 @@ def test_chat_not_relevant_returns_localized_reject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Relevance guard rejects → 200 with the localized off-topic text."""
-    from types import SimpleNamespace
-
     token = register_and_verify_user(tenant, db_session, email="chat-irrel@example.com")
     cl_resp = tenant.post(
         "/tenants",
@@ -1270,12 +1253,10 @@ def test_chat_not_relevant_returns_localized_reject(
     api_key = cl_resp.json()["api_key"]
 
     async def _async_no_inject(*args, **kwargs):
-        return SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        )
+        return Verdict.of(VerdictReason.OK)
 
     async def _async_relevance_off_topic(**kwargs):
-        return (False, "off_topic", None)
+        return Verdict.of(VerdictReason.OFFTOPIC)
 
     monkeypatch.setattr(
         "backend.chat.service.async_detect_injection",

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -14,11 +13,17 @@ from backend.guards.reject_response import (
     RejectReason,
     _build_canonical_reject_response,
 )
+from backend.guards.types import Verdict, VerdictReason
 from backend.models import Tenant, TenantProfile
 from backend.search.service import build_reliability_assessment
 
 from tests._async_utils import as_async as _as_async, as_async_generate, async_assert_not_called
 from tests.conftest import register_and_verify_user, set_client_openai_key
+
+
+def _rr(verdict: Verdict) -> tuple[bool, str]:
+    """Adapt a guard :class:`Verdict` to the legacy (relevant, reason) pair."""
+    return not verdict.blocked, verdict.reason.value
 
 
 def _create_client(
@@ -46,9 +51,7 @@ def test_injection_rejects_before_rag(
     cl_row, api_key = _create_client(tenant, db_session, email="inj@example.com")
 
     async def _async_inject_detected(_text, *, tenant_id, api_key, trace=None):
-        return SimpleNamespace(
-            detected=True, level=1, method="structural", pattern="x", score=None,
-        )
+        return Verdict.of(VerdictReason.INJECTION_STRUCTURAL, evidence="x")
 
     async def _async_relevance_unused(**kwargs):
         raise AssertionError("relevance called")
@@ -95,18 +98,21 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
     cl_row, api_key = _create_client(tenant, db_session, email="lowmix@example.com")
 
     async def _async_no_inject(_text, *, tenant_id, api_key, trace=None):
-        return SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        )
+        return Verdict.of(VerdictReason.OK)
 
     monkeypatch.setattr(
         "backend.chat.service.async_detect_injection",
         _async_no_inject,
     )
-    profile = SimpleNamespace(product_name="Product", topics=["ModA", "ModB"])
+    # The guard no longer echoes a profile back; the pipeline reads it from the
+    # DB (state.guard_profile). Upsert one so the low-similarity reject can
+    # render the product name / topics (the tenant fixture may already have
+    # provisioned an empty profile row).
+    db_session.merge(_make_profile(cl_row.id))
+    db_session.commit()
 
     async def _async_relevance_ok(**kwargs):
-        return (True, "ok", profile)
+        return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
@@ -159,18 +165,21 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     cl_row, api_key = _create_client(tenant, db_session, email="lownone@example.com")
 
     async def _async_no_inject(_text, *, tenant_id, api_key, trace=None):
-        return SimpleNamespace(
-            detected=False, level=None, method=None, pattern=None, score=None,
-        )
+        return Verdict.of(VerdictReason.OK)
 
     monkeypatch.setattr(
         "backend.chat.service.async_detect_injection",
         _async_no_inject,
     )
-    profile = SimpleNamespace(product_name="Product", topics=["ModA", "ModB"])
+    # The guard no longer echoes a profile back; the pipeline reads it from the
+    # DB (state.guard_profile). Upsert one so the low-similarity reject can
+    # render the product name / topics (the tenant fixture may already have
+    # provisioned an empty profile row).
+    db_session.merge(_make_profile(cl_row.id))
+    db_session.commit()
 
     async def _async_relevance_ok(**kwargs):
-        return (True, "ok", profile)
+        return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
@@ -233,15 +242,14 @@ def _make_profile(tenant_id: uuid.UUID) -> TenantProfile:
 async def test_async_relevance_no_profile_passes_through() -> None:
     from backend.guards.relevance_checker import async_check_relevance_with_profile
 
-    relevant, reason, p = await async_check_relevance_with_profile(
+    relevant, reason = _rr(await async_check_relevance_with_profile(
         tenant_id=uuid.uuid4(),
         user_question="some question",
         profile=None,
         api_key="sk-test",
-    )
+    ))
     assert relevant is True
     assert reason == "no_profile"
-    assert p is None
 
 
 @pytest.mark.asyncio
@@ -251,12 +259,12 @@ async def test_async_relevance_short_query_bypass() -> None:
     tid = uuid.uuid4()
     profile = _make_profile(tid)
 
-    relevant, reason, p = await async_check_relevance_with_profile(
+    relevant, reason = _rr(await async_check_relevance_with_profile(
         tenant_id=tid,
         user_question="hi",
         profile=profile,
         api_key="sk-test",
-    )
+    ))
     assert relevant is True
     assert reason == "short_query_bypass"
 
@@ -290,13 +298,13 @@ async def test_async_relevance_force_llm_check_bypasses_short_query(
     tid = uuid.uuid4()
     profile = _make_profile(tid)
 
-    relevant, reason, _p = await async_check_relevance_with_profile(
+    relevant, reason = _rr(await async_check_relevance_with_profile(
         tenant_id=tid,
         user_question="hi",
         profile=profile,
         api_key="sk-test",
         force_llm_check=True,
-    )
+    ))
     assert relevant is False
     assert reason == "offtopic"
     assert async_mock.await_count == 1
@@ -324,15 +332,14 @@ async def test_async_relevance_llm_returns_relevant(monkeypatch: pytest.MonkeyPa
     tid = uuid.uuid4()
     profile = _make_profile(tid)
 
-    relevant, reason, p = await async_check_relevance_with_profile(
+    relevant, reason = _rr(await async_check_relevance_with_profile(
         tenant_id=tid,
         user_question="how do I configure the integration module",
         profile=profile,
         api_key="sk-test",
-    )
+    ))
     assert relevant is True
     assert reason == "relevant"
-    assert p is profile
 
 
 @pytest.mark.asyncio
@@ -357,12 +364,12 @@ async def test_async_relevance_llm_returns_not_relevant(monkeypatch: pytest.Monk
     tid = uuid.uuid4()
     profile = _make_profile(tid)
 
-    relevant, reason, p = await async_check_relevance_with_profile(
+    relevant, reason = _rr(await async_check_relevance_with_profile(
         tenant_id=tid,
         user_question="write a poem about flowers please",
         profile=profile,
         api_key="sk-test",
-    )
+    ))
     # Legacy {"relevant": false} responses (no category field) must still be
     # honoured and normalize to the offtopic category token.
     assert relevant is False
@@ -392,15 +399,14 @@ async def test_async_relevance_timeout_returns_safe(monkeypatch: pytest.MonkeyPa
     tid = uuid.uuid4()
     profile = _make_profile(tid)
 
-    relevant, reason, p = await async_check_relevance_with_profile(
+    relevant, reason = _rr(await async_check_relevance_with_profile(
         tenant_id=tid,
         user_question="how do I configure the integration module",
         profile=profile,
         api_key="sk-test",
-    )
+    ))
     assert relevant is True
     assert reason == "timeout"
-    assert p is None
 
 
 @pytest.mark.asyncio
@@ -559,17 +565,16 @@ async def test_async_relevance_precheck_loads_profile_and_delegates(
     db = Mock()
     db.get = AsyncMock(return_value=profile)
 
-    relevant, reason, p = await async_check_relevance_precheck(
+    relevant, reason = _rr(await async_check_relevance_precheck(
         tenant_id=tid,
         user_question="how do I configure the integration module",
         db=db,
         api_key="sk-test",
-    )
+    ))
 
     db.get.assert_awaited_once_with(TenantProfile, tid)
     assert relevant is True
     assert reason == "relevant"
-    assert p is profile
     assert async_mock.await_count == 1
 
 
@@ -606,12 +611,12 @@ async def test_async_relevance_non_relevant_categories_returned_as_reason(
         monkeypatch, f'{{"category": "{category}", "reason": "whatever"}}'
     )
 
-    relevant, reason, _p = await async_check_relevance_with_profile(
+    relevant, reason = _rr(await async_check_relevance_with_profile(
         tenant_id=uuid.uuid4(),
         user_question="they have not answered me for two weeks",
         profile=_make_profile(uuid.uuid4()),
         api_key="sk-test",
-    )
+    ))
     assert relevant is False
     assert reason == category
 
@@ -626,12 +631,12 @@ async def test_async_relevance_unknown_category_falls_back_to_relevant(
     _cache.clear()
     _mock_guard_client(monkeypatch, '{"category": "banana", "reason": "?"}')
 
-    relevant, reason, _p = await async_check_relevance_with_profile(
+    relevant, reason = _rr(await async_check_relevance_with_profile(
         tenant_id=uuid.uuid4(),
         user_question="how do I configure the integration module",
         profile=_make_profile(uuid.uuid4()),
         api_key="sk-test",
-    )
+    ))
     assert relevant is True
     assert reason == "relevant"
 

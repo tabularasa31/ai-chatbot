@@ -93,6 +93,18 @@ Every chat turn passes through two guards **before** LLM generation (async, awai
 Key config knobs (all in `backend/core/config.py`):
 - `INJECTION_SEMANTIC_THRESHOLD` (default 0.82), `INJECTION_SEMANTIC_TIMEOUT_SEC` (0.5), `INJECTION_SEMANTIC_ENABLED`
 - `RELEVANCE_RETRIEVAL_THRESHOLD` (0.35), `RERANKER_BYPASS_THRESHOLD` (0.5)
+- `GUARD_SEMANTIC_CACHE_TTL_SECONDS` (600) — TTL for the Redis semantic-injection verdict cache
+
+### Verdict contract (`guards/types.py`)
+
+Every guard returns a single frozen `Verdict` — `blocked`, `reason` (a `VerdictReason` enum), `score`, `evidence` — instead of a bespoke bool/tuple/dataclass per guard. `blocked` is **derived** from `reason` via `Verdict.of(reason, …)` (the `_BLOCKING` set), so the two never disagree. `VerdictReason` values are the exact string tokens the pipeline routes on (`"offtopic"`, `"support_complaint"`, `"short_query_bypass"`, …), so `verdict.reason.value` is a drop-in for the legacy reason strings. Fail-open / bypass reasons (`no_profile`, `timeout`, `circuit_open`, `cancelled`, …) are grouped in `FAIL_OPEN_REASONS` — callers that gate a side effect on a *trusted* verdict (e.g. arming an escalation handoff) must exclude them. The relevance guard no longer echoes the tenant profile back; the pipeline reads it from `state.guard_profile`.
+
+**To add a guard:** pick or add a `VerdictReason` (add it to `_BLOCKING` in `guards/types.py` if it should reject/divert), write `async def guard(...) -> Verdict` returning `Verdict.of(reason, score=…, evidence=…)`, and — on the primary chat path — record it with `record_guard_event(tenant_id=…, chat_id=…, kind="…", verdict=…, latency_ms=…)`.
+
+### Verdict cache + FP/FN logging
+
+- **Semantic-injection cache** (`injection_detector.py`): the expensive level-2 embedding verdict is cached in Redis keyed by `hash(tenant_id, "injection_semantic", normalized_input)`, TTL `GUARD_SEMANTIC_CACHE_TTL_SECONDS`. Structural (level 1) is a cheap regex sweep and is not cached. Graceful: Redis down → cache miss → the guard runs directly. Hit/miss is exposed via the admin cache-metrics endpoint (`injection_semantic`) and a per-turn `injection_semantic.cache` PostHog event. The relevance guard keeps its own in-process LRU+TTL cache (keyed by tenant + profile version + question + dialog tail).
+- **`guard_events` table** (`models/guard.py`, recorder in `guards/events.py`): every primary-path verdict (injection + relevance) is written as one row — kind, blocked, reason, score, `evidence_hash` (SHA-256 of the trigger, never raw text), latency, cache_hit, chat_id — plus a `guard.verdict` PostHog event for the "Guards FP/FN" dashboard. The write is fire-and-forget on its own `AsyncSession` and best-effort (never breaks chat). `label` (fp/fn) is reserved for a future manual-review tool.
 
 ---
 
@@ -246,7 +258,7 @@ Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars
 |---|---|
 | Observability | `LANGFUSE_*`, `POSTHOG_*`, `SENTRY_DSN`, `GIT_SHA` |
 | Trace sampling | `FULL_CAPTURE_MODE`, `TRACE_SAMPLE_RATE`, `TRACE_HIGH_VOLUME_*`, `TRACE_NEW_TENANT_THRESHOLD`, `TRACE_RATE_WINDOW_SECONDS`, `OBSERVABILITY_CAPTURE_FULL_PROMPTS` |
-| Guards | `HUMAN_REQUEST_MODEL`, `RELEVANCE_GUARD_MODEL`, `INJECTION_SEMANTIC_THRESHOLD`, `INJECTION_SEMANTIC_TIMEOUT_SEC`, `INJECTION_SEMANTIC_ENABLED`, `RELEVANCE_RETRIEVAL_THRESHOLD`, `RERANKER_BYPASS_THRESHOLD` |
+| Guards | `HUMAN_REQUEST_MODEL`, `RELEVANCE_GUARD_MODEL`, `INJECTION_SEMANTIC_THRESHOLD`, `INJECTION_SEMANTIC_TIMEOUT_SEC`, `INJECTION_SEMANTIC_ENABLED`, `GUARD_SEMANTIC_CACHE_TTL_SECONDS`, `RELEVANCE_RETRIEVAL_THRESHOLD`, `RERANKER_BYPASS_THRESHOLD` |
 | Chat behavior | `VALIDATION_MODEL`, `CLARIFICATION_TURN_LIMIT`, `LANGUAGE_DETECTION_RELIABILITY_THRESHOLD`, `LOCALIZATION_MODEL`, `WIDGET_MESSAGE_MAX_CHARS`, `WIDGET_CHAT_PER_CLIENT_RATE` |
 | Contradiction adjudication | `CONTRADICTION_ADJUDICATION_ENABLED`, `CONTRADICTION_ADJUDICATION_MODEL`, `CONTRADICTION_ADJUDICATION_*` |
 | RAG / BM25 | `BM25_EXPANSION_MODE` |

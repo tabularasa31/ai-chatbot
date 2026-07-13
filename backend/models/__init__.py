@@ -31,6 +31,7 @@ from backend.models.gap import (
     GapQuestion,
     GapQuestionMessageLink,
 )
+from backend.models.guard import GuardEvent
 from backend.models.jobs import BackgroundJob, BackgroundJobStatus
 from backend.models.knowledge import Document, Embedding, QuickAnswer, UrlSource, UrlSourceRun
 from backend.models.pii import PiiEvent
@@ -65,6 +66,7 @@ __all__ = [
     "GapQuestion",
     "GapQuestionMessageLink",
     "GapSource",
+    "GuardEvent",
     "LogAnalysisState",
     "Message",
     "MessageEmbedding",

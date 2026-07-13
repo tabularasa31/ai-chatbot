@@ -1,0 +1,67 @@
+"""Add guard_events table for guard verdict logging (FP/FN analysis).
+
+Revision ID: guard_events_v1
+Revises: rls_tenant_isolation_v1
+"""
+
+from __future__ import annotations
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision = "guard_events_v1"
+down_revision = "rls_tenant_isolation_v1"
+branch_labels = None
+depends_on = None
+
+
+def _has_table(table: str) -> bool:
+    if op.get_context().as_sql:
+        return False
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    try:
+        return table in set(insp.get_table_names())
+    except Exception:
+        return False
+
+
+def upgrade() -> None:
+    if _has_table("guard_events"):
+        return
+    op.create_table(
+        "guard_events",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("chat_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("kind", sa.String(length=32), nullable=False),
+        sa.Column("blocked", sa.Boolean(), nullable=False),
+        sa.Column("reason", sa.String(length=48), nullable=False),
+        sa.Column("score", sa.Float(), nullable=True),
+        sa.Column("evidence_hash", sa.String(length=64), nullable=True),
+        sa.Column("latency_ms", sa.Float(), nullable=True),
+        sa.Column("cache_hit", sa.Boolean(), nullable=True),
+        sa.Column("label", sa.String(length=16), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["chat_id"], ["chats.id"], ondelete="SET NULL"
+        ),
+    )
+    op.create_index("ix_guard_events_tenant_id", "guard_events", ["tenant_id"])
+    op.create_index("ix_guard_events_chat_id", "guard_events", ["chat_id"])
+    op.create_index("ix_guard_events_kind", "guard_events", ["kind"])
+    op.create_index("ix_guard_events_blocked", "guard_events", ["blocked"])
+    op.create_index("ix_guard_events_reason", "guard_events", ["reason"])
+    op.create_index("ix_guard_events_label", "guard_events", ["label"])
+    op.create_index("ix_guard_events_created_at", "guard_events", ["created_at"])
+
+
+def downgrade() -> None:
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so an accidental `alembic downgrade` errors
+    # out instead of silently dropping a telemetry table.
+    raise NotImplementedError("downgrade is not supported for this migration")

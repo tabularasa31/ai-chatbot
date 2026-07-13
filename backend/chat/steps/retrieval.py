@@ -428,7 +428,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
             # verdicts (in-domain / off-topic / complaint) keep the existing
             # turn-1 rephrase and only escalate on the next consecutive miss.
             if state.guard_bypassed_short_query:
-                _, _short_reason, _ = await _svc.async_check_relevance_with_profile(
+                _short_verdict = await _svc.async_check_relevance_with_profile(
                     tenant_id=run.tenant_id,
                     user_question=run.question,
                     profile=state.profile,
@@ -437,6 +437,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
                     force_llm_check=True,
                     dialog_context=state.guard_dialog_context,
                 )
+                _short_reason = _short_verdict.reason.value
                 if _short_reason in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
                     return await _social_no_hits_result(_short_reason)
 
@@ -457,7 +458,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
             _end_span("soft_reply")
             return result
 
-        relevant, relevance_reason, _ = await _svc.async_check_relevance_with_profile(
+        _rel_verdict = await _svc.async_check_relevance_with_profile(
             tenant_id=run.tenant_id,
             user_question=run.question,
             profile=state.profile,
@@ -466,6 +467,8 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
             force_llm_check=True,
             dialog_context=state.guard_dialog_context,
         )
+        relevant = not _rel_verdict.blocked
+        relevance_reason = _rel_verdict.reason.value
 
         # Category routing mirrors the main guard site: a support
         # complaint gets the escalation offer, a social turn a polite

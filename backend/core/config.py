@@ -440,6 +440,25 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Guard telemetry retention ────────────────────────────────────────────
+    # ``guard_events`` grows ~2 rows per chat turn with no natural expiry; a
+    # daily purge job (backend/jobs/guard_events_purge.py) bounds it. Unlabeled
+    # rows are pure telemetry and drop after the short window; rows a human has
+    # marked as FP/FN (``label IS NOT NULL``) are a hand-annotated tuning dataset
+    # and are kept for the much longer window.
+    guard_events_retention_days: int = Field(
+        90,
+        alias="GUARD_EVENTS_RETENTION_DAYS",
+        ge=1,
+        description="Days to keep unlabeled guard_events rows before the purge job deletes them.",
+    )
+    guard_events_labeled_retention_days: int = Field(
+        365,
+        alias="GUARD_EVENTS_LABELED_RETENTION_DAYS",
+        ge=1,
+        description="Days to keep manually-labeled (FP/FN) guard_events rows — the tuning dataset, kept longer.",
+    )
+
     # ── Retrieval guards ─────────────────────────────────────────────────────
     relevance_retrieval_threshold: float = Field(
         0.22,

@@ -472,6 +472,108 @@ def test_stale_followup_with_explicit_human_request_still_escalates(
     assert chat.escalation_followup_pending is False
 
 
+def test_followup_new_question_falls_through_to_rag(db_session: Session) -> None:
+    """Regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1.
+
+    A genuine new question sent while ``escalation_followup_pending`` must
+    clear the gate and yield to RagHandler (return None) without running the
+    full-turn escalation LLM — not be swallowed as ticket context.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_followup_pending = True
+    chat.user_context = {"escalation_followup_clarify": True}
+    db_session.flush()
+
+    def _fail_if_full_turn(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(
+            "new-question follow-up must fall through to RAG, not run the "
+            "full-turn escalation LLM"
+        )
+
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="do you support wildcard domain names?",
+    )
+
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch(
+            "backend.chat.service.classify_followup_reply",
+            _async_ret(("new_question", 0)),
+        ),
+        patch(
+            "backend.chat.service.complete_escalation_openai_turn",
+            _fail_if_full_turn,
+        ),
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is None, "Must yield to RagHandler, not answer from the FSM"
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is False
+    assert (chat.user_context or {}).get("escalation_followup_clarify") is None
+
+
+def test_followup_gate_unclear_keeps_followup_flow(db_session: Session) -> None:
+    """Any gate decision other than ``new_question`` keeps the existing
+    follow-up flow: the full-turn escalation LLM runs and the gate stays."""
+    from backend.models import EscalationStatus, EscalationTicket, EscalationTrigger
+
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_followup_pending = True
+    db_session.add(
+        EscalationTicket(
+            tenant_id=tenant.id,
+            ticket_number="ESC-0001",
+            primary_question="need support",
+            trigger=EscalationTrigger.user_request,
+            status=EscalationStatus.open,
+            chat_id=chat.id,
+            session_id=chat.session_id,
+        )
+    )
+    db_session.flush()
+
+    class _FullTurnReached(Exception):
+        pass
+
+    def _full_turn_sentinel(*_args: Any, **_kwargs: Any) -> Any:
+        raise _FullTurnReached()
+
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="also mention that I am on the pro plan",
+    )
+
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch(
+            "backend.chat.service.classify_followup_reply",
+            _async_ret(("unclear", 0)),
+        ),
+        patch(
+            "backend.chat.service.complete_escalation_openai_turn",
+            _full_turn_sentinel,
+        ),
+    ):
+        try:
+            EscalationStateMachine()._handle_sync(ctx, db_session)
+            raise AssertionError(
+                "gate must proceed to the full-turn escalation LLM on 'unclear'"
+            )
+        except _FullTurnReached:
+            pass
+
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is True
+
+
 def test_pre_confirm_explicit_yes_creates_ticket(db_session: Session) -> None:
     """Sanity: an explicit ``yes`` still routes to ticket creation/handoff."""
     tenant = _make_persisted_tenant(db_session)

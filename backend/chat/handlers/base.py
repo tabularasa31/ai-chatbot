@@ -107,6 +107,10 @@ class HandlerContext:
     # Per-turn metrics
     turn_started_at: float = 0.0
 
+    # Tokens spent by an earlier handler before falling through to RagHandler
+    # (escalation FSM gate classifiers); folded into the RAG turn's usage.
+    carryover_tokens: int = 0
+
     # Mutable scratch space for handlers — currently unused; reserved for future
     # cross-handler state (e.g. precomputed injection result threaded between
     # injection guard and async_run_chat_pipeline).

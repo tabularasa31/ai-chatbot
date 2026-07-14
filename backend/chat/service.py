@@ -97,6 +97,7 @@ from backend.core.openai_client import get_async_openai_client  # noqa: F401
 from backend.core.openai_retry import async_call_openai_with_retry  # noqa: F401
 from backend.escalation.openai_escalation import (
     EscalationLlmResult,
+    classify_followup_reply,  # noqa: F401
     classify_pre_confirm_reply,  # noqa: F401
     complete_escalation_openai_turn,  # noqa: F401
     render_pre_confirm_text,  # noqa: F401

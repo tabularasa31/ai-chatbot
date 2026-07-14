@@ -135,8 +135,8 @@ class EscalationStateMachine(PipelineHandler):
             outcome = self._handle_followup_yes_no(ctx)
             if outcome is not None:
                 return outcome
-            # Stale follow-up (the inactivity sweeper reported the session
-            # ended) cleared the gate above. Drop into the checks below rather
+            # Gate cleared above (stale follow-up or a new substantive
+            # question). Drop into the checks below rather
             # than returning immediately: if the same message is an explicit
             # human request it must still escalate this turn; otherwise we fall
             # through to RagHandler. Mirrors the pre_confirm null-reply recovery.
@@ -331,6 +331,27 @@ class EscalationStateMachine(PipelineHandler):
             if ctx.trace is not None
             else None
         )
+        # Narrow gate before the full-turn LLM: a new substantive question
+        # must fall through to RAG this same turn — the full-turn classifier
+        # reads such questions as "unclear" (= ticket context) and re-emits
+        # the handoff copy. Classifier failure → "unclear" → existing flow.
+        gate_decision, gate_tokens = await_only(
+            _svc.classify_followup_reply(
+                latest_user_text=ctx.redacted_question,
+                api_key=ctx.api_key,
+            )
+        )
+        if gate_decision == "new_question":
+            chat.escalation_followup_pending = False
+            _clear_escalation_clarify_flag(chat)
+            ctx.db.add(chat)
+            ctx.db.commit()
+            ctx.carryover_tokens += gate_tokens
+            if followup_span is not None:
+                followup_span.end(
+                    output={"decision": "new_question", "fell_through": True}
+                )
+            return None
         ticket = get_latest_escalation_ticket_for_chat(chat.id, ctx.db)
         msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         try:
@@ -347,6 +368,7 @@ class EscalationStateMachine(PipelineHandler):
                     response_language=ctx.language_context.response_language,
                 )
             )
+            out.tokens_used += gate_tokens
             decision = out.followup_decision or "unclear"
             if decision == "unclear" and _escalation_clarify_already_asked(chat):
                 decision = "yes"
@@ -812,6 +834,7 @@ class EscalationStateMachine(PipelineHandler):
                 _clear_escalation_clarify_flag(chat)
                 ctx.db.add(chat)
                 ctx.db.commit()
+                ctx.carryover_tokens += classify_tokens
                 if pre_confirm_span is not None:
                     pre_confirm_span.end(output={"decision": None, "fell_through": True})
                 return None

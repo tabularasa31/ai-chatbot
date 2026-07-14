@@ -415,6 +415,121 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
     assert (chat.user_context or {}).get("escalation_followup_clarify") is None
 
 
+def test_chat_followup_new_question_gets_rag_answer_same_turn(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1:
+    a new question during ``escalation_followup_pending`` must get a real
+    RAG answer this same turn, not the canned handoff reply."""
+    from backend.models import (
+        Chat,
+        Document,
+        DocumentStatus,
+        DocumentType,
+        Embedding,
+        EscalationStatus,
+        EscalationTicket,
+        EscalationTrigger,
+    )
+
+    token = register_and_verify_user(tenant, db_session, email="follow-newq@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Follow NewQ Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        user_context={},
+        escalation_followup_pending=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number="ESC-0001",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="wildcards.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="Wildcard domains are supported on all plans",
+        vector=None,
+        metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.1] * 1536)
+    ]
+    mock_openai_client.chat.completions.create.side_effect = (
+        _chat_completion_side_effect("Yes, wildcard domains are supported.")
+    )
+
+    async def _gate_new_question(**kwargs):
+        return ("new_question", 7)
+
+    monkeypatch.setattr(
+        "backend.chat.service.classify_followup_reply", _gate_new_question
+    )
+
+    async def _fail_full_turn(**kwargs):
+        raise AssertionError(
+            "new-question follow-up must be answered by RAG, not the "
+            "full-turn escalation LLM"
+        )
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn", _fail_full_turn
+    )
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={
+            "session_id": str(chat.session_id),
+            "question": "do you support wildcard domain names?",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["text"] == "Yes, wildcard domains are supported."
+    assert data.get("chat_ended") is False
+    # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
+    assert data["tokens_used"] == 7
+
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is False
+    assert chat.ended_at is None
+
+
 def test_chat_when_already_closed_uses_closed_phase(
     tenant: TestClient,
     db_session: Session,

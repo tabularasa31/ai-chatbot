@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
+import { rehypeHighlightSubset } from "./highlight";
 import { MessageCircle, Send, Ticket } from "lucide-react";
 import { cn, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
@@ -1067,7 +1067,7 @@ export function ChatWidget({
                           <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
-                              rehypePlugins={[rehypeHighlight]}
+                              rehypePlugins={[rehypeHighlightSubset]}
                               components={markdownComponents}
                             >
                               {msg.text}
@@ -1132,7 +1132,7 @@ export function ChatWidget({
                   <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
-                      rehypePlugins={[rehypeHighlight]}
+                      rehypePlugins={[rehypeHighlightSubset]}
                       components={markdownComponents}
                     >
                       {streamingText}

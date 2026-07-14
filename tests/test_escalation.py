@@ -2423,6 +2423,114 @@ async def test_classify_pre_confirm_reply_fails_safe_on_exception(
     assert tokens == 0
 
 
+def _fake_followup_classifier_client(content: str, tokens: int = 5):
+    """Fake async OpenAI client whose completions.create returns ``content``."""
+
+    class _FakeMessage:
+        pass
+
+    _FakeMessage.content = content
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeUsage:
+        total_tokens = tokens
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+        usage = _FakeUsage()
+
+    class _FakeClient:
+        class chat:  # noqa: N801
+            class completions:  # noqa: N801
+                @staticmethod
+                async def create(**_kwargs: object) -> object:
+                    return _FakeResponse()
+
+    return _FakeClient()
+
+
+@pytest.mark.asyncio
+async def test_classify_followup_reply_parses_new_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The follow-up gate surfaces ``new_question`` so the handler can clear
+    the gate and fall through to RAG on the same turn."""
+    from backend.escalation.openai_escalation import classify_followup_reply
+
+    async def _fake_retry(_name, fn, **_k):
+        return await fn()
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client",
+        lambda *_a, **_k: _fake_followup_classifier_client(
+            '{"decision": "new_question"}', tokens=6
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_call_openai_with_retry",
+        _fake_retry,
+    )
+
+    decision, tokens = await classify_followup_reply(
+        latest_user_text="do you support wildcard domain names?",
+        api_key="sk-test",
+    )
+    assert decision == "new_question"
+    assert tokens == 6
+
+
+@pytest.mark.asyncio
+async def test_classify_followup_reply_unrecognized_degrades_to_unclear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unrecognized labels must NOT fall through to RAG: anything outside the
+    known set degrades to ``unclear`` so the existing follow-up flow runs."""
+    from backend.escalation.openai_escalation import classify_followup_reply
+
+    async def _fake_retry(_name, fn, **_k):
+        return await fn()
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client",
+        lambda *_a, **_k: _fake_followup_classifier_client('{"decision": "maybe"}'),
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_call_openai_with_retry",
+        _fake_retry,
+    )
+
+    decision, _ = await classify_followup_reply(
+        latest_user_text="hmm",
+        api_key="sk-test",
+    )
+    assert decision == "unclear"
+
+
+@pytest.mark.asyncio
+async def test_classify_followup_reply_fails_safe_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API blowups degrade to ``("unclear", 0)`` — never raise, never drop the
+    follow-up gate (which would skip closing the chat on a real "no")."""
+    from backend.escalation.openai_escalation import classify_followup_reply
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("openai down")
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client", _boom
+    )
+
+    decision, tokens = await classify_followup_reply(
+        latest_user_text="no thanks",
+        api_key="sk-test",
+    )
+    assert decision == "unclear"
+    assert tokens == 0
+
+
 @pytest.mark.asyncio
 async def test_escalation_turn_uses_dedicated_client_timeout(
     monkeypatch: pytest.MonkeyPatch,

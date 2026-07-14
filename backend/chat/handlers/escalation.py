@@ -135,8 +135,10 @@ class EscalationStateMachine(PipelineHandler):
             outcome = self._handle_followup_yes_no(ctx)
             if outcome is not None:
                 return outcome
-            # Stale follow-up (the inactivity sweeper reported the session
-            # ended) cleared the gate above. Drop into the checks below rather
+            # Gate cleared above: either a stale follow-up (the inactivity
+            # sweeper reported the session ended) or the user asked a new
+            # substantive question instead of answering "anything else?".
+            # Drop into the checks below rather
             # than returning immediately: if the same message is an explicit
             # human request it must still escalate this turn; otherwise we fall
             # through to RagHandler. Mirrors the pre_confirm null-reply recovery.
@@ -331,6 +333,30 @@ class EscalationStateMachine(PipelineHandler):
             if ctx.trace is not None
             else None
         )
+        # Narrow gate before the full-turn LLM: a user who ignores the
+        # "anything else?" prompt and asks a new substantive question must get
+        # a real answer this same turn. Without this, the full-turn classifier
+        # reads genuine questions as "unclear" (= extra ticket context) and
+        # replies "your request has been forwarded" to every one of them —
+        # prod session 0a730bc1 lost three consecutive questions this way.
+        # Mirrors the pre_confirm null-decision fall-through. Any classifier
+        # failure returns "unclear" and keeps the existing flow.
+        gate_decision, gate_tokens = await_only(
+            _svc.classify_followup_reply(
+                latest_user_text=ctx.redacted_question,
+                api_key=ctx.api_key,
+            )
+        )
+        if gate_decision == "new_question":
+            chat.escalation_followup_pending = False
+            _clear_escalation_clarify_flag(chat)
+            ctx.db.add(chat)
+            ctx.db.commit()
+            if followup_span is not None:
+                followup_span.end(
+                    output={"decision": "new_question", "fell_through": True}
+                )
+            return None
         ticket = get_latest_escalation_ticket_for_chat(chat.id, ctx.db)
         msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         try:
@@ -347,6 +373,9 @@ class EscalationStateMachine(PipelineHandler):
                     response_language=ctx.language_context.response_language,
                 )
             )
+            # Fold the gate-classifier tokens into the per-turn usage so
+            # analytics see the full cost of a follow-up turn.
+            out.tokens_used += gate_tokens
             decision = out.followup_decision or "unclear"
             if decision == "unclear" and _escalation_clarify_already_asked(chat):
                 decision = "yes"

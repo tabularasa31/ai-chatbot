@@ -389,6 +389,85 @@ async def classify_pre_confirm_reply(
         return "unclear", 0
 
 
+_FOLLOWUP_CLASSIFIER_SYSTEM = (
+    "You are a strict classifier. The chat assistant just told the user their "
+    "request was forwarded to the human support team and asked whether it can "
+    "help with anything else in the chat. Classify the latest user message.\n"
+    "\n"
+    "Return JSON with a single key `decision`, whose value is one of:\n"
+    '  - "new_question" — the user asks the assistant a new substantive '
+    "question or raises a new topic they expect the assistant to answer in "
+    "chat, even if loosely related to the forwarded request. Apply the same "
+    "rule across languages.\n"
+    '  - "yes"     — a bare affirmative ("yes", "sure", "I have another '
+    'question") that contains no actual question content yet.\n'
+    '  - "no"      — the user declines, says goodbye, or thanks the '
+    "assistant and closes the conversation.\n"
+    '  - "unclear" — the message only adds details, corrections, or context '
+    "to the request that was already forwarded to support, or hesitates / "
+    "asks a meta-question about the handoff itself.\n"
+    "\n"
+    'Output ONLY the JSON object, e.g. {"decision": "new_question"}. No '
+    "prose, no extra fields, no localised text."
+)
+
+
+async def classify_followup_reply(
+    *,
+    latest_user_text: str,
+    api_key: str,
+    model: str | None = None,
+    langfuse_observation: Any | None = None,
+) -> tuple[Literal["yes", "no", "unclear", "new_question"], int]:
+    """Narrow LLM gate for the post-handoff follow-up turn.
+
+    Returns ``(decision, tokens_used)``. ``"new_question"`` means the user
+    ignored the "anything else?" prompt and asked the assistant something
+    substantive — the caller clears the follow-up gate and falls through to
+    RAG so the question is answered this same turn instead of being swallowed
+    as ticket context. Any failure — API error, malformed or unrecognized
+    output — returns ``("unclear", 0)``, which keeps the existing follow-up
+    flow (full-turn LLM classification) rather than dropping the gate.
+    Never raises.
+    """
+    model_name = model or settings.escalation_model
+    _reasoning = is_reasoning_model(model_name)
+    messages = [
+        {"role": "system", "content": _FOLLOWUP_CLASSIFIER_SYSTEM},
+        {
+            "role": "user",
+            "content": f"LATEST_USER_MESSAGE:\n{latest_user_text}",
+        },
+    ]
+    try:
+        client = get_async_openai_client(
+            api_key, timeout=settings.escalation_openai_timeout_seconds
+        )
+        response = await async_call_openai_with_retry(
+            "classify_followup_reply",
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                **({} if _reasoning else {"temperature": 0}),
+                max_completion_tokens=20,
+                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
+            ),
+            langfuse_observation=langfuse_observation,
+        )
+        raw = response.choices[0].message.content or "{}"
+        decision_raw = json.loads(raw).get("decision")
+        tokens = response.usage.total_tokens if response.usage else 0
+        if decision_raw in ("yes", "no", "unclear", "new_question"):
+            return decision_raw, tokens  # type: ignore[return-value]
+        return "unclear", tokens
+    except Exception as exc:
+        logger.warning("classify_followup_reply failed: %s", exc)
+        # Fail safe to the existing follow-up flow: never let a transient
+        # outage drop the gate (which would skip closing the chat on a real
+        # "no" or lose the ticket-context forwarding on real clarifications).
+        return "unclear", 0
+
+
 ESCALATION_SYSTEM = """You are the same assistant as in the embedded support chat.
 You must output a single JSON object with keys:
 - "message_to_user" (string): what the user sees in the chat widget.

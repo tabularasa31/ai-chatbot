@@ -421,12 +421,9 @@ def test_chat_followup_new_question_gets_rag_answer_same_turn(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1.
-
-    With ``escalation_followup_pending`` set after a handoff, a genuine new
-    question must clear the gate and receive a real RAG answer this same turn —
-    not the canned "your request has been forwarded" reply.
-    """
+    """Regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1:
+    a new question during ``escalation_followup_pending`` must get a real
+    RAG answer this same turn, not the canned handoff reply."""
     from backend.models import (
         Chat,
         Document,
@@ -525,8 +522,7 @@ def test_chat_followup_new_question_gets_rag_answer_same_turn(
     data = response.json()
     assert data["text"] == "Yes, wildcard domains are supported."
     assert data.get("chat_ended") is False
-    # The gate classifier's tokens are carried over into the RAG turn's usage
-    # (the RAG completion itself is mocked with total_tokens=0).
+    # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
     assert data["tokens_used"] == 7
 
     db_session.refresh(chat)

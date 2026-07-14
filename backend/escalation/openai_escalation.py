@@ -421,14 +421,10 @@ async def classify_followup_reply(
 ) -> tuple[Literal["yes", "no", "unclear", "new_question"], int]:
     """Narrow LLM gate for the post-handoff follow-up turn.
 
-    Returns ``(decision, tokens_used)``. ``"new_question"`` means the user
-    ignored the "anything else?" prompt and asked the assistant something
-    substantive — the caller clears the follow-up gate and falls through to
-    RAG so the question is answered this same turn instead of being swallowed
-    as ticket context. Any failure — API error, malformed or unrecognized
-    output — returns ``("unclear", 0)``, which keeps the existing follow-up
-    flow (full-turn LLM classification) rather than dropping the gate.
-    Never raises.
+    Returns ``(decision, tokens_used)``. ``"new_question"`` → the caller
+    clears the follow-up gate and falls through to RAG. Any failure or
+    unrecognized output returns ``("unclear", 0)`` so the gate is never
+    dropped on a transient outage. Never raises.
     """
     model_name = model or settings.escalation_model
     _reasoning = is_reasoning_model(model_name)

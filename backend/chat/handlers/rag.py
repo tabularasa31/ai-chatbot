@@ -412,8 +412,6 @@ class RagHandler(PipelineHandler):
                 "async_run_chat_pipeline before invoking the handler."
             )
         if ctx.carryover_tokens:
-            # Tokens spent by an earlier handler (escalation FSM gate
-            # classifiers) before falling through to RAG on this turn.
             result.tokens_used += ctx.carryover_tokens
             ctx.carryover_tokens = 0
 

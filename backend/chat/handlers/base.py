@@ -107,11 +107,8 @@ class HandlerContext:
     # Per-turn metrics
     turn_started_at: float = 0.0
 
-    # Tokens spent by an earlier handler on this same turn before it fell
-    # through to RagHandler (e.g. the escalation FSM's narrow gate
-    # classifiers on pre_confirm/follow-up fall-through). RagHandler folds
-    # this into the pipeline result's usage so per-turn token accounting
-    # stays complete across the fall-through.
+    # Tokens spent by an earlier handler before falling through to RagHandler
+    # (escalation FSM gate classifiers); folded into the RAG turn's usage.
     carryover_tokens: int = 0
 
     # Mutable scratch space for handlers — currently unused; reserved for future

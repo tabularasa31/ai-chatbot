@@ -475,12 +475,9 @@ def test_stale_followup_with_explicit_human_request_still_escalates(
 def test_followup_new_question_falls_through_to_rag(db_session: Session) -> None:
     """Regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1.
 
-    After a handoff the bot asks "anything else?" and sets
-    ``escalation_followup_pending``. A genuine new substantive question sent on
-    that turn must be answered by RAG this same turn — not swallowed as ticket
-    context with a canned "your request has been forwarded" reply. The narrow
-    gate classifier returns ``new_question``; the FSM clears the gate and
-    yields to RagHandler without running the full-turn escalation LLM.
+    A genuine new question sent while ``escalation_followup_pending`` must
+    clear the gate and yield to RagHandler (return None) without running the
+    full-turn escalation LLM — not be swallowed as ticket context.
     """
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
@@ -521,10 +518,8 @@ def test_followup_new_question_falls_through_to_rag(db_session: Session) -> None
 
 
 def test_followup_gate_unclear_keeps_followup_flow(db_session: Session) -> None:
-    """A gate decision other than ``new_question`` (including the failure
-    fallback ``unclear``) must keep the existing follow-up flow: the full-turn
-    escalation LLM still runs and the gate stays engaged.
-    """
+    """Any gate decision other than ``new_question`` keeps the existing
+    follow-up flow: the full-turn escalation LLM runs and the gate stays."""
     from backend.models import EscalationStatus, EscalationTicket, EscalationTrigger
 
     tenant = _make_persisted_tenant(db_session)

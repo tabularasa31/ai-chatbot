@@ -7,12 +7,10 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
 const DIST = "dist/v1/assets";
-// Ceiling lowered after subsetting highlight.js to 10 grammars (was the full
-// lowlight `common` set, ~54 kB gzip → ~19 kB). The remaining ~71 kB is the
-// react-markdown + remark-gfm pipeline, not highlighting — that is the real
-// floor and is out of scope here. See README "Build / measure".
+// Floor is the react-markdown + remark-gfm pipeline (~71 KB), not highlighting.
+// See README "Syntax highlighting".
 const BUDGET_GZIP_BYTES = 95 * 1024; // hard ceiling (~5% over current ~90 KB)
-const WARN_GZIP_BYTES = 92 * 1024; // warn before the ceiling is hit
+const WARN_GZIP_BYTES = 92 * 1024;
 
 function listJs(dir) {
   return readdirSync(dir)

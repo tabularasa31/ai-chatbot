@@ -14,18 +14,11 @@ import sql from "highlight.js/lib/languages/sql";
 import typescript from "highlight.js/lib/languages/typescript";
 import yaml from "highlight.js/lib/languages/yaml";
 
-// Explicit subset of highlight.js grammars bundled into the widget. This is
-// what keeps the bundle under budget. rehype-highlight can't be used directly:
-// it statically imports lowlight's `common` set (~35 grammars, ~90 kB gzip) as
-// an unconditional fallback, so the bundler retains all of them even when a
-// smaller `languages` option is passed. Building our own lowlight instance from
-// an empty registry and registering only these grammars is the only way to
-// actually drop the rest from the bundle.
-//
-// Each grammar registers its own highlight.js aliases (js→javascript,
-// ts→typescript, py→python, yml→yaml, sh/shell→bash), so fenced blocks tagged
-// with those still highlight. Blocks whose language is outside this subset
-// render as plain monospace — a graceful fallback, not an error.
+// Subset of highlight.js grammars, hand-registered to keep the bundle small.
+// rehype-highlight can't be used: it statically imports lowlight's full `common`
+// set as a fallback, so the bundler retains all ~35 grammars regardless. Each
+// grammar carries its own aliases (js, ts, py, yml, sh); languages outside the
+// subset render as plain monospace.
 const lowlight = createLowlight({
   bash,
   go,
@@ -39,7 +32,6 @@ const lowlight = createLowlight({
   yaml,
 });
 
-/** Extract the `language-x` / `lang-x` name from a `<code>` node's classes. */
 function codeLanguage(node: Element): string | undefined {
   const list = node.properties?.className;
   if (!Array.isArray(list)) return undefined;
@@ -52,12 +44,8 @@ function codeLanguage(node: Element): string | undefined {
   return undefined;
 }
 
-/**
- * Minimal rehype plugin: highlight fenced code blocks using the subset lowlight
- * instance above. Mirrors rehype-highlight's `<pre><code>` handling but without
- * its `common` import and without auto-detection. Unregistered languages fall
- * through untouched (plain monospace).
- */
+// Highlight fenced code blocks via the subset instance; unregistered languages
+// are left untouched. Mirrors rehype-highlight's `<pre><code>` handling.
 export const rehypeHighlightSubset: Plugin<[], Root> = () => (tree: Root) => {
   visit(tree, "element", (node, _index, parent) => {
     if (

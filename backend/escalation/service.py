@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
 from backend.chat.language import resolve_language_context
-from backend.chat.pii import redact
+from backend.chat.pii import redact, redact_text
 from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
@@ -160,6 +161,52 @@ def _decrypt_optional(value: str | None) -> str | None:
     except RuntimeError:
         logger.warning("Failed to decrypt stored escalation original content")
         return None
+
+
+# Entity types left visible in the outbound support email. A support agent
+# replies to the end user and needs the email address and IP the user reported
+# to actually resolve the ticket, so the email body is rebuilt from original
+# text with these two unmasked. Stored ticket/message rows, analytics, and
+# logs keep the fully-redacted copies — this exemption is scoped to the email.
+_SUPPORT_EMAIL_VISIBLE_ENTITY_TYPES = frozenset({"EMAIL", "IP"})
+
+
+def _support_email_text(text: str | None) -> str:
+    """Redact original text for the support email, keeping EMAIL and IP visible.
+
+    Must be given *original* (un-redacted) text — placeholders cannot be
+    reversed. Everything except EMAIL and IP stays masked (phones, cards,
+    passwords, API keys, identity documents, tokenised URLs).
+    """
+    if not text:
+        return text or ""
+    return redact_text(text, disabled_entity_types=_SUPPORT_EMAIL_VISIBLE_ENTITY_TYPES)
+
+
+def _email_ticket_question(ticket: EscalationTicket) -> str:
+    """Ticket question for the support email body.
+
+    Prefers the encrypted original re-redacted with EMAIL/IP visible; falls
+    back to the stored redacted question when the original is absent or cannot
+    be decrypted.
+    """
+    original = _decrypt_optional(ticket.primary_question_original_encrypted)
+    if original:
+        return _support_email_text(original)
+    return _safe_ticket_question(ticket)
+
+
+def _email_message_content(message: Message) -> str:
+    """Transcript message content for the support email body.
+
+    Prefers the encrypted original re-redacted with EMAIL/IP visible; falls
+    back to the stored redacted content when the original is absent or cannot
+    be decrypted.
+    """
+    original = _decrypt_optional(getattr(message, "content_original_encrypted", None))
+    if original is not None:
+        return _support_email_text(original)
+    return _safe_message_content(message)
 
 
 def should_escalate(
@@ -462,6 +509,7 @@ def _full_transcript_from_chat(
     *,
     max_turns: int = 10,
     extra_user_turn: tuple[str, datetime] | None = None,
+    content_fn: Callable[[Message], str] = _safe_message_content,
 ) -> list[tuple[str, str, datetime | None]] | None:
     """Last ``max_turns`` user/assistant pairs as ``(role, content, created_at)``.
 
@@ -471,6 +519,11 @@ def _full_transcript_from_chat(
     message that triggered the escalation). Skipped if the last DB row is
     already a user turn with the same content (defensive against double-add
     when persistence ordering changes later).
+
+    ``content_fn`` selects how each stored message is rendered — the default
+    returns the redacted copy; the support email passes ``_email_message_content``
+    to keep EMAIL/IP visible. ``extra_user_turn`` text is passed through
+    verbatim, so callers must redact it before handing it in.
     """
     msgs = (
         db.query(Message)
@@ -483,7 +536,7 @@ def _full_transcript_from_chat(
     if msgs:
         for m in reversed(msgs):
             role = "user" if m.role == MessageRole.user else "assistant"
-            out.append((role, _safe_message_content(m), m.created_at))
+            out.append((role, content_fn(m), m.created_at))
     if extra_user_turn is not None:
         text, when = extra_user_turn
         text = text.strip()
@@ -546,6 +599,13 @@ def _build_escalation_email_body(
     :func:`_build_escalation_email_headers`. Mail clients quote bodies but
     do not quote headers.
 
+    PII policy: the question and transcript are rebuilt from the encrypted
+    originals with EMAIL and IP left visible — support needs the address and
+    IP the user reported to act, and both are the user's own data being quoted
+    back to them. All other PII (phones, cards, passwords, API keys, identity
+    documents) stays masked. Stored rows and analytics keep the fully-redacted
+    copies. See :func:`_support_email_text`.
+
     Layout (user-safe only):
       - One-line intro
       - FROM (user's own email + name — they already know these)
@@ -584,7 +644,7 @@ def _build_escalation_email_body(
 
     lines.append(sep)
     lines.append("THEIR QUESTION")
-    question_text = _safe_ticket_question(ticket).strip()
+    question_text = _email_ticket_question(ticket).strip()
     if question_text:
         for q_line in question_text.splitlines() or [question_text]:
             lines.append(f"  {q_line}")
@@ -602,7 +662,10 @@ def _build_escalation_email_body(
     extra_turn: tuple[str, datetime] | None = None
     if latest_user_text and latest_user_text.strip():
         when = latest_user_at or datetime.now(UTC)
-        extra_turn = (latest_user_text, when)
+        # ``latest_user_text`` is the raw current turn; redact it here so the
+        # extra transcript row follows the same EMAIL/IP-visible policy as the
+        # persisted rows rendered by ``_email_message_content``.
+        extra_turn = (_support_email_text(latest_user_text), when)
 
     transcript: list[tuple[str, str, datetime | None]] | None = None
     if ticket.chat_id:
@@ -610,6 +673,7 @@ def _build_escalation_email_body(
             ticket.chat_id,
             db,
             extra_user_turn=extra_turn,
+            content_fn=_email_message_content,
         )
     if transcript:
         lines.append(sep)
@@ -886,7 +950,10 @@ def _format_update_email_body(
     Same constraint as the initial notify: support replies via plain Reply
     and their mail client quotes the body back to the end user, so only
     safe content goes here. Internal metadata stays in headers. Layout is
-    intentionally minimal — just the new user turns since last notify.
+    intentionally minimal — just the new user turns since last notify. Turns
+    are rendered with the same EMAIL/IP-visible PII policy as the initial
+    notify (see :func:`_build_escalation_email_body`); the caller redacts each
+    turn via ``_email_message_content`` / ``_support_email_text``.
     """
     sep = "─" * 56
     lines: list[str] = [
@@ -996,11 +1063,13 @@ def _notify_tenant_ticket_update(
             new_msgs = [m for m in new_msgs if m.id != ticket.last_notified_message_id]
 
     turns: list[tuple[str, datetime | None]] = [
-        (_safe_message_content(m), m.created_at) for m in new_msgs
+        (_email_message_content(m), m.created_at) for m in new_msgs
     ]
     if extra_user_turn is not None:
         text, when = extra_user_turn
-        text = text.strip()
+        # Same EMAIL/IP-visible policy as the persisted delta rows above;
+        # ``extra_user_turn`` carries the raw current turn.
+        text = _support_email_text(text).strip()
         if text and not (turns and turns[-1][0].strip() == text):
             turns.append((text, when))
 

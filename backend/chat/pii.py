@@ -164,12 +164,17 @@ def _mask_ips(text: str) -> tuple[str, int]:
     return _IP_RE.sub(repl, text), count
 
 
-def _enabled_entity_types(optional_entity_types: set[str] | None) -> set[str]:
+def _enabled_entity_types(
+    optional_entity_types: set[str] | None,
+    disabled_entity_types: set[str] | None = None,
+) -> set[str]:
     enabled = set(MANDATORY_ENTITY_TYPES)
     if optional_entity_types is None:
         enabled.update(DEFAULT_OPTIONAL_ENTITY_TYPES)
     else:
         enabled.update(entity for entity in optional_entity_types if entity in OPTIONAL_ENTITY_TYPES)
+    if disabled_entity_types:
+        enabled.difference_update(disabled_entity_types)
     return enabled
 
 
@@ -177,15 +182,20 @@ def redact(
     text: str,
     *,
     optional_entity_types: set[str] | None = None,
+    disabled_entity_types: set[str] | None = None,
 ) -> RedactionResult:
     """
     Redact PII from text and return structured metadata.
 
     Mandatory entity types are always redacted. Optional entity types can be
-    narrowed by passing `optional_entity_types`.
+    narrowed by passing `optional_entity_types`. `disabled_entity_types` turns
+    off specific types entirely — including mandatory ones — for callers that
+    need a narrower policy than the storage default (e.g. the outbound support
+    email keeps EMAIL and IP visible). Applied to original text only:
+    placeholders cannot be reversed.
     """
     redacted_text = text
-    enabled = _enabled_entity_types(optional_entity_types)
+    enabled = _enabled_entity_types(optional_entity_types, disabled_entity_types)
     counts: dict[str, int] = {}
 
     ordered_patterns: list[tuple[str, re.Pattern[str], str]] = [
@@ -230,6 +240,11 @@ def redact_text(
     text: str,
     *,
     optional_entity_types: set[str] | None = None,
+    disabled_entity_types: set[str] | None = None,
 ) -> str:
     """Convenience wrapper returning only the redacted text."""
-    return redact(text, optional_entity_types=optional_entity_types).redacted_text
+    return redact(
+        text,
+        optional_entity_types=optional_entity_types,
+        disabled_entity_types=disabled_entity_types,
+    ).redacted_text

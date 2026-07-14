@@ -61,6 +61,20 @@ def test_optional_entity_types_can_be_disabled():
     assert "[ID_DOC]" not in result
 
 
+def test_disabled_entity_types_override_mandatory():
+    # EMAIL and IP are normally always masked (EMAIL is mandatory); the
+    # outbound support email disables both while keeping everything else.
+    result = redact_text(
+        "reach me at a@b.com from 192.168.1.10, phone +1 202 555 0143",
+        disabled_entity_types={"EMAIL", "IP"},
+    )
+    assert "a@b.com" in result
+    assert "192.168.1.10" in result
+    assert "[EMAIL]" not in result
+    assert "[IP]" not in result
+    assert "[PHONE]" in result
+
+
 def test_ip_redaction_skips_invalid_octets():
     text = "release 1.2.3.4 and invalid ip 999.999.999.999"
     assert redact_text(text) == text

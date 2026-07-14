@@ -497,7 +497,7 @@ def test_chat_followup_new_question_gets_rag_answer_same_turn(
     )
 
     async def _gate_new_question(**kwargs):
-        return ("new_question", 0)
+        return ("new_question", 7)
 
     monkeypatch.setattr(
         "backend.chat.service.classify_followup_reply", _gate_new_question
@@ -525,6 +525,9 @@ def test_chat_followup_new_question_gets_rag_answer_same_turn(
     data = response.json()
     assert data["text"] == "Yes, wildcard domains are supported."
     assert data.get("chat_ended") is False
+    # The gate classifier's tokens are carried over into the RAG turn's usage
+    # (the RAG completion itself is mocked with total_tokens=0).
+    assert data["tokens_used"] == 7
 
     db_session.refresh(chat)
     assert chat.escalation_followup_pending is False

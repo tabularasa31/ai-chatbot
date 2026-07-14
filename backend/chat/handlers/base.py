@@ -107,6 +107,13 @@ class HandlerContext:
     # Per-turn metrics
     turn_started_at: float = 0.0
 
+    # Tokens spent by an earlier handler on this same turn before it fell
+    # through to RagHandler (e.g. the escalation FSM's narrow gate
+    # classifiers on pre_confirm/follow-up fall-through). RagHandler folds
+    # this into the pipeline result's usage so per-turn token accounting
+    # stays complete across the fall-through.
+    carryover_tokens: int = 0
+
     # Mutable scratch space for handlers — currently unused; reserved for future
     # cross-handler state (e.g. precomputed injection result threaded between
     # injection guard and async_run_chat_pipeline).

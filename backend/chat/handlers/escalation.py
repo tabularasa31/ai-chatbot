@@ -352,6 +352,10 @@ class EscalationStateMachine(PipelineHandler):
             _clear_escalation_clarify_flag(chat)
             ctx.db.add(chat)
             ctx.db.commit()
+            # RagHandler answers this turn; carry the gate-classifier cost
+            # into its token accounting so the fall-through stays visible in
+            # per-turn usage.
+            ctx.carryover_tokens += gate_tokens
             if followup_span is not None:
                 followup_span.end(
                     output={"decision": "new_question", "fell_through": True}
@@ -841,6 +845,9 @@ class EscalationStateMachine(PipelineHandler):
                 _clear_escalation_clarify_flag(chat)
                 ctx.db.add(chat)
                 ctx.db.commit()
+                # Same carry as the follow-up new-question fall-through: the
+                # classifier cost belongs to this turn's RAG usage.
+                ctx.carryover_tokens += classify_tokens
                 if pre_confirm_span is not None:
                     pre_confirm_span.end(output={"decision": None, "fell_through": True})
                 return None

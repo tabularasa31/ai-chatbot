@@ -411,6 +411,11 @@ class RagHandler(PipelineHandler):
                 "in ctx.extras['_pipeline_result']; _async_dispatch must run "
                 "async_run_chat_pipeline before invoking the handler."
             )
+        if ctx.carryover_tokens:
+            # Tokens spent by an earlier handler (escalation FSM gate
+            # classifiers) before falling through to RAG on this turn.
+            result.tokens_used += ctx.carryover_tokens
+            ctx.carryover_tokens = 0
 
         # Guard rejects and faq_direct: persist and return immediately (no escalation).
         if result.is_reject or result.is_faq_direct:

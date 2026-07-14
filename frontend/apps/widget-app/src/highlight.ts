@@ -32,6 +32,11 @@ const lowlight = createLowlight({
   yaml,
 });
 
+// highlight.js's `shell`/`console`/`shellsession` are a separate grammar, not
+// bash aliases. Map them to bash so common LLM-fenced shell blocks still
+// highlight without bundling another grammar.
+lowlight.registerAlias({ bash: ["shell", "console", "shellsession"] });
+
 function codeLanguage(node: Element): string | undefined {
   const list = node.properties?.className;
   if (!Array.isArray(list)) return undefined;

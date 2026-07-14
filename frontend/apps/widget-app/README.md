@@ -47,11 +47,28 @@ Current bundle (production, gzipped):
 
 | Asset | Raw | Gzip | Budget |
 |---|---|---|---|
-| Widget JS (`/v1/assets/index-…js`) | ~388 kB | ~120 kB | 150 kB hard ceiling |
-| Widget CSS | ~16 kB | ~4 kB | — |
+| Widget JS (`/v1/assets/index-…js`) | ~285 kB | ~90 kB | 95 kB hard ceiling |
+| Widget CSS | ~35 kB | ~6.5 kB | — |
 | Loader (`/widget.js`) | ~6 kB | ~2.7 kB | 30 kB hard ceiling |
 
-Most of the widget JS is `highlight.js` with all 387 languages bundled by auto-detect. Lazy-loading or a language subset is a tracked optimization.
+### Syntax highlighting
+
+`src/highlight.ts` builds a lowlight instance from an **explicit subset** of
+highlight.js grammars (bash, go, javascript, json, markdown, plaintext, python,
+sql, typescript, yaml — plus their aliases) and exposes it as a small rehype
+plugin. Code blocks tagged with a language outside the subset render as plain
+monospace (graceful fallback; auto-detection is off).
+
+We can't use `rehype-highlight` directly: it statically imports lowlight's full
+`common` set (~35 grammars) as an unconditional fallback, so the bundler keeps
+all of them regardless of options. Subsetting cut the JS bundle from ~120 kB to
+~90 kB gzip.
+
+The remaining weight is **not** highlighting — it's the `react-markdown` +
+`remark-gfm` markdown pipeline (~71 kB gzip, incl. micromark/mdast and GFM's
+serialization utilities). That is the real floor: removing highlighting entirely
+only reaches ~71 kB. Getting below that would mean replacing or trimming the
+markdown renderer, which is a separate, product-affecting change.
 
 ## Source layout
 
@@ -59,12 +76,13 @@ Most of the widget JS is `highlight.js` with all 387 languages bundled by auto-d
 |---|---|
 | `src/main.tsx` | Entry: parses query params, runs the postMessage handshake, mounts `ChatWidget`. |
 | `src/ChatWidget.tsx` | The widget itself. Receives `apiBase` / `siteUrl` as props; no env-var reads. |
+| `src/highlight.ts` | Subset syntax-highlighting rehype plugin (see "Syntax highlighting" above). |
 | `src/LinkSafetyModal.tsx`, `src/LoadingIndicator.tsx`, `src/utils.ts` | Supporting UI / helpers. |
 | `src/styles.css` | Tailwind directives. |
 | `vite.config.ts`, `tsconfig.json`, `tailwind.config.ts`, `postcss.config.mjs`, `index.html` | Build config. |
 | `vercel.json` | Cache-control + CSP `frame-ancestors *` headers for `/v1/`, `/v1/assets/*`, `/widget.js`. |
 | `scripts/copy-loader.mjs` | Post-build step that pulls the loader IIFE into the widget-app `dist/`. Asserts the 30 kB gzip ceiling. |
-| `scripts/check-bundle-size.mjs` | Asserts the 150 kB widget-JS gzip ceiling. |
+| `scripts/check-bundle-size.mjs` | Asserts the 95 kB widget-JS gzip ceiling. |
 
 ## Environment variables (dashboard side)
 

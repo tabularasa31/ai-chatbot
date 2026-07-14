@@ -832,7 +832,16 @@ async def widget_history(
             if idx > 0 and m.chat_id != messages[idx - 1].chat_id
         ]
         # Read-only signal: the actual rotation happens on the next POST.
-        conversation_rotated = should_rotate(latest)
+        # Suppress the auto re-greet when the idle conversation never got a
+        # user turn (greeting-only): rotating it would just churn another
+        # empty greeting Chat row + trace for a visitor who never engaged.
+        # A real message after idle still rotates server-side (widget_chat
+        # re-checks should_rotate), so an engaged returning visitor keeps
+        # getting a fresh conversation.
+        latest_has_user_turn = any(
+            m.chat_id == latest.id and m.role == MessageRole.user for m in messages
+        )
+        conversation_rotated = should_rotate(latest) and latest_has_user_turn
 
         ticket_number: str | None = None
         if latest.escalation_awaiting_ticket_id is not None:

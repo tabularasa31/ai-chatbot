@@ -992,6 +992,35 @@ def test_widget_history_flags_pending_rotation(
     assert data["boundary_indices"] == []
 
 
+def test_widget_history_greeting_only_idle_chat_does_not_flag_rotation(
+    tenant: TestClient, db_session: Session
+) -> None:
+    # A conversation that only ever received the bootstrap greeting (no user
+    # turn) must NOT signal rotation when idle: re-greeting it would churn
+    # another empty greeting Chat + trace for a visitor who never engaged.
+    tenant_uuid, bot_public_id = _setup_rotation_tenant(
+        tenant,
+        db_session,
+        email="widget-rot-greetonly@example.com",
+        name="Widget Rot GreetOnly Co",
+    )
+    session_id = uuid.uuid4()
+    _make_session_chat(
+        db_session,
+        tenant_uuid,
+        session_id=session_id,
+        idle_minutes=45,
+        messages=[("assistant", "Hi, how can I help?")],
+    )
+
+    r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["conversation_rotated"] is False
+    assert [m["content"] for m in data["messages"]] == ["Hi, how can I help?"]
+
+
 def test_widget_history_rotated_closed_chat_is_not_ended(
     tenant: TestClient, db_session: Session
 ) -> None:

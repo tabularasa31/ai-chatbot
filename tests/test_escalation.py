@@ -841,15 +841,26 @@ def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
     # is kept encrypted (mirrors backend.chat.persistence._create_message).
     transcript_original = "I logged in from 203.0.113.7 with card 4111 1111 1111 1111"
     transcript_redacted = "I logged in from [IP] with card [CARD]"
-    db_session.add(
+    # An assistant turn that echoed an infra IP: stored redacted, original kept
+    # encrypted. It must stay masked in the email even though it can be decrypted.
+    assistant_original = "Our status page is at 198.51.100.200, please retry."
+    assistant_redacted = "Our status page is at [IP], please retry."
+    db_session.add_all([
         Message(
             chat_id=chat.id,
             role=MessageRole.user,
             content=transcript_redacted,
             content_redacted=transcript_redacted,
             content_original_encrypted=encrypt_value(transcript_original),
-        )
-    )
+        ),
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content=assistant_redacted,
+            content_redacted=assistant_redacted,
+            content_original_encrypted=encrypt_value(assistant_original),
+        ),
+    ])
     db_session.commit()
 
     question_original = "reach me at real@user.com or +1 202 555 0143, IP 198.51.100.9"
@@ -879,7 +890,11 @@ def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
     # EMAIL and IP are visible in the body — support can reply / debug.
     assert "real@user.com" in body
     assert "198.51.100.9" in body  # IP from the question
-    assert "203.0.113.7" in body  # IP from the transcript turn
+    assert "203.0.113.7" in body  # IP from the user transcript turn
+
+    # Assistant-authored PII stays masked: the bot may have echoed an infra IP
+    # from the knowledge base, which must not be un-masked into a quotable email.
+    assert "198.51.100.200" not in body  # IP from the assistant turn
 
     # Every other PII type stays masked, even though the originals were decrypted.
     assert "+1 202 555 0143" not in body

@@ -199,10 +199,16 @@ def _email_ticket_question(ticket: EscalationTicket) -> str:
 def _email_message_content(message: Message) -> str:
     """Transcript message content for the support email body.
 
-    Prefers the encrypted original re-redacted with EMAIL/IP visible; falls
-    back to the stored redacted content when the original is absent or cannot
-    be decrypted.
+    Only *user-authored* turns get the EMAIL/IP-visible treatment — support
+    needs the contact address and IP the user reported. Assistant turns keep
+    the stored redacted copy: the bot may have echoed a tenant/support address
+    or infrastructure IP from the knowledge base, and those must not be
+    un-masked into an email the support agent's client can quote back to the
+    end user. Falls back to the redacted content when the original is absent
+    or cannot be decrypted.
     """
+    if message.role != MessageRole.user:
+        return _safe_message_content(message)
     original = _decrypt_optional(getattr(message, "content_original_encrypted", None))
     if original is not None:
         return _support_email_text(original)

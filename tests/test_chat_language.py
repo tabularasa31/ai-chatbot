@@ -368,6 +368,9 @@ def test_resolve_language_context_bootstrap_prior_session_language_outranks_all(
     assert context.response_language == "ru"
     assert context.response_language_resolution_reason == "bootstrap_prior_session_language"
     assert context.detected_language == "unknown"
+    # Placeholder confidence must stay out of the confidence metrics, like the
+    # other bootstrap fast paths — detection never ran on this turn.
+    assert context.detection_confidence_measured is False
 
 
 def test_resolve_language_context_bootstrap_no_prior_language_keeps_kyc() -> None:

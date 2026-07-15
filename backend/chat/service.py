@@ -481,14 +481,16 @@ async def _ensure_chat_async(
         # The visitor identity survives rotation even though the conversation
         # state does not.
         effective_user_ctx = dict(rotated_from.user_context)
+    elif user_context:
+        effective_user_ctx = dict(user_context)
     if rotated_from is not None:
         # Carry the language the visitor last spoke in across the rotation
         # boundary. The fresh Chat row has no last_response_language of its own,
         # so this is the only bridge that lets a bootstrap re-greeting answer in
-        # the returning visitor's established language instead of English.
+        # the returning visitor's established language instead of English. Kept
+        # as a standalone statement so it does not sever the user_context
+        # if/elif chain above.
         prior_session_language = rotated_from.last_response_language
-    elif user_context:
-        effective_user_ctx = dict(user_context)
 
     if not chat:
         uc: dict | None = dict(effective_user_ctx) if effective_user_ctx else None

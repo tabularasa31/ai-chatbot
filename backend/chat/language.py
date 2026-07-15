@@ -121,6 +121,7 @@ class LanguageDetectionResult:
 _CONFIDENCE_NOT_MEASURED_REASONS = frozenset(
     {
         "locked",
+        "bootstrap_prior_session_language",
         "bootstrap_user_locale",
         "browser_locale",
         "bootstrap_default_english",

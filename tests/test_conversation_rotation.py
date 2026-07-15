@@ -259,6 +259,33 @@ async def test_ensure_chat_carries_prior_language_across_rotation(
 
 
 @pytest.mark.asyncio
+async def test_ensure_chat_uses_caller_context_when_rotated_chat_has_none(
+    async_db_session,
+) -> None:
+    """Carrying prior language must not sever the user_context fallback chain.
+
+    When the rotated-away chat stored no user_context, the caller-provided
+    context still has to reach the fresh row (and touch_user_session).
+    """
+    tenant, chat = await _make_async_tenant_and_chat(
+        async_db_session, idle_minutes=45
+    )
+
+    resolved, effective_ctx, _ = await _ensure_chat_async(
+        async_db_session,
+        tenant.id,
+        chat.session_id,
+        None,
+        {"user_id": "caller-1"},
+        None,
+    )
+
+    assert resolved.id != chat.id
+    assert effective_ctx == {"user_id": "caller-1"}
+    assert (resolved.user_context or {}).get("user_id") == "caller-1"
+
+
+@pytest.mark.asyncio
 async def test_ensure_chat_does_not_rotate_with_live_ticket(async_db_session) -> None:
     tenant, chat = await _make_async_tenant_and_chat(async_db_session, idle_minutes=45)
     ticket = EscalationTicket(

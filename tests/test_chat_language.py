@@ -349,6 +349,45 @@ def test_resolve_language_context_bootstrap_sets_unknown_detection() -> None:
     assert context.escalation_language_source == "tenant"
 
 
+def test_resolve_language_context_bootstrap_prior_session_language_outranks_all() -> None:
+    """A carried prior-session language wins over KYC and browser on bootstrap.
+
+    Regression: a returning visitor whose session rotated used to be re-greeted
+    in English even though they had spoken Russian, because the bootstrap chain
+    ignored the session's established language.
+    """
+    context = resolve_language_context(
+        current_turn_text="",
+        is_bootstrap_turn=True,
+        bootstrap_user_locale="fr-FR",
+        browser_locale="de-DE",
+        prior_session_language="ru",
+        tenant_escalation_language="es",
+    )
+
+    assert context.response_language == "ru"
+    assert context.response_language_resolution_reason == "bootstrap_prior_session_language"
+    assert context.detected_language == "unknown"
+    # Placeholder confidence must stay out of the confidence metrics, like the
+    # other bootstrap fast paths — detection never ran on this turn.
+    assert context.detection_confidence_measured is False
+
+
+def test_resolve_language_context_bootstrap_no_prior_language_keeps_kyc() -> None:
+    """Without a carried language the fixed KYC → browser → English chain holds."""
+    context = resolve_language_context(
+        current_turn_text="",
+        is_bootstrap_turn=True,
+        bootstrap_user_locale="fr-FR",
+        browser_locale="de-DE",
+        prior_session_language=None,
+        tenant_escalation_language="es",
+    )
+
+    assert context.response_language == "fr-FR"
+    assert context.response_language_resolution_reason == "bootstrap_user_locale"
+
+
 def test_resolve_language_context_detector_failure_returns_english(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

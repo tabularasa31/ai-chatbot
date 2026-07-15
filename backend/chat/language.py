@@ -121,6 +121,7 @@ class LanguageDetectionResult:
 _CONFIDENCE_NOT_MEASURED_REASONS = frozenset(
     {
         "locked",
+        "bootstrap_prior_session_language",
         "bootstrap_user_locale",
         "browser_locale",
         "bootstrap_default_english",
@@ -574,6 +575,7 @@ def resolve_language_context(
     browser_locale: str | None,
     tenant_escalation_language: str | None,
     previous_response_language: str | None = None,
+    prior_session_language: str | None = None,
     recent_user_turn_texts: list[str] | None = None,
     language_locked: bool = False,
     tenant_id: str | None = None,
@@ -613,6 +615,7 @@ def resolve_language_context(
             browser_locale=browser_locale,
             tenant_escalation_language=tenant_escalation_language,
             previous_response_language=previous_response_language,
+            prior_session_language=prior_session_language,
             recent_user_turn_texts=recent_user_turn_texts,
             tenant_id=tenant_id,
             bot_id=bot_id,
@@ -636,6 +639,7 @@ def _resolve_language_context_inner(
     browser_locale: str | None,
     tenant_escalation_language: str | None,
     previous_response_language: str | None = None,
+    prior_session_language: str | None = None,
     recent_user_turn_texts: list[str] | None = None,
     tenant_id: str | None = None,
     bot_id: str | None = None,
@@ -647,13 +651,29 @@ def _resolve_language_context_inner(
     if is_bootstrap_turn:
         # Fixed contract — must not be reordered.
         # Bootstrap (no user message yet) resolves response_language as:
-        #   1. user_context.locale  (KYC, tenant-passed via identity_token)
-        #   2. browser_locale       (Accept-Language / widget hint)
-        #   3. English              (final fallback)
-        # KYC outranks browser deliberately: it reflects what the tenant's
-        # own system says about this specific user. See
+        #   1. prior_session_language  (language the visitor actually spoke in
+        #      an earlier conversation of this same session, carried across a
+        #      rotation boundary — only set when the session was rotated)
+        #   2. user_context.locale     (KYC, tenant-passed via identity_token)
+        #   3. browser_locale          (Accept-Language / widget hint)
+        #   4. English                 (final fallback)
+        # prior_session_language outranks KYC/browser deliberately: an observed
+        # language the visitor typed in a prior turn beats any passive hint. It
+        # is null on a genuinely first bootstrap (no rotation), so brand-new
+        # sessions fall through to the KYC/browser/English chain unchanged. See
         # docs/04-features.md "Bootstrap locale chain — fixed contract"
         # and docs/docs-ru/08-chat-pipeline.md for the rationale.
+        carried_language = _normalize_config_language(prior_session_language)
+        if carried_language:
+            return ResolvedLanguageContext(
+                detected_language="unknown",
+                confidence=0.0,
+                is_reliable=False,
+                response_language=carried_language,
+                response_language_resolution_reason="bootstrap_prior_session_language",
+                escalation_language=escalation_language,
+                escalation_language_source=escalation_language_source,
+            )
         bootstrap_language = _normalize_config_language(bootstrap_user_locale)
         if bootstrap_language:
             return ResolvedLanguageContext(

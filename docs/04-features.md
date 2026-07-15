@@ -649,11 +649,12 @@ Localization of deterministic text is handled by a shared helper in `backend/cha
 
 For any turn that has no user message to detect language from (the bootstrap greeting and any other pre-question deterministic text), the response language is resolved in this exact order. **This order must not be changed without an explicit product decision** — call sites and tests rely on it.
 
-1. **`user_context.locale`** — the locale the tenant explicitly passed for this user (typically via `userHints.locale` in `Chat9Widget.start({...})` or `Chat9Widget.setHints({...})`). This is the strongest signal because the tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
-2. **`user_context.browser_locale` / request `Accept-Language`** — the browser-reported locale. Weaker than the explicit hint because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
-3. **English** — final fallback when neither signal is available.
+1. **Prior session language** — the language the visitor actually spoke in an earlier conversation of this same session, carried across a rotation boundary (`rotated_from.last_response_language`). This is the strongest signal because it is an *observed* choice the visitor made, not a passive hint. It is only present when the session was rotated (an idle re-open); a genuinely first bootstrap has no prior language and falls through. Without it, a returning Russian-speaking visitor re-greeted after an idle gap would be greeted in English.
+2. **`user_context.locale`** — the locale the tenant explicitly passed for this user (typically via `userHints.locale` in `Chat9Widget.start({...})` or `Chat9Widget.setHints({...})`). The tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
+3. **`user_context.browser_locale` / request `Accept-Language`** — the browser-reported locale. Weaker than the explicit hint because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
+4. **English** — final fallback when no signal is available.
 
-The explicit hint outranks browser deliberately. Reversing the order would silently override tenants who paid the integration cost of passing `locale` through `userHints`. Implementation: [`_resolve_language_context_inner`](../backend/chat/language.py) in `backend/chat/language.py` — bootstrap branch.
+Prior session language outranks KYC/browser deliberately: an observed language the visitor typed beats any hint. Below it, the explicit KYC hint outranks browser — reversing *that* would silently override tenants who paid the integration cost of passing `locale` through `userHints`. Implementation: [`_resolve_language_context_inner`](../backend/chat/language.py) in `backend/chat/language.py` — bootstrap branch; the carry across rotation lives in `_ensure_chat_async` in `backend/chat/service.py`.
 
 #### Language locking — fixed contract
 

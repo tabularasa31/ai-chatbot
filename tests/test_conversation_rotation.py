@@ -198,7 +198,7 @@ async def _make_async_tenant_and_chat(async_db_session, *, idle_minutes: int, **
 async def test_ensure_chat_reuses_within_idle_window(async_db_session) -> None:
     tenant, chat = await _make_async_tenant_and_chat(async_db_session, idle_minutes=5)
 
-    resolved, _ = await _ensure_chat_async(
+    resolved, _, _ = await _ensure_chat_async(
         async_db_session, tenant.id, chat.session_id, None, None, None
     )
 
@@ -210,7 +210,7 @@ async def test_ensure_chat_reuses_within_idle_window(async_db_session) -> None:
 async def test_ensure_chat_rotates_idle_conversation(async_db_session) -> None:
     tenant, chat = await _make_async_tenant_and_chat(async_db_session, idle_minutes=45)
 
-    resolved, _ = await _ensure_chat_async(
+    resolved, _, _ = await _ensure_chat_async(
         async_db_session, tenant.id, chat.session_id, None, None, None
     )
 
@@ -230,13 +230,32 @@ async def test_ensure_chat_carries_user_context_across_rotation(
         async_db_session, idle_minutes=45, user_context={"user_id": "u-1"}
     )
 
-    resolved, effective_ctx = await _ensure_chat_async(
+    resolved, effective_ctx, _ = await _ensure_chat_async(
         async_db_session, tenant.id, chat.session_id, None, None, None
     )
 
     assert resolved.id != chat.id
     # Visitor identity survives rotation even though conversation state resets.
     assert effective_ctx == {"user_id": "u-1"}
+
+
+@pytest.mark.asyncio
+async def test_ensure_chat_carries_prior_language_across_rotation(
+    async_db_session,
+) -> None:
+    tenant, chat = await _make_async_tenant_and_chat(
+        async_db_session, idle_minutes=45, last_response_language="ru"
+    )
+
+    resolved, _, prior_session_language = await _ensure_chat_async(
+        async_db_session, tenant.id, chat.session_id, None, None, None
+    )
+
+    # Fresh conversation, but the language the visitor last spoke in bridges the
+    # rotation so a bootstrap re-greeting can answer in it instead of English.
+    assert resolved.id != chat.id
+    assert resolved.last_response_language is None
+    assert prior_session_language == "ru"
 
 
 @pytest.mark.asyncio
@@ -255,7 +274,7 @@ async def test_ensure_chat_does_not_rotate_with_live_ticket(async_db_session) ->
     async_db_session.add(chat)
     await async_db_session.commit()
 
-    resolved, _ = await _ensure_chat_async(
+    resolved, _, _ = await _ensure_chat_async(
         async_db_session, tenant.id, chat.session_id, None, None, None
     )
 
@@ -279,7 +298,7 @@ async def test_ensure_chat_picks_latest_of_many(async_db_session) -> None:
     async_db_session.add(newer)
     await async_db_session.commit()
 
-    resolved, _ = await _ensure_chat_async(
+    resolved, _, _ = await _ensure_chat_async(
         async_db_session, tenant.id, old_chat.session_id, None, None, None
     )
 

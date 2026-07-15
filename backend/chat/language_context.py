@@ -229,6 +229,7 @@ def _resolve_chat_language_context(
     bootstrap_user_locale: str | None,
     browser_locale: str | None,
     is_bootstrap_turn: bool,
+    prior_session_language: str | None = None,
     chat: Chat | None = None,
     db: Session | None = None,
 ) -> ResolvedLanguageContext:
@@ -256,6 +257,7 @@ def _resolve_chat_language_context(
             or getattr(tenant_profile, "escalation_language", None)
         ),
         previous_response_language=previous_response_language,
+        prior_session_language=prior_session_language,
         recent_user_turn_texts=recent_user_turn_texts,
         language_locked=bool(getattr(chat, "language_locked", False)) if chat is not None else False,
         tenant_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,

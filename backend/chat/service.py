@@ -441,7 +441,7 @@ async def _ensure_chat_async(
     bot_id: uuid.UUID | None,
     user_context: dict | None,
     browser_locale: str | None,
-) -> tuple[Chat, dict | None]:
+) -> tuple[Chat, dict | None, str | None]:
     """Load the session's current conversation, rotating it when stale.
 
     Loads the latest Chat row for the session (``selectinload`` for messages)
@@ -455,6 +455,7 @@ async def _ensure_chat_async(
     chat = result.scalars().first()
 
     rotated_from: Chat | None = None
+    prior_session_language: str | None = None
     if chat is not None and should_rotate(chat):
         # Serialize concurrent rotation: lock the stale row, then re-read the
         # latest chat. If a parallel request rotated while we waited on the
@@ -480,6 +481,12 @@ async def _ensure_chat_async(
         # The visitor identity survives rotation even though the conversation
         # state does not.
         effective_user_ctx = dict(rotated_from.user_context)
+    if rotated_from is not None:
+        # Carry the language the visitor last spoke in across the rotation
+        # boundary. The fresh Chat row has no last_response_language of its own,
+        # so this is the only bridge that lets a bootstrap re-greeting answer in
+        # the returning visitor's established language instead of English.
+        prior_session_language = rotated_from.last_response_language
     elif user_context:
         effective_user_ctx = dict(user_context)
 
@@ -548,7 +555,7 @@ async def _ensure_chat_async(
 
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
-    return chat, effective_user_ctx
+    return chat, effective_user_ctx, prior_session_language
 
 
 async def _build_handler_context_async(
@@ -770,7 +777,7 @@ async def async_process_chat_message(
         name="chat_setup",
         input={"session_id": str(session_id), "has_bot_id": bot_id is not None},
     )
-    chat, effective_user_ctx = await _ensure_chat_async(
+    chat, effective_user_ctx, prior_session_language = await _ensure_chat_async(
         db, tenant_id, session_id, bot_id, user_context, browser_locale
     )
     # Bind tenant_row to the now-active session. It is detached either by the
@@ -823,6 +830,7 @@ async def async_process_chat_message(
             is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
             bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
             browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
+            prior_session_language=prior_session_language,
             chat=chat,
             db=s,
         ),

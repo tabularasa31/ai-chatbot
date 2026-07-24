@@ -72,7 +72,14 @@ class GreetingHandler(PipelineHandler):
       analytics and inject a blank turn into the OpenAI transcript. Bootstrap
       detection on the next call relies on ``bool(chat.messages)``.
     * Bare social turn: a typed message the human-request classifier flagged as
-      carrying no actionable request. Persists the full user + assistant turn.
+      carrying no actionable request, emitted only at the *start* of a
+      conversation (before any substantive turn). Persists the full user +
+      assistant turn.
+
+    Once the chat has substantive content, a bare social turn is never greeted:
+    the welcome text is an opener, so re-emitting it mid-dialogue is wrong (and
+    the classifier can misread a short answer to the bot's own question as
+    no-request-content). Those turns fall through to RAG.
 
     Escalation / closed states are never intercepted here: a bare "yes" / "no"
     / email / ticket-id reply has no request content but must reach the
@@ -89,6 +96,17 @@ class GreetingHandler(PipelineHandler):
             return False
 
         chat = ctx.chat
+        # Mid-conversation guard: the social greeting is a conversation *opener*
+        # ("Welcome to <product> support! Ask your question"). Once the chat has
+        # carried real request content, a bare affirmation / ack ("yes, there
+        # is", "thanks") is a follow-up, not an opener — and the human-request
+        # classifier is nondeterministic on such short replies, so an answer to
+        # the bot's own clarifying question ("да есть") can momentarily read as
+        # no-request-content. Greeting here is the recurring "re-greet
+        # mid-dialogue" bug. Fall through so the turn reaches the escalation FSM
+        # / RAG, which continue the thread with full history.
+        if chat.has_substantive_content:
+            return False
         # Defer to the EscalationStateMachine for any active escalation / closed
         # state — a short confirmation reply there carries no request content
         # but is not small talk.

@@ -439,6 +439,98 @@ def test_low_retrieval_guard_reranker_rescue_passes() -> None:
     assert run.state.reranker_rescued is True
 
 
+def test_low_retrieval_guard_social_recheck_returns_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A short mid-dialogue social turn ("thanks") that bypassed the relevance
+    guard and retrieved only sub-threshold hits gets the polite social
+    acknowledgement, not the low_retrieval refusal."""
+
+    async def _fake_reject(**kwargs):
+        return _FakeLocalization(text="thanks — happy to help")
+
+    monkeypatch.setattr(
+        "backend.chat.steps.refusal.build_reject_response_result", _fake_reject
+    )
+
+    async def _guard(**kwargs):
+        assert kwargs.get("force_llm_check") is True
+        return Verdict.of(VerdictReason.SOCIAL)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile", _guard
+    )
+
+    run = _make_run(question="спасибо")
+    run.state.guard_bypassed_short_query = True
+    run.state.retrieval = _retrieval_ctx(
+        best_rank_score=0.1, vector_similarities=[0.01, 0.02]
+    )
+    result = asyncio.run(retrieval.low_retrieval_guard(run))
+    assert result is not None
+    assert result.reject_reason == "social"
+    assert result.final_answer == "thanks — happy to help"
+
+
+def test_low_retrieval_guard_bypass_non_social_still_low_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A short *question* that bypassed the guard but is not social falls
+    through to the normal low_retrieval reject after the re-check."""
+
+    async def _fake_reject(**kwargs):
+        return _FakeLocalization(text="low retrieval")
+
+    monkeypatch.setattr(
+        "backend.chat.steps.refusal.build_reject_response_result", _fake_reject
+    )
+
+    async def _guard(**kwargs):
+        return Verdict.of(VerdictReason.RELEVANT)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile", _guard
+    )
+
+    run = _make_run(question="wildcard?")
+    run.state.guard_bypassed_short_query = True
+    run.state.retrieval = _retrieval_ctx(
+        best_rank_score=0.1, vector_similarities=[0.01, 0.02]
+    )
+    result = asyncio.run(retrieval.low_retrieval_guard(run))
+    assert result is not None
+    assert result.reject_reason == "low_retrieval"
+
+
+def test_low_retrieval_guard_no_recheck_when_not_bypassed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No relevance re-check (extra LLM call) fires when the query did not
+    bypass the guard — the recheck is scoped to short-query bypass only."""
+
+    async def _fake_reject(**kwargs):
+        return _FakeLocalization(text="low retrieval")
+
+    monkeypatch.setattr(
+        "backend.chat.steps.refusal.build_reject_response_result", _fake_reject
+    )
+
+    async def _guard(**kwargs):
+        raise AssertionError("relevance re-check must not run for non-bypassed turns")
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile", _guard
+    )
+
+    run = _make_run()  # guard_bypassed_short_query defaults to False
+    run.state.retrieval = _retrieval_ctx(
+        best_rank_score=0.1, vector_similarities=[0.01, 0.02]
+    )
+    result = asyncio.run(retrieval.low_retrieval_guard(run))
+    assert result is not None
+    assert result.reject_reason == "low_retrieval"
+
+
 # ---------------------------------------------------------------------------
 # generation seam
 # ---------------------------------------------------------------------------

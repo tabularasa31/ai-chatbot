@@ -137,6 +137,33 @@ def test_can_handle_returns_true_for_bare_typed_greeting(db_session: Session) ->
     assert GreetingHandler().can_handle(ctx) is True
 
 
+def test_can_handle_returns_false_for_bare_social_turn_mid_dialogue(
+    db_session: Session,
+) -> None:
+    """Regression: no re-greeting once the chat has substantive content.
+
+    The welcome text is a conversation opener. After real Q&A the sticky
+    ``has_substantive_content`` flag is set; a bare affirmation the classifier
+    momentarily reads as no-request-content ("да есть", answering the bot's own
+    clarifying question) must fall through to RAG, not trigger the opener again.
+    Reproduces the Langfuse "greeting mid-dialogue" session.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.has_substantive_content = True
+    db_session.flush()
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="да есть",
+        is_new_session=False,
+        message_has_request_content=False,
+    )
+
+    assert GreetingHandler().can_handle(ctx) is False
+
+
 def test_can_handle_returns_false_when_explicit_human_request(db_session: Session) -> None:
     """A hand-me-off request is never small talk, even with no request content."""
     tenant = _make_persisted_tenant(db_session)

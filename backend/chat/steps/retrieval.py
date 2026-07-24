@@ -599,6 +599,13 @@ async def _social_recheck_reject(
 
     Returns None when the turn didn't bypass the guard or isn't social — the
     caller then proceeds with its normal reject.
+
+    No ``no_rag_hits`` event is emitted here: that event is defined for the
+    strict zero-hits path only (see ``backend/chat/events.py``), and this
+    branch runs precisely because retrieval returned populated-but-sub-threshold
+    hits. The social outcome stays observable via ``reject_reason="social"`` on
+    the result — matching the pre-retrieval relevance-guard social path, which
+    likewise emits no extra event.
     """
     state = run.state
     if not state.guard_bypassed_short_query:
@@ -620,22 +627,11 @@ async def _social_recheck_reject(
     if reason not in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
         return None
 
-    # Render the reply before emitting telemetry so a failed render never
-    # records a social_reply outcome for a reply that was never sent.
-    result = await build_reject_result(
+    return await build_reject_result(
         run,
         reject_reason="social_question" if reason == CATEGORY_SOCIAL_QUESTION else "social",
         retrieval=retrieval,
-        tokens_as_output=True,
     )
-    _emit_no_rag_hits_event(
-        outcome="social_reply",
-        tenant_public_id=run.tenant_public_id,
-        bot_public_id=run.bot_public_id,
-        chat_id=run.chat_id,
-        relevance_reason=reason,
-    )
-    return result
 
 
 async def low_retrieval_guard(run: PipelineRun) -> ChatPipelineResult | None:

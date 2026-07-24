@@ -577,6 +577,67 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
         raise
 
 
+async def _social_recheck_reject(
+    run: PipelineRun,
+    *,
+    retrieval: RetrievalContext,
+) -> ChatPipelineResult | None:
+    """Re-classify a guard-bypassed short query and, when it is a pure social
+    turn (thanks / farewell / bot-meta question), return the polite
+    acknowledgement instead of a knowledge-base-miss reply.
+
+    Short queries (≤ ``SHORT_QUERY_WORD_LIMIT`` words) skip the pre-retrieval
+    relevance guard, so a mid-dialogue "thanks" arrives at the retrieval-quality
+    guards with no category verdict. ``zero_hits_fast_path`` already runs this
+    re-check on empty retrieval; this mirrors it for the low-retrieval path
+    (retrieval returned only sub-threshold hits — the more common shape for a
+    bare social turn, which still embeds against *some* chunks). Both routes
+    then emit the same closing acknowledgement rather than a "couldn't help /
+    rephrase" refusal. The check passes ``dialog_context`` so a short *answer*
+    to the bot's own question ("да есть") is read as an on-topic continuation,
+    not social, and falls through to the normal reject.
+
+    Returns None when the turn didn't bypass the guard or isn't social — the
+    caller then proceeds with its normal reject.
+    """
+    state = run.state
+    if not state.guard_bypassed_short_query:
+        return None
+
+    from backend.chat import service as _svc
+
+    verdict = await _svc.async_check_relevance_with_profile(
+        tenant_id=run.tenant_id,
+        user_question=run.question,
+        profile=state.profile,
+        api_key=run.api_key,
+        trace=run.trace,
+        force_llm_check=True,
+        dialog_context=state.guard_dialog_context,
+        chat_id=str(run.chat_id) if run.chat_id is not None else None,
+    )
+    reason = verdict.reason.value
+    if reason not in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
+        return None
+
+    # Render the reply before emitting telemetry so a failed render never
+    # records a social_reply outcome for a reply that was never sent.
+    result = await build_reject_result(
+        run,
+        reject_reason="social_question" if reason == CATEGORY_SOCIAL_QUESTION else "social",
+        retrieval=retrieval,
+        tokens_as_output=True,
+    )
+    _emit_no_rag_hits_event(
+        outcome="social_reply",
+        tenant_public_id=run.tenant_public_id,
+        bot_public_id=run.bot_public_id,
+        chat_id=run.chat_id,
+        relevance_reason=reason,
+    )
+    return result
+
+
 async def low_retrieval_guard(run: PipelineRun) -> ChatPipelineResult | None:
     """Reject when every vector similarity is below the relevance threshold.
 
@@ -602,6 +663,12 @@ async def low_retrieval_guard(run: PipelineRun) -> ChatPipelineResult | None:
         and all(sim is not None for sim in retrieval.vector_similarities)
         and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
     ):
+        # A short mid-dialogue social turn ("thanks") bypassed the relevance
+        # guard and retrieved only sub-threshold hits — give it the same polite
+        # acknowledgement the zero-hits path does, not a low-retrieval refusal.
+        social = await _social_recheck_reject(run, retrieval=retrieval)
+        if social is not None:
+            return social
         return await build_reject_result(
             run,
             reject_reason="low_retrieval",

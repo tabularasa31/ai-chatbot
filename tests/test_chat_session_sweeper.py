@@ -17,16 +17,17 @@ from backend.models.enums import MessageRole
 
 @pytest.fixture(autouse=True)
 def _pin_idle_timeout(monkeypatch):
-    """Pin the sweep threshold to 30 min for these tests.
+    """Pin both sweep thresholds to 30 min for these tests.
 
-    The shipped default is 7 days (shared with conversation rotation); these
-    tests exercise the sweep *mechanism* at a fixed, small threshold. Raising
-    the default defers chat_session_ended for abandoned sessions to that
-    window — an intentional consequence, not covered by these mechanism tests.
+    The shipped conversation window is 7 days (shared with rotation); empty
+    mount chats are reaped on a separate short window. These tests exercise the
+    sweep *mechanism* at a single fixed threshold; the decoupled behavior is
+    covered explicitly by ``test_empty_chat_reaped_on_short_window_...``.
     """
     from backend.core.config import settings
 
     monkeypatch.setattr(settings, "conversation_idle_timeout_seconds", 1800)
+    monkeypatch.setattr(settings, "empty_chat_idle_timeout_seconds", 1800)
 
 
 def _make_tenant(db: Session) -> Tenant:
@@ -210,6 +211,42 @@ def test_mixed_pass_emits_only_for_chats_with_messages(
     db_session.refresh(nonempty)
     assert empty.session_ended_event_at is not None
     assert nonempty.session_ended_event_at is not None
+
+
+def test_empty_chat_reaped_on_short_window_message_chat_kept(
+    db_session: Session, monkeypatch
+) -> None:
+    """Decoupled windows: an idle empty mount chat is reaped on the short
+    empty-chat window while a message-bearing conversation in the same idle
+    range is kept for the long conversation window (returning-visitor
+    continuity). Guards against empty mount chats lingering in
+    ix_chats_sweeper_pending for days once the conversation window is raised."""
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "conversation_idle_timeout_seconds", 7 * 24 * 3600)
+    monkeypatch.setattr(settings, "empty_chat_idle_timeout_seconds", 1800)
+
+    tenant = _make_tenant(db_session)
+    # 45 min idle: past the 30-min empty window, well within the 7-day one.
+    empty = _make_chat(db_session, tenant, age_minutes=45, with_message=False)
+    conversation = _make_chat(db_session, tenant, age_minutes=45, with_message=True)
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        chat_session_sweeper,
+        "_emit_chat_session_ended_event",
+        lambda **kwargs: captured.append(kwargs),
+    )
+
+    count = sweep_inactive_chats(db_session)
+
+    # Empty chat reaped (marker set, no event); conversation left pending.
+    assert count == 0
+    assert captured == []
+    db_session.refresh(empty)
+    db_session.refresh(conversation)
+    assert empty.session_ended_event_at is not None
+    assert conversation.session_ended_event_at is None
 
 
 def test_escalation_closed_chat_is_skipped(

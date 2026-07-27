@@ -125,6 +125,25 @@ def test_default_idle_timeout_is_seven_days() -> None:
     )
 
 
+def test_returning_visitor_within_default_window_does_not_rotate(
+    db_session: Session, monkeypatch
+) -> None:
+    """At the shipped 7-day default, a visitor returning hours later keeps the
+    same conversation (no rotation -> is_new_session stays False -> no
+    re-greeting). Overrides the autouse 30-min pin to exercise the real
+    default; reproduces the Langfuse re-greeting session."""
+    from backend.core.config import Settings, settings
+
+    monkeypatch.setattr(
+        settings,
+        "conversation_idle_timeout_seconds",
+        Settings.model_fields["conversation_idle_timeout_seconds"].default,
+    )
+    tenant = _make_tenant(db_session)
+    chat = _make_chat(db_session, tenant, idle_minutes=120)  # 2h, within 7 days
+    assert should_rotate(chat) is False
+
+
 def test_fresh_chat_does_not_rotate(db_session: Session) -> None:
     tenant = _make_tenant(db_session)
     chat = _make_chat(db_session, tenant, idle_minutes=5)

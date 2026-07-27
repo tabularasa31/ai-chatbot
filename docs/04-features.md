@@ -363,7 +363,7 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 
 **Clarification budget**
 
-- Maximum **1 blocking clarifying question per conversation** (`CLARIFICATION_TURN_LIMIT`, default 1, configurable via env var). The budget resets when conversation rotation opens a new Chat row (see "Sessions, conversations, and history") — a visitor returning after the idle timeout gets a full budget again.
+- Maximum **1 blocking clarifying question per conversation** (`CLARIFICATION_TURN_LIMIT`, default 1, configurable via env var). The budget resets when conversation rotation opens a new Chat row (see "Sessions, conversations, and history") — i.e. only after a long idle gap (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, 7 days) or `Start new chat`, not on a return within the widget session.
 - `chats.clarification_count` tracks how many blocking clarifications have been issued in the conversation.
 - Counter increments only on `Decision.clarify(type=blocking)`, atomically in the same DB transaction as the assistant message.
 - Inline clarifications (`type=inline`, appended after a partial answer) are budget-free and never increment the counter.
@@ -699,14 +699,16 @@ Two distinct notions:
 - A **session** (`session_id`, UUID) identifies the *visitor in a browser*. The stock widget stores it in localStorage per bot (and per identified user) with a **sliding 24-hour TTL** — the visitor-identity lifetime. Sessions are scoped to a client — no cross-client leakage.
 - A **conversation** (`Chat` row) is one continuous exchange. Messages within a conversation are stored and passed as history in subsequent turns (last N messages, `CHAT_HISTORY_TURNS`).
 
-**Conversation rotation.** A session spans multiple conversations over time. When a message arrives and the session's latest conversation has been idle longer than `CONVERSATION_IDLE_TIMEOUT_SECONDS` (default 1800 = 30 min, measured on the chat's last activity), the backend lazily opens a **new Chat row under the same session_id**. The same threshold drives the `chat_session_ended` analytics sweeper, so behavior and metrics share one definition of an ended conversation.
+**Conversation rotation.** A session spans multiple conversations over time. When a message arrives and the session's latest conversation has been idle longer than `CONVERSATION_IDLE_TIMEOUT_SECONDS` (default 604800 = 7 days, measured on the chat's last activity), the backend lazily opens a **new Chat row under the same session_id**. The window is deliberately long — longer than the widget's own 24-hour session TTL — so a visitor returning within their widget session **continues the same conversation and is not re-greeted**; a fresh conversation (with a greeting) starts only after a genuinely long gap or `Start new chat`. The same threshold drives the `chat_session_ended` analytics sweeper for conversations that carry real messages, so behavior and metrics share one definition of an ended conversation; raising it likewise defers `chat_session_ended` for abandoned conversations to the same window.
 
-What resets with a new conversation:
+Message-less mount chats (`/widget/session/init` creates a `Chat` on every widget mount before the visitor types) are reaped on a **separate short window**, `EMPTY_CHAT_IDLE_TIMEOUT_SECONDS` (default 1800 = 30 min). They never emit `chat_session_ended`, so this only controls how quickly they drop out of the `ix_chats_sweeper_pending` partial index — decoupled from the conversation window so raising the latter does not let empty mount chats pile up in that index for days.
+
+What resets when a *new* conversation opens (after the window, or `Start new chat`) — not on an in-window return, which keeps all of it:
 
 - prompt history (the LLM no longer sees yesterday's turns)
 - clarification budget (`clarification_count`)
 - loop-detection window
-- greeting (shown again to the returning visitor)
+- greeting (shown again only when a new conversation actually opens — not on an in-window return)
 - language lock
 
 What survives rotation:

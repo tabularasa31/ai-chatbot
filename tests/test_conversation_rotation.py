@@ -36,6 +36,21 @@ from backend.models.base import _utcnow
 from backend.models.enums import MessageRole
 
 
+@pytest.fixture(autouse=True)
+def _pin_idle_timeout(monkeypatch):
+    """Pin the rotation threshold to 30 min for the behavior tests in this file.
+
+    The shipped default is 7 days (a visitor returning within their widget
+    session keeps the same conversation instead of being re-greeted); these
+    tests exercise the rotation *mechanism* at a fixed, small threshold so they
+    stay valid independent of that product value. The default itself is covered
+    by ``test_default_idle_timeout_is_seven_days``.
+    """
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "conversation_idle_timeout_seconds", 1800)
+
+
 def _make_ticket(db: Session, tenant: Tenant) -> EscalationTicket:
     ticket = EscalationTicket(
         tenant_id=tenant.id,
@@ -93,8 +108,40 @@ def _make_chat(
 
 
 # ---------------------------------------------------------------------------
-# should_rotate unit behavior (default threshold: 1800s = 30 min)
+# should_rotate unit behavior (threshold pinned to 1800s = 30 min by fixture)
 # ---------------------------------------------------------------------------
+
+
+def test_default_idle_timeout_is_seven_days() -> None:
+    """The shipped default keeps a returning visitor's conversation alive for a
+    week so they are not re-greeted; the widget's own 24h session TTL is the
+    practical bound. Reads the class default directly so the autouse pin above
+    does not mask it."""
+    from backend.core.config import Settings
+
+    assert (
+        Settings.model_fields["conversation_idle_timeout_seconds"].default
+        == 7 * 24 * 3600
+    )
+
+
+def test_returning_visitor_within_default_window_does_not_rotate(
+    db_session: Session, monkeypatch
+) -> None:
+    """At the shipped 7-day default, a visitor returning hours later keeps the
+    same conversation (no rotation -> is_new_session stays False -> no
+    re-greeting). Overrides the autouse 30-min pin to exercise the real
+    default; reproduces the Langfuse re-greeting session."""
+    from backend.core.config import Settings, settings
+
+    monkeypatch.setattr(
+        settings,
+        "conversation_idle_timeout_seconds",
+        Settings.model_fields["conversation_idle_timeout_seconds"].default,
+    )
+    tenant = _make_tenant(db_session)
+    chat = _make_chat(db_session, tenant, idle_minutes=120)  # 2h, within 7 days
+    assert should_rotate(chat) is False
 
 
 def test_fresh_chat_does_not_rotate(db_session: Session) -> None:

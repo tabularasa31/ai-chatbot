@@ -892,6 +892,21 @@ def _setup_rotation_tenant(
     return uuid.UUID(cl_resp.json()["id"]), bot_public_id
 
 
+@pytest.fixture(autouse=True)
+def _pin_idle_timeout(monkeypatch):
+    """Pin the rotation threshold to 30 min for widget tests.
+
+    The shipped default is now 7 days (a returning visitor keeps their
+    conversation within a widget session instead of being re-greeted). 1800s
+    was the prior default every test here was written against, so pinning it
+    is a no-op for non-rotation tests while keeping the ``conversation_rotated``
+    boundary tests exercising the mechanism at a fixed threshold.
+    """
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "conversation_idle_timeout_seconds", 1800)
+
+
 def _make_session_chat(
     db_session: Session,
     tenant_uuid: uuid.UUID,

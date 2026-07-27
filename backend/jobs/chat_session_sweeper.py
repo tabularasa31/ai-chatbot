@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
@@ -57,25 +57,37 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
 
     Chats already closed by escalation (``ended_at`` set) are skipped — that
     path emits its own event.
+
+    Two idle windows, read at call time so tests can override settings:
+
+    * Chats with messages use ``conversation_idle_timeout_seconds`` — the same
+      knob as lazy conversation rotation (backend/chat/rotation.py), so
+      analytics and behavior share one definition of an ended conversation.
+    * Message-less mount chats use ``empty_chat_idle_timeout_seconds`` (short).
+      They never emit an event, so reaping them early only stamps the marker to
+      drop them from ``ix_chats_sweeper_pending``; decoupling keeps that index
+      small even when the conversation window is raised to days.
     """
     reference = now or _utcnow()
-    # Same knob as lazy conversation rotation (backend/chat/rotation.py): one
-    # definition of "the conversation ended" for analytics and behavior. Read
-    # at call time so tests can override settings.
-    cutoff = reference - timedelta(seconds=settings.conversation_idle_timeout_seconds)
-    has_messages_expr = (
-        select(Message.id)
-        .where(Message.chat_id == Chat.id)
-        .exists()
-        .label("has_messages")
+    long_cutoff = reference - timedelta(
+        seconds=settings.conversation_idle_timeout_seconds
+    )
+    empty_cutoff = reference - timedelta(
+        seconds=settings.empty_chat_idle_timeout_seconds
+    )
+    has_messages_exists = (
+        select(Message.id).where(Message.chat_id == Chat.id).exists()
     )
     rows = (
-        db.query(Chat, has_messages_expr)
+        db.query(Chat, has_messages_exists.label("has_messages"))
         .options(joinedload(Chat.tenant), joinedload(Chat.bot))
         .filter(
             Chat.session_ended_event_at.is_(None),
             Chat.ended_at.is_(None),
-            Chat.updated_at < cutoff,
+            or_(
+                and_(has_messages_exists, Chat.updated_at < long_cutoff),
+                and_(~has_messages_exists, Chat.updated_at < empty_cutoff),
+            ),
         )
         .order_by(Chat.updated_at)
         .limit(_MAX_SESSIONS_PER_SWEEP)

@@ -219,10 +219,16 @@ class Settings(BaseSettings):
     )
     clarification_turn_limit: int = Field(1, alias="CLARIFICATION_TURN_LIMIT", ge=1)
     conversation_idle_timeout_seconds: int = Field(
-        1800,
+        604800,  # 7 days
         alias="CONVERSATION_IDLE_TIMEOUT_SECONDS",
         ge=60,
-        description="Idle gap (no chat activity) after which the next message starts a new conversation (new Chat row, same session_id). Shared by lazy rotation and the chat_session_ended analytics sweeper so the system has a single definition of an ended conversation.",
+        description="Idle gap (no chat activity) after which the next message starts a new conversation (new Chat row, same session_id) — and, on the widget, the boundary past which a returning visitor is re-greeted. Set to 7 days so a visitor returning within their widget session (localStorage session_id, 24h TTL) continues the same conversation instead of being greeted again. Shared by lazy rotation and the chat_session_ended analytics sweeper (for chats that carry real messages) so the system keeps a single definition of an ended conversation; raising it likewise defers chat_session_ended for abandoned conversations to the same window. Message-less widget-mount chats are reaped separately — see empty_chat_idle_timeout_seconds.",
+    )
+    empty_chat_idle_timeout_seconds: int = Field(
+        1800,  # 30 min
+        alias="EMPTY_CHAT_IDLE_TIMEOUT_SECONDS",
+        ge=60,
+        description="Idle gap after which the sweeper reaps a message-less Chat (a /widget/session/init mount the visitor never typed into). Kept short and decoupled from conversation_idle_timeout_seconds so raising the returning-visitor window does not leave empty mount chats sitting in the ix_chats_sweeper_pending partial index for days (observed ~154 mounts per real session). Empty chats never emit chat_session_ended, so this only controls index-reaping cadence, not analytics.",
     )
     loop_detection_window: int = Field(
         3,

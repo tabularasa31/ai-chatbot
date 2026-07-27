@@ -647,6 +647,96 @@ def test_notify_tenant_new_ticket_falls_back_to_owner_email(
     assert send_email_mock.call_args.args[0] == "owner-only@example.com"
 
 
+def test_notify_tenant_new_ticket_reports_failure_when_brevo_refuses(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A ``None`` from ``send_email`` (Brevo 4xx/5xx) must raise an internal
+    metric and leave the notify markers untouched so the send stays retryable.
+    """
+    token = register_and_verify_user(tenant, db_session, email="owner-refused@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Brevo Refused Tenant"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number="ESC-0012",
+        primary_question="need help",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        user_email="enduser@example.com",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with (
+        patch("backend.escalation.service.send_email", return_value=None),
+        patch("backend.escalation.service.capture_event") as capture_mock,
+    ):
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    capture_mock.assert_called_once()
+    assert capture_mock.call_args.args[0] == "escalation.email_send_failed"
+    assert capture_mock.call_args.kwargs["properties"]["reason"] == "brevo_refused"
+    assert capture_mock.call_args.kwargs["properties"]["stage"] == "initial"
+    # Markers must NOT advance on a refused send, or follow-ups get suppressed.
+    db_session.refresh(ticket)
+    assert ticket.notification_message_id is None
+    assert ticket.last_notified_at is None
+
+
+def test_notify_tenant_new_ticket_reports_failure_when_send_raises(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """An exception from the send is swallowed for the caller but still
+    surfaces an internal metric with ``reason="send_exception"``.
+    """
+    token = register_and_verify_user(tenant, db_session, email="owner-raise@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Brevo Raise Tenant"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number="ESC-0013",
+        primary_question="need help",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        user_email="enduser@example.com",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with (
+        patch("backend.escalation.service.send_email", side_effect=RuntimeError("boom")),
+        patch("backend.escalation.service.capture_event") as capture_mock,
+    ):
+        # Must not propagate — the ticket already exists, notify is best-effort.
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    capture_mock.assert_called_once()
+    assert capture_mock.call_args.args[0] == "escalation.email_send_failed"
+    assert capture_mock.call_args.kwargs["properties"]["reason"] == "send_exception"
+
+
 def _make_tenant_for_email_test(
     tenant: TestClient, db_session: Session, *, owner_email: str
 ) -> Tenant:

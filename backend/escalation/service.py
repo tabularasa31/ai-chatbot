@@ -45,6 +45,7 @@ from backend.models import (
 )
 from backend.models.base import _utcnow
 from backend.observability.cache_metrics import record_hit, record_miss
+from backend.observability.metrics import capture_event
 from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict
 
@@ -795,6 +796,89 @@ def _send_email_off_loop(*args: Any, **kwargs: Any) -> str | None:
         return send_email(*args, **kwargs)
 
 
+def _report_escalation_email_failure(
+    tenant: Tenant | None,
+    ticket: EscalationTicket,
+    *,
+    reason: str,
+    stage: str,
+    error: BaseException | None = None,
+) -> None:
+    """Raise an internal alert when an escalation notification fails to send.
+
+    Escalation emails are best-effort: a failed send is otherwise only visible
+    in a ``logger.warning`` line — never reaching Sentry (no exception escapes
+    the notify path) or product metrics. That blind spot let a broken Brevo
+    integration silently drop every support notification while chats and
+    tickets kept working normally. This surfaces the failure to our internal
+    monitoring only (Sentry alert + PostHog metric); it never reaches the
+    tenant dashboard or the end user.
+
+    ``reason`` is the failure mode: ``"brevo_refused"`` when ``send_email``
+    returned ``None`` (Brevo HTTP 4xx/5xx or an internal error), or
+    ``"send_exception"`` when the call itself raised. ``stage`` is
+    ``"initial"`` (new-ticket notify) or ``"followup"`` (threaded update).
+
+    ``error`` (when the send raised) contributes only its exception *type name*
+    for triage — never the message/args, which can carry the recipient address
+    or other PII.
+
+    Never raises — observability must not break the notify path.
+    """
+    tenant_id = str(tenant.id) if tenant is not None else None
+    # Type name only — an exception message can embed the recipient email
+    # (PII); the class name is enough to tell a network error from an auth one.
+    error_type = type(error).__name__ if error is not None else None
+    try:
+        import sentry_sdk
+
+        with sentry_sdk.new_scope() as scope:
+            # error_kind + tenant power the 60s Sentry dedup (see
+            # observability/sentry._before_send), so a Brevo outage raises one
+            # alert per tenant per minute instead of one per dropped ticket.
+            scope.set_tag("error_kind", "escalation_email_send_failed")
+            scope.set_tag("escalation_email_reason", reason)
+            if tenant_id is not None:
+                scope.set_context(
+                    "tenant",
+                    {"tenant_id": tenant_id, "tenant_name": getattr(tenant, "name", None)},
+                )
+            scope.set_context(
+                "escalation_email",
+                {
+                    "ticket_number": ticket.ticket_number,
+                    "reason": reason,
+                    "stage": stage,
+                    "error_type": error_type,
+                },
+            )
+            sentry_sdk.capture_message(
+                f"Escalation notification email failed to send ({reason})",
+                level="error",
+                scope=scope,
+            )
+    except Exception:
+        # Sentry not installed / not initialized, or capture failed — the
+        # PostHog metric below still fires. Never propagate.
+        pass
+
+    # PostHog captures every occurrence (no dedup) so the failure rate is
+    # measurable even during a sustained outage. ``capture_event`` is itself a
+    # no-op when metrics are disabled and swallows its own errors.
+    capture_event(
+        "escalation.email_send_failed",
+        distinct_id=tenant_id or "system",
+        tenant_id=tenant_id,
+        properties={
+            "reason": reason,
+            "stage": stage,
+            "ticket_number": ticket.ticket_number,
+            "error_type": error_type,
+        },
+        groups={"tenant": tenant_id} if tenant_id else None,
+    )
+
+
 def _notify_tenant_new_ticket(
     tenant: Tenant,
     ticket: EscalationTicket,
@@ -863,6 +947,9 @@ def _notify_tenant_new_ticket(
         )
     except Exception as e:
         logger.warning("Escalation email failed: %s", e)
+        _report_escalation_email_failure(
+            tenant, ticket, reason="send_exception", stage="initial", error=e
+        )
         return
 
     if send_result is None:
@@ -872,6 +959,9 @@ def _notify_tenant_new_ticket(
         # ``notification_message_id`` empty, which makes every subsequent call
         # to ``_notify_tenant_ticket_update`` skip (anchor missing) and
         # permanently suppresses notifications for this ticket.
+        _report_escalation_email_failure(
+            tenant, ticket, reason="brevo_refused", stage="initial"
+        )
         return
 
     # Mark the high-water line for follow-up update emails. Empty-string
@@ -1100,12 +1190,18 @@ def _notify_tenant_ticket_update(
         )
     except Exception as e:
         logger.warning("Escalation follow-up email failed (ticket=%s): %s", ticket.ticket_number, e)
+        _report_escalation_email_failure(
+            tenant, ticket, reason="send_exception", stage="followup", error=e
+        )
         return
 
     if send_result is None:
         # Brevo refused the send. Do NOT advance the marker — the delta we
         # just tried to deliver must remain eligible for a retry on the next
         # eligible user turn.
+        _report_escalation_email_failure(
+            tenant, ticket, reason="brevo_refused", stage="followup"
+        )
         return
 
     # ``now`` above is timezone-aware (UTC) and used only for debounce

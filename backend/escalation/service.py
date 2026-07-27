@@ -819,9 +819,16 @@ def _report_escalation_email_failure(
     ``"send_exception"`` when the call itself raised. ``stage`` is
     ``"initial"`` (new-ticket notify) or ``"followup"`` (threaded update).
 
+    ``error`` (when the send raised) contributes only its exception *type name*
+    for triage — never the message/args, which can carry the recipient address
+    or other PII.
+
     Never raises — observability must not break the notify path.
     """
     tenant_id = str(tenant.id) if tenant is not None else None
+    # Type name only — an exception message can embed the recipient email
+    # (PII); the class name is enough to tell a network error from an auth one.
+    error_type = type(error).__name__ if error is not None else None
     try:
         import sentry_sdk
 
@@ -838,7 +845,12 @@ def _report_escalation_email_failure(
                 )
             scope.set_context(
                 "escalation_email",
-                {"ticket_number": ticket.ticket_number, "reason": reason, "stage": stage},
+                {
+                    "ticket_number": ticket.ticket_number,
+                    "reason": reason,
+                    "stage": stage,
+                    "error_type": error_type,
+                },
             )
             sentry_sdk.capture_message(
                 f"Escalation notification email failed to send ({reason})",
@@ -861,6 +873,7 @@ def _report_escalation_email_failure(
             "reason": reason,
             "stage": stage,
             "ticket_number": ticket.ticket_number,
+            "error_type": error_type,
         },
         groups={"tenant": tenant_id} if tenant_id else None,
     )

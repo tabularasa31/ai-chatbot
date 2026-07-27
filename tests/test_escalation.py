@@ -734,7 +734,15 @@ def test_notify_tenant_new_ticket_reports_failure_when_send_raises(
 
     capture_mock.assert_called_once()
     assert capture_mock.call_args.args[0] == "escalation.email_send_failed"
-    assert capture_mock.call_args.kwargs["properties"]["reason"] == "send_exception"
+    props = capture_mock.call_args.kwargs["properties"]
+    assert props["reason"] == "send_exception"
+    assert props["stage"] == "initial"
+    # Only the exception class name is recorded — never the message (PII).
+    assert props["error_type"] == "RuntimeError"
+    # A raised send leaves markers untouched, same as a refused one.
+    db_session.refresh(ticket)
+    assert ticket.notification_message_id is None
+    assert ticket.last_notified_at is None
 
 
 def _make_tenant_for_email_test(
@@ -2110,12 +2118,20 @@ def test_notify_ticket_update_does_not_advance_marker_on_send_failure(
 
     _persist_user_message(db_session, chat, "context that fails to send")
 
-    with patch("backend.escalation.service.send_email") as send_email_mock:
-        send_email_mock.return_value = None
+    with (
+        patch("backend.escalation.service.send_email", return_value=None),
+        patch("backend.escalation.service.capture_event") as capture_mock,
+    ):
         _notify_tenant_ticket_update(ticket, db_session)
 
     db_session.refresh(ticket)
     assert ticket.last_notified_message_id == pre_marker
+    # The failed follow-up send must also surface the internal metric, tagged
+    # with the follow-up stage so the two send paths are distinguishable.
+    capture_mock.assert_called_once()
+    assert capture_mock.call_args.args[0] == "escalation.email_send_failed"
+    assert capture_mock.call_args.kwargs["properties"]["reason"] == "brevo_refused"
+    assert capture_mock.call_args.kwargs["properties"]["stage"] == "followup"
 
 
 def test_notify_ticket_update_skips_yes_no_admin_replies_via_handler(

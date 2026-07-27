@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
+import pytest
 from sqlalchemy.orm import Session
 
 from backend.jobs import chat_session_sweeper
@@ -12,6 +13,20 @@ from backend.jobs.chat_session_sweeper import sweep_inactive_chats
 from backend.models import Chat, Message, Tenant
 from backend.models.base import _utcnow
 from backend.models.enums import MessageRole
+
+
+@pytest.fixture(autouse=True)
+def _pin_idle_timeout(monkeypatch):
+    """Pin the sweep threshold to 30 min for these tests.
+
+    The shipped default is 7 days (shared with conversation rotation); these
+    tests exercise the sweep *mechanism* at a fixed, small threshold. Raising
+    the default defers chat_session_ended for abandoned sessions to that
+    window — an intentional consequence, not covered by these mechanism tests.
+    """
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "conversation_idle_timeout_seconds", 1800)
 
 
 def _make_tenant(db: Session) -> Tenant:

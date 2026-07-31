@@ -17,8 +17,9 @@ const geistMono = localFont({
 
 export const metadata: Metadata = {
   metadataBase: getMetadataBase(),
-  title: "AI Chatbot Dashboard",
-  description: "AI Chatbot SaaS Dashboard",
+  title: "Chat9 — AI support chatbot for your docs",
+  description:
+    "Chat9 turns your docs into a 24/7 AI support agent. Upload your knowledge base, embed the widget, and let it answer customers automatically.",
 };
 
 export default function RootLayout({

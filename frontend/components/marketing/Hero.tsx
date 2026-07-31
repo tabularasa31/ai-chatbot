@@ -1,3 +1,5 @@
+'use client';
+
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { Send } from 'lucide-react';
@@ -7,9 +9,11 @@ export function Hero() {
     <section className="max-w-7xl mx-auto px-6 py-20 md:py-32">
       <div className="grid md:grid-cols-2 gap-12 md:gap-16 items-center">
         {/* Left Column - Text Content */}
+        {/* Above-the-fold: animate transform only (no opacity gate) so the LCP
+            heading paints immediately instead of waiting for hydration. */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
+          initial={{ y: 20 }}
+          animate={{ y: 0 }}
           transition={{ duration: 0.6 }}
         >
           <h1 className="text-5xl md:text-6xl lg:text-7xl text-nd-text mb-6">
@@ -35,9 +39,10 @@ export function Hero() {
         </motion.div>
 
         {/* Right Column - Chat UI Mockup */}
+        {/* Above-the-fold: scale-in without an opacity gate for the same reason. */}
         <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
+          initial={{ scale: 0.95 }}
+          animate={{ scale: 1 }}
           transition={{ duration: 0.6, delay: 0.2 }}
           className="relative"
         >

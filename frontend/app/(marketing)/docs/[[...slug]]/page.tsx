@@ -39,8 +39,26 @@ export function generateMetadata({ params }: PageProps): Metadata {
   const page = source.getPage(params.slug);
   if (!page) return {};
 
+  const title = `${page.data.title} | Chat9 Docs`;
+
   return {
-    title: page.data.title,
+    title,
     description: page.data.description,
+    alternates: {
+      canonical: page.url,
+    },
+    openGraph: {
+      type: 'article',
+      url: page.url,
+      siteName: 'Chat9',
+      locale: 'en_US',
+      title,
+      description: page.data.description,
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description: page.data.description,
+    },
   };
 }

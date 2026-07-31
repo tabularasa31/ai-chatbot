@@ -1,3 +1,5 @@
+'use client';
+
 import { Upload, Clock, Mail, Brain } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useScrollAnimation } from '../hooks/useScrollAnimation';
@@ -53,6 +55,14 @@ export function Features() {
 
   return (
     <section id="features" className="max-w-7xl mx-auto px-6 py-20">
+      <div className="text-center mb-12">
+        <h2 className="text-nd-text text-4xl md:text-5xl mb-4">
+          Everything you need to automate support
+        </h2>
+        <p className="text-nd-text/60 text-xl">
+          Set up in minutes, running around the clock.
+        </p>
+      </div>
       <div className="grid md:grid-cols-2 gap-6">
         {features.map((feature, index) => (
           <FeatureCard

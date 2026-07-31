@@ -8,9 +8,29 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: "/",
-      // Keep authenticated app surfaces out of the index; only marketing
-      // routes (/, /blog, /docs) should be crawlable.
-      disallow: ["/dashboard", "/login", "/signup", "/api/"],
+      // Keep non-marketing app surfaces out of the index; only /, /blog and
+      // /docs should be crawlable. Covers the auth-gated app shells (mirrors
+      // middleware PROTECTED_PATHS), the auth/account flows, the embeddable
+      // widget host, and the API.
+      disallow: [
+        "/dashboard",
+        "/knowledge",
+        "/settings",
+        "/widget-settings",
+        "/logs",
+        "/review",
+        "/admin",
+        "/escalations",
+        "/gap-analyzer",
+        "/login",
+        "/signup",
+        "/forgot-password",
+        "/reset-password",
+        "/verify",
+        "/embed",
+        "/widget/",
+        "/api/",
+      ],
     },
     sitemap: `${siteUrl}/sitemap.xml`,
     host: siteUrl,

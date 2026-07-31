@@ -50,6 +50,8 @@ export function generateMetadata({ params }: PageProps): Metadata {
     openGraph: {
       type: 'article',
       url: page.url,
+      siteName: 'Chat9',
+      locale: 'en_US',
       title,
       description: page.data.description,
     },

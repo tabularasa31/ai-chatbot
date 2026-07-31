@@ -20,7 +20,9 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: 'website',
-    url: getSiteUrl(),
+    url: `${getSiteUrl()}/`,
+    siteName: 'Chat9',
+    locale: 'en_US',
     title: TITLE,
     description: DESCRIPTION,
   },

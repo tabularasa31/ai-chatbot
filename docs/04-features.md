@@ -751,9 +751,16 @@ The chat session is **not** immediately closed after escalation — the user can
 ### Ticket inbox (dashboard)
 
 Tenants see all their tickets at `/escalations`:
-- Status: `open` / `resolved`
+- Status: `open` / `resolved` / `auto_closed`
 - Trigger type, session link, creation time
 - One-click resolve button → `POST /escalations/{id}/resolve`
+
+Repeat escalations inside one conversation reuse the chat's existing open
+ticket instead of minting a new number; the new turn is threaded under the
+original notification email. A ticket whose conversation has gone idle past
+`CONVERSATION_IDLE_TIMEOUT_SECONDS` is moved to `auto_closed` by the chat
+session sweeper — distinct from `resolved`, which only a tenant sets and which
+means support actually handled the request.
 
 ### Widget UX
 

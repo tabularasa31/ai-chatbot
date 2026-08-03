@@ -24,6 +24,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
+from backend.chat.events import _check_escalation_rate
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import async_localize_text_to_language_result
 from backend.core.config import settings
@@ -37,7 +38,9 @@ from backend.escalation.service import (
     apply_collected_contact_email,
     get_latest_escalation_ticket_for_chat,
     get_open_escalation_ticket_for_chat,
+    notify_support_of_repeat_escalation,
     parse_contact_email,
+    raise_ticket_priority_if_higher,
 )
 from backend.models import (
     EscalationPhase,
@@ -517,11 +520,12 @@ class EscalationStateMachine(PipelineHandler):
         notify_sent = False
         if existing_ticket is not None:
             ticket = existing_ticket
+            raise_ticket_priority_if_higher(
+                ticket, esc_trigger, ctx.effective_user_ctx, ctx.db
+            )
             try:
-                notify_sent = _notify_tenant_ticket_update(
-                    ticket,
-                    ctx.db,
-                    extra_user_turn=(ctx.question, _utcnow()),
+                notify_sent = notify_support_of_repeat_escalation(
+                    ticket, ctx.db, latest_user_text=ctx.question
                 )
             except Exception as notify_exc:
                 logger.warning(
@@ -529,6 +533,13 @@ class EscalationStateMachine(PipelineHandler):
                     ticket.ticket_number,
                     notify_exc,
                 )
+            # Close the write transaction before the OpenAI handoff below. The
+            # create branch commits inside create_escalation_ticket; without a
+            # commit here the reuse branch would hold the ticket row lock and
+            # its pooled connection for the whole multi-second LLM round-trip,
+            # and a raising LLM call would roll back the notify markers for an
+            # email that has already gone out (re-sending the delta later).
+            ctx.db.commit()
         else:
             ticket = _svc.create_escalation_ticket(
                 ctx.tenant_id,
@@ -574,6 +585,14 @@ class EscalationStateMachine(PipelineHandler):
                     "ticket": ticket.ticket_number,
                     "reused_ticket": reused,
                 }
+            )
+        # The runaway-loop detector must see every handoff attempt, including
+        # the repeats that reuse collapses — a burst of them is exactly the
+        # symptom that surfaced the duplicate-ticket incident. It is deliberately
+        # kept out of the analytics event below, which counts escalations.
+        if reused:
+            _check_escalation_rate(
+                getattr(ctx.tenant_row, "public_id", None), ctx.bot_public_id
             )
         # Only a genuinely new ticket is an escalation. Emitting on reuse would
         # count one handed-off conversation N times in the escalation metrics.

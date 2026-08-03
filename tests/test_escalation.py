@@ -3124,3 +3124,180 @@ def test_late_contact_email_reopens_auto_closed_ticket(
     assert ticket.status == EscalationStatus.open
     assert ticket.resolved_at is None
     assert ticket.user_email == "late@example.com"
+
+
+import backend.escalation.service as escalation_service  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+
+def _open_ticket_with_anchor(
+    db: Session,
+    tenant_id: uuid.UUID,
+    chat: Chat,
+    *,
+    anchor: str | None = "<msg-1@brevo>",
+    last_notified_at=None,
+) -> EscalationTicket:
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number="ESC-0001",
+        primary_question="first question",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email="user@example.com",
+        notification_message_id=anchor,
+        last_notified_at=last_notified_at,
+    )
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def test_repeat_escalation_notify_bypasses_the_followup_debounce(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """A second escalation inside the debounce window must still reach support.
+
+    Ticket reuse routes the handoff through the follow-up notify, which carries
+    a 60s debounce meant for chatty follow-up turns. The create path it replaces
+    has no debounce, and the marker advance at the end of that path guarantees a
+    repeat lands inside the window — so without the bypass the bot would tell
+    the user "passed to support" while support received nothing.
+    """
+    from datetime import UTC, datetime
+
+    token = register_and_verify_user(
+        tenant, db_session, email="debounce-owner@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Debounce Tenant"},
+    )
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    # Notified one second ago — deep inside the 60s debounce window.
+    ticket = _open_ticket_with_anchor(
+        db_session,
+        tenant_id,
+        chat,
+        last_notified_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+    )
+
+    sent: list[tuple] = []
+    monkeypatch.setattr(
+        escalation_service,
+        "_send_email_off_loop",
+        lambda *a, **kw: sent.append((a, kw)) or "<msg-2@brevo>",
+    )
+
+    assert (
+        escalation_service.notify_support_of_repeat_escalation(
+            ticket, db_session, latest_user_text="my invoice for March is wrong"
+        )
+        is True
+    )
+    assert len(sent) == 1
+    assert "my invoice for March is wrong" in sent[0][0][2]
+
+
+def test_repeat_escalation_reattempts_initial_notify_when_anchor_missing(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """A ticket whose initial notify failed must not become un-notifiable.
+
+    ``create_escalation_ticket`` swallows a failing initial send, leaving
+    ``notification_message_id`` NULL — the state in which the threaded-update
+    path no-ops forever. Before ticket reuse the next repeat minted a new ticket
+    and re-attempted the send, so a transient Brevo outage self-healed; the
+    reuse guard must preserve that by re-attempting the initial notify.
+    """
+    token = register_and_verify_user(
+        tenant, db_session, email="anchor-owner@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Anchor Tenant"},
+    )
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    ticket = _open_ticket_with_anchor(db_session, tenant_id, chat, anchor=None)
+
+    sent: list[tuple] = []
+    monkeypatch.setattr(
+        escalation_service,
+        "_send_email_off_loop",
+        lambda *a, **kw: sent.append((a, kw)) or "<recovered@brevo>",
+    )
+
+    assert (
+        escalation_service.notify_support_of_repeat_escalation(
+            ticket, db_session, latest_user_text="hello?? is anyone there"
+        )
+        is True
+    )
+    assert len(sent) == 1
+    # Re-attempt is the *initial* notify, so the anchor is restored and later
+    # turns can thread under it.
+    db_session.refresh(ticket)
+    assert ticket.notification_message_id == "<recovered@brevo>"
+
+
+def test_repeat_escalation_raises_priority_but_never_lowers_it(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(
+        tenant, db_session, email="priority-owner@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Priority Tenant"},
+    )
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    ticket = _open_ticket_with_anchor(db_session, tenant_id, chat)
+    ticket.priority = EscalationPriority.medium
+    db_session.add(ticket)
+    db_session.commit()
+
+    high_ctx = {"plan_tier": "enterprise"}
+    escalation_service.raise_ticket_priority_if_higher(
+        ticket, EscalationTrigger.user_request, high_ctx, db_session
+    )
+    db_session.commit()
+    db_session.refresh(ticket)
+    raised = ticket.priority
+    assert escalation_service._PRIORITY_ORDER[raised] > escalation_service._PRIORITY_ORDER[
+        EscalationPriority.medium
+    ]
+
+    # A later low-priority turn must not demote a ticket support is already
+    # treating as urgent.
+    escalation_service.raise_ticket_priority_if_higher(
+        ticket, EscalationTrigger.low_similarity, {}, db_session
+    )
+    db_session.commit()
+    db_session.refresh(ticket)
+    assert ticket.priority == raised

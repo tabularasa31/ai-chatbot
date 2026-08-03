@@ -145,7 +145,11 @@ L2 ticket inbox. A ticket is created automatically whenever a conversation is es
 
 Priority is set from the `plan_tier` field in `userHints` (`enterprise` or `pro` → elevated priority). See [Embedding the Widget → userHints](/docs/embedding-the-widget#userhints-optional).
 
+**One ticket per conversation:** if the same visitor asks for a human again in the same conversation, the new message is added to the existing ticket and threaded under the original notification email — you won't get a new ticket number for every repeat.
+
 **Resolving tickets:** Click **Resolve** on any open ticket to close it. Resolved tickets remain visible with a filter toggle.
+
+**Auto-closed tickets:** when a conversation goes quiet for long enough, its ticket is moved to **Auto-closed** so the open queue stays meaningful. This only clears the queue — it does not mean anyone replied. Auto-closed tickets stay visible under the **Auto-closed** filter, and you can still mark one **Resolved** once your team has handled it.
 
 ## Admin (`/admin/metrics`)
 

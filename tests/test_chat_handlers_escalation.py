@@ -657,9 +657,9 @@ def test_repeat_explicit_request_reuses_open_ticket(db_session: Session) -> None
     notify_calls: list[dict[str, Any]] = []
     emitted: list[Any] = []
 
-    def _fake_notify(ticket: Any, _db: Any, *, extra_user_turn: Any = None) -> bool:
+    def _fake_notify(ticket: Any, _db: Any, *, latest_user_text: str, **_kw: Any) -> bool:
         notify_calls.append(
-            {"ticket_number": ticket.ticket_number, "extra_user_turn": extra_user_turn}
+            {"ticket_number": ticket.ticket_number, "latest_user_text": latest_user_text}
         )
         return True
 
@@ -685,7 +685,7 @@ def test_repeat_explicit_request_reuses_open_ticket(db_session: Session) -> None
             lambda **_kw: sentinel,
         ),
         patch(
-            "backend.chat.handlers.escalation._notify_tenant_ticket_update",
+            "backend.chat.handlers.escalation.notify_support_of_repeat_escalation",
             _fake_notify,
         ),
         patch(
@@ -700,7 +700,7 @@ def test_repeat_explicit_request_reuses_open_ticket(db_session: Session) -> None
     assert len(notify_calls) == 1
     assert notify_calls[0]["ticket_number"] == "ESC-0001"
     assert (
-        notify_calls[0]["extra_user_turn"][0]
+        notify_calls[0]["latest_user_text"]
         == "дай мне телефон или почту службы поддержки"
     )
     # Reuse is not a fresh escalation.

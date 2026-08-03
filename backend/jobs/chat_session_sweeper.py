@@ -1,4 +1,10 @@
-"""Background job: report inactive chat sessions via chat_session_ended.
+"""Background job: report inactive chat sessions, and age out stale tickets.
+
+Two passes per tick, sharing the ``conversation_idle_timeout_seconds`` window:
+:func:`sweep_inactive_chats` emits ``chat_session_ended``, and
+:func:`auto_close_stale_tickets` closes escalation tickets whose conversation
+is over (see its docstring for why tickets never leave ``open`` otherwise).
+
 
 Widget chats are stateless per-turn HTTP with no explicit "close" signal, so
 the end of a session is detected by inactivity: a chat whose ``updated_at``
@@ -28,7 +34,7 @@ from sqlalchemy.orm import Session, joinedload
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
 from backend.core.config import settings
 from backend.jobs._periodic import LockSpec, PeriodicJob
-from backend.models import Chat, Message
+from backend.models import Chat, EscalationStatus, EscalationTicket, Message
 from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
@@ -139,6 +145,58 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     return count
 
 
+def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int:
+    """Close open tickets whose conversation is over. Returns the count closed.
+
+    Chat9 has no inbound channel: the notify email carries ``Reply-To: <end
+    user>``, so support answers the user directly and we never learn the
+    outcome. The only transition off ``open`` is a tenant clicking "Mark as
+    resolved" in the dashboard — which tenants working out of their mailbox
+    never do. Without this pass every ticket ever created stays ``open``
+    forever and the inbox's open count means nothing.
+
+    Keyed on the ticket's chat going idle past
+    ``conversation_idle_timeout_seconds`` — the same window lazy rotation and
+    the session sweeper use, so "the conversation is over" keeps one definition
+    system-wide. Deliberately independent of the ``chat_session_ended`` pass
+    above, which skips chats already closed by escalation (``ended_at`` set);
+    those carry tickets too and must age out on the same rule.
+
+    Tickets with no ``chat_id`` (direct API creations) are left alone — there is
+    no conversation to age them against.
+    """
+    reference = now or _utcnow()
+    cutoff = reference - timedelta(seconds=settings.conversation_idle_timeout_seconds)
+    stale = (
+        db.query(EscalationTicket)
+        .join(Chat, EscalationTicket.chat_id == Chat.id)
+        .filter(
+            EscalationTicket.status == EscalationStatus.open,
+            Chat.updated_at < cutoff,
+        )
+        .order_by(EscalationTicket.created_at)
+        .limit(_MAX_SESSIONS_PER_SWEEP)
+        .all()
+    )
+    count = 0
+    for ticket in stale:
+        try:
+            ticket.status = EscalationStatus.auto_closed
+            # Naive UTC — the column is ``DateTime`` with no timezone; writing
+            # an aware value crashes asyncpg. See ``models/base._utcnow``.
+            ticket.resolved_at = _utcnow()
+            db.add(ticket)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "chat_session_sweeper failed to auto-close ticket %s", ticket.id
+            )
+            db.rollback()
+            continue
+        count += 1
+    return count
+
+
 def _sweep_once() -> None:
     from backend.core.db import SessionLocal
 
@@ -147,6 +205,9 @@ def _sweep_once() -> None:
         count = sweep_inactive_chats(db)
         if count:
             logger.info("chat_session_sweeper: reported %d inactive sessions", count)
+        closed = auto_close_stale_tickets(db)
+        if closed:
+            logger.info("chat_session_sweeper: auto-closed %d stale tickets", closed)
     finally:
         db.close()
 

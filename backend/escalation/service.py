@@ -886,7 +886,7 @@ def _notify_tenant_new_ticket(
     *,
     latest_user_text: str | None = None,
     latest_user_at: datetime | None = None,
-) -> None:
+) -> bool:
     """Send the escalation notification to the tenant's support inbox.
 
     Skipped when the ticket has no usable end-user email: support cannot reply
@@ -913,14 +913,14 @@ def _notify_tenant_new_ticket(
                 tenant.id,
                 ticket.ticket_number,
             )
-        return
+        return False
 
     user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
     support_config = public_support_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
     recipient = support_config["l2_email"] or (user.email if user and user.email else None)
     if not recipient:
         logger.warning("No escalation notification email configured for tenant_id=%s", tenant.id)
-        return
+        return False
 
     body = _build_escalation_email_body(
         tenant,
@@ -950,7 +950,7 @@ def _notify_tenant_new_ticket(
         _report_escalation_email_failure(
             tenant, ticket, reason="send_exception", stage="initial", error=e
         )
-        return
+        return False
 
     if send_result is None:
         # Brevo refused the send (HTTP 4xx/5xx) or the call raised internally.
@@ -962,7 +962,7 @@ def _notify_tenant_new_ticket(
         _report_escalation_email_failure(
             tenant, ticket, reason="brevo_refused", stage="initial"
         )
-        return
+        return False
 
     # Mark the high-water line for follow-up update emails. Empty-string
     # ``send_result`` means the send succeeded but no Message-ID is available
@@ -985,7 +985,7 @@ def _notify_tenant_new_ticket(
     )
     db.add(ticket)
     db.flush()
-
+    return True
 
 def _current_high_user_message_id(
     chat_id: uuid.UUID | None,
@@ -1079,7 +1079,8 @@ def _notify_tenant_ticket_update(
     db: Session,
     *,
     extra_user_turn: tuple[str, datetime] | None = None,
-) -> None:
+    force: bool = False,
+) -> bool:
     """Forward new user turns on an active ticket to the support inbox.
 
     Threaded as a reply to the original notify email so support's mail client
@@ -1101,35 +1102,39 @@ def _notify_tenant_ticket_update(
     yet been persisted (escalation handlers run before ``_persist_turn``).
     """
     if ticket.status != EscalationStatus.open:
-        return
+        return False
     if not _is_valid_email(ticket.user_email):
-        return
+        return False
     if ticket.notification_message_id is None:
         # Without the Message-ID anchor we cannot thread the update under the
         # initial notify; sending a standalone email here would split the
         # conversation in the support inbox. The initial notify also captures
         # the full transcript so support already has this context.
-        return
+        return False
 
     chat: Chat | None = ticket.chat
     if chat is not None and chat.ended_at is not None:
-        return
+        return False
 
     tenant = ticket.tenant
     if tenant is None:
-        return
+        return False
     user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
     support_config = public_support_config_dict(
         tenant.settings if isinstance(tenant.settings, dict) else None
     )
     recipient = support_config["l2_email"] or (user.email if user and user.email else None)
     if not recipient:
-        return
+        return False
 
     now = datetime.now(UTC)
     last_at = _to_utc(ticket.last_notified_at)
-    if last_at is not None and (now - last_at).total_seconds() < _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS:
-        return
+    if (
+        not force
+        and last_at is not None
+        and (now - last_at).total_seconds() < _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS
+    ):
+        return False
 
     # Build the delta: user turns persisted after the high-water mark.
     boundary_at: datetime | None = None
@@ -1171,7 +1176,7 @@ def _notify_tenant_ticket_update(
 
     turns = [(t, w) for t, w in turns if t and t.strip()]
     if not turns:
-        return
+        return False
 
     body = _format_update_email_body(turns)
     headers = _build_escalation_email_headers(ticket, chat=chat)
@@ -1193,7 +1198,7 @@ def _notify_tenant_ticket_update(
         _report_escalation_email_failure(
             tenant, ticket, reason="send_exception", stage="followup", error=e
         )
-        return
+        return False
 
     if send_result is None:
         # Brevo refused the send. Do NOT advance the marker — the delta we
@@ -1202,7 +1207,7 @@ def _notify_tenant_ticket_update(
         _report_escalation_email_failure(
             tenant, ticket, reason="brevo_refused", stage="followup"
         )
-        return
+        return False
 
     # ``now`` above is timezone-aware (UTC) and used only for debounce
     # arithmetic. The column is ``DateTime`` (naive, no ``timezone=True``);
@@ -1213,7 +1218,7 @@ def _notify_tenant_ticket_update(
         ticket.last_notified_message_id = new_msgs[-1].id
     db.add(ticket)
     db.flush()
-
+    return True
 
 def create_escalation_ticket(
     tenant_id: uuid.UUID,
@@ -1356,6 +1361,14 @@ def apply_collected_contact_email(
     # actually has something to act on.
     notify_late = not _is_valid_email(ticket.user_email) and _is_valid_email(email)
     ticket.user_email = email
+    if notify_late and ticket.status == EscalationStatus.auto_closed:
+        # A chat awaiting an email blocks rotation, so it can sit idle long
+        # enough for the sweeper to age its ticket out. If the user eventually
+        # answers, support is about to hear about this request for the first
+        # time — it must be open, or it would be emailed out while reading as
+        # closed in the dashboard (and later turns could not thread onto it).
+        ticket.status = EscalationStatus.open
+        ticket.resolved_at = None
     ctx = dict(chat.user_context or {})
     ctx["email"] = email
     chat.user_context = ctx
@@ -1428,6 +1441,103 @@ def delete_ticket_original_content(
     ticket.primary_question = ticket.primary_question_redacted or ""
     db.add(ticket)
     return ticket, 1
+
+
+_PRIORITY_ORDER = {
+    EscalationPriority.low: 0,
+    EscalationPriority.medium: 1,
+    EscalationPriority.high: 2,
+    EscalationPriority.critical: 3,
+}
+
+
+def notify_support_of_repeat_escalation(
+    ticket: EscalationTicket,
+    db: Session,
+    *,
+    latest_user_text: str,
+    when: datetime | None = None,
+) -> bool:
+    """Deliver a reused ticket's new turn to support. Returns whether it sent.
+
+    An escalation is an *active* event and must reach support as reliably as a
+    freshly created ticket does — the bot tells the user "passed to support" and
+    returns a ticket number either way. The passive follow-up path is not good
+    enough on its own for two reasons, both of which silently swallowed the
+    handoff before this existed:
+
+    * its ``_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS`` window exists to keep chatty
+      follow-up turns from flooding the inbox, but the create path it replaces
+      here has no debounce at all — and the marker advance at the end of that
+      path guarantees a repeat inside the window. Bypassed via ``force``.
+    * it no-ops forever when the initial notify never landed a Message-ID
+      anchor (Brevo refused, or the send raised — ``create_escalation_ticket``
+      swallows that). Before ticket reuse, the next repeat minted a new ticket
+      and re-attempted the send, so a transient outage self-healed; now the
+      reuse guard would latch onto the broken ticket. So re-attempt the initial
+      notify instead, which also restores the anchor for later updates.
+    """
+    if ticket.notification_message_id is None:
+        tenant = ticket.tenant
+        if tenant is None:
+            return False
+        return _notify_tenant_new_ticket(
+            tenant, ticket, db, latest_user_text=latest_user_text
+        )
+    return _notify_tenant_ticket_update(
+        ticket,
+        db,
+        extra_user_turn=(latest_user_text, when or _utcnow()),
+        force=True,
+    )
+
+
+def raise_ticket_priority_if_higher(
+    ticket: EscalationTicket,
+    trigger: EscalationTrigger,
+    user_context: dict | None,
+    db: Session,
+) -> None:
+    """Escalate a reused ticket's priority when the new request outranks it.
+
+    Reuse keeps the original ticket's fields, which is right for the question
+    itself but wrong for urgency: a ``critical`` request must not sit at
+    ``medium`` because it arrived second in the same conversation. Priority
+    only ever moves up here — a later low-priority turn cannot demote a ticket
+    support is already treating as urgent.
+    """
+    plan = (user_context or {}).get("plan_tier")
+    new_priority = compute_priority(trigger, plan, user_context)
+    if _PRIORITY_ORDER.get(new_priority, 0) <= _PRIORITY_ORDER.get(ticket.priority, 0):
+        return
+    ticket.priority = new_priority
+    db.add(ticket)
+
+
+def get_open_escalation_ticket_for_chat(
+    chat_id: uuid.UUID, db: Session
+) -> EscalationTicket | None:
+    """Newest still-open ticket for this chat, or None.
+
+    Guards the "one open ticket per chat" rule: a user who keeps asking for a
+    human — re-phrasing, repeating, or answering a second pre-confirm offer —
+    must land on the existing ticket rather than minting a fresh ESC number
+    per turn. Support loses nothing by the reuse: the initial notify already
+    carries the full transcript, and each later turn is threaded under it by
+    :func:`_notify_tenant_ticket_update`.
+
+    Scoped to ``status == open`` so a chat that continues after support closed
+    the ticket can still raise a genuinely new one.
+    """
+    return (
+        db.query(EscalationTicket)
+        .filter(
+            EscalationTicket.chat_id == chat_id,
+            EscalationTicket.status == EscalationStatus.open,
+        )
+        .order_by(EscalationTicket.created_at.desc())
+        .first()
+    )
 
 
 def get_latest_escalation_ticket_for_chat(chat_id: uuid.UUID, db: Session) -> EscalationTicket:
@@ -1582,17 +1692,47 @@ def _perform_manual_escalation_impl(
     primary_question_override = (
         original_user_message if is_llm_unavailable and original_user_message else None
     )
-    ticket = create_escalation_ticket(
-        tenant.id,
-        primary_question_override or user_note or "(manual escalation)",
-        trigger,
-        db,
-        chat_id=chat.id,
-        session_id=session_id,
-        user_context=effective,
-        user_note=enriched_note,
-        optional_entity_types=optional_entity_types,
-    )
+    # One open ticket per chat — repeated presses of "Talk to support" must
+    # land on the existing ticket instead of minting a fresh ESC number each
+    # time. Mirrors the same rule in the chat escalation FSM.
+    existing_ticket = get_open_escalation_ticket_for_chat(chat.id, db)
+    reused = existing_ticket is not None
+    if existing_ticket is not None:
+        ticket = existing_ticket
+        raise_ticket_priority_if_higher(ticket, trigger, effective, db)
+        try:
+            # ``enriched_note``, not ``user_note`` — it carries the
+            # ``[llm_failure: ...]`` prefix support needs to read a repeat press
+            # during an outage correctly.
+            notify_support_of_repeat_escalation(
+                ticket,
+                db,
+                latest_user_text=(
+                    primary_question_override or enriched_note or "(manual escalation)"
+                ),
+            )
+        except Exception as e:
+            logger.warning(
+                "repeat manual-escalation notify failed (ticket=%s): %s",
+                ticket.ticket_number,
+                e,
+            )
+        # Close the write transaction before the OpenAI handoff below; the
+        # create branch commits inside create_escalation_ticket. See the same
+        # note in chat/handlers/escalation.py::_create_ticket_and_handoff.
+        db.commit()
+    else:
+        ticket = create_escalation_ticket(
+            tenant.id,
+            primary_question_override or user_note or "(manual escalation)",
+            trigger,
+            db,
+            chat_id=chat.id,
+            session_id=session_id,
+            user_context=effective,
+            user_note=enriched_note,
+            optional_entity_types=optional_entity_types,
+        )
     if is_llm_unavailable:
         # LLM provider is the failing dependency — every step here must be
         # provably LLM-free. Resolve the response language from local signals
@@ -1676,16 +1816,24 @@ def _perform_manual_escalation_impl(
     db.add(chat)
     db.commit()
 
-    from backend.chat.events import _emit_chat_escalated_event
-    _emit_chat_escalated_event(
-        tenant_public_id=getattr(tenant, "public_id", None),
-        bot_public_id=bot_public_id,
-        chat_id=str(chat.id),
-        escalation_reason=trigger.value,
-        escalation_trigger=trigger.value,
-        plan_tier=effective.get("plan_tier"),
-        priority=ticket.priority.value,
-    )
+    # The runaway-loop detector must still see repeats that reuse collapses;
+    # only the escalation count below is suppressed. Mirrors the FSM path.
+    if reused:
+        from backend.chat.events import _check_escalation_rate
+        _check_escalation_rate(getattr(tenant, "public_id", None), bot_public_id)
+    # Reuse is not a new escalation — emitting here would count one handed-off
+    # conversation once per button press.
+    if not reused:
+        from backend.chat.events import _emit_chat_escalated_event
+        _emit_chat_escalated_event(
+            tenant_public_id=getattr(tenant, "public_id", None),
+            bot_public_id=bot_public_id,
+            chat_id=str(chat.id),
+            escalation_reason=trigger.value,
+            escalation_trigger=trigger.value,
+            plan_tier=effective.get("plan_tier"),
+            priority=ticket.priority.value,
+        )
 
     return (message_to_user, ticket.ticket_number)
 

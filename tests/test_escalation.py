@@ -1543,6 +1543,135 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
     assert ticket.trigger == EscalationTrigger.answer_rejected
 
 
+def test_repeat_manual_escalation_reuses_open_ticket(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """One open ticket per chat.
+
+    Regression for the incident where a single conversation produced six
+    identical ESC tickets in 79 seconds: every repeat of the handoff request
+    minted a fresh ticket number. Repeat escalations must land on the existing
+    open ticket instead.
+    """
+    token = register_and_verify_user(
+        tenant, db_session, email="manual-repeat@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual Repeat"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "known@example.com"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+
+    _msg, first = _run_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="дай мне телефон или почту службы поддержки",
+        trigger=EscalationTrigger.user_request,
+    )
+    for _ in range(4):
+        _msg, again = _run_manual_escalation(
+            db_session,
+            cl,
+            chat.session_id,
+            api_key="sk-test",
+            user_note="дай мне телефон или почту службы поддержки",
+            trigger=EscalationTrigger.user_request,
+        )
+        assert again == first
+
+    tickets = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .all()
+    )
+    assert len(tickets) == 1
+
+
+def test_manual_escalation_mints_new_ticket_once_previous_resolved(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Reuse is scoped to open tickets.
+
+    Once support has resolved the ticket, a fresh request in the same chat is a
+    genuinely new issue and must get its own number.
+    """
+    token = register_and_verify_user(
+        tenant, db_session, email="manual-resolved@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual Resolved"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "known@example.com"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+
+    _msg, first = _run_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="first problem",
+        trigger=EscalationTrigger.user_request,
+    )
+    ticket = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .one()
+    )
+    ticket.status = EscalationStatus.resolved
+    db_session.add(ticket)
+    db_session.commit()
+
+    _msg, second = _run_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="unrelated second problem",
+        trigger=EscalationTrigger.user_request,
+    )
+    assert second != first
+    tickets = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .all()
+    )
+    assert len(tickets) == 2
+
+
 def test_escalation_api_returns_safe_question_by_default(
     tenant: TestClient,
     db_session: Session,
@@ -2940,3 +3069,235 @@ async def test_escalation_turn_empty_message_uses_bounded_fallback(
     assert out.message_to_user == FALLBACK_EN_GENERIC
     # Completion tokens are still counted; the degraded localization adds 0.
     assert out.tokens_used == 7
+
+
+def test_late_contact_email_reopens_auto_closed_ticket(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A ticket the sweeper aged out must reopen when support is finally notified.
+
+    A chat awaiting the user's email blocks conversation rotation, so it can sit
+    idle long enough to be auto-closed. If the user then answers, the deferred
+    notify fires — support hears about the request for the first time, so it
+    cannot read as closed in the dashboard.
+    """
+    from datetime import UTC, datetime
+
+    token = register_and_verify_user(
+        tenant, db_session, email="reopen-owner@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Reopen Tenant"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number="ESC-0001",
+        primary_question="my domain won't delegate",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.auto_closed,
+        resolved_at=datetime.now(UTC).replace(tzinfo=None),
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email=None,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    apply_collected_contact_email(
+        ticket.id, chat.id, "late@example.com", db_session
+    )
+    db_session.commit()
+
+    db_session.refresh(ticket)
+    assert ticket.status == EscalationStatus.open
+    assert ticket.resolved_at is None
+    assert ticket.user_email == "late@example.com"
+
+
+import backend.escalation.service as escalation_service  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+
+def _open_ticket_with_anchor(
+    db: Session,
+    tenant_id: uuid.UUID,
+    chat: Chat,
+    *,
+    anchor: str | None = "<msg-1@brevo>",
+    last_notified_at=None,
+) -> EscalationTicket:
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number="ESC-0001",
+        primary_question="first question",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email="user@example.com",
+        notification_message_id=anchor,
+        last_notified_at=last_notified_at,
+    )
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def test_repeat_escalation_notify_bypasses_the_followup_debounce(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """A second escalation inside the debounce window must still reach support.
+
+    Ticket reuse routes the handoff through the follow-up notify, which carries
+    a 60s debounce meant for chatty follow-up turns. The create path it replaces
+    has no debounce, and the marker advance at the end of that path guarantees a
+    repeat lands inside the window — so without the bypass the bot would tell
+    the user "passed to support" while support received nothing.
+    """
+    from datetime import UTC, datetime
+
+    token = register_and_verify_user(
+        tenant, db_session, email="debounce-owner@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Debounce Tenant"},
+    )
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    # Notified one second ago — deep inside the 60s debounce window.
+    ticket = _open_ticket_with_anchor(
+        db_session,
+        tenant_id,
+        chat,
+        last_notified_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=1),
+    )
+
+    sent: list[tuple] = []
+    monkeypatch.setattr(
+        escalation_service,
+        "_send_email_off_loop",
+        lambda *a, **kw: sent.append((a, kw)) or "<msg-2@brevo>",
+    )
+
+    assert (
+        escalation_service.notify_support_of_repeat_escalation(
+            ticket, db_session, latest_user_text="my invoice for March is wrong"
+        )
+        is True
+    )
+    assert len(sent) == 1
+    assert "my invoice for March is wrong" in sent[0][0][2]
+
+
+def test_repeat_escalation_reattempts_initial_notify_when_anchor_missing(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """A ticket whose initial notify failed must not become un-notifiable.
+
+    ``create_escalation_ticket`` swallows a failing initial send, leaving
+    ``notification_message_id`` NULL — the state in which the threaded-update
+    path no-ops forever. Before ticket reuse the next repeat minted a new ticket
+    and re-attempted the send, so a transient Brevo outage self-healed; the
+    reuse guard must preserve that by re-attempting the initial notify.
+    """
+    token = register_and_verify_user(
+        tenant, db_session, email="anchor-owner@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Anchor Tenant"},
+    )
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    ticket = _open_ticket_with_anchor(db_session, tenant_id, chat, anchor=None)
+
+    sent: list[tuple] = []
+    monkeypatch.setattr(
+        escalation_service,
+        "_send_email_off_loop",
+        lambda *a, **kw: sent.append((a, kw)) or "<recovered@brevo>",
+    )
+
+    assert (
+        escalation_service.notify_support_of_repeat_escalation(
+            ticket, db_session, latest_user_text="hello?? is anyone there"
+        )
+        is True
+    )
+    assert len(sent) == 1
+    # Re-attempt is the *initial* notify, so the anchor is restored and later
+    # turns can thread under it.
+    db_session.refresh(ticket)
+    assert ticket.notification_message_id == "<recovered@brevo>"
+
+
+def test_repeat_escalation_raises_priority_but_never_lowers_it(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(
+        tenant, db_session, email="priority-owner@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Priority Tenant"},
+    )
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    ticket = _open_ticket_with_anchor(db_session, tenant_id, chat)
+    ticket.priority = EscalationPriority.medium
+    db_session.add(ticket)
+    db_session.commit()
+
+    high_ctx = {"plan_tier": "enterprise"}
+    escalation_service.raise_ticket_priority_if_higher(
+        ticket, EscalationTrigger.user_request, high_ctx, db_session
+    )
+    db_session.commit()
+    db_session.refresh(ticket)
+    raised = ticket.priority
+    assert escalation_service._PRIORITY_ORDER[raised] > escalation_service._PRIORITY_ORDER[
+        EscalationPriority.medium
+    ]
+
+    # A later low-priority turn must not demote a ticket support is already
+    # treating as urgent.
+    escalation_service.raise_ticket_priority_if_higher(
+        ticket, EscalationTrigger.low_similarity, {}, db_session
+    )
+    db_session.commit()
+    db_session.refresh(ticket)
+    assert ticket.priority == raised

@@ -77,6 +77,12 @@ class EscalationStatus(str, enum.Enum):
     open = "open"
     in_progress = "in_progress"
     resolved = "resolved"
+    # Terminal, set by the sweeper when the conversation behind the ticket went
+    # idle past the shared "conversation is over" window. Deliberately distinct
+    # from ``resolved``: nothing here claims support handled the request, and
+    # collapsing the two would destroy the only signal the inbox has about what
+    # still needs a human. Column is VARCHAR(11) — this value fits exactly.
+    auto_closed = "auto_closed"
 
 
 class PiiEventDirection(str, enum.Enum):

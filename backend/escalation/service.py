@@ -1356,6 +1356,14 @@ def apply_collected_contact_email(
     # actually has something to act on.
     notify_late = not _is_valid_email(ticket.user_email) and _is_valid_email(email)
     ticket.user_email = email
+    if notify_late and ticket.status == EscalationStatus.auto_closed:
+        # A chat awaiting an email blocks rotation, so it can sit idle long
+        # enough for the sweeper to age its ticket out. If the user eventually
+        # answers, support is about to hear about this request for the first
+        # time — it must be open, or it would be emailed out while reading as
+        # closed in the dashboard (and later turns could not thread onto it).
+        ticket.status = EscalationStatus.open
+        ticket.resolved_at = None
     ctx = dict(chat.user_context or {})
     ctx["email"] = email
     chat.user_context = ctx

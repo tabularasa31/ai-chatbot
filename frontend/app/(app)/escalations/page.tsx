@@ -17,6 +17,7 @@ const STATUS_OPTIONS = [
   { value: "open", label: "Open" },
   { value: "in_progress", label: "In progress" },
   { value: "resolved", label: "Resolved" },
+  { value: "auto_closed", label: "Auto-closed" },
 ];
 
 function priorityClass(p: string): string {
@@ -34,6 +35,7 @@ function statusClass(s: string): string {
     open: "bg-emerald-50 text-emerald-800",
     in_progress: "bg-blue-50 text-blue-800",
     resolved: "bg-slate-100 text-slate-600",
+    auto_closed: "bg-slate-100 text-slate-500",
   };
   return map[s] || "bg-slate-100 text-slate-700";
 }
@@ -49,8 +51,10 @@ export default function EscalationsPage() {
       <h1 className="text-2xl font-semibold text-slate-800">Escalations</h1>
       <p className="text-slate-500 text-sm max-w-2xl">
         Support tickets created when the bot could not answer, the user asked for a human, or they
-        used &quot;Talk to support&quot;. Resolve here when your team has replied by email.
-      </p>
+        used &quot;Talk to support&quot;. Resolve here when your team has replied by email. Tickets
+        whose conversation has gone quiet are auto-closed — that only clears the queue, it does
+        not mean anyone answered.
+</p>
 
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm text-slate-600">

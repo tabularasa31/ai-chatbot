@@ -3069,3 +3069,58 @@ async def test_escalation_turn_empty_message_uses_bounded_fallback(
     assert out.message_to_user == FALLBACK_EN_GENERIC
     # Completion tokens are still counted; the degraded localization adds 0.
     assert out.tokens_used == 7
+
+
+def test_late_contact_email_reopens_auto_closed_ticket(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A ticket the sweeper aged out must reopen when support is finally notified.
+
+    A chat awaiting the user's email blocks conversation rotation, so it can sit
+    idle long enough to be auto-closed. If the user then answers, the deferred
+    notify fires — support hears about the request for the first time, so it
+    cannot read as closed in the dashboard.
+    """
+    from datetime import UTC, datetime
+
+    token = register_and_verify_user(
+        tenant, db_session, email="reopen-owner@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Reopen Tenant"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number="ESC-0001",
+        primary_question="my domain won't delegate",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.auto_closed,
+        resolved_at=datetime.now(UTC).replace(tzinfo=None),
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email=None,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    apply_collected_contact_email(
+        ticket.id, chat.id, "late@example.com", db_session
+    )
+    db_session.commit()
+
+    db_session.refresh(ticket)
+    assert ticket.status == EscalationStatus.open
+    assert ticket.resolved_at is None
+    assert ticket.user_email == "late@example.com"

@@ -9,8 +9,18 @@ import pytest
 from sqlalchemy.orm import Session
 
 from backend.jobs import chat_session_sweeper
-from backend.jobs.chat_session_sweeper import sweep_inactive_chats
-from backend.models import Chat, Message, Tenant
+from backend.jobs.chat_session_sweeper import (
+    auto_close_stale_tickets,
+    sweep_inactive_chats,
+)
+from backend.models import (
+    Chat,
+    EscalationStatus,
+    EscalationTicket,
+    EscalationTrigger,
+    Message,
+    Tenant,
+)
 from backend.models.base import _utcnow
 from backend.models.enums import MessageRole
 
@@ -294,3 +304,101 @@ def test_sweep_preserves_updated_at(db_session: Session, monkeypatch) -> None:
     db_session.refresh(chat)
     assert chat.session_ended_event_at is not None
     assert chat.updated_at == last_activity
+
+
+# ---------------------------------------------------------------------------
+# Ticket auto-close — Chat9 has no inbound channel, so an open ticket never
+# leaves ``open`` unless a tenant clicks "Mark as resolved" in the dashboard.
+# The sweeper ages them out on the shared conversation-over window.
+# ---------------------------------------------------------------------------
+
+
+def _make_ticket(
+    db: Session,
+    tenant: Tenant,
+    chat: Chat | None,
+    *,
+    status: EscalationStatus = EscalationStatus.open,
+    number: str = "ESC-0001",
+) -> EscalationTicket:
+    ticket = EscalationTicket(
+        tenant_id=tenant.id,
+        ticket_number=number,
+        primary_question="my domain won't delegate",
+        trigger=EscalationTrigger.user_request,
+        status=status,
+        chat_id=chat.id if chat is not None else None,
+        session_id=chat.session_id if chat is not None else None,
+    )
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def test_stale_open_ticket_is_auto_closed(db_session: Session) -> None:
+    tenant = _make_tenant(db_session)
+    chat = _make_chat(db_session, tenant, age_minutes=90)
+    ticket = _make_ticket(db_session, tenant, chat)
+
+    assert auto_close_stale_tickets(db_session) == 1
+
+    db_session.refresh(ticket)
+    assert ticket.status == EscalationStatus.auto_closed
+    assert ticket.resolved_at is not None
+    # Auto-close must not fabricate a resolution — nobody answered.
+    assert ticket.resolution_text is None
+
+
+def test_ticket_on_active_conversation_is_left_open(db_session: Session) -> None:
+    tenant = _make_tenant(db_session)
+    chat = _make_chat(db_session, tenant, age_minutes=5)
+    ticket = _make_ticket(db_session, tenant, chat)
+
+    assert auto_close_stale_tickets(db_session) == 0
+
+    db_session.refresh(ticket)
+    assert ticket.status == EscalationStatus.open
+
+
+def test_auto_close_covers_escalation_closed_chats(db_session: Session) -> None:
+    """``sweep_inactive_chats`` skips chats with ``ended_at`` set; their tickets
+    must still age out, so the ticket pass is deliberately independent of it."""
+    tenant = _make_tenant(db_session)
+    chat = _make_chat(db_session, tenant, age_minutes=90)
+    # Query-level update with an explicit updated_at: a plain ORM commit would
+    # fire the column's onupdate and make the idle chat look fresh. In
+    # production ended_at is set during a real turn, so the chat legitimately
+    # ages from the moment it closed.
+    db_session.query(Chat).filter(Chat.id == chat.id).update(
+        {"ended_at": chat.updated_at, "updated_at": chat.updated_at},
+        synchronize_session=False,
+    )
+    db_session.commit()
+    ticket = _make_ticket(db_session, tenant, chat)
+
+    assert auto_close_stale_tickets(db_session) == 1
+    db_session.refresh(ticket)
+    assert ticket.status == EscalationStatus.auto_closed
+
+
+def test_auto_close_leaves_already_terminal_tickets_alone(db_session: Session) -> None:
+    tenant = _make_tenant(db_session)
+    chat = _make_chat(db_session, tenant, age_minutes=90)
+    resolved = _make_ticket(
+        db_session, tenant, chat, status=EscalationStatus.resolved, number="ESC-0001"
+    )
+
+    assert auto_close_stale_tickets(db_session) == 0
+    db_session.refresh(resolved)
+    assert resolved.status == EscalationStatus.resolved
+
+
+def test_auto_close_skips_tickets_without_a_chat(db_session: Session) -> None:
+    """Direct API creations have no conversation to age against."""
+    tenant = _make_tenant(db_session)
+    ticket = _make_ticket(db_session, tenant, None)
+
+    assert auto_close_stale_tickets(db_session) == 0
+    db_session.refresh(ticket)
+    assert ticket.status == EscalationStatus.open

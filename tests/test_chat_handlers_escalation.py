@@ -21,7 +21,15 @@ from backend.chat.handlers.escalation import (
     EscalationStateMachine,
 )
 from backend.chat.language import ResolvedLanguageContext
-from backend.models import Chat, Message, MessageRole, Tenant
+from backend.models import (
+    Chat,
+    EscalationStatus,
+    EscalationTicket,
+    EscalationTrigger,
+    Message,
+    MessageRole,
+    Tenant,
+)
 
 
 def _make_language_context() -> ResolvedLanguageContext:
@@ -609,6 +617,100 @@ def test_pre_confirm_explicit_yes_creates_ticket(db_session: Session) -> None:
 
 def _fail_if_ticket_handoff(*_args: Any, **_kwargs: Any) -> Any:
     raise AssertionError("No ticket/handoff must be created while eliciting the question")
+
+
+def test_repeat_explicit_request_reuses_open_ticket(db_session: Session) -> None:
+    """One open ticket per chat — the FSM path.
+
+    Regression for the incident where one conversation produced ESC-0312..0317
+    in 79 seconds: the user kept repeating "дай мне телефон или почту службы
+    поддержки", and each turn fell through the follow-up gate into the explicit
+    -request branch, minting a fresh ticket. With an open ticket already on the
+    chat, the repeat must thread onto it instead — no new ESC number, and no
+    second ``chat_escalated`` event inflating the metrics.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    existing = EscalationTicket(
+        tenant_id=tenant.id,
+        ticket_number="ESC-0001",
+        primary_question="дай мне телефон или почту службы поддержки",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email="user@example.com",
+    )
+    db_session.add(existing)
+    db_session.flush()
+
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="дай мне телефон или почту службы поддержки",
+        explicit_human_request=True,
+        message_has_request_content=True,
+    )
+
+    sentinel = object()
+    notify_calls: list[dict[str, Any]] = []
+    emitted: list[Any] = []
+
+    def _fake_notify(ticket: Any, _db: Any, *, extra_user_turn: Any = None) -> bool:
+        notify_calls.append(
+            {"ticket_number": ticket.ticket_number, "extra_user_turn": extra_user_turn}
+        )
+        return True
+
+    def _fail_if_created(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(
+            "repeat explicit human request minted a second ticket for a chat "
+            "that already has an open one"
+        )
+
+    handoff = Mock()
+    handoff.message_to_user = "passed to support"
+    handoff.tokens_used = 0
+
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch("backend.chat.service.create_escalation_ticket", _fail_if_created),
+        patch(
+            "backend.chat.service.complete_escalation_openai_turn",
+            _async_ret(handoff),
+        ),
+        patch(
+            "backend.chat.service._escalation_turn_response",
+            lambda **_kw: sentinel,
+        ),
+        patch(
+            "backend.chat.handlers.escalation._notify_tenant_ticket_update",
+            _fake_notify,
+        ),
+        patch(
+            "backend.chat.service._emit_chat_escalated_event",
+            lambda **kw: emitted.append(kw),
+        ),
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel
+    # Threaded onto the existing ticket, carrying this turn.
+    assert len(notify_calls) == 1
+    assert notify_calls[0]["ticket_number"] == "ESC-0001"
+    assert (
+        notify_calls[0]["extra_user_turn"][0]
+        == "дай мне телефон или почту службы поддержки"
+    )
+    # Reuse is not a fresh escalation.
+    assert emitted == []
+    tickets = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .all()
+    )
+    assert len(tickets) == 1
 
 
 def test_can_handle_true_when_awaiting_request(db_session: Session) -> None:

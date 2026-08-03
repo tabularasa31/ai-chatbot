@@ -1543,6 +1543,135 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
     assert ticket.trigger == EscalationTrigger.answer_rejected
 
 
+def test_repeat_manual_escalation_reuses_open_ticket(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """One open ticket per chat.
+
+    Regression for the incident where a single conversation produced six
+    identical ESC tickets in 79 seconds: every repeat of the handoff request
+    minted a fresh ticket number. Repeat escalations must land on the existing
+    open ticket instead.
+    """
+    token = register_and_verify_user(
+        tenant, db_session, email="manual-repeat@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual Repeat"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "known@example.com"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+
+    _msg, first = _run_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="дай мне телефон или почту службы поддержки",
+        trigger=EscalationTrigger.user_request,
+    )
+    for _ in range(4):
+        _msg, again = _run_manual_escalation(
+            db_session,
+            cl,
+            chat.session_id,
+            api_key="sk-test",
+            user_note="дай мне телефон или почту службы поддержки",
+            trigger=EscalationTrigger.user_request,
+        )
+        assert again == first
+
+    tickets = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .all()
+    )
+    assert len(tickets) == 1
+
+
+def test_manual_escalation_mints_new_ticket_once_previous_resolved(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Reuse is scoped to open tickets.
+
+    Once support has resolved the ticket, a fresh request in the same chat is a
+    genuinely new issue and must get its own number.
+    """
+    token = register_and_verify_user(
+        tenant, db_session, email="manual-resolved@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual Resolved"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "known@example.com"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+
+    _msg, first = _run_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="first problem",
+        trigger=EscalationTrigger.user_request,
+    )
+    ticket = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .one()
+    )
+    ticket.status = EscalationStatus.resolved
+    db_session.add(ticket)
+    db_session.commit()
+
+    _msg, second = _run_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="unrelated second problem",
+        trigger=EscalationTrigger.user_request,
+    )
+    assert second != first
+    tickets = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .all()
+    )
+    assert len(tickets) == 2
+
+
 def test_escalation_api_returns_safe_question_by_default(
     tenant: TestClient,
     db_session: Session,

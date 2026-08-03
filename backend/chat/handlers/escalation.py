@@ -36,6 +36,7 @@ from backend.escalation.service import (
     advance_notification_marker_to_current,
     apply_collected_contact_email,
     get_latest_escalation_ticket_for_chat,
+    get_open_escalation_ticket_for_chat,
     parse_contact_email,
 )
 from backend.models import (
@@ -505,19 +506,44 @@ class EscalationStateMachine(PipelineHandler):
         # query, whereas `ctx.question` on a confirmation turn is typically just
         # the bare "yes". The current turn is surfaced separately via
         # `latest_user_text`, which appends it to the email transcript.
-        ticket = _svc.create_escalation_ticket(
-            ctx.tenant_id,
-            pre_confirm_ctx.get("primary_question") or ctx.question,
-            esc_trigger,
-            ctx.db,
-            chat_id=chat.id,
-            session_id=ctx.session_id,
-            best_similarity_score=pre_confirm_ctx.get("best_similarity_score"),
-            retrieved_chunks=pre_confirm_ctx.get("retrieved_chunks"),
-            user_context=ctx.effective_user_ctx,
-            optional_entity_types=ctx.optional_entity_types,
-            latest_user_text=ctx.question,
-        )
+        # One open ticket per chat. A user who repeats or re-phrases the
+        # handoff request (and a bot that keeps re-offering escalation) would
+        # otherwise mint a fresh ESC number every turn — the support inbox saw
+        # six identical tickets in 79 seconds for one conversation. Reuse costs
+        # support nothing: the initial notify already carried the full
+        # transcript, and this turn is threaded under it below.
+        existing_ticket = get_open_escalation_ticket_for_chat(chat.id, ctx.db)
+        reused = existing_ticket is not None
+        notify_sent = False
+        if existing_ticket is not None:
+            ticket = existing_ticket
+            try:
+                notify_sent = _notify_tenant_ticket_update(
+                    ticket,
+                    ctx.db,
+                    extra_user_turn=(ctx.question, _utcnow()),
+                )
+            except Exception as notify_exc:
+                logger.warning(
+                    "repeat-escalation notify failed (ticket=%s): %s",
+                    ticket.ticket_number,
+                    notify_exc,
+                )
+        else:
+            ticket = _svc.create_escalation_ticket(
+                ctx.tenant_id,
+                pre_confirm_ctx.get("primary_question") or ctx.question,
+                esc_trigger,
+                ctx.db,
+                chat_id=chat.id,
+                session_id=ctx.session_id,
+                best_similarity_score=pre_confirm_ctx.get("best_similarity_score"),
+                retrieved_chunks=pre_confirm_ctx.get("retrieved_chunks"),
+                user_context=ctx.effective_user_ctx,
+                optional_entity_types=ctx.optional_entity_types,
+                latest_user_text=ctx.question,
+            )
+            notify_sent = True
         chat.escalation_pre_confirm_context = None
         phase = (
             EscalationPhase.handoff_ask_email
@@ -542,16 +568,25 @@ class EscalationStateMachine(PipelineHandler):
             chat.escalation_followup_pending = True
         ctx.db.add(chat)
         if span is not None:
-            span.end(output={**(span_output_extra or {}), "ticket": ticket.ticket_number})
-        _svc._emit_chat_escalated_event(
-            tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-            bot_public_id=ctx.bot_public_id,
-            chat_id=str(chat.id),
-            escalation_reason=escalation_reason,
-            escalation_trigger=esc_trigger.value,
-            plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
-            priority=ticket.priority,
-        )
+            span.end(
+                output={
+                    **(span_output_extra or {}),
+                    "ticket": ticket.ticket_number,
+                    "reused_ticket": reused,
+                }
+            )
+        # Only a genuinely new ticket is an escalation. Emitting on reuse would
+        # count one handed-off conversation N times in the escalation metrics.
+        if not reused:
+            _svc._emit_chat_escalated_event(
+                tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+                bot_public_id=ctx.bot_public_id,
+                chat_id=str(chat.id),
+                escalation_reason=escalation_reason,
+                escalation_trigger=esc_trigger.value,
+                plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
+                priority=ticket.priority,
+            )
         outcome = _svc._escalation_turn_response(
             db=ctx.db,
             chat=chat,
@@ -566,9 +601,14 @@ class EscalationStateMachine(PipelineHandler):
             escalated=True,
             ticket_number=ticket.ticket_number,
         )
-        # `create_escalation_ticket` above sent the initial notify with this
-        # turn bundled via `latest_user_text`; advance the marker past the
-        # just-persisted message to prevent re-send.
+        # The notify above (initial, or the threaded update on reuse) already
+        # carried this turn — via `latest_user_text` / `extra_user_turn`
+        # respectively. Advance the marker past the just-persisted message to
+        # prevent a re-send. Skipped when the notify did not go out (debounced
+        # or refused): the marker must stay put so that delta remains eligible
+        # for the next attempt.
+        if not notify_sent:
+            return outcome
         try:
             ctx.db.refresh(ticket)
             advance_notification_marker_to_current(ticket, ctx.db)

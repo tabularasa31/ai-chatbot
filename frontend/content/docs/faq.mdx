@@ -96,7 +96,7 @@ Escalation happens automatically or on request:
 - **On request** — when the user explicitly asks for a human: "talk to a human", "connect me to support", "хочу с оператором", and similar phrases in any language.
 
 **What does the user see when escalated?**
-A ticket badge appears above the transcript, and the bot confirms the handoff. The chat stays open — the visitor can keep asking questions while support works the ticket. After the handoff the bot asks whether anything else is needed; only when the visitor says no does the chat close, at which point the widget shows a **"Start new chat"** button with the existing transcript still visible above it.
+For the automatic triggers the bot first asks in one sentence whether the user wants the request forwarded — no ticket exists until they agree, and if they decline the chat simply carries on. Once a ticket is created (immediately, when the user asked for a human outright), a badge with the ticket number appears above the transcript and the bot confirms the handoff; if no email is on file it asks for one, since support replies by email. The chat stays open throughout — the user can keep asking the bot questions while support works the ticket. Only when the user later confirms they need nothing further does the chat close, at which point the widget shows a **"Start new chat"** button with the existing transcript still visible above it.
 
 **What does the operator see?**
 A ticket appears in **Dashboard → Escalations** with the trigger type, a sequential ticket number (e.g. `ESC-42`), and a link to the full conversation log. A notification email is sent to the support email configured in Settings.

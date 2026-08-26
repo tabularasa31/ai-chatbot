@@ -764,9 +764,9 @@ means support actually handled the request.
 
 ### Widget UX
 
-- A **"Talk to support"** button appears in the widget after escalation
 - A ticket banner shows the ticket number
-- Input is locked (chat is ended)
+- Input stays enabled: escalation does not close the chat. The visitor keeps talking to the bot while the ticket is open, and `ended_at` is set only when they confirm they need nothing further (see § 6 above)
+- The widget offers an explicit escalate button only on an `llm_unavailable` failure bubble (gated by `can_escalate`) — not as a standing "talk to support" control
 - `POST /widget/escalate` is a public endpoint (no auth required) — the widget can escalate without a JWT
 
 ### Escalation analytics

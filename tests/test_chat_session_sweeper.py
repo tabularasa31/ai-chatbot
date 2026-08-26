@@ -259,10 +259,10 @@ def test_empty_chat_reaped_on_short_window_message_chat_kept(
     assert conversation.session_ended_event_at is None
 
 
-def test_escalation_closed_chat_is_skipped(
+def test_visitor_closed_chat_is_skipped(
     db_session: Session, monkeypatch
 ) -> None:
-    # Chats closed by escalation (ended_at set) already emit their own event;
+    # Chats the visitor closed (ended_at set) already emit their own event;
     # the sweeper must not emit a second "timeout" event for them.
     tenant = _make_tenant(db_session)
     chat = _make_chat(db_session, tenant, age_minutes=90)
@@ -361,7 +361,7 @@ def test_ticket_on_active_conversation_is_left_open(db_session: Session) -> None
     assert ticket.status == EscalationStatus.open
 
 
-def test_auto_close_covers_escalation_closed_chats(db_session: Session) -> None:
+def test_auto_close_covers_visitor_closed_chats(db_session: Session) -> None:
     """``sweep_inactive_chats`` skips chats with ``ended_at`` set; their tickets
     must still age out, so the ticket pass is deliberately independent of it."""
     tenant = _make_tenant(db_session)

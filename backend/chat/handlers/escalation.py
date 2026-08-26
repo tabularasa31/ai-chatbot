@@ -166,7 +166,9 @@ class EscalationStateMachine(PipelineHandler):
 
     def _handle_chat_closed(self, ctx: HandlerContext) -> ChatTurnOutcome:
         _svc = _svc_lookup()
-        msgs = _svc.build_chat_messages_for_openai(ctx.chat, ctx.redacted_question)
+        msgs = _svc.build_chat_messages_for_openai(
+            ctx.chat, ctx.redacted_question, ctx.optional_entity_types
+        )
         if ctx.trace is not None:
             ctx.trace.span(
                 name="chat-state-check",
@@ -231,7 +233,9 @@ class EscalationStateMachine(PipelineHandler):
                 ctx.db.refresh(ticket)
                 ctx.db.refresh(chat)
                 ctx.db.expire(chat, ["messages"])
-                msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
+                msgs = _svc.build_chat_messages_for_openai(
+                    chat, ctx.redacted_question, ctx.optional_entity_types
+                )
                 out = await_only(
                     _svc.complete_escalation_openai_turn(
                         phase=EscalationPhase.handoff_email_known,
@@ -276,7 +280,9 @@ class EscalationStateMachine(PipelineHandler):
                     )
                     ctx.db.rollback()
                 return outcome
-            msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
+            msgs = _svc.build_chat_messages_for_openai(
+                chat, ctx.redacted_question, ctx.optional_entity_types
+            )
             out = await_only(
                 _svc.complete_escalation_openai_turn(
                     phase=EscalationPhase.email_parse_failed,
@@ -357,7 +363,9 @@ class EscalationStateMachine(PipelineHandler):
                 )
             return None
         ticket = get_latest_escalation_ticket_for_chat(chat.id, ctx.db)
-        msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
+        msgs = _svc.build_chat_messages_for_openai(
+            chat, ctx.redacted_question, ctx.optional_entity_types
+        )
         try:
             out = await_only(
                 _svc.complete_escalation_openai_turn(
@@ -561,7 +569,9 @@ class EscalationStateMachine(PipelineHandler):
             if not ticket.user_email
             else EscalationPhase.handoff_email_known
         )
-        msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
+        msgs = _svc.build_chat_messages_for_openai(
+            chat, ctx.redacted_question, ctx.optional_entity_types
+        )
         out_handoff = await_only(
             _svc.complete_escalation_openai_turn(
                 phase=phase,

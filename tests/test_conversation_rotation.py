@@ -18,7 +18,6 @@ import pytest
 from sqlalchemy.orm import Session
 
 from backend.chat.history_service import (
-    delete_session_original_content,
     get_session_logs,
     list_chat_sessions,
 )
@@ -420,26 +419,6 @@ def test_list_chat_sessions_groups_rotated_conversations(
     summary = summaries[0]
     assert summary.session_id == old.session_id
     assert summary.message_count == 2
-
-
-def test_delete_original_content_covers_all_conversations(
-    db_session: Session,
-) -> None:
-    tenant, old, new = _seed_rotated_session(db_session)
-    for chat in (old, new):
-        msg = (
-            db_session.query(Message).filter(Message.chat_id == chat.id).one()
-        )
-        msg.content_original_encrypted = b"secret"
-        msg.content_redacted = "redacted"
-        db_session.add(msg)
-    db_session.commit()
-
-    _, deleted = delete_session_original_content(
-        old.session_id, tenant.id, db_session
-    )
-
-    assert deleted == 2
 
 
 def test_sweeper_marker_forces_rotation_despite_fresh_updated_at(

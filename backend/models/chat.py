@@ -205,9 +205,9 @@ class EscalationTicket(Base):
     )
     ticket_number = Column(String(32), nullable=False, index=True)
 
+    # Original user wording. Redaction is applied on the way out (support
+    # e-mail, OpenAI requests), never on the way in.
     primary_question = Column(Text, nullable=False)
-    primary_question_original_encrypted = Column(Text, nullable=True)
-    primary_question_redacted = Column(Text, nullable=True)
     conversation_summary = Column(Text, nullable=True)
 
     trigger = Column(
@@ -287,9 +287,9 @@ class Message(Base):
         Enum(MessageRole, native_enum=False),
         nullable=False,
     )
+    # Original message text as written. Consumers that send it outside the
+    # platform (OpenAI prompts, support e-mail) redact at that boundary.
     content = Column(Text, nullable=False)
-    content_original_encrypted = Column(Text, nullable=True)
-    content_redacted = Column(Text, nullable=True)
     source_documents = Column(
         ARRAY(PG_UUID(as_uuid=True)),
         nullable=True,

@@ -147,8 +147,6 @@ class ChatMessageLogItem(BaseModel):
     session_id: UUID
     role: Literal["user", "assistant"]
     content: str
-    content_original: str | None = None
-    content_original_available: bool = False
     feedback: Literal["none", "up", "down"]
     ideal_answer: str | None
     created_at: datetime

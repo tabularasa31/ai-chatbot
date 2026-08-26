@@ -16,22 +16,11 @@ from backend.chat.language import (
     _decide_language_lock,
     resolve_language_context,
 )
-from backend.core.crypto import decrypt_value
 from backend.models import Chat, Message, MessageRole, Tenant, TenantProfile
 from backend.observability.metrics import capture_event
 from backend.support_config import public_support_config_dict
 
 logger = logging.getLogger(__name__)
-
-
-def _decrypt_optional(value: str | None) -> str | None:
-    if not value:
-        return None
-    try:
-        return decrypt_value(value)
-    except RuntimeError:
-        logger.warning("Failed to decrypt stored original content")
-        return None
 
 
 def _is_bootstrap_question(text: str) -> bool:
@@ -63,17 +52,13 @@ def _load_recent_user_turn_texts(
     limit: int,
 ) -> list[str]:
     recent_rows = (
-        db.query(Message.content_original_encrypted, Message.content_redacted, Message.content)
+        db.query(Message.content)
         .filter(Message.chat_id == chat.id, Message.role == MessageRole.user)
         .order_by(Message.created_at.desc())
         .limit(max(limit - 1, 0))
         .all()
     )
-    historical_texts = []
-    for encrypted_original, redacted_content, plain_content in recent_rows:
-        historical_texts.append(
-            _decrypt_optional(encrypted_original) or redacted_content or plain_content or ""
-        )
+    historical_texts = [row[0] or "" for row in recent_rows]
     texts = [current_turn_text, *historical_texts]
     return [text for text in texts if text and text.strip()][:limit]
 

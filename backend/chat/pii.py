@@ -2,7 +2,8 @@
 PII redaction helpers for outbound-safe text handling.
 
 Stage 1 keeps a deterministic regex-only implementation and returns a
-structured result so callers can persist redacted text and audit metadata.
+structured result so callers can mask text at an egress boundary and record
+audit metadata about what was masked.
 """
 
 from __future__ import annotations
@@ -248,3 +249,21 @@ def redact_text(
         optional_entity_types=optional_entity_types,
         disabled_entity_types=disabled_entity_types,
     ).redacted_text
+
+
+def redact_for_egress(
+    text: str | None,
+    *,
+    optional_entity_types: set[str] | None = None,
+) -> str:
+    """Mask PII in stored text on its way out of the platform.
+
+    Storage keeps the user's original wording; every outbound boundary — the
+    question and chat history sent to OpenAI, background jobs that embed or
+    summarise stored turns, outbound e-mail — passes the text through here
+    first. ``None``/empty input returns an empty string so callers can hand in
+    nullable columns directly.
+    """
+    if not text:
+        return ""
+    return redact_text(text, optional_entity_types=optional_entity_types)

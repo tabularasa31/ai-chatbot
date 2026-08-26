@@ -677,7 +677,9 @@ class RagHandler(PipelineHandler):
                                 # (86exn3x9u). Degrades to the canonical
                                 # template inside the renderer on failure.
                                 chat_messages=build_chat_messages_for_openai(
-                                    chat, ctx.redacted_question
+                                    chat,
+                                    ctx.redacted_question,
+                                    ctx.optional_entity_types,
                                 ),
                             ),
                             timeout=settings.escalation_pre_confirm_render_timeout_seconds,

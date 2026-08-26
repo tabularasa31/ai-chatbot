@@ -53,7 +53,6 @@ from backend.chat.history_service import (
     PREVIEW_MAX_LEN,  # noqa: F401  (re-export)
     SessionSummary,  # noqa: F401  (re-export for test imports)
     _tenant_optional_entity_types,
-    delete_session_original_content,  # noqa: F401  (re-export for test imports)
     get_chat_history,  # noqa: F401  (re-export for test imports)
     get_session_logs,  # noqa: F401  (re-export for test imports)
     list_chat_sessions,  # noqa: F401  (re-export for test imports)
@@ -63,7 +62,6 @@ from backend.chat.language import (
 )
 from backend.chat.language_context import (
     _assistant_turn_index,  # noqa: F401  (re-export — handlers access via _svc.*)
-    _decrypt_optional,  # noqa: F401  (re-export)
     _is_bootstrap_question,
     _load_recent_user_turn_texts,  # noqa: F401  (re-export)
     _maybe_lock_language,  # noqa: F401  (re-export)
@@ -670,9 +668,13 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
         if not handler.can_handle(ctx):
             continue
         if isinstance(handler, RagHandler):
+            # Egress boundary: the pipeline embeds this text, rewrites it,
+            # and puts it in the generation prompt — every one of those is an
+            # OpenAI call, so it gets the redacted question, never the raw
+            # one. Storage keeps the original via ``ctx.question``.
             pipeline_result = await async_run_chat_pipeline(
                 ctx.tenant_id,
-                ctx.question,
+                ctx.redacted_question,
                 db,
                 api_key=ctx.api_key,
                 language_context=ctx.language_context,
@@ -690,6 +692,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
                 allow_clarification=ctx.allow_clarification,
                 guard_profile=ctx.tenant_profile,
                 support_contact_question=ctx.support_contact_question,
+                optional_entity_types=ctx.optional_entity_types,
             )
             ctx.extras["_pipeline_result"] = pipeline_result
 

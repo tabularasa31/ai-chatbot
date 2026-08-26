@@ -7,9 +7,10 @@ with X?" and the user answers "yes, how?", the reply carries no retrievable
 terms on its own.
 
 ``build_dialog_context`` renders the last few exchanges as a plain text
-block. Two consumers feed it to LLM calls that resolve such continuations
-semantically instead of guessing from surface features (word count,
-affirmation dictionaries):
+block, masking PII as it goes: stored messages keep their original wording
+and both consumers below ship this block to OpenAI. Two consumers feed it to
+LLM calls that resolve such continuations semantically instead of guessing
+from surface features (word count, affirmation dictionaries):
 
 - the relevance guard (``backend.guards.relevance_checker``), so anaphoric
   replies ("what about X?") are judged against the conversation;
@@ -23,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 
+from backend.chat.pii import redact_for_egress
 from backend.models import Message, MessageRole
 
 _MIN_DATETIME = datetime.min
@@ -36,6 +38,7 @@ def build_dialog_context(
     *,
     max_turns: int = _DIALOG_CONTEXT_TURNS,
     char_cap: int = _DIALOG_CONTEXT_CHAR_CAP,
+    optional_entity_types: set[str] | None = None,
 ) -> str | None:
     """Render the last ``max_turns`` user/assistant exchanges as a plain block.
 
@@ -54,7 +57,11 @@ def build_dialog_context(
     recent: list[str] = []
     turns_seen = 0
     for m in reversed(ordered):
-        content = (m.content or "").strip()
+        # Both consumers hand this block to an OpenAI call, so stored
+        # originals are masked here, at the egress boundary.
+        content = redact_for_egress(
+            m.content, optional_entity_types=optional_entity_types
+        ).strip()
         if not content:
             continue
         if m.role == MessageRole.user:

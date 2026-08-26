@@ -59,10 +59,14 @@ def upgrade() -> None:
             op.drop_column(table, column)
 
     if _has_table("pii_events"):
+        # Driven off _REMOVED_DIRECTIONS rather than repeating the values: a
+        # later direction removal that edits only the constant would otherwise
+        # leave its rows behind, and the ORM raises LookupError on reading them
+        # — the exact failure this purge exists to prevent.
+        placeholders = ", ".join(f":direction_{i}" for i in range(len(_REMOVED_DIRECTIONS)))
         op.execute(
-            sa.text(
-                "DELETE FROM pii_events WHERE direction IN "
-                "('message_storage', 'original_view', 'original_delete')"
+            sa.text(f"DELETE FROM pii_events WHERE direction IN ({placeholders})").bindparams(
+                **{f"direction_{i}": value for i, value in enumerate(_REMOVED_DIRECTIONS)}
             )
         )
 

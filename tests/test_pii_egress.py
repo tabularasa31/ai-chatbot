@@ -17,15 +17,22 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
+import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.followup import build_dialog_context
 from backend.chat.steps.generate import _build_prior_messages_for_llm
+from backend.core.config import settings
 from backend.core.crypto import encrypt_value
 from backend.escalation.service import transcript_messages_for_openai
-from backend.migrations.versions.pii_restore_originals_v1 import _restore
+from backend.migrations.versions import pii_restore_originals_v1
+from backend.migrations.versions.pii_restore_originals_v1 import (
+    _guard_nothing_restored,
+    _require_usable_key,
+    _restore,
+)
 from backend.models import (
     Chat,
     Document,
@@ -426,3 +433,46 @@ def test_backfill_skips_rows_whose_ciphertext_cannot_be_decrypted() -> None:
             sa.text("SELECT content FROM messages WHERE id = 'broken'")
         ).scalar_one()
         assert stored == "contact me at [EMAIL]"
+
+
+def test_backfill_pages_through_more_rows_than_one_batch(monkeypatch) -> None:
+    """The read is streamed in pages; every row must still be restored exactly once."""
+    monkeypatch.setattr(pii_restore_originals_v1, "_BATCH", 2)
+    originals = {f"m{i}": f"reach me at user{i}@example.com" for i in range(5)}
+    with _legacy_messages_engine().begin() as connection:
+        for row_id, original in originals.items():
+            connection.execute(
+                sa.text(
+                    "INSERT INTO messages (id, content, content_original_encrypted) "
+                    "VALUES (:id, :content, :enc)"
+                ),
+                {"id": row_id, "content": "reach me at [EMAIL]", "enc": encrypt_value(original)},
+            )
+
+        restored, skipped = _restore(
+            connection, "messages", "content", "content_original_encrypted"
+        )
+
+        assert (restored, skipped) == (5, 0)
+        stored = dict(
+            connection.execute(sa.text("SELECT id, content FROM messages")).all()
+        )
+        assert stored == originals
+
+
+def test_backfill_refuses_to_run_without_a_usable_key(monkeypatch) -> None:
+    """An absent key would skip every row, then the next revision drops them."""
+    monkeypatch.setattr(settings, "encryption_key", None)
+
+    with pytest.raises(RuntimeError, match="ENCRYPTION_KEY"):
+        _require_usable_key()
+
+
+def test_backfill_aborts_when_a_usable_key_decrypted_nothing() -> None:
+    """A rotated key: rows existed, none came back. Stop before the columns go."""
+    with pytest.raises(RuntimeError, match="rotated"):
+        _guard_nothing_restored("messages", restored=0, skipped=3)
+
+    # Partial success and an empty table are both fine — nothing to protect.
+    _guard_nothing_restored("messages", restored=1, skipped=2)
+    _guard_nothing_restored("messages", restored=0, skipped=0)

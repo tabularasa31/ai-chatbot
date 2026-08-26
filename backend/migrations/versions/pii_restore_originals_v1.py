@@ -48,6 +48,43 @@ def _has_column(table: str, column: str) -> bool:
     return column in cols
 
 
+def _require_usable_key() -> None:
+    """Abort unless the configured key can be built at all.
+
+    ``_restore`` skips any row it cannot decrypt, which is right for isolated
+    corrupt ciphertext but indistinguishable from an absent key — that case
+    would skip every row, report success, and let
+    ``pii_drop_redacted_columns_v1`` drop the only copy of the originals in the
+    same upgrade.
+    """
+    from backend.core.crypto import get_fernet
+
+    try:
+        get_fernet()
+    except Exception as exc:
+        raise RuntimeError(
+            "pii_restore_originals_v1 cannot decrypt stored originals: "
+            f"{exc}. Set ENCRYPTION_KEY to the key those rows were written with "
+            "and re-run; the next revision drops the encrypted columns, so "
+            "continuing would destroy them."
+        ) from exc
+
+
+def _guard_nothing_restored(table: str, restored: int, skipped: int) -> None:
+    """Abort when a usable key still decrypted nothing at all.
+
+    Rows existed, the key built fine, and not one of them came back: the key is
+    the wrong one (rotated since those rows were written). Stop rather than let
+    the next revision drop what this one failed to recover.
+    """
+    if restored == 0 and skipped > 0:
+        raise RuntimeError(
+            f"pii_restore_originals_v1: all {skipped} encrypted originals in "
+            f"{table} failed to decrypt. ENCRYPTION_KEY looks rotated; aborting "
+            "before pii_drop_redacted_columns_v1 destroys them."
+        )
+
+
 def _restore(bind, table: str, target: str, encrypted: str) -> tuple[int, int]:
     """Copy decrypted ``encrypted`` into ``target``. Returns (restored, skipped).
 
@@ -56,32 +93,38 @@ def _restore(bind, table: str, target: str, encrypted: str) -> tuple[int, int]:
     """
     from backend.core.crypto import decrypt_value
 
-    select_sql = (
+    select_stmt = sa.text(
         f"SELECT id, {encrypted} FROM {table} "
         f"WHERE {encrypted} IS NOT NULL AND {encrypted} <> ''"
-    )
-    update_sql = f"UPDATE {table} SET {target} = :plaintext WHERE id = :row_id"
-    rows = bind.execute(sa.text(select_sql)).fetchall()
+    ).execution_options(stream_results=True, max_row_buffer=_BATCH)
+    update_stmt = sa.text(f"UPDATE {table} SET {target} = :plaintext WHERE id = :row_id")
 
+    # Streamed in pages rather than fetched whole: this runs in the deploy's
+    # release step, and materialising an entire ``messages`` table there is how
+    # the upgrade gets OOM-killed half-applied. On backends without server-side
+    # cursors the option is ignored and ``fetchmany`` still pages correctly.
+    result = bind.execute(select_stmt)
     restored = 0
     skipped = 0
-    pending: list[dict[str, object]] = []
-    for row_id, ciphertext in rows:
-        try:
-            plaintext = decrypt_value(ciphertext)
-        except Exception:
-            # Unset/rotated ENCRYPTION_KEY or corrupt ciphertext: leave the row
-            # untouched rather than blanking the only readable text it has.
-            skipped += 1
-            continue
-        pending.append({"row_id": row_id, "plaintext": plaintext})
-        if len(pending) >= _BATCH:
-            bind.execute(sa.text(update_sql), pending)
+    while True:
+        rows = result.fetchmany(_BATCH)
+        if not rows:
+            break
+        pending: list[dict[str, object]] = []
+        for row_id, ciphertext in rows:
+            try:
+                plaintext = decrypt_value(ciphertext)
+            except Exception:
+                # A single corrupt ciphertext: leave the row untouched rather
+                # than blanking the only readable text it has. A *systemic*
+                # decryption failure is caught by ``upgrade`` below, which
+                # refuses to hand over to the column-dropping revision.
+                skipped += 1
+                continue
+            pending.append({"row_id": row_id, "plaintext": plaintext})
+        if pending:
+            bind.execute(update_stmt, pending)
             restored += len(pending)
-            pending = []
-    if pending:
-        bind.execute(sa.text(update_sql), pending)
-        restored += len(pending)
     return restored, skipped
 
 
@@ -93,6 +136,8 @@ def upgrade() -> None:
             "pii_restore_originals_v1 needs a live database connection "
             "(it decrypts each row); run it without --sql."
         )
+
+    _require_usable_key()
 
     targets = (
         ("messages", "content", "content_original_encrypted"),
@@ -112,6 +157,7 @@ def upgrade() -> None:
             restored,
             skipped,
         )
+        _guard_nothing_restored(table, restored, skipped)
 
 
 def downgrade() -> None:

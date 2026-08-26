@@ -717,7 +717,7 @@ What survives rotation:
 - previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and listed in the dashboard Logs with per-conversation dividers)
 - an **active escalation ticket still collecting the user's email** — this is the one case that *blocks* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
 
-A conversation closed by escalation (`ended_at` set) also rotates once idle: a visitor returning past the window starts fresh instead of hitting the "session is closed" reply.
+A conversation the visitor closed (`ended_at` set — they answered "no" to the post-escalation "anything else?" follow-up) also rotates once idle: a visitor returning past the window starts fresh instead of hitting the "session is closed" reply.
 
 Widget protocol: `GET /widget/history` returns the last two conversations flattened, `boundary_indices` (positions where a newer conversation starts) and `conversation_rotated` (true when the next message will open a new conversation — the widget renders a separator and requests a fresh greeting by POSTing an empty message with the existing `session_id`).
 

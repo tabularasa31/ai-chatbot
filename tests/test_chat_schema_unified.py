@@ -66,6 +66,10 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
     # outcome + failure_state are degraded-state extensions for the
     # LLM-unavailable path; populated only when the OpenAI provider fails
     # mid-turn. Old widgets that ignore them still render `text`.
+    # delivered_to_operator marks the muted path — a human operator holds the
+    # chat, so the visitor's message was recorded and handed on and `text` is
+    # empty by design. Old widgets that ignore it render nothing, which is the
+    # correct behaviour anyway.
     assert set(widget_properties.keys()) == {
         "text",
         "session_id",
@@ -73,6 +77,7 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
         "ticket_number",
         "outcome",
         "failure_state",
+        "delivered_to_operator",
     }
     assert "source_documents" not in widget_properties
     assert "tokens_used" not in widget_properties

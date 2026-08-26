@@ -55,10 +55,12 @@ def latest_chat_query(
 def should_rotate(chat: Chat, *, now: datetime | None = None) -> bool:
     """True when the next message must open a new conversation for the session.
 
-    A chat idle past the shared threshold rotates — including chats closed by
-    escalation (``ended_at`` set), so a returning visitor gets a fresh
-    conversation instead of a "session closed" dead end. Within the window a
-    closed chat keeps today's acknowledge_closed_or_start_new behavior.
+    A chat idle past the shared threshold rotates — including chats the
+    visitor closed (``ended_at`` set, i.e. they answered "no" to the
+    post-escalation "anything else?" follow-up; escalation on its own leaves
+    the chat open), so a returning visitor gets a fresh conversation instead
+    of a "session closed" dead end. Within the window a closed chat keeps
+    today's acknowledge_closed_or_start_new behavior.
 
     A chat the sweeper already reported ended (``session_ended_event_at``
     set) rotates unconditionally: the marker is the system's own declaration

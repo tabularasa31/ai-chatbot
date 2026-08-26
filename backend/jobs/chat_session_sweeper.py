@@ -61,8 +61,9 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     excluded from the next pass; otherwise the empty-chat backlog would
     accumulate in the index unbounded as widget impressions add up.
 
-    Chats already closed by escalation (``ended_at`` set) are skipped — that
-    path emits its own event.
+    Chats the visitor already closed (``ended_at`` set — they answered "no"
+    to the post-escalation "anything else?" follow-up; escalation on its own
+    does not set it) are skipped: that path emits its own event.
 
     Two idle windows, read at call time so tests can override settings:
 
@@ -159,7 +160,7 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
     ``conversation_idle_timeout_seconds`` — the same window lazy rotation and
     the session sweeper use, so "the conversation is over" keeps one definition
     system-wide. Deliberately independent of the ``chat_session_ended`` pass
-    above, which skips chats already closed by escalation (``ended_at`` set);
+    above, which skips chats the visitor already closed (``ended_at`` set);
     those carry tickets too and must age out on the same rule.
 
     Tickets with no ``chat_id`` (direct API creations) are left alone — there is

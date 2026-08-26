@@ -97,7 +97,7 @@ Escalation happens automatically or on request:
 - **On request** — when the user explicitly asks for a human: "talk to a human", "connect me to support", "хочу с оператором", and similar phrases in any language.
 
 **What does the user see when escalated?**
-The chat is closed. The widget shows a **"Start new chat"** button. The existing conversation transcript stays visible above it.
+The chat stays open — escalation does not close it. The user can keep asking the bot questions while support works the ticket. Only when the user confirms they need nothing further does the chat close, at which point the widget shows a **"Start new chat"** button with the existing transcript still visible above it.
 
 **What does the operator see?**
 A ticket appears in **Dashboard → Escalations** with the trigger type, a sequential ticket number (e.g. `ESC-42`), and a link to the full conversation log. A notification email is sent to the support email configured in Settings.

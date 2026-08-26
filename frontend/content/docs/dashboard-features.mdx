@@ -131,7 +131,7 @@ L2 ticket inbox. A ticket is created automatically whenever a conversation is es
 
 **What happens when a ticket is created:**
 
-- The active chat is closed (`chat_ended`). The widget shows a "Start new chat" button.
+- The visitor's chat stays open — they can keep talking to the bot while your team works the ticket. It closes (`chat_ended`) only once the visitor confirms they need nothing further, and the widget then shows a "Start new chat" button.
 - An email notification is sent to the support email configured in Settings.
 - A ticket appears in this inbox with a sequential number (e.g. `ESC-42`), the trigger, and a link to the conversation log.
 

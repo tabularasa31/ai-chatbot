@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session, joinedload
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
 from backend.core.config import settings
 from backend.jobs._periodic import LockSpec, PeriodicJob
-from backend.models import Chat, EscalationStatus, EscalationTicket, Message
+from backend.models import Chat, EscalationStatus, EscalationTicket, Message, OperatorState
 from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,13 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
 
     Tickets with no ``chat_id`` (direct API creations) are left alone — there is
     no conversation to age them against.
+
+    Chats a human operator currently holds (``OperatorState.live``) are skipped
+    outright, regardless of how idle they look. Idleness is measured on
+    ``chats.updated_at``, which only a visitor turn refreshes — an operator
+    reading the thread and composing a reply does not touch it — so a live
+    handoff can cross the threshold while it is actively being worked. Closing
+    the ticket underneath the person answering it is exactly wrong.
     """
     reference = now or _utcnow()
     cutoff = reference - timedelta(seconds=settings.conversation_idle_timeout_seconds)
@@ -174,6 +181,7 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
         .filter(
             EscalationTicket.status == EscalationStatus.open,
             Chat.updated_at < cutoff,
+            Chat.operator_state != OperatorState.live,
         )
         .order_by(EscalationTicket.created_at)
         .limit(_MAX_SESSIONS_PER_SWEEP)

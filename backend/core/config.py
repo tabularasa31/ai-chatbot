@@ -230,6 +230,12 @@ class Settings(BaseSettings):
         ge=60,
         description="Idle gap after which the sweeper reaps a message-less Chat (a /widget/session/init mount the visitor never typed into). Kept short and decoupled from conversation_idle_timeout_seconds so raising the returning-visitor window does not leave empty mount chats sitting in the ix_chats_sweeper_pending partial index for days (observed ~154 mounts per real session). Empty chats never emit chat_session_ended, so this only controls index-reaping cadence, not analytics.",
     )
+    operator_release_idle_seconds: int = Field(
+        900,  # 15 min
+        alias="OPERATOR_RELEASE_IDLE_SECONDS",
+        ge=60,
+        description="How long a chat stays muted after the last operator activity before the bot takes it back. Applied lazily, on the visitor's next message: an operator who answered once and closed their laptop would otherwise mute the bot forever. Deliberately not a background sweep — releasing at turn time needs no async localization from a sync thread and cannot race a live turn. The one case it does not cover is a visitor who never writes again, and then there is nobody to un-mute the bot for.",
+    )
     loop_detection_window: int = Field(
         3,
         alias="LOOP_DETECTION_WINDOW",

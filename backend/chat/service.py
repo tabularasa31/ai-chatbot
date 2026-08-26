@@ -75,8 +75,10 @@ from backend.chat.persistence import (
     _finalize_persisted_messages,  # noqa: F401  (re-export)
     _persist_assistant_message,  # noqa: F401  (re-export — greeting handler lazy-imports via service)
     _persist_assistant_message_with_response_language,  # noqa: F401  (re-export)
+    _persist_operator_message,  # noqa: F401  (re-export — operator channel)
     _persist_turn,  # noqa: F401  (re-export — escalation handler accesses via _svc.*)
     _persist_turn_with_response_language,
+    _persist_user_only_turn,  # noqa: F401  (re-export — operator handler lazy-imports via service)
     _source_docs_for_db,  # noqa: F401  (re-export)
 )
 from backend.chat.pii import redact

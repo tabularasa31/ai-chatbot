@@ -31,6 +31,7 @@ def _create_message(
     content: str,
     source_documents: list[uuid.UUID] | None = None,
     optional_entity_types: set[str] | None = None,
+    operator_user_id: uuid.UUID | None = None,
 ) -> Message:
     """Persist one turn's message with its ORIGINAL text.
 
@@ -39,6 +40,10 @@ def _create_message(
     it at that boundary. The redaction pass here is audit-only — it records
     which entity types will be masked whenever this message is sent to OpenAI
     (as the question or as prompt history) and never rewrites ``content``.
+
+    ``operator_user_id`` is set only on ``MessageRole.operator`` rows whose
+    author resolves to a tenant user; it stays NULL for an unattributed
+    operator reply and for every user / assistant row.
     """
     message = Message(
         id=uuid.uuid4(),
@@ -46,6 +51,7 @@ def _create_message(
         role=role,
         content=content,
         source_documents=source_documents,
+        operator_user_id=operator_user_id,
     )
     db.add(message)
     redaction = redact(content, optional_entity_types=optional_entity_types)
@@ -124,6 +130,75 @@ def _finalize_persisted_messages(
     except Exception:
         db.rollback()
         raise
+
+
+def _persist_user_only_turn(
+    db: Session,
+    *,
+    chat: Chat,
+    tenant_id: uuid.UUID,
+    user_content: str,
+    optional_entity_types: set[str] | None = None,
+) -> Message:
+    """Persist a visitor turn that gets no bot reply.
+
+    Used while an operator holds the chat (``OperatorState.live``): the
+    message is recorded exactly as any other user turn — same redaction audit,
+    same ``PiiEvent`` rows, same commit path — and nothing is generated in
+    response. Composed from the shared helpers rather than written out so the
+    muted path can never drift from the normal one.
+
+    No token accounting: the turn cost nothing, no LLM was called.
+    """
+    message = _create_message(
+        db,
+        chat=chat,
+        tenant_id=tenant_id,
+        role=MessageRole.user,
+        content=user_content,
+        optional_entity_types=optional_entity_types,
+    )
+    _finalize_persisted_messages(
+        db=db,
+        chat=chat,
+        tenant_id=tenant_id,
+        extra_tokens=0,
+    )
+    return message
+
+
+def _persist_operator_message(
+    db: Session,
+    *,
+    chat: Chat,
+    tenant_id: uuid.UUID,
+    content: str,
+    operator_user_id: uuid.UUID | None,
+    optional_entity_types: set[str] | None = None,
+) -> Message:
+    """Persist a human operator's reply into the chat thread.
+
+    The thread is the single ledger: an answer written in the console and one
+    that arrives by e-mail land as the same kind of row, so every later
+    consumer (widget history, the console, the phase-3 knowledge loop) reads
+    one shape regardless of which channel produced it.
+    """
+    message = _create_message(
+        db,
+        chat=chat,
+        tenant_id=tenant_id,
+        role=MessageRole.operator,
+        content=content,
+        optional_entity_types=optional_entity_types,
+        operator_user_id=operator_user_id,
+    )
+    _finalize_persisted_messages(
+        db=db,
+        chat=chat,
+        tenant_id=tenant_id,
+        extra_tokens=0,
+    )
+    return message
 
 
 def _persist_turn(

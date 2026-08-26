@@ -18,7 +18,7 @@ and then there is nobody to un-mute the bot for.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -28,7 +28,7 @@ from backend.models import Chat, Message, MessageRole, OperatorState
 from backend.models.base import _utcnow
 
 
-def last_operator_activity_at(db: Session, chat: Chat):
+def last_operator_activity_at(db: Session, chat: Chat) -> datetime | None:
     """When the operator was last active in this chat, or ``None``.
 
     The later of the moment they joined and their most recent message, so a

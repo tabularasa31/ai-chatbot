@@ -139,8 +139,6 @@ def test_chat_creates_messages_in_db(
     assert "assistant" in roles
     user_message = next(m for m in messages if m.role.value == "user")
     assert user_message.content == "Hello"
-    assert user_message.content_original_encrypted is not None
-    assert user_message.content_redacted == "Hello"
 
 
 def test_chat_stamps_default_bot_id_on_persisted_chat(

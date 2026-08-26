@@ -612,13 +612,12 @@ Before any text is sent to OpenAI, the user's message is passed through a regex 
 | IPv4 addresses | `[IP]` |
 | URLs with token-like params | `[URL_TOKEN]` |
 
-Only redacted text crosses the OpenAI boundary. Storage is split into:
+Redaction is an **egress** concern, not a storage one. Storage keeps a single column with the original wording — `messages.content` and `escalation_tickets.primary_question` — and every boundary that sends text out of the platform masks it on the way:
 
-- `messages.content_original_encrypted` — encrypted original wording
-- `messages.content_redacted` — canonical safe text
-- `messages.content` — legacy compatibility field, now kept redacted-safe
+- the user question, chat history, and background-job text handed to OpenAI (`redact_for_egress` in `backend/chat/pii.py`);
+- the escalation notification email, which additionally keeps `EMAIL` and `IP` visible in user-authored turns so support can actually reply (`_support_email_text`).
 
-Tenant admins can configure optional regex entity types in `Settings → Privacy`. Chat logs and escalations are **safe-first**: redacted text is shown by default, while original text requires privileged access and every original view/delete action is written to `pii_events`.
+Only redacted text crosses the OpenAI boundary. Tenant admins configure optional regex entity types in `Settings → Privacy`; the setting governs what is masked at those egress boundaries. `pii_events` records what was masked on the way out — there is no "view / delete originals" flow any more, because the tenant's own dashboard already shows their conversations as written.
 
 ### Answer validation (FI-034)
 

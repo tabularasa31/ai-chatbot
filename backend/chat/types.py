@@ -237,4 +237,7 @@ class PipelineRun:
     allow_clarification: bool = True
     guard_profile: TenantProfile | None = None
     support_contact_question: bool = False
+    # Tenant's optional PII entity types, applied wherever this turn's text
+    # (question, prompt history) is handed to OpenAI. ``None`` = defaults.
+    optional_entity_types: set[str] | None = None
     state: PipelineState = field(default_factory=PipelineState)

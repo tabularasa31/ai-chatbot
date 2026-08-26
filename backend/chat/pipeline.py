@@ -71,6 +71,7 @@ async def async_run_chat_pipeline(
     allow_clarification: bool = True,
     guard_profile: TenantProfile | None = None,
     support_contact_question: bool = False,
+    optional_entity_types: set[str] | None = None,
 ) -> ChatPipelineResult:
     """Run one chat turn through the RAG pipeline (see module docstring)."""
     # The language context is resolved by the caller on the normal chat path;
@@ -107,6 +108,7 @@ async def async_run_chat_pipeline(
         allow_clarification=allow_clarification,
         guard_profile=guard_profile,
         support_contact_question=support_contact_question,
+        optional_entity_types=optional_entity_types,
     )
 
     # --- Pre-retrieval: guards, query plan, FAQ --------------------------

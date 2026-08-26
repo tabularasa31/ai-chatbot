@@ -90,7 +90,11 @@ def test_build_prior_messages_for_llm_trims_to_max_messages_and_caps_chars() -> 
             MessageRole.assistant,
         ]
     ):
-        m = _StubMessage(role, "x" * 200 if i == 3 else f"msg{i}", idx=i + 1)
+        # Plain prose, not a 200-char alphanumeric blob: the egress redactor
+        # this function now runs would mask the latter as an [API_KEY] and the
+        # cap would have nothing left to trim.
+        long_text = "the quick brown fox jumps over the lazy dog. " * 6
+        m = _StubMessage(role, long_text if i == 3 else f"msg{i}", idx=i + 1)
         m.created_at = base + timedelta(seconds=i)
         msgs.append(m)
     chat_stub = SimpleNamespace(messages=msgs)

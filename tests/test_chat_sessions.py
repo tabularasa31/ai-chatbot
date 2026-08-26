@@ -457,22 +457,25 @@ def test_get_session_logs_success(
     assert len(data["messages"]) == 2
     assert data["messages"][0]["role"] == "user"
     assert data["messages"][0]["content"] == "Hello"
-    assert data["messages"][0]["content_original"] is None
-    assert data["messages"][0]["content_original_available"] is False
+    assert "content_original" not in data["messages"][0]
     assert data["messages"][0]["session_id"] == str(chat.session_id)
     assert data["messages"][1]["role"] == "assistant"
     assert data["messages"][1]["content"] == "Hi there"
     assert data["messages"][0]["created_at"] <= data["messages"][1]["created_at"]
 
 
-def test_get_session_logs_can_include_original_for_authenticated_owner(
+def test_get_session_logs_returns_original_text_to_the_tenant_owner(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    from backend.chat.pii import redact
-    from backend.core.crypto import encrypt_value
-    from backend.models import Chat, Message, MessageRole, User
+    """The tenant reads back their own conversations as written.
+
+    Redaction is applied where text leaves the platform (OpenAI, support
+    e-mail), not on the dashboard read path — and there is no separate
+    "view originals" privilege any more.
+    """
+    from backend.models import Chat, Message, MessageRole
 
     token = register_and_verify_user(tenant, db_session, email="logs-original@example.com")
     cl = tenant.post(
@@ -486,37 +489,30 @@ def test_get_session_logs_can_include_original_for_authenticated_owner(
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
-    m1 = Message(
-        chat_id=chat.id,
-        role=MessageRole.user,
-        content="email me at user@example.com",
-        content_original_encrypted=encrypt_value("email me at user@example.com"),
-        content_redacted=redact("email me at user@example.com").redacted_text,
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.user,
+            content="email me at user@example.com",
+        )
     )
-    db_session.add(m1)
-    db_session.commit()
-    user = db_session.query(User).filter_by(email="logs-original@example.com").first()
-    assert user is not None
-    user.is_admin = True
-    db_session.add(user)
     db_session.commit()
 
     resp = tenant.get(
-        f"/chat/logs/session/{chat.session_id}?include_original=true",
+        f"/chat/logs/session/{chat.session_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["messages"][0]["content"] == "email me at [EMAIL]"
-    assert data["messages"][0]["content_original"] == "email me at user@example.com"
-    assert data["messages"][0]["content_original_available"] is True
+    assert data["messages"][0]["content"] == "email me at user@example.com"
 
 
-def test_get_session_logs_include_original_requires_admin(
+def test_get_session_logs_has_no_include_original_switch(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
+    """The removed query param must not resurrect a second view of the data."""
     from backend.models import Chat, Message, MessageRole
 
     token = register_and_verify_user(tenant, db_session, email="logs-no-admin@example.com")
@@ -538,17 +534,17 @@ def test_get_session_logs_include_original_requires_admin(
         f"/chat/logs/session/{chat.session_id}?include_original=true",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 403
+    # Unknown query params are ignored; the response carries no originals field.
+    assert resp.status_code == 200
+    assert "content_original" not in resp.json()["messages"][0]
 
 
-def test_delete_session_original_requires_admin_and_removes_original(
+def test_delete_session_original_route_is_gone(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    from backend.chat.pii import redact
-    from backend.core.crypto import encrypt_value
-    from backend.models import Chat, Message, MessageRole, User
+    from backend.models import Chat
 
     token = register_and_verify_user(tenant, db_session, email="logs-delete@example.com")
     cl = tenant.post(
@@ -562,85 +558,12 @@ def test_delete_session_original_requires_admin_and_removes_original(
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
-    msg = Message(
-        chat_id=chat.id,
-        role=MessageRole.user,
-        content="[EMAIL]",
-        content_original_encrypted=encrypt_value("user@example.com"),
-        content_redacted=redact("user@example.com").redacted_text,
-    )
-    db_session.add(msg)
-    db_session.commit()
-
-    denied = tenant.post(
-        f"/chat/logs/session/{chat.session_id}/delete-original",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert denied.status_code == 403
-
-    user = db_session.query(User).filter_by(email="logs-delete@example.com").first()
-    assert user is not None
-    user.is_admin = True
-    db_session.add(user)
-    db_session.commit()
 
     resp = tenant.post(
         f"/chat/logs/session/{chat.session_id}/delete-original",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 200
-    assert resp.json()["deleted_count"] == 1
-
-    db_session.refresh(msg)
-    assert msg.content_original_encrypted is None
-    assert msg.content == msg.content_redacted
-
-
-def test_delete_session_original_clears_legacy_plaintext_when_redacted_missing(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    from backend.core.crypto import encrypt_value
-    from backend.models import Chat, Message, MessageRole, User
-
-    token = register_and_verify_user(tenant, db_session, email="logs-delete-empty@example.com")
-    cl = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Logs Delete Empty Tenant"},
-    )
-    tenant_id = uuid.UUID(cl.json()["id"])
-
-    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-    msg = Message(
-        chat_id=chat.id,
-        role=MessageRole.user,
-        content="plaintext@example.com",
-        content_original_encrypted=encrypt_value("plaintext@example.com"),
-        content_redacted=None,
-    )
-    db_session.add(msg)
-    db_session.commit()
-
-    user = db_session.query(User).filter_by(email="logs-delete-empty@example.com").first()
-    assert user is not None
-    user.is_admin = True
-    db_session.add(user)
-    db_session.commit()
-
-    resp = tenant.post(
-        f"/chat/logs/session/{chat.session_id}/delete-original",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 200
-
-    db_session.refresh(msg)
-    assert msg.content_original_encrypted is None
-    assert msg.content == ""
+    assert resp.status_code == 404
 
 
 def test_get_session_logs_404_wrong_client(

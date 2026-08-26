@@ -12,7 +12,6 @@ from backend.chat.language import ResolvedLanguageContext
 from backend.chat.language_context import _set_last_response_language
 from backend.chat.pii import redact
 from backend.contact_sessions.service import record_user_session_turn
-from backend.core.crypto import encrypt_value
 from backend.models import Chat, Message, MessageRole, PiiEvent, PiiEventDirection
 from backend.observability import TraceHandle
 
@@ -31,20 +30,25 @@ def _create_message(
     role: MessageRole,
     content: str,
     source_documents: list[uuid.UUID] | None = None,
-    direction: PiiEventDirection = PiiEventDirection.message_storage,
     optional_entity_types: set[str] | None = None,
 ) -> Message:
-    redaction = redact(content, optional_entity_types=optional_entity_types)
+    """Persist one turn's message with its ORIGINAL text.
+
+    Redaction is not a storage concern: the row keeps what the user (or bot)
+    actually wrote, and consumers that ship the text outside the platform mask
+    it at that boundary. The redaction pass here is audit-only — it records
+    which entity types will be masked whenever this message is sent to OpenAI
+    (as the question or as prompt history) and never rewrites ``content``.
+    """
     message = Message(
         id=uuid.uuid4(),
         chat_id=chat.id,
         role=role,
-        content=redaction.redacted_text,
-        content_original_encrypted=encrypt_value(content),
-        content_redacted=redaction.redacted_text,
+        content=content,
         source_documents=source_documents,
     )
     db.add(message)
+    redaction = redact(content, optional_entity_types=optional_entity_types)
     if redaction.was_redacted:
         # SQLite enforces FK at row level and SQLAlchemy's UoW does not reorder
         # PiiEvent (FK-only, no relationship) ahead of its parent Message, so
@@ -56,7 +60,7 @@ def _create_message(
                     tenant_id=tenant_id,
                     chat_id=chat.id,
                     message_id=message.id,
-                    direction=direction,
+                    direction=PiiEventDirection.llm_request,
                     entity_type=entity.type,
                     count=entity.count,
                 )

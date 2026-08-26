@@ -86,11 +86,17 @@ class EscalationStatus(str, enum.Enum):
 
 
 class PiiEventDirection(str, enum.Enum):
-    message_storage = "message_storage"
+    """Outbound boundary a redaction was applied at.
+
+    Storage holds the user's original wording; redaction happens where text
+    leaves the platform, so every direction names an egress: an OpenAI
+    request, the escalation ticket forwarded to support, or a notification
+    e-mail.
+    """
+
+    llm_request = "llm_request"
     escalation_ticket = "escalation_ticket"
     notification_email = "notification_email"
-    original_view = "original_view"
-    original_delete = "original_delete"
 
 
 class EscalationPhase(str, enum.Enum):

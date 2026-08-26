@@ -388,9 +388,8 @@ def test_create_escalation_ticket_stores_redacted_and_encrypted_question(
         db_session,
     )
 
-    assert ticket.primary_question == "my email is [EMAIL]"
-    assert ticket.primary_question_redacted == "my email is [EMAIL]"
-    assert ticket.primary_question_original_encrypted is not None
+    # Storage keeps the original wording; redaction happens on the way out.
+    assert ticket.primary_question == "my email is user@example.com"
 
 
 def test_create_escalation_ticket_raises_after_max_retries(
@@ -822,7 +821,6 @@ def test_notify_email_body_contains_full_context_and_reply_to(
         tenant_id=cl.id,
         ticket_number="ESC-0102",
         primary_question="Yes please",
-        primary_question_redacted="Yes please",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.high,
         status=EscalationStatus.open,
@@ -920,8 +918,6 @@ def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
     un-masks EMAIL and IP (rebuilt from the encrypted originals) while every
     other PII type stays redacted. Stored ticket/message rows are unaffected.
     """
-    from backend.core.crypto import encrypt_value
-
     cl = _make_tenant_for_email_test(
         tenant, db_session, owner_email="pii-owner@example.com"
     )
@@ -935,28 +931,22 @@ def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
     db_session.commit()
     db_session.refresh(chat)
 
-    # A persisted transcript turn: stored content is redacted, the raw original
-    # is kept encrypted (mirrors backend.chat.persistence._create_message).
+    # A persisted transcript turn: stored as written (mirrors
+    # backend.chat.persistence._create_message).
     transcript_original = "I logged in from 203.0.113.7 with card 4111 1111 1111 1111"
-    transcript_redacted = "I logged in from [IP] with card [CARD]"
-    # An assistant turn that echoed an infra IP: stored redacted, original kept
-    # encrypted. It must stay masked in the email even though it can be decrypted.
+    # An assistant turn that echoed an infra IP. It is stored as written too,
+    # but must stay masked in the email.
     assistant_original = "Our status page is at 198.51.100.200, please retry."
-    assistant_redacted = "Our status page is at [IP], please retry."
     db_session.add_all([
         Message(
             chat_id=chat.id,
             role=MessageRole.user,
-            content=transcript_redacted,
-            content_redacted=transcript_redacted,
-            content_original_encrypted=encrypt_value(transcript_original),
+            content=transcript_original,
         ),
         Message(
             chat_id=chat.id,
             role=MessageRole.assistant,
-            content=assistant_redacted,
-            content_redacted=assistant_redacted,
-            content_original_encrypted=encrypt_value(assistant_original),
+            content=assistant_original,
         ),
     ])
     db_session.commit()
@@ -965,9 +955,7 @@ def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
     ticket = EscalationTicket(
         tenant_id=cl.id,
         ticket_number="ESC-0103",
-        primary_question="reach me at [EMAIL] or [PHONE], IP [IP]",
-        primary_question_redacted="reach me at [EMAIL] or [PHONE], IP [IP]",
-        primary_question_original_encrypted=encrypt_value(question_original),
+        primary_question=question_original,
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.high,
         status=EscalationStatus.open,
@@ -994,24 +982,22 @@ def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
     # from the knowledge base, which must not be un-masked into a quotable email.
     assert "198.51.100.200" not in body  # IP from the assistant turn
 
-    # Every other PII type stays masked, even though the originals were decrypted.
+    # Every other PII type stays masked on the way out.
     assert "+1 202 555 0143" not in body
     assert "[PHONE]" in body
     assert "4111 1111 1111 1111" not in body
     assert "[CARD]" in body
 
-    # Storage is untouched — the redacted copies still mask everything.
+    # Storage is untouched — the row still holds what the user wrote.
     db_session.refresh(ticket)
-    assert ticket.primary_question_redacted == "reach me at [EMAIL] or [PHONE], IP [IP]"
-    assert "real@user.com" not in ticket.primary_question
+    assert ticket.primary_question == question_original
 
 
-def test_notify_email_body_falls_back_to_redacted_when_no_original(
+def test_notify_email_body_handles_already_masked_legacy_question(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """When the encrypted original is absent (legacy rows), the email body
-    falls back to the stored redacted question — no crash, no leak."""
+    """Rows written before the move already hold masked text — no crash, no leak."""
     cl = _make_tenant_for_email_test(
         tenant, db_session, owner_email="fallback-owner@example.com"
     )
@@ -1019,8 +1005,6 @@ def test_notify_email_body_falls_back_to_redacted_when_no_original(
         tenant_id=cl.id,
         ticket_number="ESC-0104",
         primary_question="contact me at [EMAIL]",
-        primary_question_redacted="contact me at [EMAIL]",
-        primary_question_original_encrypted=None,
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.high,
         status=EscalationStatus.open,
@@ -1052,7 +1036,6 @@ def test_notify_email_skipped_when_no_user_email(
         tenant_id=cl.id,
         ticket_number="ESC-0200",
         primary_question="Need a human",
-        primary_question_redacted="Need a human",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.high,
         status=EscalationStatus.open,
@@ -1081,7 +1064,6 @@ def test_notify_email_skipped_when_user_email_is_malformed(
         tenant_id=cl.id,
         ticket_number="ESC-0202",
         primary_question="needs help",
-        primary_question_redacted="needs help",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.high,
         status=EscalationStatus.open,
@@ -1119,7 +1101,6 @@ def test_apply_collected_contact_email_fires_deferred_notification(
         tenant_id=cl.id,
         ticket_number="ESC-0500",
         primary_question="please connect me to support",
-        primary_question_redacted="please connect me to support",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.high,
         status=EscalationStatus.open,
@@ -1165,7 +1146,6 @@ def test_apply_collected_contact_email_does_not_double_notify(
         tenant_id=cl.id,
         ticket_number="ESC-0501",
         primary_question="anything",
-        primary_question_redacted="anything",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.high,
         status=EscalationStatus.open,
@@ -1229,7 +1209,6 @@ def test_notify_email_body_appends_latest_user_text_not_yet_in_db(
         tenant_id=cl.id,
         ticket_number="ESC-0310",
         primary_question="yes, my invoice is broken",
-        primary_question_redacted="yes, my invoice is broken",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.high,
         status=EscalationStatus.open,
@@ -1291,7 +1270,6 @@ def test_notify_tenant_new_ticket_stores_naive_last_notified_at(
         tenant_id=cl.id,
         ticket_number="ESC-NV01",
         primary_question="need a human",
-        primary_question_redacted="need a human",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.medium,
         status=EscalationStatus.open,
@@ -1341,7 +1319,6 @@ def test_advance_notification_marker_stores_naive_last_notified_at(
         tenant_id=cl.id,
         ticket_number="ESC-NV02",
         primary_question="need a human",
-        primary_question_redacted="need a human",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.medium,
         status=EscalationStatus.open,
@@ -1370,7 +1347,6 @@ def test_notify_email_subject_omits_priority_tier(
         tenant_id=cl.id,
         ticket_number="ESC-0311",
         primary_question="urgent help",
-        primary_question_redacted="urgent help",
         trigger=EscalationTrigger.user_request,
         priority=EscalationPriority.critical,
         status=EscalationStatus.open,
@@ -1403,7 +1379,6 @@ def test_notify_email_body_omits_user_note_section_when_absent(
         tenant_id=cl.id,
         ticket_number="ESC-0201",
         primary_question="generic question",
-        primary_question_redacted="generic question",
         trigger=EscalationTrigger.low_similarity,
         priority=EscalationPriority.medium,
         status=EscalationStatus.open,
@@ -1672,10 +1647,11 @@ def test_manual_escalation_mints_new_ticket_once_previous_resolved(
     assert len(tickets) == 2
 
 
-def test_escalation_api_returns_safe_question_by_default(
+def test_escalation_api_returns_the_stored_question_to_its_owner(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
+    """The ticket is the tenant's own data — no separate "originals" view."""
     token = register_and_verify_user(tenant, db_session, email="esc-api@example.com")
     cl_resp = tenant.post(
         "/tenants",
@@ -1698,80 +1674,11 @@ def test_escalation_api_returns_safe_question_by_default(
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["primary_question"] == "contact me at [EMAIL]"
-    assert data["primary_question_original"] is None
-    assert data["primary_question_original_available"] is True
+    assert data["primary_question"] == "contact me at user@example.com"
+    assert "primary_question_original" not in data
 
 
-def test_escalation_api_can_include_original_question(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(
-        tenant, db_session, email="esc-api-orig@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc API Orig Tenant"},
-    )
-    assert cl_resp.status_code == 201
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    ticket = create_escalation_ticket(
-        tenant_id,
-        "contact me at user@example.com",
-        EscalationTrigger.user_request,
-        db_session,
-    )
-    user = (
-        db_session.query(User).filter(User.email == "esc-api-orig@example.com").first()
-    )
-    assert user is not None
-    user.is_admin = True
-    db_session.add(user)
-    db_session.commit()
-
-    resp = tenant.get(
-        f"/escalations/{ticket.id}?include_original=true",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["primary_question"] == "contact me at [EMAIL]"
-    assert data["primary_question_original"] == "contact me at user@example.com"
-
-
-def test_escalation_api_include_original_requires_admin(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(
-        tenant, db_session, email="esc-api-no-admin@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc API No Admin Tenant"},
-    )
-    assert cl_resp.status_code == 201
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    ticket = create_escalation_ticket(
-        tenant_id,
-        "contact me at user@example.com",
-        EscalationTrigger.user_request,
-        db_session,
-    )
-
-    resp = tenant.get(
-        f"/escalations/{ticket.id}?include_original=true",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 403
-
-
-def test_delete_escalation_original_requires_admin_and_removes_original(
+def test_delete_escalation_original_route_is_gone(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -1791,79 +1698,11 @@ def test_delete_escalation_original_requires_admin_and_removes_original(
         db_session,
     )
 
-    denied = tenant.post(
-        f"/escalations/{ticket.id}/delete-original",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert denied.status_code == 403
-
-    user = db_session.query(User).filter(User.email == "esc-delete@example.com").first()
-    assert user is not None
-    user.is_admin = True
-    db_session.add(user)
-    db_session.commit()
-
     resp = tenant.post(
         f"/escalations/{ticket.id}/delete-original",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 200
-    assert resp.json()["deleted_count"] == 1
-
-    db_session.refresh(ticket)
-    assert ticket.primary_question_original_encrypted is None
-    assert ticket.primary_question == ticket.primary_question_redacted
-
-
-def test_delete_escalation_original_clears_legacy_plaintext_when_redacted_missing(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    from backend.core.crypto import encrypt_value
-
-    token = register_and_verify_user(
-        tenant, db_session, email="esc-delete-empty@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc Delete Empty Tenant"},
-    )
-    assert cl_resp.status_code == 201
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    ticket = EscalationTicket(
-        tenant_id=tenant_id,
-        ticket_number="ESC-0001",
-        primary_question="secret@example.com",
-        primary_question_original_encrypted=encrypt_value("secret@example.com"),
-        primary_question_redacted=None,
-        trigger=EscalationTrigger.user_request,
-        priority=EscalationPriority.high,
-        status=EscalationStatus.open,
-    )
-    db_session.add(ticket)
-    db_session.commit()
-
-    user = (
-        db_session.query(User)
-        .filter(User.email == "esc-delete-empty@example.com")
-        .first()
-    )
-    assert user is not None
-    user.is_admin = True
-    db_session.add(user)
-    db_session.commit()
-
-    resp = tenant.post(
-        f"/escalations/{ticket.id}/delete-original",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 200
-
-    db_session.refresh(ticket)
-    assert ticket.primary_question_original_encrypted is None
-    assert ticket.primary_question == ""
+    assert resp.status_code == 404
 
 
 def test_perform_manual_escalation_emits_chat_escalated_event(

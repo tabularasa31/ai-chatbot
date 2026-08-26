@@ -9,7 +9,6 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session, joinedload
 
-from backend.chat.language_context import _decrypt_optional
 from backend.models import (
     Chat,
     Message,
@@ -30,20 +29,6 @@ def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:
     raw = tenant.settings if isinstance(tenant.settings, dict) else None
     cfg = public_redaction_config_dict(raw)
     return set(cfg["optional_entity_types"])
-
-
-def _display_message_content(message: Message, *, include_original: bool) -> str:
-    if include_original:
-        original = _decrypt_optional(message.content_original_encrypted)
-        if original is not None:
-            return original
-    if message.content_redacted:
-        return message.content_redacted
-    return message.content
-
-
-def _message_original_available(message: Message) -> bool:
-    return bool(message.content_original_encrypted)
 
 
 @dataclass
@@ -118,9 +103,9 @@ def list_chat_sessions(tenant_id: uuid.UUID, db: Session) -> list[SessionSummary
             if m.created_at and m.created_at > last_activity:
                 last_activity = m.created_at
             if m.role == MessageRole.user:
-                last_question = _display_message_content(m, include_original=False)
+                last_question = m.content
             elif m.role == MessageRole.assistant:
-                preview = _display_message_content(m, include_original=False)
+                preview = m.content
                 if len(preview) > PREVIEW_MAX_LEN:
                     preview = preview[:PREVIEW_MAX_LEN].rstrip() + "..."
                 last_answer_preview = preview
@@ -152,9 +137,13 @@ def get_session_logs(
     session_id: uuid.UUID,
     tenant_id: uuid.UUID,
     db: Session,
-    *,
-    include_original: bool = False,
-) -> list[tuple[uuid.UUID, uuid.UUID, str, str, str | None, bool, str, str | None, datetime, uuid.UUID]] | None:
+) -> list[tuple[uuid.UUID, uuid.UUID, str, str, str, str | None, datetime, uuid.UUID]] | None:
+    """Full message log of a session as stored — i.e. the original wording.
+
+    The tenant owns this conversation data; masking happens where text leaves
+    the platform (OpenAI requests, support e-mail), not on the dashboard read
+    path.
+    """
     chat_ids = _session_chat_ids(session_id, tenant_id, db)
     if not chat_ids:
         return None
@@ -170,9 +159,7 @@ def get_session_logs(
             m.id,
             session_id,
             m.role.value,
-            _display_message_content(m, include_original=False),
-            _display_message_content(m, include_original=True) if include_original else None,
-            _message_original_available(m),
+            m.content,
             (m.feedback or MessageFeedback.none).value,
             m.ideal_answer,
             m.created_at,
@@ -182,39 +169,3 @@ def get_session_logs(
         )
         for m in messages
     ]
-
-
-def delete_session_original_content(
-    session_id: uuid.UUID,
-    tenant_id: uuid.UUID,
-    db: Session,
-) -> tuple[Chat | None, int]:
-    # Privacy deletion must cover every conversation of the session, not just
-    # the latest one — rotated-away chats still hold original content.
-    chats = (
-        db.query(Chat)
-        .filter(
-            Chat.session_id == session_id,
-            Chat.tenant_id == tenant_id,
-        )
-        .order_by(Chat.created_at.desc())
-        .all()
-    )
-    if not chats:
-        return None, 0
-    chat = chats[0]
-
-    messages = (
-        db.query(Message)
-        .filter(Message.chat_id.in_([c.id for c in chats]))
-        .all()
-    )
-    deleted_count = 0
-    for message in messages:
-        if message.content_original_encrypted is None:
-            continue
-        message.content_original_encrypted = None
-        message.content = message.content_redacted or ""
-        db.add(message)
-        deleted_count += 1
-    return chat, deleted_count

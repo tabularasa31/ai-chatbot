@@ -844,16 +844,12 @@ def test_load_recent_user_turn_texts_without_duplicating_current(
                 chat_id=chat.id,
                 role=MessageRole.user,
                 content="older question",
-                content_original_encrypted="enc",
-                content_redacted="older question",
                 created_at=base_time - timedelta(minutes=2),
             ),
             Message(
                 chat_id=chat.id,
                 role=MessageRole.user,
                 content="latest previous question",
-                content_original_encrypted="enc",
-                content_redacted="latest previous question",
                 created_at=base_time - timedelta(minutes=1),
             ),
         ]
@@ -870,10 +866,15 @@ def test_load_recent_user_turn_texts_without_duplicating_current(
     assert texts == ["current question", "latest previous question", "older question"]
 
 
-def test_load_recent_user_turn_texts_prefers_decrypted_original(
+def test_load_recent_user_turn_texts_reads_stored_original(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
+    """Language detection sees what the user actually wrote.
+
+    Messages are stored un-redacted, so no decryption detour is needed to get
+    a reliable language signal out of the history.
+    """
     tenant_id, _api_key = _chat_test_setup(tenant, db_session, "sticky-history-original@example.com")
     chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
@@ -882,22 +883,17 @@ def test_load_recent_user_turn_texts_prefers_decrypted_original(
         Message(
             chat_id=chat.id,
             role=MessageRole.user,
-            content="REDACTED",
-            content_original_encrypted="encrypted-token",
-            content_redacted="REDACTED",
+            content="Как сбросить пароль?",
         )
     )
     db_session.commit()
 
-    original_decrypt = "backend.chat.language_context._decrypt_optional"
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(original_decrypt, lambda _value: "Как сбросить пароль?")
-        texts = _load_recent_user_turn_texts(
-            db_session,
-            chat,
-            "current question",
-            limit=2,
-        )
+    texts = _load_recent_user_turn_texts(
+        db_session,
+        chat,
+        "current question",
+        limit=2,
+    )
 
     assert texts == ["current question", "Как сбросить пароль?"]
 

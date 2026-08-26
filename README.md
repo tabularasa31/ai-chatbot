@@ -261,7 +261,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 |--------|------|-------------|
 | GET | `/admin/metrics/summary` | Platform-wide stats (admin only) |
 | GET | `/admin/metrics/tenants` | Per-tenant stats (admin only) |
-| GET | `/admin/privacy/pii-events` | PII redaction / access audit log (admin only) |
+| GET | `/admin/privacy/pii-events` | PII egress-redaction audit log (admin only) |
 | DELETE | `/admin/privacy/pii-events/retention` | Purge expired PII-event rows (admin only) |
 
 ### Other

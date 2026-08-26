@@ -24,6 +24,7 @@ from backend.chat.language import (
     async_localize_text_to_language_result,
     log_llm_tokens,
 )
+from backend.chat.pii import redact_for_egress
 from backend.chat.prompts import build_rag_messages
 from backend.chat.streaming import (
     LanguageGateStreamFilter,
@@ -198,6 +199,7 @@ def _build_prior_messages_for_llm(
     *,
     max_messages: int,
     char_cap: int,
+    optional_entity_types: set[str] | None = None,
 ) -> list[dict[str, str]] | None:
     """Take the trailing N persisted turns of ``chat`` and format them for the
     OpenAI chat API. Returns None when there is nothing to add.
@@ -205,13 +207,19 @@ def _build_prior_messages_for_llm(
     The current user turn is NOT yet persisted at this point in the pipeline
     (async_run_chat_pipeline runs before _persist_turn_with_response_language), so
     the full chat.messages list is "prior" context.
+
+    Persisted rows hold the original wording, so each turn is redacted here —
+    this is the OpenAI egress boundary for chat history, and it must mask the
+    same entity types as the current question.
     """
     if chat is None or max_messages <= 0:
         return None
     persisted = sorted(chat.messages or [], key=lambda m: m.created_at or m.id)
     out: list[dict[str, str]] = []
     for m in persisted[-max_messages:]:
-        text = (m.content or "").strip()
+        text = redact_for_egress(
+            m.content, optional_entity_types=optional_entity_types
+        ).strip()
         if not text:
             continue
         if len(text) > char_cap:
@@ -603,6 +611,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         run.chat,
         max_messages=settings.chat_history_turns,
         char_cap=settings.chat_history_message_char_cap,
+        optional_entity_types=run.optional_entity_types,
     )
 
     if run.status_callback is not None:

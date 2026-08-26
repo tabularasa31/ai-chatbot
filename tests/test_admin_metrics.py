@@ -286,8 +286,8 @@ def test_admin_pii_events_list_and_cleanup(tenant: TestClient, db_session: Sessi
     old_event = PiiEvent(
         tenant_id=tenant_id,
         actor_user_id=user.id,
-        direction=PiiEventDirection.original_view,
-        entity_type="ORIGINAL_VIEW",
+        direction=PiiEventDirection.llm_request,
+        entity_type="EMAIL",
         count=1,
         action_path="/chat/logs/session/demo",
         created_at=datetime.now(timezone.utc) - timedelta(days=400),
@@ -295,10 +295,10 @@ def test_admin_pii_events_list_and_cleanup(tenant: TestClient, db_session: Sessi
     fresh_event = PiiEvent(
         tenant_id=tenant_id,
         actor_user_id=user.id,
-        direction=PiiEventDirection.original_delete,
-        entity_type="ORIGINAL_DELETE",
+        direction=PiiEventDirection.notification_email,
+        entity_type="PHONE",
         count=1,
-        action_path="/chat/logs/session/demo/delete-original",
+        action_path="/escalations/demo/notify",
         created_at=datetime.now(timezone.utc),
     )
     db_session.add_all([old_event, fresh_event])
@@ -307,13 +307,13 @@ def test_admin_pii_events_list_and_cleanup(tenant: TestClient, db_session: Sessi
     fresh_event_id = str(fresh_event.id)
 
     list_resp = tenant.get(
-        "/admin/privacy/pii-events?direction=original_delete",
+        "/admin/privacy/pii-events?direction=notification_email",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_resp.status_code == 200
     items = list_resp.json()["items"]
     assert len(items) == 1
-    assert items[0]["direction"] == "original_delete"
+    assert items[0]["direction"] == "notification_email"
     assert items[0]["actor_user_id"] == str(user.id)
 
     cleanup_resp = tenant.delete(

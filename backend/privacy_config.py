@@ -23,6 +23,11 @@ def public_redaction_config_dict(raw: dict[str, Any] | None) -> dict[str, list[s
     return {"optional_entity_types": list(optional)}
 
 
+def optional_entity_types_from_settings(settings_value: dict[str, Any] | None) -> set[str]:
+    """Optional entity types this tenant wants masked at every egress boundary."""
+    return set(public_redaction_config_dict(settings_value)["optional_entity_types"])
+
+
 def with_redaction_config(settings_value: dict[str, Any] | None, config: dict[str, list[str]]) -> dict[str, Any]:
     payload = dict(settings_value or {})
     payload["redaction"] = {

@@ -78,6 +78,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 | `backend/observability/` | Langfuse trace helpers, Sentry, PostHog metrics formatters |
 | `backend/gap_analyzer/` | Gap Analyzer orchestration (see AGENTS.md for full layout) |
 | `backend/evals/` | Automated answer-quality eval CLI: golden dataset → chat → metrics + Anthropic-as-judge. See `docs/06-developer-test-runbook.md` § Eval pipeline. |
+| `backend/operator/` | Live operator handoff — take / answer / release a chat, with the bot muted while a human holds it. One ingestion seam (`ingest_from_operator`) for every channel |
 | `backend/knowledge/` | Tenant knowledge profile extraction and topics API |
 | `backend/tenant_knowledge/` | FAQ/tenant-profile service helpers |
 | `tests/conftest.py` | Pytest fixtures (DB session, test client) |

@@ -394,6 +394,13 @@ def test_release_returns_the_chat_to_the_bot(
     assert body["operator_state"] == "bot"
     assert body["assigned_operator_id"] is None
     assert body["operator_released_at"] is not None
+
+    # Releasing again is a no-op: a retry must not overwrite the timestamp of
+    # the release that actually happened.
+    again = tenant.post(f"/operator/chats/{chat.id}/release", headers=ws.auth)
+    assert again.status_code == 200, again.text
+    assert again.json()["operator_released_at"] == body["operator_released_at"]
+
     # Released is takeable again — the claim predicate must not stay falsified.
     assert tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth).status_code == 200
 

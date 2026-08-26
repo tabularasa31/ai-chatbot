@@ -109,8 +109,15 @@ def release_chat(db: Session, chat: Chat) -> Chat:
     Shares :func:`backend.chat.handlers.operator.release_to_bot` with the lazy
     release on the chat path, so an explicit "return to bot" and an idle
     timeout leave the row in exactly the same shape.
+
+    A chat already in ``bot`` is left untouched rather than re-stamped: a
+    double click or a retried request must not overwrite the timestamp of the
+    release that actually happened.
     """
     from backend.chat.handlers.operator import release_to_bot
+
+    if chat.operator_state is OperatorState.bot:
+        return chat
 
     release_to_bot(db, chat)
     db.commit()

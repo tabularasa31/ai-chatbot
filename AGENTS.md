@@ -300,7 +300,8 @@ ai-chatbot/
 │   ├── core/                 # db, config, security, limiter, utils, openai_client, …
 │   ├── auth/, admin/, bots/, chat/, chunkers/, contact_sessions/, documents/,
 │   │   embeddings/, escalation/, evals/, faq/, gap_analyzer/, guards/, jobs/,
-│   │   knowledge/, observability/, search/, tenant_knowledge/, tenants/, widget/, email/
+│   │   knowledge/, observability/, operator/, search/, tenant_knowledge/,
+│   │   tenants/, widget/, email/
 │   │   ├── routes.py         # HTTP routes (often APIRouter)
 │   │   ├── service.py        # business logic, DB access
 │   │   └── schemas.py        # Pydantic request/response schemas
@@ -327,6 +328,7 @@ Notable non-obvious modules:
 - `backend/knowledge/` — extracts and serves the tenant's knowledge profile (topics) from indexed documents; dashboard `/knowledge` page.
 - `backend/tenant_knowledge/` — low-level FAQ and `TenantProfile` service helpers used by the chat pipeline.
 - `backend/contact_sessions/` — tracks contact-level session state across escalation flows.
+- `backend/operator/` — live operator handoff: a human takes a chat and answers the visitor directly, with the bot muted (`Chat.operator_state == live`, enforced by `OperatorHandler`, first in `default_router()`). Async-first. Every channel writes through the one `ingest_from_operator(chat, text, actor)` seam, so the inbound e-mail webhook and the later Telegram / Slack bridges are extra callers rather than parallel implementations. Release back to the bot is **lazy** — evaluated on the visitor's next turn against `OPERATOR_RELEASE_IDLE_SECONDS`, never in a background sweep.
 - `backend/evals/` — automated answer-quality eval CLI (`python -m backend.evals run`). Loads YAML golden datasets from `tests/eval/datasets/`, hits the running backend's widget chat endpoint, and scores responses with deterministic checks + Anthropic Claude as LLM-as-judge. Datasets and unit tests in `tests/`; demo bot seeded via `scripts/seed_eval_bot.py`.
 
 Run the API from the repo root with `PYTHONPATH` pointing at the root so `backend.*` imports resolve.

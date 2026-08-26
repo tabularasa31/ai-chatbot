@@ -28,6 +28,7 @@ from backend.models.enums import (
     EscalationTrigger,
     MessageFeedback,
     MessageRole,
+    OperatorState,
 )
 
 
@@ -141,6 +142,33 @@ class Chat(Base):
         default=False,
         server_default="false",
     )
+    # --- Live operator handoff ---
+    # ``live`` mutes the bot for this chat: the visitor's turns are persisted
+    # and no reply is generated. Never means "waiting" — that is derived from
+    # an open ticket with no assignee.
+    # ``length`` is explicit rather than derived from the longest value: a
+    # VARCHAR sized to today's enum is the trap ``escalation_tickets.trigger``
+    # (VARCHAR(15)) already fell into, where adding a value needs a column
+    # alteration. 16 leaves room for a third state to be a Python-only change.
+    operator_state = Column(
+        Enum(OperatorState, native_enum=False, length=16),
+        nullable=False,
+        default=OperatorState.bot,
+        server_default="bot",
+    )
+    # Who claimed the conversation in the console. Advisory, not an exclusive
+    # lock: an inbound e-mail reply from another team member is still accepted
+    # (a shared support inbox has no single claimant). ``SET NULL`` so deleting
+    # a user never deletes conversation history.
+    assigned_operator_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    operator_joined_at = Column(DateTime, nullable=True)
+    operator_released_at = Column(DateTime, nullable=True)
+
     last_response_language = Column(String(16), nullable=True)
     # Last reliable per-turn detected_language in this chat. Observability
     # fallback only: short follow-up turns ("Yes", "ok?") and locked chats
@@ -183,6 +211,18 @@ Index(
     Chat.updated_at,
     postgresql_where=Chat.session_ended_event_at.is_(None) & Chat.ended_at.is_(None),
     sqlite_where=Chat.session_ended_event_at.is_(None) & Chat.ended_at.is_(None),
+)
+
+# Partial index for finding the chats an operator is currently in. Follows the
+# sweeper index above: ``live`` is the rare state, so indexing only those rows
+# keeps it a handful of entries however large ``chats`` grows. Used by the
+# sweeper's live-chat exclusion and, from phase 2, by the console queue.
+Index(
+    "ix_chats_operator_live",
+    Chat.tenant_id,
+    Chat.updated_at,
+    postgresql_where=Chat.operator_state == OperatorState.live,
+    sqlite_where=Chat.operator_state == OperatorState.live,
 )
 
 
@@ -300,6 +340,15 @@ class Message(Base):
         default=MessageFeedback.none,
     )
     ideal_answer = Column(Text, nullable=True)
+    # Set on ``MessageRole.operator`` rows when the author could be resolved to
+    # a tenant user. NULL for an unattributed operator reply (phase 1: an
+    # inbound e-mail from an address that matches no user) and for every
+    # user/assistant row. ``SET NULL`` so removing a user keeps the transcript.
+    operator_user_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

@@ -38,6 +38,28 @@ class SourceSchedule(str, enum.Enum):
 class MessageRole(str, enum.Enum):
     user = "user"
     assistant = "assistant"
+    # A human operator answering the visitor directly, through any
+    # ``OperatorChannel`` (dashboard console, inbound e-mail reply, later
+    # Telegram / Slack). Deliberately distinct from ``assistant``: the bot's
+    # quality metrics, loop detection and FAQ mining must never count a human
+    # reply as a bot reply. Value fits the existing VARCHAR(9) column, so no
+    # column alteration is needed.
+    operator = "operator"
+
+
+class OperatorState(str, enum.Enum):
+    """Who is answering the visitor in a chat.
+
+    Only two values on purpose. "Waiting for an operator" is *derived* — an
+    open ``EscalationTicket`` whose chat has no ``assigned_operator_id`` — and
+    is never stored: a second persisted state would be a second FSM alongside
+    the escalation one, and the two would drift.
+    """
+
+    # The bot answers normally. Default for every chat.
+    bot = "bot"
+    # A human operator has taken over; the bot is fully muted for this chat.
+    live = "live"
 
 
 class MessageFeedback(str, enum.Enum):

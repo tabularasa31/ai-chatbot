@@ -187,11 +187,17 @@ class GapDismissal(Base):
         Enum(GapDismissReason, native_enum=False),
         nullable=False,
     )
+    # ``SET NULL`` rather than ``CASCADE``: deleting the person who dismissed a
+    # gap must not resurrect the gap. Nullable for the same reason — the row
+    # outlives the account that created it.
     dismissed_by = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("users.id"),
-        nullable=False,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
+    # Signature kept when the account is deleted; see ``Message.operator_label``.
+    # A dismissal is a decision someone will later question.
+    dismissed_by_label = Column(String(255), nullable=True)
     dismissed_at = Column(DateTime, nullable=False, default=_utcnow)
 
 

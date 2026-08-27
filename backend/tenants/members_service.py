@@ -25,13 +25,38 @@ So no column was added. The one thing an invite does differently is live
 longer: a colleague may not read their mail within the hour a password reset
 allows.
 
-Removal detaches rather than deletes. ``users.tenant_id`` is
-``ON DELETE SET NULL`` and half the FKs pointing at ``users.id`` are too — one
-(``gap_dismissals.dismissed_by``) has no ``ondelete`` at all, so a hard delete
-of an active member would be refused by the database. Detaching also keeps
-attribution intact: a transcript still names the operator who answered in it.
-The role goes back to ``owner`` on the way out, because the column describes a
-membership, and the next workspace this account joins or creates is its own.
+**Removal deletes the account.** There is deliberately no such thing as a
+verified user with no workspace: membership and account have the same
+lifetime. That is what keeps the invite path honest — every invitee is a new
+account setting a first password from the link, so nobody is ever added to a
+workspace without an act of their own. Being invited again later means a new
+account, with a new id.
+
+Deleting a user would silently erase attribution, because five of the six FKs
+into ``users`` are ``ON DELETE SET NULL``: every message the departing person
+wrote and every stretch they held would lose its author with no trace that
+there had been one, and "who handled this" is asked more often after somebody
+leaves, not less. So the account goes and the signature stays —
+:func:`_stamp_attribution` writes their e-mail onto the history that points at
+them, in the same transaction as the delete.
+
+Stamping happens at deletion rather than at write time. Removal is rare, and
+the delete already forces the database to touch every referencing row to apply
+``SET NULL`` (``messages.operator_user_id`` carries no index, so that pass is
+a scan either way) — the stamp adds a second pass over tables that must be
+walked regardless, and costs nothing on the live reply path, where an operator
+is answering a waiting visitor. The usual objection to stamping late is that a
+partial failure loses exactly what it exists to save; here both the updates
+and the delete are flushed into the single request-scoped transaction and
+committed once, so the pair is atomic. Should it fail, the rollback leaves the
+member in place with their history intact — never an anonymised row.
+
+Not stamped: ``chats.assigned_operator_id`` is live state (who holds this
+conversation *now*), not history, and a departed operator holding nothing is
+the truth. ``pii_events.actor_user_id`` is never written by anything — the
+three surviving directions are all machine egress (``llm_request``,
+``escalation_ticket``, ``notification_email``) and neither writer sets it — so
+it has no attribution to lose.
 """
 
 from __future__ import annotations
@@ -45,7 +70,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth.roles import ROLE_OWNER
 from backend.core.security import hash_password
-from backend.models import User
+from backend.models import GapDismissal, Message, OperatorSession, User
 from backend.models.base import _utcnow
 
 #: How long an invite link stays usable. Longer than the one hour a password
@@ -105,14 +130,17 @@ def invite_member(
     email: str,
     role: str,
     db: Session,
-) -> tuple[User, str | None]:
-    """Add someone to the workspace by e-mail.
+) -> tuple[User, str]:
+    """Add someone to the workspace by e-mail, and return them with a token.
 
-    Returns the member row and the invite token, or ``None`` for the token
-    when the invitee already has a usable password (an existing account with
-    no workspace, e.g. one whose previous workspace was deleted). Such a
-    person is added outright and told so; handing them a set-password link
-    would reset a password they are still using.
+    Three cases only, because an account and its membership have the same
+    lifetime — there is no such thing as an existing account with no
+    workspace waiting to be adopted:
+
+    * already a member here, invite accepted → 409;
+    * belongs to another workspace → 409;
+    * otherwise a brand-new account, unverified, with an unusable password,
+      which becomes a real login only when the invitee follows the link.
 
     Re-inviting someone whose invite is still outstanding re-issues the token
     and applies the new role, so a lost e-mail is fixed by sending it again.
@@ -131,19 +159,11 @@ def invite_member(
         db.refresh(existing)
         return existing, token
 
-    if existing is not None and existing.tenant_id is not None:
+    if existing is not None:
         raise HTTPException(
             status_code=409,
             detail="This e-mail is already registered to another workspace",
         )
-
-    if existing is not None:
-        existing.tenant_id = tenant_id
-        existing.role = role
-        token = None if existing.is_verified else _issue_invite_token(existing)
-        db.commit()
-        db.refresh(existing)
-        return existing, token
 
     member = User(
         email=email,
@@ -194,6 +214,26 @@ def change_member_role(
     return member
 
 
+def _stamp_attribution(member: User, db: Session) -> None:
+    """Write the departing member's signature onto the history pointing at them.
+
+    Must run in the same transaction as the delete that follows — the caller
+    commits once for both. Bulk updates with ``synchronize_session=False``:
+    nothing in this request reads those rows afterwards, and the identity map
+    is discarded with the session.
+    """
+    label = member.email
+    db.query(Message).filter(Message.operator_user_id == member.id).update(
+        {Message.operator_label: label}, synchronize_session=False
+    )
+    db.query(OperatorSession).filter(
+        OperatorSession.operator_user_id == member.id
+    ).update({OperatorSession.operator_label: label}, synchronize_session=False)
+    db.query(GapDismissal).filter(GapDismissal.dismissed_by == member.id).update(
+        {GapDismissal.dismissed_by_label: label}, synchronize_session=False
+    )
+
+
 def remove_member(
     *,
     tenant_id: uuid.UUID,
@@ -201,11 +241,16 @@ def remove_member(
     member_id: uuid.UUID,
     db: Session,
 ) -> None:
-    """Detach a member from the workspace.
+    """Delete a member's account, keeping their signature on the history.
 
     Refuses self-removal (leaving is not the same act as being removed, and an
     owner who removes themselves by accident has no way back in) and refuses
-    the last owner.
+    the last owner — the guard now protects a delete rather than a detach, so
+    what it prevents is a workspace with no owner *and* no way to appoint one.
+
+    The account is gone the moment this commits: any JWT still in the
+    departing member's browser stops resolving to a user, so
+    ``get_current_user`` answers 401 on their very next request.
     """
     member = get_member(tenant_id, member_id, db)
     if member.id == actor_id:
@@ -216,9 +261,6 @@ def remove_member(
         raise HTTPException(
             status_code=400, detail="The last owner cannot be removed"
         )
-    member.tenant_id = None
-    member.role = ROLE_OWNER
-    # An outstanding invite dies with the membership it was issued for.
-    member.reset_password_token = None
-    member.reset_password_expires_at = None
+    _stamp_attribution(member, db)
+    db.delete(member)
     db.commit()

@@ -63,31 +63,24 @@ def _workspace_name(tenant_id: uuid.UUID, db: Session) -> str:
 
 
 def _send_invite_email(
-    *, to: str, workspace: str, inviter_email: str, token: str | None
+    *, to: str, workspace: str, inviter_email: str, token: str
 ) -> None:
     """Tell the invitee they are in, and how to get in.
 
-    Failures are logged, never raised: the membership is already committed,
-    and an owner can re-invite to send another link.
+    Sent on every invite: the account created for them has no usable password,
+    so this link is the only way it ever becomes a login. Failures are logged,
+    never raised — the membership is already committed, and an owner fixes a
+    lost e-mail by inviting again.
     """
-    if token:
-        subject = f"You've been invited to {workspace} on Chat9"
-        body_text = (
-            "Hi,\n\n"
-            f"{inviter_email} invited you to join {workspace} on Chat9.\n\n"
-            "Set your password and get started:\n\n"
-            f"{settings.FRONTEND_URL}/accept-invite?token={token}\n\n"
-            "This link expires in 7 days.\n\n"
-            "If you weren't expecting this, you can ignore this email.\n"
-        )
-    else:
-        subject = f"You've been added to {workspace} on Chat9"
-        body_text = (
-            "Hi,\n\n"
-            f"{inviter_email} added you to {workspace} on Chat9.\n\n"
-            f"Sign in with your existing password: {settings.FRONTEND_URL}/login\n\n"
-            "If you weren't expecting this, you can ignore this email.\n"
-        )
+    subject = f"You've been invited to {workspace} on Chat9"
+    body_text = (
+        "Hi,\n\n"
+        f"{inviter_email} invited you to join {workspace} on Chat9.\n\n"
+        "Set your password and get started:\n\n"
+        f"{settings.FRONTEND_URL}/accept-invite?token={token}\n\n"
+        "This link expires in 7 days.\n\n"
+        "If you weren't expecting this, you can ignore this email.\n"
+    )
     try:
         send_email(to=to, subject=subject, body=body_text)
     except Exception as exc:  # pragma: no cover - transport failure
@@ -116,6 +109,8 @@ def invite_member_route(
 ) -> InviteMemberResponse:
     """Invite someone by e-mail.
 
+    Creates an account that cannot yet be logged into and mails a
+    set-password link — following it is the invitee's own act of joining.
     409 when the address already belongs to a member of this workspace or to
     another workspace. Re-inviting someone whose invite is still outstanding
     succeeds and re-issues the link.
@@ -133,9 +128,7 @@ def invite_member_route(
         inviter_email=current_user.email,
         token=token,
     )
-    return InviteMemberResponse(
-        member=_member_to_response(member), invite_sent=token is not None
-    )
+    return InviteMemberResponse(member=_member_to_response(member))
 
 
 @members_router.patch("/{member_id}", response_model=TenantMemberResponse)
@@ -161,7 +154,11 @@ def remove_member_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    """Remove a member. Not yourself, and not the last owner."""
+    """Delete a member's account. Not yourself, and not the last owner.
+
+    Their history keeps their signature — see
+    ``members_service._stamp_attribution``.
+    """
     remove_member(
         tenant_id=_tenant_id(current_user),
         actor_id=current_user.id,

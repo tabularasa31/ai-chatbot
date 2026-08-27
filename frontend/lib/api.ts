@@ -78,7 +78,6 @@ export type TenantMember = {
 
 export type InviteMemberResponse = {
   member: TenantMember;
-  invite_sent: boolean;
 };
 
 export type CreateTenantResponse = TenantResponse & {

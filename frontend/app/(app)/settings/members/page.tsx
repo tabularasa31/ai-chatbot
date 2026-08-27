@@ -63,9 +63,7 @@ export default function MembersPage() {
       const result = await api.members.invite(address, role);
       setEmail("");
       setNotice(
-        result.invite_sent
-          ? `Invite sent to ${result.member.email}. The link expires in 7 days.`
-          : `${result.member.email} already had a Chat9 account and was added straight away.`
+        `Invite sent to ${result.member.email}. The link expires in 7 days.`
       );
       await mutate();
     } catch (err) {
@@ -89,7 +87,13 @@ export default function MembersPage() {
   }
 
   async function remove(member: TenantMember) {
-    if (!confirm(`Remove ${member.email} from the workspace?`)) return;
+    if (
+      !confirm(
+        `Remove ${member.email}? This deletes their account. Their past replies ` +
+          `stay in the transcripts, signed with their address.`
+      )
+    )
+      return;
     setBusyId(member.id);
     setActionError("");
     try {
@@ -120,7 +124,8 @@ export default function MembersPage() {
         <p className="text-slate-500 text-sm mt-1">
           Invite colleagues to work the inbox with you. An operator answers
           conversations and reads the knowledge base; an owner also holds
-          settings, API keys, and publishing.
+          settings, API keys, and publishing. Removing someone deletes their
+          account; their past replies stay in the transcripts.
         </p>
       </div>
 

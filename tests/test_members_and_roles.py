@@ -18,7 +18,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.auth.service import create_token_for_user
-from backend.models import Chat, User
+from backend.models import (
+    Chat,
+    GapDismissal,
+    Message,
+    MessageRole,
+    OperatorSession,
+    User,
+)
 from backend.models.base import _utcnow
 from tests.conftest import register_and_verify_user
 
@@ -111,7 +118,6 @@ def test_invited_colleague_sets_a_password_and_lands_in_the_same_tenant(
     resp, sent = _invite(tenant, ws, email="ops@acme.example.com")
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["invite_sent"] is True
     assert body["member"]["role"] == "operator"
     assert body["member"]["status"] == "pending"
 
@@ -409,9 +415,14 @@ def test_succession_promote_then_demote_the_original_owner(
     assert tenant.get("/tenants/members", headers=_auth(op_token)).status_code == 200
 
 
-def test_a_removed_member_loses_access(
+def test_removing_a_member_deletes_the_account_and_kills_their_session(
     tenant: TestClient, db_session: Session
 ) -> None:
+    """Membership and account have the same lifetime.
+
+    A live JWT in the departing member's browser must stop working at once —
+    the token is stateless, so what invalidates it is the user row being gone.
+    """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
     op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
     member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
@@ -427,15 +438,139 @@ def test_a_removed_member_loses_access(
     )
 
     db_session.expire_all()
-    member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    assert member.tenant_id is None
-    # Detached, not deleted: the account survives so transcripts keep naming it.
-    assert member.role == "owner"
+    assert (
+        db_session.query(User).filter(User.email == "ops@acme.example.com").first()
+        is None
+    )
 
+    # 401, not 404: there is no longer a principal, never mind a workspace.
     headers = _auth(op_token)
-    assert tenant.post(f"/operator/chats/{chat.id}/take", headers=headers).status_code == 404
-    assert tenant.get("/tenants/members", headers=headers).status_code == 404
-    assert tenant.get("/tenants/me", headers=headers).status_code == 404
+    assert tenant.get("/tenants/me", headers=headers).status_code == 401
+    assert tenant.get("/tenants/members", headers=headers).status_code == 401
+    assert (
+        tenant.post(f"/operator/chats/{chat.id}/take", headers=headers).status_code
+        == 401
+    )
+    # And they cannot log back in with the password they set.
+    assert (
+        tenant.post(
+            "/auth/login",
+            json={"email": "ops@acme.example.com", "password": OTHER_PASSWORD},
+        ).status_code
+        == 401
+    )
+
+    listing = tenant.get("/tenants/members", headers=ws.auth).json()["items"]
+    assert [row["email"] for row in listing] == ["owner@acme.example.com"]
+
+
+def test_removal_keeps_the_signature_on_the_history(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The account goes; who did the work stays.
+
+    ``SET NULL`` on every FK into ``users`` would erase authorship silently,
+    and nothing reads these fields yet (the console is phase 2), so the loss
+    would surface only when someone asked who handled a ticket.
+    """
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    member_id = member.id
+
+    chat = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    reply = Message(
+        chat_id=chat.id,
+        role=MessageRole.operator,
+        content="Refunds take 14 days.",
+        operator_user_id=member_id,
+    )
+    stretch = OperatorSession(
+        tenant_id=ws.tenant_id,
+        chat_id=chat.id,
+        operator_user_id=member_id,
+        joined_at=_utcnow(),
+    )
+    dismissal = GapDismissal(
+        tenant_id=ws.tenant_id,
+        source="mode_a",
+        gap_id=uuid.uuid4(),
+        reason="not_relevant",
+        dismissed_by=member_id,
+    )
+    db_session.add_all([reply, stretch, dismissal])
+    db_session.commit()
+
+    assert (
+        tenant.delete(
+            f"/tenants/members/{member_id}", headers=ws.auth
+        ).status_code
+        == 204
+    )
+
+    db_session.expire_all()
+    reply = db_session.query(Message).filter(Message.id == reply.id).one()
+    stretch = db_session.query(OperatorSession).filter(
+        OperatorSession.id == stretch.id
+    ).one()
+    dismissal = db_session.query(GapDismissal).filter(
+        GapDismissal.id == dismissal.id
+    ).one()
+
+    # The id is gone with the account, the signature is not.
+    assert reply.operator_user_id is None
+    assert reply.operator_label == "ops@acme.example.com"
+    assert reply.content == "Refunds take 14 days."
+    assert stretch.operator_user_id is None
+    assert stretch.operator_label == "ops@acme.example.com"
+    # SET NULL rather than CASCADE: a dismissed gap must not come back just
+    # because the person who dismissed it left.
+    assert dismissal.dismissed_by is None
+    assert dismissal.dismissed_by_label == "ops@acme.example.com"
+
+
+def test_a_reinvited_address_gets_a_new_account_and_old_history_keeps_the_label(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Coming back is a new account, and nothing has to reconcile the two."""
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    first = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    first_id = first.id
+    chat = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    reply = Message(
+        chat_id=chat.id,
+        role=MessageRole.operator,
+        content="Earlier answer.",
+        operator_user_id=first_id,
+    )
+    db_session.add(reply)
+    db_session.commit()
+
+    assert (
+        tenant.delete(f"/tenants/members/{first_id}", headers=ws.auth).status_code
+        == 204
+    )
+    # Invited again: a fresh account, and a fresh set-password link.
+    second_token = _onboard_operator(
+        tenant, db_session, ws, email="ops@acme.example.com"
+    )
+    second = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    assert second.id != first_id
+
+    db_session.expire_all()
+    reply = db_session.query(Message).filter(Message.id == reply.id).one()
+    # Old work stays attributed by label, not re-attributed to the new account.
+    assert reply.operator_user_id is None
+    assert reply.operator_label == "ops@acme.example.com"
+
+    assert tenant.get("/tenants/me", headers=_auth(second_token)).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -505,10 +640,14 @@ def test_cross_tenant_chats_stay_404_for_an_operator(
 def test_a_principal_without_a_workspace_is_refused(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """``users.tenant_id`` is nullable, so this principal really exists.
+    """``users.tenant_id`` is nullable, so the role check must handle NULL.
 
-    Their ``role`` column still reads "owner" — its default — which is
-    exactly why the role check must look at the membership first.
+    Not a state removal produces any more — removal deletes the account — but
+    the column is still nullable and the window between registering and
+    verifying still exists, so the dependency has to answer for it. Their
+    ``role`` column reads "owner" here, its default, which is exactly why the
+    check must look at the membership before the role: reading the role alone
+    would promote a principal who belongs to nothing.
     """
     token = register_and_verify_user(tenant, db_session, email="nobody@acme.example.com")
     orphan = db_session.query(User).filter(User.email == "nobody@acme.example.com").one()

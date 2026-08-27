@@ -43,15 +43,10 @@ class InviteMemberRequest(BaseModel):
 
 
 class InviteMemberResponse(BaseModel):
-    """Result of an invite.
-
-    ``invite_sent`` is False when the invitee already had a usable password
-    (an existing account with no workspace): they were added outright and no
-    set-password link was issued.
-    """
+    """Result of an invite. A set-password link is always sent — the account
+    created for the invitee has no usable password until they follow it."""
 
     member: TenantMemberResponse
-    invite_sent: bool
 
 
 class UpdateMemberRoleRequest(BaseModel):

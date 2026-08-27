@@ -50,11 +50,17 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
 
     private_schema = spec["components"]["schemas"]["ChatTurnResponse"]
     private_properties = private_schema["properties"]
+    # delivered_to_operator is on BOTH contours, unlike source_documents /
+    # tokens_used. It is not a trace field: without it this contour cannot
+    # tell "a human is handling this" (empty text by design) from "the turn
+    # broke", and custom server-side integrations need that as much as the
+    # widget does.
     assert set(private_properties.keys()) == {
         "text",
         "session_id",
         "chat_ended",
         "ticket_number",
+        "delivered_to_operator",
         "source_documents",
         "tokens_used",
     }
@@ -66,6 +72,10 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
     # outcome + failure_state are degraded-state extensions for the
     # LLM-unavailable path; populated only when the OpenAI provider fails
     # mid-turn. Old widgets that ignore them still render `text`.
+    # delivered_to_operator marks the muted path — a human operator holds the
+    # chat, so the visitor's message was recorded and handed on and `text` is
+    # empty by design. Old widgets that ignore it render nothing, which is the
+    # correct behaviour anyway.
     assert set(widget_properties.keys()) == {
         "text",
         "session_id",
@@ -73,6 +83,7 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
         "ticket_number",
         "outcome",
         "failure_state",
+        "delivered_to_operator",
     }
     assert "source_documents" not in widget_properties
     assert "tokens_used" not in widget_properties

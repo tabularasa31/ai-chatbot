@@ -714,7 +714,8 @@ What survives rotation:
 
 - the session itself (`session_id`, widget localStorage, contact/user context)
 - previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and listed in the dashboard Logs with per-conversation dividers)
-- an **active escalation ticket still collecting the user's email** — this is the one case that *blocks* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
+- an **active escalation ticket still collecting the user's email** — one of two cases that *block* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
+- a **live operator handoff** (`operator_state = live`) — the other blocker. Rotating would open a fresh conversation with the bot answering while a human is mid-conversation on the old one, and the operator's thread would be orphaned. A handoff whose operator has really gone is released back to the bot by the sweeper first, so the block only ever holds a conversation someone is actually in.
 
 A conversation the visitor closed (`ended_at` set — they answered "no" to the post-escalation "anything else?" follow-up) also rotates once idle: a visitor returning past the window starts fresh instead of hitting the "session is closed" reply.
 
@@ -750,16 +751,34 @@ The chat session is **not** immediately closed after escalation — the user can
 ### Ticket inbox (dashboard)
 
 Tenants see all their tickets at `/escalations`:
-- Status: `open` / `resolved` / `auto_closed`
+- Status: `open` / `in_progress` / `resolved` / `auto_closed`
 - Trigger type, session link, creation time
 - One-click resolve button → `POST /escalations/{id}/resolve`
 
-Repeat escalations inside one conversation reuse the chat's existing open
-ticket instead of minting a new number; the new turn is threaded under the
-original notification email. A ticket whose conversation has gone idle past
+`in_progress` is set automatically when an operator takes the conversation
+(either entry point — `POST /operator/chats/{id}/take` or simply answering via
+`/messages`), so the inbox distinguishes a request someone is already holding
+from one nobody has looked at. `open` and `in_progress` are both *active*:
+repeat escalations inside one conversation reuse an active ticket instead of
+minting a new number, and the new turn is threaded under the original
+notification email.
+
+A ticket whose conversation has gone idle past
 `CONVERSATION_IDLE_TIMEOUT_SECONDS` is moved to `auto_closed` by the chat
-session sweeper — distinct from `resolved`, which only a tenant sets and which
-means support actually handled the request.
+session sweeper, from either active status — distinct from `resolved`, which
+only a tenant sets and which means support actually handled the request.
+
+**Abandoned claims bounce back.** An operator who claims a conversation and
+never writes a word would otherwise be indistinguishable from one who answered
+and let the conversation end: both age out to `auto_closed`. So a ticket that
+is `in_progress` with *no operator message at all* in its chat, and whose
+claim is older than `OPERATOR_CLAIM_BOUNCE_SECONDS` (12 h), is returned to
+`open` and support is re-notified — once per ticket, since it is an outbound
+email. This clock is deliberately far longer than
+`OPERATOR_RELEASE_IDLE_SECONDS` (15 min, which un-mutes the bot for the
+waiting visitor): firing an email on the shorter one would re-notify every
+time an operator stepped away to check something. An operator who *did* reply
+and then went quiet does not bounce — the visitor got an answer.
 
 ### Widget UX
 

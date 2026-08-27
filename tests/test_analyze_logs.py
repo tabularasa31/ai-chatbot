@@ -244,7 +244,11 @@ async def test_thumbs_down_skip(db_session, client_row, chat_session):
     )
 
     now = datetime.now(timezone.utc)
-    # Create user messages + thumbs-down assistant answers
+    # Create user messages + thumbs-down assistant answers. Timestamps step
+    # *forward* per turn so the rows form a real conversation (q, a, q, a, …).
+    # They used to step backward, which put all three questions before all
+    # three answers — a shape the pairing rule cannot read, and one no chat
+    # produces.
     user_msgs = []
     for i in range(3):
         user_msg = _make_message(
@@ -252,14 +256,14 @@ async def test_thumbs_down_skip(db_session, client_row, chat_session):
             chat_session,
             MessageRole.user,
             f"Bad question {i}",
-            created_at=now - timedelta(seconds=60 + i),
+            created_at=now - timedelta(seconds=60 - i * 10),
         )
         _make_message(
             db_session,
             chat_session,
             MessageRole.assistant,
             f"Bad answer {i}",
-            created_at=now - timedelta(seconds=50 + i),
+            created_at=now - timedelta(seconds=55 - i * 10),
             feedback=MessageFeedback.down,
         )
         user_msgs.append(user_msg)
@@ -494,3 +498,89 @@ async def test_is_running_released_on_failure(db_session, client_row):
     assert state is not None
     assert state.is_running is False, "is_running must be FALSE after job failure"
     assert state.last_run_status == "failed"
+
+
+# ── swallowed visitor turns must not borrow a later answer ────────────────────
+
+
+def test_swallowed_visitor_turns_get_no_answer(db_session, client_row, chat_session):
+    """A live operator handoff breaks "every user row has an assistant row".
+
+    Visitor turns during the handoff are swallowed by ``OperatorHandler`` and
+    persisted with no reply. Unbounded, all of them would pair with the first
+    bot answer *after* the release — an unrelated one — and be fed to OpenAI
+    as FAQ candidates, each carrying that answer's thumbs-up/down. A turn
+    nobody answered must return no answer.
+    """
+    from backend.jobs.analyze_chat_logs import _get_answer_for_message
+
+    now = datetime.now(timezone.utc)
+
+    # An ordinary answered turn before the handoff.
+    answered = _make_message(
+        db_session,
+        chat_session,
+        MessageRole.user,
+        "What is the refund policy?",
+        created_at=now - timedelta(seconds=120),
+    )
+    its_answer = _make_message(
+        db_session,
+        chat_session,
+        MessageRole.assistant,
+        "Refunds are processed in 7 days.",
+        created_at=now - timedelta(seconds=110),
+    )
+    # Three visitor turns while a human held the chat — no assistant rows.
+    swallowed = [
+        _make_message(
+            db_session,
+            chat_session,
+            MessageRole.user,
+            f"during the handoff {i}",
+            created_at=now - timedelta(seconds=90 - i * 5),
+        )
+        for i in range(3)
+    ]
+    _make_message(
+        db_session,
+        chat_session,
+        MessageRole.operator,
+        "Ann here — looking into it.",
+        created_at=now - timedelta(seconds=70),
+    )
+    # Released; the visitor asks something new and the bot answers it.
+    after_release = _make_message(
+        db_session,
+        chat_session,
+        MessageRole.user,
+        "and how do I change my plan?",
+        created_at=now - timedelta(seconds=30),
+    )
+    unrelated_answer = _make_message(
+        db_session,
+        chat_session,
+        MessageRole.assistant,
+        "Open Settings → Plan to change it.",
+        created_at=now - timedelta(seconds=20),
+        feedback=MessageFeedback.up,
+    )
+    db_session.commit()
+
+    # The answered turn still pairs with its own answer.
+    text, _ = _get_answer_for_message(db_session, answered.id, chat_session.id)
+    assert text == its_answer.content
+
+    # None of the swallowed turns borrows the later, unrelated answer — nor
+    # its thumbs-up, which would otherwise be attributed to all three.
+    for msg in swallowed:
+        text, feedback = _get_answer_for_message(db_session, msg.id, chat_session.id)
+        assert text is None
+        assert feedback == MessageFeedback.none
+
+    # The post-release turn keeps its own answer.
+    text, feedback = _get_answer_for_message(
+        db_session, after_release.id, chat_session.id
+    )
+    assert text == unrelated_answer.content
+    assert feedback == MessageFeedback.up

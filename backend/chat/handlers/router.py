@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.handlers.escalation import EscalationStateMachine
 from backend.chat.handlers.greeting import GreetingHandler
+from backend.chat.handlers.operator import OperatorHandler
 from backend.chat.handlers.rag import RagHandler
 
 
@@ -39,11 +40,14 @@ class HandlerRouter:
 def default_router() -> HandlerRouter:
     """Builds the standard handler chain.
 
-    Order matters: GreetingHandler claims the empty bootstrap turn on a brand-new
-    session (the widget-open welcome) and bare social turns with no actionable
-    request, EscalationStateMachine claims any active escalation state or
-    explicit human request, and RagHandler is the catch-all that runs the full
-    RAG pipeline for everything else.
+    Order matters: OperatorHandler comes first because a live human takeover
+    outranks every other state — including a closed chat, so an operator who
+    answers after the visitor said "no, that's all" never lands the turn in
+    EscalationStateMachine's closed-chat path. GreetingHandler then claims the
+    empty bootstrap turn on a brand-new session (the widget-open welcome) and
+    bare social turns with no actionable request, EscalationStateMachine claims
+    any active escalation state or explicit human request, and RagHandler is
+    the catch-all that runs the full RAG pipeline for everything else.
 
     Bare greetings are intercepted by intent, not by length: GreetingHandler
     only claims a typed turn when the human-request classifier reports no
@@ -56,6 +60,7 @@ def default_router() -> HandlerRouter:
     """
     return HandlerRouter(
         [
+            OperatorHandler(),
             GreetingHandler(),
             EscalationStateMachine(),
             RagHandler(),

@@ -30,6 +30,13 @@ class ChatTurnOutcome:
     # No support ticket is created automatically; the widget shows the
     # localized fallback ``text`` plus Try again / Contact support buttons.
     failure_state: LlmFailureState | None = None
+    # True when a human operator holds the chat: the visitor's message was
+    # persisted and handed to the operator, and the bot deliberately produced
+    # nothing. ``text`` is empty on this path, which is why it needs its own
+    # discriminator — the widget's "nothing streamed but there is text" replay
+    # branch must be suppressed exactly as it is for ``failure_state``, or an
+    # empty bubble is rendered.
+    delivered_to_operator: bool = False
     # DB primary key of the Chat row; used by the widget layer to attach
     # ttft_ms to the PostHog chat_first_token_ms event so it can be joined
     # with chat.turn / chat_completed (which use chat_id as a property too).

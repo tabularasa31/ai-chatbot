@@ -707,18 +707,24 @@ def _widget_chat_stream(
         is_llm_unavailable = (
             outcome is not None and outcome.failure_state is not None
         )
+        # A human operator holds this chat: the visitor's message was persisted
+        # and nothing was generated. Same suppression as the degraded path
+        # below, for the same reason — there is no bot reply to replay.
+        delivered_to_operator = (
+            outcome is not None and outcome.delivered_to_operator
+        )
         # Suppress streamed-chunk replay for the degraded path: no chunks
         # were produced (LLM failed before any token), and emitting the
         # fallback as a "chunk" before the "done" event would leak it into
         # any naive client buffer.
-        if not streamed_any and final_text and not is_llm_unavailable:
+        if not streamed_any and final_text and not is_llm_unavailable and not delivered_to_operator:
             # Non-streaming fallback: TTFT = full pipeline latency.
             result_holder["ttft_ms"] = round((time.monotonic() - t_start) * 1000)
             yield f"data: {json.dumps({'type': 'chunk', 'text': final_text})}\n\n"
         # Emit TTFT metric once, after pipeline completes, so chat_id from the
         # outcome is available for joining with chat.turn / chat_completed.
         ttft_ms = result_holder.get("ttft_ms")
-        if ttft_ms is not None and not is_llm_unavailable:
+        if ttft_ms is not None and not is_llm_unavailable and not delivered_to_operator:
             _emit_first_token_metric(
                 sid=sid,
                 ttft_ms=ttft_ms,
@@ -734,6 +740,7 @@ def _widget_chat_stream(
             ticket_number=outcome.ticket_number if outcome is not None else None,
             outcome="llm_unavailable" if is_llm_unavailable else None,
             failure_state=outcome.failure_state if is_llm_unavailable else None,
+            delivered_to_operator=delivered_to_operator,
         )
         done_payload: dict[str, Any] = {
             "type": "done",

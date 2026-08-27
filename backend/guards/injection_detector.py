@@ -512,3 +512,39 @@ def _log_detection(tenant_id: str, result: InjectionDetectionResult) -> None:
         result.level,
         result.method,
     )
+
+
+def monitor_injection_structural(
+    text: str,
+    *,
+    tenant_id: str,
+    chat_id: str,
+) -> Verdict:
+    """Run level 1 only, record the verdict, and gate nothing.
+
+    For paths that never reach the LLM and therefore have nothing to protect,
+    but where a probing visitor still has to be visible in monitoring — today
+    that is the live operator handoff, where the bot is muted and the visitor's
+    message goes straight to a human.
+
+    Level 2 is deliberately not run: it costs an embedding call and its latency
+    on a path that currently has neither, and the point here is observation,
+    not gating. The returned verdict is informational — callers must not block,
+    alter or drop the message on it. A human is reading the text, and a
+    customer pasting an error string that trips a pattern is not an attacker.
+
+    Recording goes through :func:`_finalize_injection`, the same conversion and
+    the same ``kind="injection"`` row shape the gating call site writes, so the
+    two populations stay comparable in the FP/FN dashboard. ``reason``
+    separates the levels (``injection_structural`` vs ``injection_semantic`` vs
+    ``ok``), so nothing is lost by sharing the kind.
+
+    ``chat_id`` is required rather than optional: a verdict with no turn to
+    attach it to would not be recorded at all, and a silently skipped write is
+    the exact failure this function exists to prevent.
+    """
+    start = perf_counter()
+    result = detect_injection_structural(text)
+    if result.detected:
+        _log_detection(tenant_id, result)
+    return _finalize_injection(result, tenant_id, chat_id, start)

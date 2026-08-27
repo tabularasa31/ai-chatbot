@@ -8,7 +8,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
-
 #: The two membership roles. Spelled out rather than referenced from
 #: ``backend.auth.roles`` because ``Literal`` only accepts literals; that
 #: module stays the source of truth for the values themselves.

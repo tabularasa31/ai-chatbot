@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import require_owner, require_verified_user
 from backend.core.db import get_db
 from backend.gap_analyzer.enums import GapRunMode, GapSource
 from backend.gap_analyzer.jobs import start_gap_analyzer_job_runner
@@ -278,7 +278,7 @@ def discard_mode_b_draft(
 def publish_mode_b_draft(
     gap_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PublishResult:
     """Promote the persisted draft into ``tenant_faq``. Requires explicit admin click.

@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session, selectinload
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import require_owner, require_verified_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.documents.schemas import (
@@ -126,7 +126,7 @@ def _quick_answer_response(answer: QuickAnswer) -> QuickAnswerResponse:
 def upload_document_route(
     request: Request,
     file: UploadFile,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentResponse:
     """
@@ -207,7 +207,7 @@ def list_knowledge_sources_route(
 @documents_router.post("/sources/url", response_model=UrlSourceResponse, status_code=201)
 def create_url_source_route(
     payload: UrlSourceCreateRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Create a new URL source and start indexing in the background."""
@@ -290,7 +290,7 @@ def get_url_source_route(
 def update_url_source_route(
     source_id: uuid.UUID,
     payload: UrlSourceUpdateRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Update editable URL source settings."""
@@ -311,7 +311,7 @@ def update_url_source_route(
 @documents_router.post("/sources/{source_id}/refresh", response_model=UrlSourceResponse)
 def refresh_url_source_route(
     source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Trigger an immediate re-crawl for a URL source."""
@@ -331,7 +331,7 @@ def refresh_url_source_route(
 @documents_router.delete("/sources/{source_id}", status_code=204, response_model=None)
 def delete_url_source_route(
     source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Delete a URL source and all indexed pages/chunks associated with it."""
@@ -345,7 +345,7 @@ def delete_url_source_route(
 def delete_source_page_route(
     source_id: uuid.UUID,
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Delete one indexed page from a URL source and exclude it from future refreshes."""
@@ -389,7 +389,7 @@ def get_document_health_route(
 @documents_router.post("/{document_id}/health/run", response_model=DocumentHealthStatusResponse)
 def run_document_health_check_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentHealthStatusResponse:
     """Run health check synchronously and return updated health_status."""
@@ -439,7 +439,7 @@ def get_document_detail_route(
 @documents_router.delete("/{document_id}", status_code=204, response_model=None)
 def delete_document_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """

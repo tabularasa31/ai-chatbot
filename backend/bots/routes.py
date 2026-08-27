@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import require_owner, require_verified_user
 from backend.bots import service as bots_service
 from backend.bots.schemas import (
     BotCreate,
@@ -37,6 +37,14 @@ def _current_user(
 def _tenant_id(
     current_user: Annotated[User, Depends(_current_user)],
 ) -> uuid.UUID:
+    return current_user.tenant_id  # type: ignore[return-value]
+
+
+def _owner_tenant_id(
+    current_user: Annotated[User, Depends(require_owner)],
+) -> uuid.UUID:
+    """Tenant id for bot configuration — how the bot answers is a setting,
+    and settings belong to the owner. Reads stay open to every member."""
     return current_user.tenant_id  # type: ignore[return-value]
 
 
@@ -72,7 +80,7 @@ def list_bots(
 def create_bot(
     body: BotCreate,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(_current_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
     tenant_id: uuid.UUID = current_user.tenant_id  # type: ignore[assignment]
@@ -122,7 +130,7 @@ def get_bot(
 def update_bot(
     bot_id: uuid.UUID,
     body: BotUpdate,
-    tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
+    tenant_id: Annotated[uuid.UUID, Depends(_owner_tenant_id)],
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
     return bots_service.update_bot(bot_id, tenant_id, db, body)
@@ -131,7 +139,7 @@ def update_bot(
 @bots_router.delete("/{bot_id}", status_code=204, response_model=None)
 def delete_bot(
     bot_id: uuid.UUID,
-    tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
+    tenant_id: Annotated[uuid.UUID, Depends(_owner_tenant_id)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     bots_service.delete_bot(bot_id, tenant_id, db)
@@ -151,7 +159,7 @@ def get_bot_disclosure(
 def put_bot_disclosure(
     bot_id: uuid.UUID,
     body: DisclosureConfigUpdate,
-    tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
+    tenant_id: Annotated[uuid.UUID, Depends(_owner_tenant_id)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DisclosureConfigResponse:
     data = bots_service.update_bot_disclosure_config(bot_id, tenant_id, body.level, db)

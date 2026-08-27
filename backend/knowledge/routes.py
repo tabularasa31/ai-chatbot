@@ -8,7 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import require_owner, require_verified_user
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
@@ -108,7 +108,7 @@ def get_knowledge_profile(
 @knowledge_router.patch("/profile", response_model=KnowledgeProfileResponse)
 def patch_knowledge_profile(
     payload: KnowledgeProfilePatchRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeProfileResponse:
     tenant = _get_tenant(db, current_user)
@@ -196,7 +196,7 @@ def list_knowledge_faq(
 @knowledge_router.post("/faq/approve-all", response_model=KnowledgeFaqApproveAllResponse)
 def approve_all_faq(
     background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFaqApproveAllResponse:
     tenant = _get_tenant(db, current_user)
@@ -230,7 +230,7 @@ def approve_all_faq(
 def approve_faq(
     faq_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFaqApproveResponse:
     tenant = _get_tenant(db, current_user)
@@ -253,7 +253,7 @@ def approve_faq(
 @knowledge_router.post("/faq/{faq_id}/reject", response_model=KnowledgeFaqRejectResponse)
 def reject_faq(
     faq_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFaqRejectResponse:
     tenant = _get_tenant(db, current_user)
@@ -268,7 +268,7 @@ def update_faq(
     faq_id: uuid.UUID,
     payload: KnowledgeFaqUpdateRequest,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFaqItemResponse:
     tenant = _get_tenant(db, current_user)
@@ -309,7 +309,7 @@ def update_faq(
 @knowledge_router.delete("/faq/{faq_id}", response_model=KnowledgeFaqRejectResponse)
 def delete_faq(
     faq_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeFaqRejectResponse:
     tenant = _get_tenant(db, current_user)

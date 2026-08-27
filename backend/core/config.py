@@ -236,6 +236,12 @@ class Settings(BaseSettings):
         ge=60,
         description="How long a chat stays muted after the last operator activity before the bot takes it back. Applied lazily, on the visitor's next message: an operator who answered once and closed their laptop would otherwise mute the bot forever. Deliberately not a background sweep — releasing at turn time needs no async localization from a sync thread and cannot race a live turn. The one case it does not cover is a visitor who never writes again, and then there is nobody to un-mute the bot for.",
     )
+    operator_claim_bounce_seconds: int = Field(
+        43200,  # 12 h
+        alias="OPERATOR_CLAIM_BOUNCE_SECONDS",
+        ge=60,
+        description="How long a claimed-but-unanswered escalation ticket stays in_progress before the sweeper bounces it back to open and re-notifies support once. Deliberately a separate, much longer clock than OPERATOR_RELEASE_IDLE_SECONDS: that one faces the visitor sitting in the widget, so the bot must resume within minutes, and the release is cheap and reversible. This one faces the team's inbox and sends an e-mail, so firing it on the release clock would re-notify every time an operator stepped away to read the docs or ask a colleague. Only ever fires for a claim with no operator message at all in the chat; a claim that produced an answer aged out the normal way.",
+    )
     loop_detection_window: int = Field(
         3,
         alias="LOOP_DETECTION_WINDOW",

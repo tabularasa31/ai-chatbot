@@ -894,7 +894,8 @@ def test_take_clears_the_escalation_automaton_but_not_the_ticket(
     _assert_automaton_disarmed(db_session, chat.id)
     surviving = db_session.get(EscalationTicket, ticket.id)
     assert surviving is not None
-    assert surviving.status is EscalationStatus.open
+    # Still there, still attached, and now reading as work someone holds.
+    assert surviving.status is EscalationStatus.in_progress
     assert surviving.chat_id == chat.id
 
 
@@ -920,7 +921,8 @@ def test_operator_message_clears_the_escalation_automaton_but_not_the_ticket(
     _assert_automaton_disarmed(db_session, chat.id)
     surviving = db_session.get(EscalationTicket, ticket.id)
     assert surviving is not None
-    assert surviving.status is EscalationStatus.open
+    # Still there, still attached, and now reading as work someone holds.
+    assert surviving.status is EscalationStatus.in_progress
     assert surviving.chat_id == chat.id
 
 
@@ -1046,3 +1048,417 @@ def test_thanking_the_operator_is_not_read_as_a_pre_confirm_answer(
         .count()
         == 0
     )
+
+
+# --------------------------------------------------------------------------
+# Ticket lifecycle: claim → in_progress → (abandoned) bounce back to open
+# --------------------------------------------------------------------------
+
+
+def _claimed_chat_with_ticket(
+    db: Session,
+    tenant_id: uuid.UUID,
+    *,
+    operator_id: uuid.UUID,
+    claimed_ago: timedelta,
+) -> tuple[Chat, EscalationTicket]:
+    """A chat an operator took ``claimed_ago`` ago, and its in_progress ticket."""
+    claimed_at = _utcnow() - claimed_ago
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        operator_state=OperatorState.live,
+        assigned_operator_id=operator_id,
+        operator_joined_at=claimed_at,
+        created_at=claimed_at,
+        updated_at=claimed_at,
+    )
+    db.add(chat)
+    db.commit()
+    db.refresh(chat)
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number=f"ESC-{uuid.uuid4().hex[:6]}",
+        primary_question="my invoice is wrong",
+        trigger=EscalationTrigger.low_similarity,
+        status=EscalationStatus.in_progress,
+        chat_id=chat.id,
+    )
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return chat, ticket
+
+
+def _bare_tenant(db: Session, name: str):
+    from backend.models import Tenant
+
+    row = Tenant(name=name)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _count_bounce_emails(monkeypatch) -> list[str]:
+    """Record every abandoned-claim notification instead of sending it."""
+    from backend.jobs import chat_session_sweeper
+
+    sent: list[str] = []
+
+    def _fake(ticket, db) -> bool:
+        sent.append(ticket.ticket_number)
+        return True
+
+    monkeypatch.setattr(
+        chat_session_sweeper, "notify_support_of_abandoned_claim", _fake
+    )
+    return sent
+
+
+def test_claiming_a_chat_moves_its_open_ticket_to_in_progress(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """The escalations inbox must show reality.
+
+    Before this, a request an operator was already holding was
+    indistinguishable from one nobody had looked at.
+    """
+    ws = _make_workspace(tenant, db_session, email="prog@example.com", name="Prog Co")
+    chat = _make_chat(db_session, ws.tenant_id)
+    ticket = _open_ticket(db_session, ws.tenant_id, chat)
+
+    resp = tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth)
+
+    assert resp.status_code == 200, resp.text
+    db_session.expire_all()
+    assert (
+        db_session.get(EscalationTicket, ticket.id).status
+        is EscalationStatus.in_progress
+    )
+
+
+def test_claiming_never_drags_a_terminal_ticket_back_into_the_queue(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """``resolved`` and ``auto_closed`` are terminal.
+
+    An operator opening an old conversation to read it must not resurrect its
+    ticket — only a ticket still in ``open`` moves.
+    """
+    ws = _make_workspace(tenant, db_session, email="term@example.com", name="Term Co")
+    for status in (EscalationStatus.resolved, EscalationStatus.auto_closed):
+        chat = _make_chat(db_session, ws.tenant_id)
+        ticket = _open_ticket(db_session, ws.tenant_id, chat)
+        ticket.status = status
+        db_session.add(ticket)
+        db_session.commit()
+
+        assert (
+            tenant.post(
+                f"/operator/chats/{chat.id}/messages",
+                headers=ws.auth,
+                json={"text": "just reading through this"},
+            ).status_code
+            == 200
+        )
+
+        db_session.expire_all()
+        assert db_session.get(EscalationTicket, ticket.id).status is status
+
+
+def test_an_abandoned_claim_bounces_back_to_open_and_notifies_once(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """An operator took the request and never wrote a word.
+
+    Worse than never claiming it: an unclaimed ticket stays visibly ``open``,
+    while a claimed one would age out to ``auto_closed`` indistinguishable
+    from a request that was answered. It goes back in the queue, and support
+    hears about it exactly once however many times the sweeper runs.
+    """
+    from backend.core.config import settings
+    from backend.jobs.chat_session_sweeper import bounce_abandoned_claims
+
+    tenant_row = _bare_tenant(db_session, "Bounce Co")
+    operator = _second_user_in_tenant(
+        db_session, tenant_row.id, email="silent@bounce.example"
+    )
+    sent = _count_bounce_emails(monkeypatch)
+    chat, ticket = _claimed_chat_with_ticket(
+        db_session,
+        tenant_row.id,
+        operator_id=operator.id,
+        claimed_ago=timedelta(seconds=settings.operator_claim_bounce_seconds + 3600),
+    )
+
+    assert bounce_abandoned_claims(db_session) == 1
+
+    db_session.expire_all()
+    bounced = db_session.get(EscalationTicket, ticket.id)
+    assert bounced.status is EscalationStatus.open
+    assert bounced.claim_bounced_at is not None
+    assert sent == [bounced.ticket_number]
+
+    # The cap holds across repeated sweeps — outbound e-mail must not loop.
+    # Re-arm the exact conditions that produced the first bounce so the only
+    # thing standing between this ticket and a second e-mail is the cap.
+    bounced.status = EscalationStatus.in_progress
+    db_session.add(bounced)
+    db_session.commit()
+
+    for _ in range(3):
+        assert bounce_abandoned_claims(db_session) == 0
+    assert sent == [bounced.ticket_number]
+    db_session.expire_all()
+    assert (
+        db_session.get(EscalationTicket, ticket.id).status
+        is EscalationStatus.in_progress
+    )
+
+
+def test_a_claim_that_produced_an_answer_does_not_bounce(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """Answered-then-quiet is the happy path, not an abandoned claim.
+
+    The visitor got something. The ticket ages out on the normal idle rule
+    exactly as it did before the handoff feature existed — and ``in_progress``
+    must not exempt it from that, or phase 0 would invent a new class of
+    ticket that never closes.
+    """
+    from backend.core.config import settings
+    from backend.jobs.chat_session_sweeper import (
+        auto_close_stale_tickets,
+        bounce_abandoned_claims,
+    )
+
+    tenant_row = _bare_tenant(db_session, "Answered Co")
+    operator = _second_user_in_tenant(
+        db_session, tenant_row.id, email="replied@answered.example"
+    )
+    sent = _count_bounce_emails(monkeypatch)
+    chat, ticket = _claimed_chat_with_ticket(
+        db_session,
+        tenant_row.id,
+        operator_id=operator.id,
+        claimed_ago=timedelta(
+            seconds=settings.conversation_idle_timeout_seconds + 3600
+        ),
+    )
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.operator,
+            content="Fixed — the invoice has been reissued.",
+            operator_user_id=operator.id,
+            created_at=chat.operator_joined_at + timedelta(minutes=2),
+        )
+    )
+    db_session.commit()
+    # Released long ago; only the ticket status still carries the claim. Done
+    # as a bulk UPDATE pinning updated_at, because an ORM write here would
+    # fire the column's onupdate and make the chat look active again — which
+    # is the very thing auto_close_stale_tickets keys on.
+    db_session.query(Chat).filter(Chat.id == chat.id).update(
+        {
+            "operator_state": OperatorState.bot,
+            "assigned_operator_id": None,
+            "updated_at": chat.updated_at,
+        },
+        synchronize_session=False,
+    )
+    db_session.commit()
+
+    assert bounce_abandoned_claims(db_session) == 0
+    assert sent == []
+
+    assert auto_close_stale_tickets(db_session) == 1
+    db_session.expire_all()
+    assert (
+        db_session.get(EscalationTicket, ticket.id).status
+        is EscalationStatus.auto_closed
+    )
+
+
+def test_a_fresh_claim_is_not_bounced_on_the_release_clock(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """The two clocks must not be collapsed into one.
+
+    A chat past the 15-minute release window is handed back to the bot, but
+    its ticket must stay ``in_progress``: firing the e-mail on that clock
+    would re-notify support every time an operator stepped away to read the
+    docs or ask a colleague.
+    """
+    from backend.core.config import settings
+    from backend.jobs.chat_session_sweeper import (
+        bounce_abandoned_claims,
+        release_idle_operator_chats,
+    )
+
+    tenant_row = _bare_tenant(db_session, "Two Clocks")
+    operator = _second_user_in_tenant(
+        db_session, tenant_row.id, email="stepped@clocks.example"
+    )
+    sent = _count_bounce_emails(monkeypatch)
+    assert (
+        settings.operator_release_idle_seconds
+        < settings.operator_claim_bounce_seconds
+    )
+    chat, ticket = _claimed_chat_with_ticket(
+        db_session,
+        tenant_row.id,
+        operator_id=operator.id,
+        claimed_ago=timedelta(seconds=settings.operator_release_idle_seconds + 600),
+    )
+
+    assert release_idle_operator_chats(db_session) == 1
+    assert bounce_abandoned_claims(db_session) == 0
+    assert sent == []
+
+    db_session.expire_all()
+    assert db_session.get(Chat, chat.id).operator_state is OperatorState.bot
+    assert (
+        db_session.get(EscalationTicket, ticket.id).status
+        is EscalationStatus.in_progress
+    )
+
+
+# --------------------------------------------------------------------------
+# Downstream consumers of a handoff
+# --------------------------------------------------------------------------
+
+
+def test_the_api_contour_can_tell_a_handoff_from_a_broken_turn(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """``POST /chat`` needs the discriminator too, not just the widget.
+
+    A muted chat answers ``{"text": ""}``, which a custom server-side
+    integration cannot otherwise distinguish from a turn that failed.
+    """
+    ws = _make_workspace(tenant, db_session, email="disc@example.com", name="Disc Co")
+    _seed_knowledge(db_session, ws.tenant_id)
+    _arm_openai(mock_openai_client, answer="Refunds take 14 days.")
+    live = _make_chat(
+        db_session,
+        ws.tenant_id,
+        operator_state=OperatorState.live,
+        operator_joined_at=_utcnow(),
+    )
+    ordinary = _make_chat(db_session, ws.tenant_id)
+
+    muted = tenant.post(
+        "/chat",
+        headers={"X-API-Key": ws.api_key},
+        json={"question": "any update?", "session_id": str(live.session_id)},
+    )
+    answered = tenant.post(
+        "/chat",
+        headers={"X-API-Key": ws.api_key},
+        json={"question": "when do refunds land?", "session_id": str(ordinary.session_id)},
+    )
+
+    assert muted.status_code == 200, muted.text
+    assert muted.json()["text"] == ""
+    assert muted.json()["delivered_to_operator"] is True
+
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["text"] != ""
+    assert answered.json()["delivered_to_operator"] is False
+
+
+def test_an_operator_reply_does_not_count_as_a_visitor_turn(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """``conversation_turns`` means *user* turns.
+
+    Counting the operator's messages into it would inflate engagement
+    precisely on the conversations a human had to step into.
+    """
+    from backend.contact_sessions.service import get_active_user_session
+
+    ws = _make_workspace(tenant, db_session, email="turns@example.com", name="Turns Co")
+    contact_id = f"contact-{uuid.uuid4().hex[:8]}"
+    chat = _make_chat(db_session, ws.tenant_id)
+    chat.user_context = {"user_id": contact_id}
+    db_session.add(chat)
+    db_session.commit()
+
+    for text in ("First reply.", "And one more thing."):
+        assert (
+            tenant.post(
+                f"/operator/chats/{chat.id}/messages",
+                headers=ws.auth,
+                json={"text": text},
+            ).status_code
+            == 200
+        )
+
+    db_session.expire_all()
+    session_row = get_active_user_session(
+        db_session, tenant_id=ws.tenant_id, contact_id=contact_id
+    )
+    # The session exists — an operator reply is still activity on it — but no
+    # visitor turn was taken, so the counter has not moved.
+    assert session_row is not None
+    assert session_row.conversation_turns == 0
+
+
+def test_the_inbox_preview_shows_an_operator_reply(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A chat whose latest reply came from a human showed the bot's older one.
+
+    ``message_count`` already included the operator rows, so the row read as a
+    conversation that had moved on next to a preview that had not.
+    """
+    from backend.chat.history_service import list_chat_sessions
+
+    ws = _make_workspace(tenant, db_session, email="inbox@example.com", name="Inbox Co")
+    chat = _make_chat(db_session, ws.tenant_id)
+    base = _utcnow() - timedelta(minutes=10)
+    db_session.add_all(
+        [
+            Message(
+                chat_id=chat.id,
+                role=MessageRole.user,
+                content="my invoice is wrong",
+                created_at=base,
+            ),
+            Message(
+                chat_id=chat.id,
+                role=MessageRole.assistant,
+                content="I could not find that in the documentation.",
+                created_at=base + timedelta(seconds=10),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    assert (
+        tenant.post(
+            f"/operator/chats/{chat.id}/messages",
+            headers=ws.auth,
+            json={"text": "Ann here — reissued, you should see it now."},
+        ).status_code
+        == 200
+    )
+
+    db_session.expire_all()
+    row = next(
+        s for s in list_chat_sessions(ws.tenant_id, db_session)
+        if s.session_id == chat.session_id
+    )
+    assert row.message_count == 3
+    assert row.last_answer_preview == "Ann here — reissued, you should see it now."

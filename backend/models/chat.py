@@ -215,8 +215,14 @@ Index(
 
 # Partial index for finding the chats an operator is currently in. Follows the
 # sweeper index above: ``live`` is the rare state, so indexing only those rows
-# keeps it a handful of entries however large ``chats`` grows. Used by the
-# sweeper's live-chat exclusion and, from phase 2, by the console queue.
+# keeps it a handful of entries however large ``chats`` grows.
+#
+# It serves queries that *look for* live chats: the sweeper's
+# ``release_idle_operator_chats`` pass, and from phase 2 the console queue. It
+# does NOT serve the live-chat exclusions in the other two sweeper passes —
+# those are anti-predicates (``operator_state != 'live'``), and no partial
+# index built ``WHERE operator_state = 'live'`` can answer a query asking for
+# the complement of its own predicate.
 Index(
     "ix_chats_operator_live",
     Chat.tenant_id,
@@ -288,6 +294,14 @@ class EscalationTicket(Base):
     notification_message_id = Column(String(998), nullable=True)
     last_notified_at = Column(DateTime, nullable=True)
     last_notified_message_id = Column(PG_UUID(as_uuid=True), nullable=True)
+
+    # When the sweeper bounced an abandoned claim back to ``open`` (an operator
+    # took the chat and never wrote a word). Doubles as the once-per-ticket cap
+    # on the re-notification: it is an outbound e-mail, so a second claim that
+    # is abandoned again must not send a second one. A timestamp rather than a
+    # flag so the inbox and any later triage can see *when* the request was
+    # dropped, not merely that it was.
+    claim_bounced_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(

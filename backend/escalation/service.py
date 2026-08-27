@@ -766,6 +766,26 @@ def _build_escalation_email_headers(
 # short messages while typing out their context.
 _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS = 60
 
+# Statuses that mean "this request is still live work". ``in_progress`` joined
+# ``open`` when the operator handoff started claiming tickets: a request a
+# human is holding is not finished, and every rule that used to ask "is this
+# ticket open?" means "is it still live work?" — reuse instead of minting a
+# second ESC number, thread follow-up turns onto it, age it out when the
+# conversation is over. Only ``resolved`` and ``auto_closed`` are terminal.
+ACTIVE_TICKET_STATUSES = (EscalationStatus.open, EscalationStatus.in_progress)
+
+
+def _support_inbox_recipient(tenant: Tenant, db: Session) -> str | None:
+    """Where this tenant's support notifications go, or ``None``.
+
+    The configured L2 address if there is one, else the workspace owner.
+    """
+    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
+    support_config = public_support_config_dict(
+        tenant.settings if isinstance(tenant.settings, dict) else None
+    )
+    return support_config["l2_email"] or (user.email if user and user.email else None)
+
 
 def _send_email_off_loop(*args: Any, **kwargs: Any) -> str | None:
     """Send the notification without blocking the event loop.
@@ -1089,7 +1109,7 @@ def _notify_tenant_ticket_update(
     ``extra_user_turn`` lets the caller include the current turn that has not
     yet been persisted (escalation handlers run before ``_persist_turn``).
     """
-    if ticket.status != EscalationStatus.open:
+    if ticket.status not in ACTIVE_TICKET_STATUSES:
         return False
     if not _is_valid_email(ticket.user_email):
         return False
@@ -1107,11 +1127,7 @@ def _notify_tenant_ticket_update(
     tenant = ticket.tenant
     if tenant is None:
         return False
-    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
-    support_config = public_support_config_dict(
-        tenant.settings if isinstance(tenant.settings, dict) else None
-    )
-    recipient = support_config["l2_email"] or (user.email if user and user.email else None)
+    recipient = _support_inbox_recipient(tenant, db)
     if not recipient:
         return False
 
@@ -1483,6 +1499,123 @@ def raise_ticket_priority_if_higher(
     db.add(ticket)
 
 
+def mark_ticket_in_progress(db: Session, *, chat_id: uuid.UUID) -> EscalationTicket | None:
+    """Move this chat's open ticket to ``in_progress``. Returns it, or ``None``.
+
+    Called from both operator entry points — the explicit ``/take`` and the
+    implicit claim inside ``ingest_from_operator`` — because both mean the
+    same thing: a person has picked this request up. The escalations inbox
+    then shows reality instead of leaving a request someone is already
+    holding indistinguishable from one nobody has looked at.
+
+    Only a ticket in ``open`` moves. A ``resolved`` or ``auto_closed`` ticket
+    is terminal and must not be dragged back into the queue by an operator
+    opening the conversation to read it; a ticket already ``in_progress`` is
+    left as it is, so a colleague joining a shared thread does not restamp
+    anything.
+
+    The claim time itself is not recorded here — ``chats.operator_joined_at``
+    already holds it, and one clock is better than two that can disagree.
+    """
+    ticket = (
+        db.query(EscalationTicket)
+        .filter(
+            EscalationTicket.chat_id == chat_id,
+            EscalationTicket.status == EscalationStatus.open,
+        )
+        .order_by(EscalationTicket.created_at.desc())
+        .first()
+    )
+    if ticket is None:
+        return None
+    ticket.status = EscalationStatus.in_progress
+    db.add(ticket)
+    return ticket
+
+
+def notify_support_of_abandoned_claim(ticket: EscalationTicket, db: Session) -> bool:
+    """Tell support a claimed request was dropped. Returns whether it sent.
+
+    An operator claimed the conversation and never wrote a word. Without this
+    the request is *worse off* than if nobody had touched it: an unclaimed
+    ticket at least sits visibly ``open`` in the inbox, whereas a claimed one
+    ages out to ``auto_closed`` on the normal idle path, indistinguishable
+    from a request that was answered and ended naturally.
+
+    Threaded under the original notify's Message-ID so it lands in the same
+    support conversation, and deliberately given its own body rather than
+    reusing ``_format_update_email_body`` — that one opens with "The user
+    added more context to their request", which here would be a plain
+    falsehood. Everything else (recipient resolution, header construction,
+    the off-loop Brevo send, failure reporting) is the shared machinery.
+
+    Caller is responsible for the once-per-ticket cap (``claim_bounced_at``)
+    and for putting the status back to ``open`` first.
+    """
+    tenant = ticket.tenant
+    if tenant is None:
+        return False
+    if not _is_valid_email(ticket.user_email):
+        return False
+    if ticket.notification_message_id is None:
+        # No anchor — the initial notify never landed. A standalone e-mail
+        # here would split the conversation in the support inbox, and the
+        # request was never announced in the first place, so re-run the
+        # initial notify instead: it carries the full transcript and restores
+        # the anchor for anything later.
+        return _notify_tenant_new_ticket(
+            tenant, ticket, db, latest_user_text=_safe_ticket_question(ticket)
+        )
+    recipient = _support_inbox_recipient(tenant, db)
+    if not recipient:
+        return False
+
+    headers = _build_escalation_email_headers(ticket, chat=ticket.chat)
+    headers["In-Reply-To"] = ticket.notification_message_id
+    headers["References"] = ticket.notification_message_id
+    question_preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
+    subject = f"Re: [{ticket.ticket_number}] {question_preview}".rstrip(" —-")
+    # User-safe: support replies by hitting Reply, and their mail client
+    # quotes this body back to the end user. Nothing here says anything the
+    # end user should not read.
+    body = "\n".join(
+        [
+            "Hello,",
+            "",
+            "This request was picked up but has not been answered, so it is "
+            "back in the queue and still needs a reply.",
+            "",
+            f"Ticket: {ticket.ticket_number}",
+            "",
+            "The original request and full transcript are in the message this "
+            "is a reply to.",
+        ]
+    )
+
+    try:
+        send_result = _send_email_off_loop(
+            recipient,
+            subject,
+            body,
+            reply_to=ticket.user_email,
+            extra_headers=headers,
+        )
+    except Exception as e:
+        logger.warning(
+            "Abandoned-claim email failed (ticket=%s): %s", ticket.ticket_number, e
+        )
+        _report_escalation_email_failure(
+            tenant, ticket, reason="send_exception", stage="claim_bounce", error=e
+        )
+        return False
+    if send_result is None:
+        _report_escalation_email_failure(
+            tenant, ticket, reason="brevo_refused", stage="claim_bounce"
+        )
+        return False
+    return True
+
+
 def get_open_escalation_ticket_for_chat(
     chat_id: uuid.UUID, db: Session
 ) -> EscalationTicket | None:
@@ -1495,14 +1628,17 @@ def get_open_escalation_ticket_for_chat(
     carries the full transcript, and each later turn is threaded under it by
     :func:`_notify_tenant_ticket_update`.
 
-    Scoped to ``status == open`` so a chat that continues after support closed
-    the ticket can still raise a genuinely new one.
+    Scoped to the *active* statuses so a chat that continues after support
+    closed the ticket can still raise a genuinely new one. ``in_progress``
+    counts as active: an operator holding the request is the strongest reason
+    of all to reuse its ticket rather than mint a second ESC number behind
+    their back.
     """
     return (
         db.query(EscalationTicket)
         .filter(
             EscalationTicket.chat_id == chat_id,
-            EscalationTicket.status == EscalationStatus.open,
+            EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
         )
         .order_by(EscalationTicket.created_at.desc())
         .first()

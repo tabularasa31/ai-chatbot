@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from backend.escalation.service import mark_ticket_in_progress
 from backend.models import Chat, Message, OperatorState
 from backend.models.base import _utcnow
 
@@ -139,6 +140,10 @@ def claim_chat(db: Session, *, chat_id: uuid.UUID, tenant_id: uuid.UUID, user_id
             synchronize_session=False,
         )
     )
+    if updated:
+        # Same commit as the claim: the inbox must never show a chat as taken
+        # while its ticket still reads ``open``, in either direction.
+        mark_ticket_in_progress(db, chat_id=chat_id)
     db.commit()
     return bool(updated)
 
@@ -176,7 +181,7 @@ def ingest_from_operator(
 ) -> OperatorIngestResult:
     """Record a human reply in the chat thread and put the chat in ``live``.
 
-    Three side effects beyond persisting the message, all of them consequences
+    Four side effects beyond persisting the message, all of them consequences
     of "a person has just answered this visitor":
 
     * The chat goes ``live``, muting the bot for subsequent visitor turns.
@@ -188,7 +193,10 @@ def ingest_from_operator(
       session resume would skip the chat entirely (the widget only reattaches
       to chats with ``ended_at IS NULL``).
     * The escalation FSM flags are cleared — see :func:`taken_over_values`
-      for why, and for why the ticket row itself is not touched.
+      for why, and for why the ticket *row* is not deleted or resolved.
+    * The chat's open escalation ticket moves to ``in_progress``, so the
+      escalations inbox stops showing a request someone is already holding as
+      untouched. Status only; the ticket is otherwise left alone.
     """
     from backend.chat.service import _persist_operator_message
 
@@ -215,6 +223,12 @@ def ingest_from_operator(
         chat.operator_joined_at = _utcnow()
         chat.operator_released_at = None
     db.add(chat)
+    # Answering *is* taking, so this runs on every ingest, not only when the
+    # assignment changed hands: an unattributed reply (``actor.user_id is
+    # None`` — phase 1's inbound e-mail from an address matching no tenant
+    # user) claims nothing but is still a human working the request. The call
+    # only ever moves a ticket out of ``open``, so repeating it is a no-op.
+    mark_ticket_in_progress(db, chat_id=chat.id)
 
     message = _persist_operator_message(
         db,

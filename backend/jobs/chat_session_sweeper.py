@@ -1,19 +1,24 @@
 """Background job: report inactive chat sessions, and age out stale tickets.
 
-Three passes per tick, in this order:
+Four passes per tick, in this order:
 
 1. :func:`release_idle_operator_chats` hands back a chat whose human operator
    went silent past ``OPERATOR_RELEASE_IDLE_SECONDS``. It runs first because
-   the other two skip ``live`` chats entirely, so a chat pinned by a vanished
+   passes 2 and 4 skip ``live`` chats entirely, so a chat pinned by a vanished
    operator would otherwise be invisible to both forever.
 2. :func:`sweep_inactive_chats` emits ``chat_session_ended``.
-3. :func:`auto_close_stale_tickets` closes escalation tickets whose
+3. :func:`bounce_abandoned_claims` returns a ticket an operator claimed and
+   never answered to ``open``, re-notifying support once. Ahead of pass 4 so
+   the bounced ticket is ``open`` again before that pass looks at it.
+4. :func:`auto_close_stale_tickets` closes escalation tickets whose
    conversation is over (see its docstring for why tickets never leave
    ``open`` otherwise).
 
-Passes 2 and 3 share the ``conversation_idle_timeout_seconds`` window; pass 1
-uses the operator window, which is much shorter and measured on operator
-activity rather than visitor activity.
+Passes 2 and 4 share the ``conversation_idle_timeout_seconds`` window. Pass 1
+uses ``OPERATOR_RELEASE_IDLE_SECONDS`` and pass 3
+``OPERATOR_CLAIM_BOUNCE_SECONDS``, both measured on operator activity rather
+than visitor activity — and deliberately far apart from each other, because
+one faces the waiting visitor and the other the team's inbox.
 
 
 Widget chats are stateless per-turn HTTP with no explicit "close" signal, so
@@ -43,8 +48,19 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
 from backend.core.config import settings
+from backend.escalation.service import (
+    ACTIVE_TICKET_STATUSES,
+    notify_support_of_abandoned_claim,
+)
 from backend.jobs._periodic import LockSpec, PeriodicJob
-from backend.models import Chat, EscalationStatus, EscalationTicket, Message, OperatorState
+from backend.models import (
+    Chat,
+    EscalationStatus,
+    EscalationTicket,
+    Message,
+    MessageRole,
+    OperatorState,
+)
 from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
@@ -236,6 +252,101 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
     return count
 
 
+def bounce_abandoned_claims(db: Session, *, now: datetime | None = None) -> int:
+    """Return dropped claims to the queue. Returns the count bounced.
+
+    An operator claimed a conversation and never wrote a word. Nothing else in
+    phase 0 can tell that apart from "an operator answered and the
+    conversation ended naturally": both chats go quiet, and both tickets age
+    out to ``auto_closed`` on the normal idle path. That is the worst outcome
+    the feature can produce — a visitor asked for a human, a human took the
+    request, said nothing, and the system quietly cleared it from the queue.
+    An unclaimed ticket would at least have stayed visibly ``open``.
+
+    The distinguishing signal is whether any ``MessageRole.operator`` message
+    exists in the chat, which needs no schema of its own. No message at all
+    means the claim produced nothing.
+
+    Two clocks, deliberately not collapsed into one:
+
+    * The chat release (``release_idle_operator_chats``, 15 min) faces the
+      *visitor*, who is sitting in the widget waiting, so the bot must resume
+      quickly. It is cheap and reversible — an operator who comes back and
+      sends a message re-claims the chat through ``ingest_from_operator``.
+    * This bounce (``OPERATOR_CLAIM_BOUNCE_SECONDS``, 12 h) faces the *team's
+      inbox* and sends an e-mail. On the release clock it would re-notify
+      every time an operator stepped away to read the docs or ask a colleague.
+
+    The re-notification is capped at once per ticket via ``claim_bounced_at``.
+    Outbound e-mail must not be able to loop, and the status transition alone
+    would not cap it: a ticket bounced back to ``open`` can be claimed and
+    abandoned again.
+
+    **Known limitation, not a bug to fix here:** an operator who replies "let
+    me check" and then disappears for three days does not bounce, because the
+    zero-message test cannot see it. Deciding whether a reply was a
+    *meaningful answer* is fuzzy, and guessing at it in v1 would trade a
+    precise rule for an unpredictable one.
+
+    Runs before :func:`auto_close_stale_tickets` so a bounced ticket is back
+    in ``open`` before that pass considers it. With the default windows (12 h
+    here against a 7-day conversation window) the two cannot collide anyway.
+    """
+    reference = now or _utcnow()
+    cutoff = reference - timedelta(seconds=settings.operator_claim_bounce_seconds)
+    answered_exists = (
+        select(Message.id)
+        .where(
+            Message.chat_id == Chat.id,
+            Message.role == MessageRole.operator,
+        )
+        .exists()
+    )
+    abandoned = (
+        db.query(EscalationTicket)
+        .join(Chat, EscalationTicket.chat_id == Chat.id)
+        .filter(
+            EscalationTicket.status == EscalationStatus.in_progress,
+            EscalationTicket.claim_bounced_at.is_(None),
+            Chat.operator_joined_at.isnot(None),
+            Chat.operator_joined_at < cutoff,
+            ~answered_exists,
+        )
+        .order_by(EscalationTicket.created_at)
+        .limit(_MAX_SESSIONS_PER_SWEEP)
+        .all()
+    )
+    count = 0
+    for ticket in abandoned:
+        try:
+            ticket.status = EscalationStatus.open
+            # Naive UTC — the column is ``DateTime`` with no timezone; writing
+            # an aware value crashes asyncpg. See ``models/base._utcnow``.
+            ticket.claim_bounced_at = _utcnow()
+            db.add(ticket)
+            # Commit the cap *before* sending: a send that succeeds and then
+            # fails to commit would re-notify on the next tick. Committing
+            # first can at worst lose one e-mail, which is the better failure.
+            db.commit()
+        except Exception:
+            logger.exception(
+                "chat_session_sweeper failed to bounce ticket %s", ticket.id
+            )
+            db.rollback()
+            continue
+        count += 1
+        try:
+            notify_support_of_abandoned_claim(ticket, db)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "chat_session_sweeper failed to notify on bounced ticket %s",
+                ticket.id,
+            )
+            db.rollback()
+    return count
+
+
 def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int:
     """Close open tickets whose conversation is over. Returns the count closed.
 
@@ -256,6 +367,15 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
     Tickets with no ``chat_id`` (direct API creations) are left alone — there is
     no conversation to age them against.
 
+    Both *active* statuses age out, ``in_progress`` as well as ``open``. A
+    claimed ticket is not permanently exempt: an operator answered and the
+    conversation then ended naturally is the ordinary happy path, and leaving
+    it ``in_progress`` forever would recreate the never-closing backlog this
+    pass exists to drain, one status over. A claim that produced *no* answer
+    is a different animal and is handled by
+    :func:`bounce_abandoned_claims`, which runs first and puts such a ticket
+    back to ``open`` before this pass sees it.
+
     Chats a human operator currently holds (``OperatorState.live``) are skipped
     outright, regardless of how idle they look. Idleness is measured on
     ``chats.updated_at``, which only a visitor turn refreshes — an operator
@@ -269,7 +389,7 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
         db.query(EscalationTicket)
         .join(Chat, EscalationTicket.chat_id == Chat.id)
         .filter(
-            EscalationTicket.status == EscalationStatus.open,
+            EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
             Chat.updated_at < cutoff,
             Chat.operator_state != OperatorState.live,
         )
@@ -312,6 +432,11 @@ def _sweep_once() -> None:
         count = sweep_inactive_chats(db)
         if count:
             logger.info("chat_session_sweeper: reported %d inactive sessions", count)
+        bounced = bounce_abandoned_claims(db)
+        if bounced:
+            logger.info(
+                "chat_session_sweeper: bounced %d abandoned claims", bounced
+            )
         closed = auto_close_stale_tickets(db)
         if closed:
             logger.info("chat_session_sweeper: auto-closed %d stale tickets", closed)

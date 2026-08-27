@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.crypto import encrypt_value
 from backend.core.rls import set_tenant_context
-from backend.models import Bot, Tenant, TenantProfile, User
+from backend.models import Bot, Tenant, TenantPlan, TenantProfile, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.support_config import public_support_config_dict, with_support_config
 from backend.tenants.api_keys_service import (
@@ -206,6 +206,53 @@ def update_support_settings_for_user(
     db.refresh(tenant)
     invalidate_tenant(tenant.id)
     return get_support_settings_for_user(user_id, db)
+
+
+def get_plan_for_user(user_id: uuid.UUID, db: Session) -> str:
+    """Return the tenant's current tier. Readable by any member.
+
+    A tenant row written before the column existed, or one whose value is
+    somehow unrecognised, reads as ``free`` — the tier that is exactly
+    today's behaviour, so an unreadable value can never hand out an
+    entitlement nobody asked for.
+    """
+    tenant = get_tenant_by_user(user_id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return _normalized_plan(tenant)
+
+
+def set_plan_for_user(user_id: uuid.UUID, plan: str, db: Session) -> str:
+    """Switch the tenant's tier. Owner-only.
+
+    Nothing is charged and nothing is recorded as charged: this flips one
+    column. The role model that would let this narrow to a dedicated
+    permission is landing separately, so the guard here is the existing owner
+    check.
+    """
+    tenant = get_tenant_by_user(user_id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or getattr(user, "role", None) != "owner":
+        raise HTTPException(status_code=403, detail="Owner role required")
+    try:
+        target = TenantPlan(plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Unknown plan") from exc
+    tenant.plan = target.value
+    db.commit()
+    db.refresh(tenant)
+    invalidate_tenant(tenant.id)
+    return _normalized_plan(tenant)
+
+
+def _normalized_plan(tenant: Tenant) -> str:
+    raw = getattr(tenant, "plan", None)
+    try:
+        return TenantPlan(raw).value
+    except ValueError:
+        return TenantPlan.free.value
 
 
 def update_tenant(

@@ -421,8 +421,8 @@ def _sweep_once() -> None:
 
     db = SessionLocal()
     try:
-        # First: a chat still held by a vanished operator is invisible to both
-        # passes below (they exclude ``live``). Releasing it here makes it
+        # First: a chat still held by a vanished operator is invisible to the
+        # two passes that exclude ``live``. Releasing it here makes it
         # eligible for them in this same tick.
         released = release_idle_operator_chats(db)
         if released:

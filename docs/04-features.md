@@ -780,6 +780,48 @@ waiting visitor): firing an email on the shorter one would re-notify every
 time an operator stepped away to check something. An operator who *did* reply
 and then went quiet does not bounce — the visitor got an answer.
 
+### Operator handoff analytics
+
+`chat_session_ended` describes a whole chat, from `created_at`, and is emitted
+**at most once**. It cannot also describe the stretch a human served: an
+operator reopens a chat that was already reported as ended, so a second
+emission would restate the first event with the idle wait folded in — session
+counts would double and average duration would inflate. The operator-served
+stretch therefore gets its own record.
+
+**`operator_sessions`** — one row per stretch of a conversation served by a
+human. Opened when the chat goes `live` (either entry point), stamped with the
+first operator message, and closed by whichever path hands the chat back. A
+row rather than columns on `chats` because a stretch is repeatable: an
+operator releases, the bot answers, an operator takes over again — two
+stretches in one chat, each with its own clock and its own handler.
+
+Closing emits **`operator_session_ended`**:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `chat_id` / `session_id` | `string` | Conversation and widget session |
+| `operator_session_id` | `string` | The stretch — a chat can have several |
+| `operator_user_id` | `string \| null` | `null` for an unattributed reply (inbound e-mail matching no tenant user) |
+| `duration_ms` | `int` | How long the human held the conversation |
+| `first_response_ms` | `int \| null` | From the **escalation ticket's `created_at`** to the first human reply — the clock support teams live by. `null` when the stretch was never answered, or when nobody had escalated |
+| `answered` | `bool` | `false` = a claim that produced no reply at all |
+| `ended_reason` | `string` | `released` \| `idle_timeout` \| `visitor_returned` \| `reconciled` |
+
+`first_response_ms` is deliberately **not** measured from `operator_joined_at`:
+taking a chat and answering in it are roughly the same moment, so that clock
+would measure nothing.
+
+**The sweeper is the primary closer, not the release button.** A support
+conversation ends when it ends and nobody presses "release", so most stretches
+are closed by the sweeper's idle-release pass (`ended_reason=idle_timeout`).
+Explicit release (`released`) and the lazy release on the visitor's next turn
+(`visitor_returned`) are the two definite triggers. A fifth sweeper pass closes
+a row whose chat is already back in `bot` — the gap the bulk-UPDATE release
+cannot close atomically — stamping the chat's own `operator_released_at` rather
+than sweep time, and reporting it as `reconciled`. That pass writes to
+`operator_sessions` only, so it cannot disturb the ticket auto-close above.
+
 ### Widget UX
 
 - A ticket banner shows the ticket number

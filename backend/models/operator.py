@@ -22,7 +22,6 @@ import uuid
 
 from sqlalchemy import Column, DateTime, Enum, ForeignKey, Index, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import relationship
 
 from backend.models.base import Base, _utcnow
 from backend.models.enums import OperatorSessionEndReason
@@ -43,13 +42,20 @@ class OperatorSession(Base):
         # Per-chat access: the open-row lookup on the ingest path (every
         # operator reply) and the full stretch history the console renders.
         Index("ix_operator_sessions_chat_joined", "chat_id", "joined_at"),
-        # The sweeper's reconciliation pass scans for rows still open with no
-        # tenant or chat filter, so the composite above cannot serve it. The
-        # predicate matches the pass exactly and carries only currently-open
-        # stretches — a handful of rows however large the table grows.
+        # Two jobs in one index. As a *constraint* it makes "at most one open
+        # stretch per chat" real rather than intended: opening is a
+        # read-then-write, so two simultaneous ingests can both find nothing
+        # open, and a silent second row would report one human-served stretch
+        # as two `operator_session_ended` events — the double counting this
+        # whole design exists to avoid. As an *index* its predicate matches
+        # the sweeper's reconciliation scan exactly, which carries no tenant
+        # or chat filter and so cannot use the composite above; it holds only
+        # currently-open stretches, a handful of rows however large the table
+        # grows.
         Index(
-            "ix_operator_sessions_open",
-            "joined_at",
+            "uq_operator_sessions_open",
+            "chat_id",
+            unique=True,
             postgresql_where=text("ended_at IS NULL"),
             sqlite_where=text("ended_at IS NULL"),
         ),
@@ -98,6 +104,3 @@ class OperatorSession(Base):
         Enum(OperatorSessionEndReason, native_enum=False, length=32),
         nullable=True,
     )
-
-    chat = relationship("Chat")
-    operator = relationship("User")

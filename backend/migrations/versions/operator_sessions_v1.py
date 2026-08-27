@@ -19,10 +19,13 @@ visitor asked for a human. Measuring from ``joined_at`` would measure nothing:
 taking a chat and answering in it are the same moment.
 
 Two indexes only, on a table written roughly once per handoff:
-``(chat_id, joined_at)`` for the open-row lookup on the ingest path and the
-console's per-chat history, and a partial ``joined_at WHERE ended_at IS NULL``
-for the sweeper's reconciliation scan, which carries no tenant or chat filter
-and so cannot use the composite.
+``(chat_id, joined_at)`` for the console's per-chat history, and a **unique**
+partial ``chat_id WHERE ended_at IS NULL``. The second does double duty — it
+enforces "at most one open stretch per chat", without which two simultaneous
+ingests would each insert a row and one human-served stretch would report two
+``operator_session_ended`` events, and its predicate is exactly the sweeper's
+reconciliation scan, which carries no tenant or chat filter and so cannot use
+the composite.
 
 RLS is applied here in the same revision (the table has a non-nullable
 ``tenant_id``); the policy shape is a frozen snapshot, deliberately not
@@ -58,6 +61,23 @@ def _has_table(table: str) -> bool:
         return False
 
 
+def _has_index(table: str, name: str) -> bool:
+    """Checked per index, not folded into :func:`_has_table`.
+
+    A replay over a table that exists but is missing an index has to repair
+    it — the unique partial index below is a correctness constraint, not a
+    performance detail, so a table left without it is a table that will
+    silently accept a second open stretch.
+    """
+    if op.get_context().as_sql:
+        return False
+    try:
+        indexes = sa.inspect(op.get_bind()).get_indexes(table)
+    except Exception:
+        return False
+    return name in {i["name"] for i in indexes}
+
+
 def upgrade() -> None:
     if not _has_table(_TABLE):
         op.create_table(
@@ -91,13 +111,16 @@ def upgrade() -> None:
                 ondelete="SET NULL",
             ),
         )
+    if not _has_index(_TABLE, "ix_operator_sessions_chat_joined"):
         op.create_index(
             "ix_operator_sessions_chat_joined", _TABLE, ["chat_id", "joined_at"]
         )
+    if not _has_index(_TABLE, "uq_operator_sessions_open"):
         op.create_index(
-            "ix_operator_sessions_open",
+            "uq_operator_sessions_open",
             _TABLE,
-            ["joined_at"],
+            ["chat_id"],
+            unique=True,
             postgresql_where=sa.text("ended_at IS NULL"),
             sqlite_where=sa.text("ended_at IS NULL"),
         )

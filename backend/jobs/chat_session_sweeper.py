@@ -224,7 +224,10 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
     abandoned, and its ticket would never age out.
     """
     from backend.chat.handlers.operator import operator_is_idle, released_to_bot_values
-    from backend.operator.sessions import close_operator_session
+    from backend.operator.sessions import (
+        close_operator_session,
+        emit_operator_session_ended,
+    )
 
     reference = now or _utcnow()
     live = (
@@ -254,6 +257,21 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
                 },
                 synchronize_session=False,
             )
+            # Same transaction as the release, deliberately. Closing the
+            # stretch in a second transaction leaves a window in which the
+            # chat reads ``bot`` while its stretch is still open — and an
+            # operator answering in that window would have their *new* stretch
+            # merged into the old open row and then closed along with it,
+            # losing the second stretch permanently: the chat is ``live``
+            # again with nothing open, and the reconciliation pass below only
+            # looks at chats that are not ``live``. Reported nowhere, which is
+            # the exact failure this table exists to end.
+            released = close_operator_session(
+                db,
+                chat=chat,
+                reason=OperatorSessionEndReason.idle_timeout,
+                ended_at=reference,
+            )
             db.commit()
         except Exception:
             logger.exception(
@@ -261,26 +279,9 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
             )
             db.rollback()
             continue
-        # After the release is durably committed, so the event is at-most-once
-        # (same rule as the marker-then-emit order above). The bulk UPDATE
-        # cannot carry the stretch with it, so a failure here — or a crash in
-        # between — leaves a row still open, which
-        # :func:`close_orphaned_operator_sessions` closes on a later tick at
-        # the chat's own release time. The release itself already stands, so
-        # the count is incremented either way.
-        try:
-            close_operator_session(
-                db,
-                chat=chat,
-                reason=OperatorSessionEndReason.idle_timeout,
-                ended_at=reference,
-            )
-        except Exception:
-            logger.exception(
-                "chat_session_sweeper failed to close operator session on chat %s",
-                chat.id,
-            )
-            db.rollback()
+        # Only after the commit, so the event is at-most-once — the same rule
+        # as the marker-then-emit order above.
+        emit_operator_session_ended(released)
         count += 1
     return count
 
@@ -478,13 +479,17 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
 def close_orphaned_operator_sessions(db: Session, *, now: datetime | None = None) -> int:
     """Close stretches left open by a chat that is already back in ``bot``.
 
-    Every release closes its own stretch in the same breath, so this pass
-    normally finds nothing. It exists for the gap the sweeper's own release
-    cannot close atomically — the bulk UPDATE commits, then the stretch is
-    closed in a second transaction — and for any chat that went ``live``
-    before ``operator_sessions`` existed. Without it such a row stays open
-    forever and its stretch is never reported, which is the exact failure this
-    table was added to end.
+    Every release closes its own stretch in the same transaction, so this pass
+    normally finds nothing. It exists for the rows no release will ever reach:
+    a chat that went ``live`` before ``operator_sessions`` existed, and a
+    stretch whose release landed while its close did not (a crash between the
+    write and the commit, or a future release path that forgets). Without it
+    such a row stays open forever and its stretch is never reported, which is
+    the exact failure this table was added to end.
+
+    It cannot cover a chat that is currently ``live`` — that is a stretch in
+    progress, not an orphan — which is why the release paths close their own
+    stretch atomically rather than relying on this pass to tidy up after them.
 
     Closed at ``chats.operator_released_at`` rather than sweep time: the
     stretch really ended when the chat was handed back, and stamping the
@@ -495,7 +500,10 @@ def close_orphaned_operator_sessions(db: Session, *, now: datetime | None = None
     for the same reason: it is a backstop, and the four passes above keep the
     ordering their docstrings describe.
     """
-    from backend.operator.sessions import close_operator_session
+    from backend.operator.sessions import (
+        close_operator_session,
+        emit_operator_session_ended,
+    )
 
     reference = now or _utcnow()
     # No eager loads: each close commits, which expires everything loaded here,
@@ -521,6 +529,7 @@ def close_orphaned_operator_sessions(db: Session, *, now: datetime | None = None
                 reason=OperatorSessionEndReason.reconciled,
                 ended_at=chat.operator_released_at or reference,
             )
+            db.commit()
         except Exception:
             logger.exception(
                 "chat_session_sweeper failed to reconcile operator session on chat %s",
@@ -529,6 +538,7 @@ def close_orphaned_operator_sessions(db: Session, *, now: datetime | None = None
             db.rollback()
             continue
         if closed is not None:
+            emit_operator_session_ended(closed)
             count += 1
     return count
 

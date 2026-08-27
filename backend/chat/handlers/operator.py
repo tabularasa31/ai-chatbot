@@ -25,6 +25,7 @@ afterwards.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -38,6 +39,9 @@ from backend.models import (
     OperatorState,
 )
 from backend.models.base import _utcnow
+
+if TYPE_CHECKING:
+    from backend.operator.sessions import ClosedStretch
 
 
 def last_operator_activity_at(db: Session, chat: Chat) -> datetime | None:
@@ -85,7 +89,7 @@ def released_to_bot_values() -> dict[str, object]:
 
 def release_to_bot(
     db: Session, chat: Chat, *, reason: OperatorSessionEndReason
-) -> None:
+) -> ClosedStretch | None:
     """Hand the conversation back to the bot (ORM path) and close the stretch.
 
     ``reason`` is the caller's, because only the caller knows why: the
@@ -94,18 +98,19 @@ def release_to_bot(
     a stretch an operator ended, versus one the visitor walked back into
     while the operator was silent.
 
-    :func:`~backend.operator.sessions.close_operator_session` commits, so the
-    released columns staged just above land in the same transaction as the
-    closed stretch. Callers keep their own ``commit()`` — it is then a no-op
-    on the ORM path and still correct for a chat that had no open stretch to
-    close (one that went ``live`` before this table existed).
+    Everything is staged, nothing is committed: the released columns and the
+    closed stretch belong to one transaction, so there is no instant in which
+    the chat reads ``bot`` while its stretch is still open. Callers commit and
+    then pass the return value to
+    :func:`~backend.operator.sessions.emit_operator_session_ended`. ``None``
+    means there was no open stretch to close and nothing to report.
     """
     from backend.operator.sessions import close_operator_session
 
     for column, value in released_to_bot_values().items():
         setattr(chat, column, value)
     db.add(chat)
-    close_operator_session(
+    return close_operator_session(
         db, chat=chat, reason=reason, ended_at=chat.operator_released_at
     )
 
@@ -146,6 +151,7 @@ class OperatorHandler(PipelineHandler):
         # Lazy import: service.py imports the router at module load, so
         # importing the persistence helpers at module top would cycle.
         from backend.chat.service import _persist_user_only_turn
+        from backend.operator.sessions import emit_operator_session_ended
 
         ctx.db = sync_db
         chat = ctx.chat
@@ -154,10 +160,14 @@ class OperatorHandler(PipelineHandler):
             # ``visitor_returned``, not ``idle_timeout``: the operator went
             # quiet past the same window either way, but here the visitor is
             # still in the conversation and just got handed back to the bot.
-            release_to_bot(
+            released = release_to_bot(
                 sync_db, chat, reason=OperatorSessionEndReason.visitor_returned
             )
             sync_db.commit()
+            # After the commit, and touching no database: this is the
+            # visitor's live turn, and telemetry must not be able to fail a
+            # release that has already succeeded.
+            emit_operator_session_ended(released)
             if ctx.trace is not None:
                 ctx.trace.update(
                     metadata={

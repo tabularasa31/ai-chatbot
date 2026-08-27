@@ -23,7 +23,11 @@ from sqlalchemy.orm import Session
 from backend.escalation.service import mark_ticket_in_progress
 from backend.models import Chat, Message, OperatorSessionEndReason, OperatorState
 from backend.models.base import _utcnow
-from backend.operator.sessions import open_operator_session, record_operator_reply
+from backend.operator.sessions import (
+    emit_operator_session_ended,
+    open_operator_session,
+    record_operator_reply,
+)
 
 
 class OperatorChannel(str, enum.Enum):
@@ -151,8 +155,7 @@ def claim_chat(db: Session, *, chat_id: uuid.UUID, tenant_id: uuid.UUID, user_id
         # Likewise same commit: the stretch a human is about to serve starts
         # being recorded the moment they take it, not the moment they reply.
         # A row without its claim (or a claim without its row) would leave the
-        # handoff observable only in the half that landed. Ordered after the
-        # ticket move so the stretch resolves the ticket it is working.
+        # handoff observable only in the half that landed.
         open_operator_session(
             db,
             chat_id=chat_id,
@@ -180,8 +183,11 @@ def release_chat(db: Session, chat: Chat) -> Chat:
     if chat.operator_state is OperatorState.bot:
         return chat
 
-    release_to_bot(db, chat, reason=OperatorSessionEndReason.released)
+    released = release_to_bot(db, chat, reason=OperatorSessionEndReason.released)
     db.commit()
+    # After the commit, and reading nothing: the release has succeeded, and a
+    # telemetry failure must not turn it into a 500 for the operator.
+    emit_operator_session_ended(released)
     db.refresh(chat)
     return chat
 

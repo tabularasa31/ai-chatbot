@@ -20,6 +20,10 @@ from datetime import timedelta
 import pytest
 from sqlalchemy.orm import Session
 
+from unittest.mock import Mock
+
+from fastapi.testclient import TestClient
+
 from backend.chat.handlers.operator import release_to_bot
 from backend.jobs.chat_session_sweeper import (
     auto_close_stale_tickets,
@@ -47,7 +51,17 @@ from backend.operator.service import (
     ingest_from_operator,
     release_chat,
 )
-from backend.operator.sessions import get_open_operator_session
+from backend.operator.sessions import (
+    close_operator_session,
+    emit_operator_session_ended,
+    get_open_operator_session,
+    open_operator_session,
+)
+from tests.test_operator_handoff import (
+    _arm_openai,
+    _make_workspace,
+    _seed_knowledge,
+)
 
 # --------------------------------------------------------------------------
 # Fixtures / helpers
@@ -363,10 +377,11 @@ def test_visitor_returning_closes_the_stretch_with_its_own_reason(
     )
     db_session.refresh(chat)
 
-    release_to_bot(
+    released = release_to_bot(
         db_session, chat, reason=OperatorSessionEndReason.visitor_returned
     )
     db_session.commit()
+    emit_operator_session_ended(released)
 
     (session,) = _sessions(db_session, chat)
     assert session.ended_reason is OperatorSessionEndReason.visitor_returned
@@ -631,3 +646,375 @@ def test_reconciliation_does_not_disturb_ticket_auto_close(
     assert auto_close_stale_tickets(db_session) == 1
     db_session.refresh(ticket)
     assert ticket.status is EscalationStatus.auto_closed
+
+
+def test_the_handler_itself_emits_on_the_visitors_turn(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    captured: list[dict],
+) -> None:
+    """End to end: the release is wired to the event, not just capable of it.
+
+    The direct-call test above exercises the contract; this one exercises the
+    caller, so a `release_to_bot` whose payload nobody emits cannot pass.
+    """
+    ws = _make_workspace(tenant, db_session, email="e2e@example.com", name="E2E Co")
+    _seed_knowledge(db_session, ws.tenant_id)
+    _arm_openai(mock_openai_client, answer="Refunds take 14 days.")
+    chat = Chat(
+        tenant_id=ws.tenant_id,
+        session_id=uuid.uuid4(),
+        operator_state=OperatorState.live,
+        # Well past the 15-minute default release window.
+        operator_joined_at=_utcnow() - timedelta(hours=2),
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    db_session.add(
+        OperatorSession(
+            tenant_id=ws.tenant_id,
+            chat_id=chat.id,
+            joined_at=chat.operator_joined_at,
+            first_reply_at=chat.operator_joined_at,
+        )
+    )
+    db_session.commit()
+
+    resp = tenant.post(
+        "/chat",
+        headers={"X-API-Key": ws.api_key},
+        json={
+            "question": "When do I get my refund?",
+            "session_id": str(chat.session_id),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    (payload,) = captured
+    assert payload["ended_reason"] == "visitor_returned"
+    assert payload["chat_id"] == str(chat.id)
+
+
+# --------------------------------------------------------------------------
+# Races. Each of these fails against the two-step close this replaced.
+# --------------------------------------------------------------------------
+
+
+def _live_stretch(
+    db: Session, tenant: Tenant, operator: User, *, joined_at
+) -> Chat:
+    """A live chat with an open stretch and one operator message, all aged."""
+    chat = _make_chat(
+        db,
+        tenant,
+        operator_state=OperatorState.live,
+        assigned_operator_id=operator.id,
+        operator_joined_at=joined_at,
+    )
+    db.add(
+        OperatorSession(
+            tenant_id=tenant.id,
+            chat_id=chat.id,
+            operator_user_id=operator.id,
+            joined_at=joined_at,
+            first_reply_at=joined_at,
+        )
+    )
+    db.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.operator,
+            content="be right back",
+            created_at=joined_at,
+        )
+    )
+    db.commit()
+    return chat
+
+
+def test_the_sweeper_never_commits_a_released_chat_with_an_open_stretch(
+    db_session: Session,
+    tenant_row: Tenant,
+    operator_user: User,
+    captured: list[dict],
+    monkeypatch,
+) -> None:
+    """The release and the close are one transaction, and this proves it.
+
+    Closing in a second transaction leaves a window where the chat reads `bot`
+    while its stretch is still open. An `ingest_from_operator` landing in that
+    window reuses the open row instead of starting a new stretch, and the
+    sweeper then closes it — the chat is `live` again with nothing open,
+    invisible to the reconciliation pass (which skips live chats) and to every
+    later release (which finds nothing to close). That stretch is reported
+    nowhere, which is the exact failure this table exists to end.
+
+    The window cannot be reached from the outside once it is gone, so the
+    assertion is on the boundary itself: no commit inside the pass may ever
+    publish a chat that is back with the bot while a stretch is still open.
+    """
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "operator_release_idle_seconds", 900)
+    chat = _live_stretch(
+        db_session,
+        tenant_row,
+        operator_user,
+        joined_at=_utcnow() - timedelta(hours=3),
+    )
+
+    seen: list[tuple[OperatorState, int]] = []
+    real_commit = db_session.commit
+
+    def _observe() -> None:
+        real_commit()
+        state = (
+            db_session.query(Chat.operator_state)
+            .filter(Chat.id == chat.id)
+            .scalar()
+        )
+        still_open = (
+            db_session.query(OperatorSession.id)
+            .filter(
+                OperatorSession.chat_id == chat.id,
+                OperatorSession.ended_at.is_(None),
+            )
+            .count()
+        )
+        seen.append((state, still_open))
+
+    monkeypatch.setattr(db_session, "commit", _observe)
+    assert release_idle_operator_chats(db_session) == 1
+    monkeypatch.undo()
+
+    assert seen, "the pass committed nothing — the observation proves nothing"
+    assert not [
+        state
+        for state, still_open in seen
+        if state is OperatorState.bot and still_open
+    ], f"released chat published with an open stretch: {seen}"
+    assert len(captured) == 1
+
+
+def test_an_operator_returning_after_a_release_starts_a_new_stretch(
+    db_session: Session,
+    tenant_row: Tenant,
+    operator_user: User,
+    captured: list[dict],
+    monkeypatch,
+) -> None:
+    """The recovery shape: the sweeper gave up, the operator came back.
+
+    The reply must not land on the stretch the sweeper just closed — it is a
+    new one, with its own clock, and it must still be reportable when it ends.
+    """
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "operator_release_idle_seconds", 900)
+    chat = _live_stretch(
+        db_session,
+        tenant_row,
+        operator_user,
+        joined_at=_utcnow() - timedelta(hours=3),
+    )
+
+    assert release_idle_operator_chats(db_session) == 1
+    db_session.expire_all()
+    chat = db_session.get(Chat, chat.id)
+    assert chat.operator_state is OperatorState.bot
+    assert get_open_operator_session(db_session, chat_id=chat.id) is None
+
+    # The operator returns and answers. This is a new stretch.
+    ingest_from_operator(
+        db_session,
+        chat=chat,
+        tenant_id=tenant_row.id,
+        text="Sorry, back — here is the answer.",
+        actor=_console(operator_user),
+    )
+
+    db_session.expire_all()
+    first, second = _sessions(db_session, chat)
+    assert first.ended_reason is OperatorSessionEndReason.idle_timeout
+    assert second.ended_at is None
+    assert second.first_reply_at is not None
+    # And it can still be reported when it ends.
+    release_chat(db_session, chat)
+    assert [p["ended_reason"] for p in captured] == ["idle_timeout", "released"]
+
+
+def test_one_open_stretch_per_chat_is_enforced_by_the_database(
+    db_session: Session, tenant_row: Tenant, operator_user: User
+) -> None:
+    """Two colleagues answering at once must not produce two stretches.
+
+    `open_operator_session` reuses an open row, but that is a read-then-write:
+    two simultaneous ingests can both find nothing open. Without the unique
+    partial index both would insert, and one human-served stretch would report
+    two `operator_session_ended` events — the double counting the whole design
+    exists to avoid.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    chat = _make_chat(db_session, tenant_row)
+    first = open_operator_session(
+        db_session,
+        chat_id=chat.id,
+        tenant_id=tenant_row.id,
+        operator_user_id=operator_user.id,
+    )
+    db_session.commit()
+
+    # A racing writer that skipped the reuse check entirely.
+    db_session.add(
+        OperatorSession(
+            tenant_id=tenant_row.id,
+            chat_id=chat.id,
+            operator_user_id=operator_user.id,
+            joined_at=_utcnow(),
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+    # Two stretches may coexist once the first has ended.
+    assert len(_sessions(db_session, chat)) == 1
+    first = db_session.get(OperatorSession, first.id)
+    first.ended_at = _utcnow()
+    first.ended_reason = OperatorSessionEndReason.released
+    db_session.commit()
+    open_operator_session(
+        db_session,
+        chat_id=chat.id,
+        tenant_id=tenant_row.id,
+        operator_user_id=operator_user.id,
+    )
+    db_session.commit()
+    assert len(_sessions(db_session, chat)) == 2
+
+
+def test_a_second_closer_does_not_emit_a_second_event(
+    db_session: Session,
+    tenant_row: Tenant,
+    operator_user: User,
+    captured: list[dict],
+) -> None:
+    """One stretch, one event, however many closers reach for it."""
+    chat = _make_chat(
+        db_session,
+        tenant_row,
+        operator_state=OperatorState.live,
+        assigned_operator_id=operator_user.id,
+        operator_joined_at=_utcnow(),
+    )
+    db_session.add(
+        OperatorSession(
+            tenant_id=tenant_row.id,
+            chat_id=chat.id,
+            operator_user_id=operator_user.id,
+            joined_at=_utcnow(),
+        )
+    )
+    db_session.commit()
+
+    release_chat(db_session, chat)
+    # A sweeper tick that read the chat before that release committed.
+    assert (
+        close_operator_session(
+            db_session, chat=chat, reason=OperatorSessionEndReason.idle_timeout
+        )
+        is None
+    )
+    db_session.commit()
+
+    (session,) = _sessions(db_session, chat)
+    assert session.ended_reason is OperatorSessionEndReason.released
+    assert len(captured) == 1
+
+
+def test_a_repeat_takeover_does_not_re_measure_the_same_ask(
+    db_session: Session,
+    tenant_row: Tenant,
+    operator_user: User,
+    captured: list[dict],
+) -> None:
+    """`first_response_ms` is reported once per ask, not once per stretch.
+
+    Nothing moves a ticket out of `in_progress` on release, so a second
+    takeover with no new escalation would otherwise re-anchor to the original
+    ticket and report a second, hours-inflated first-response sample for a
+    question that was answered in minutes.
+    """
+    asked_at = _utcnow() - timedelta(minutes=6)
+    chat = _make_chat(db_session, tenant_row)
+    ticket = _make_ticket(db_session, tenant_row, chat, created_at=asked_at)
+
+    ingest_from_operator(
+        db_session,
+        chat=chat,
+        tenant_id=tenant_row.id,
+        text="First answer.",
+        actor=_console(operator_user),
+    )
+    release_chat(db_session, chat)
+    ingest_from_operator(
+        db_session,
+        chat=chat,
+        tenant_id=tenant_row.id,
+        text="Second answer.",
+        actor=_console(operator_user),
+    )
+    release_chat(db_session, chat)
+
+    first, second = _sessions(db_session, chat)
+    assert first.escalation_ticket_id == ticket.id
+    assert second.escalation_ticket_id is None
+    firsts = [p["first_response_ms"] for p in captured]
+    assert firsts[0] is not None and firsts[0] >= 6 * 60 * 1000
+    assert firsts[1] is None
+    # Both stretches are still reported — only the ask is not double counted.
+    assert all(p["answered"] for p in captured)
+
+
+def test_a_new_escalation_anchors_the_next_stretch(
+    db_session: Session,
+    tenant_row: Tenant,
+    operator_user: User,
+    captured: list[dict],
+) -> None:
+    """The flip side: a genuinely new ask is measured again."""
+    chat = _make_chat(db_session, tenant_row)
+    _make_ticket(
+        db_session, tenant_row, chat, created_at=_utcnow() - timedelta(minutes=30)
+    )
+    ingest_from_operator(
+        db_session,
+        chat=chat,
+        tenant_id=tenant_row.id,
+        text="First answer.",
+        actor=_console(operator_user),
+    )
+    release_chat(db_session, chat)
+
+    # The visitor asks again and escalates again.
+    second_ask = _utcnow() - timedelta(minutes=3)
+    second_ticket = _make_ticket(
+        db_session, tenant_row, chat, created_at=second_ask
+    )
+    ingest_from_operator(
+        db_session,
+        chat=chat,
+        tenant_id=tenant_row.id,
+        text="Second answer.",
+        actor=_console(operator_user),
+    )
+    release_chat(db_session, chat)
+
+    _first, second = _sessions(db_session, chat)
+    assert second.escalation_ticket_id == second_ticket.id
+    assert captured[1]["first_response_ms"] >= 3 * 60 * 1000
+    assert captured[1]["first_response_ms"] < 30 * 60 * 1000

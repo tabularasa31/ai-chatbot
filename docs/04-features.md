@@ -808,6 +808,14 @@ Closing emits **`operator_session_ended`**:
 | `answered` | `bool` | `false` = a claim that produced no reply at all |
 | `ended_reason` | `string` | `released` \| `idle_timeout` \| `visitor_returned` \| `reconciled` |
 
+`first_response_ms` is reported **once per ask, not once per stretch**. Nothing
+moves a ticket out of `in_progress` on release, so a repeat takeover with no
+new escalation would otherwise re-measure from the original `created_at` —
+hours earlier, and already answered in minutes — and inflate the team's
+first-response average. A stretch anchors only a ticket no earlier stretch has
+claimed; a second takeover with no new ask reports no response time at all,
+and a genuinely new escalation mints a new ticket that is anchored normally.
+
 `first_response_ms` is deliberately **not** measured from `operator_joined_at`:
 taking a chat and answering in it are roughly the same moment, so that clock
 would measure nothing.
@@ -818,9 +826,17 @@ are closed by the sweeper's idle-release pass (`ended_reason=idle_timeout`).
 Explicit release (`released`) and the lazy release on the visitor's next turn
 (`visitor_returned`) are the two definite triggers. A fifth sweeper pass closes
 a row whose chat is already back in `bot` — the gap the bulk-UPDATE release
-cannot close atomically — stamping the chat's own `operator_released_at` rather
-than sweep time, and reporting it as `reconciled`. That pass writes to
+cannot reach: a chat that went `live` before the table existed, or a release
+whose close never landed. It stamps the chat's own `operator_released_at`
+rather than sweep time, and reports `reconciled`. That pass writes to
 `operator_sessions` only, so it cannot disturb the ticket auto-close above.
+
+Each release closes its own stretch **in the same transaction**, so the chat is
+never published as back-with-the-bot while its stretch is still open — an
+operator answering in that instant starts a new stretch instead of having it
+merged into the one being closed. "At most one open stretch per chat" is
+enforced by a unique partial index, so two colleagues answering simultaneously
+cannot produce two rows, and hence two events, for one human-served stretch.
 
 ### Widget UX
 

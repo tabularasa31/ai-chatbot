@@ -92,6 +92,12 @@ def upgrade() -> None:
         op.add_column("chats", sa.Column("operator_released_at", sa.DateTime(), nullable=True))
 
     # Partial index over the rare ``live`` state — mirrors ix_chats_sweeper_pending.
+    # Serves queries that look *for* live chats (the sweeper's idle-operator
+    # release pass, and the phase-2 console queue). It cannot serve the
+    # live-chat exclusions in the other sweeper passes: those are
+    # anti-predicates (``operator_state != 'live'``) and no partial index
+    # built WHERE operator_state = 'live' answers the complement of its own
+    # predicate.
     if not _has_index("chats", "ix_chats_operator_live"):
         op.create_index(
             "ix_chats_operator_live",

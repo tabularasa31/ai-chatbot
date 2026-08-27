@@ -78,12 +78,21 @@ class ChatTurnResponse(BaseModel):
     """Response for a single chat turn.
 
     Returned by `/chat` as JSON.
+
+    ``delivered_to_operator`` marks the muted path, exactly as on
+    ``WidgetChatTurnResponse``: a human operator holds the chat, so the
+    message was recorded and handed on and ``text`` is empty by design.
+    Without it this contour — the X-API-Key one, used by custom server-side
+    integrations — has no way to tell "a human is handling this" from "the
+    turn broke", since both look like ``{"text": "", ...}``. Defaults False,
+    so existing callers are unaffected.
     """
 
     text: str
     session_id: UUID
     chat_ended: bool = False
     ticket_number: str | None = None
+    delivered_to_operator: bool = False
     # Trace fields — populated only by the private API; widget always omits these.
     source_documents: list[UUID] | None = None
     tokens_used: int | None = None

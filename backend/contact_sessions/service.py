@@ -198,7 +198,16 @@ def record_user_session_turn(
     tenant_id: uuid.UUID,
     user_context: dict[str, Any] | None,
     ended_at: datetime | None = None,
+    count_turn: bool = True,
 ) -> ContactSession | None:
+    """Touch the contact's session for this turn, and count it.
+
+    ``count_turn=False`` records the activity without incrementing the
+    counter. Used for a human operator's reply: ``conversation_turns`` means
+    *user* turns, and counting the operator's messages into it would inflate
+    the metric on exactly the conversations a person had to step into — the
+    ones whose engagement numbers most need to be readable.
+    """
     contact_id = _extract_contact_id(user_context)
     if not contact_id:
         return None
@@ -211,7 +220,8 @@ def record_user_session_turn(
         row = touch_user_session(db, tenant_id=tenant_id, user_context=user_context)
     if row is None:
         return None
-    row.conversation_turns = int(row.conversation_turns or 0) + 1
+    if count_turn:
+        row.conversation_turns = int(row.conversation_turns or 0) + 1
     if ended_at is not None:
         row.session_ended_at = ended_at
     db.add(row)

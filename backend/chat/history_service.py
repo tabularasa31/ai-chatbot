@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 PREVIEW_MAX_LEN = 120
 
+# Roles that count as "a reply to the visitor" for the inbox preview. A human
+# operator's answer is the latest reply in that conversation as much as a bot's
+# is, and the inbox row should show whichever came last.
+_REPLY_ROLES = (MessageRole.assistant, MessageRole.operator)
+
 
 def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:
     if not tenant:
@@ -104,7 +109,11 @@ def list_chat_sessions(tenant_id: uuid.UUID, db: Session) -> list[SessionSummary
                 last_activity = m.created_at
             if m.role == MessageRole.user:
                 last_question = m.content
-            elif m.role == MessageRole.assistant:
+            elif m.role in _REPLY_ROLES:
+                # Operator replies count as answers here. ``message_count``
+                # already includes them, so keying the preview on assistant
+                # rows alone made a chat a human had answered show the bot's
+                # older reply next to a message count that had moved on.
                 preview = m.content
                 if len(preview) > PREVIEW_MAX_LEN:
                     preview = preview[:PREVIEW_MAX_LEN].rstrip() + "..."

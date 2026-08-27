@@ -81,6 +81,7 @@ def _finalize_persisted_messages(
     tenant_id: uuid.UUID,
     extra_tokens: int,
     set_rephrase_flag: bool = False,
+    count_user_turn: bool = True,
 ) -> None:
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     # Authoritative single write point for the zero-RAG-hits tracker so the
@@ -114,6 +115,7 @@ def _finalize_persisted_messages(
                 tenant_id=tenant_id,
                 user_context=chat.user_context,
                 ended_at=chat.ended_at,
+                count_turn=count_user_turn,
             )
     except Exception:
         logger.warning(
@@ -197,6 +199,11 @@ def _persist_operator_message(
         chat=chat,
         tenant_id=tenant_id,
         extra_tokens=0,
+        # ``conversation_turns`` counts *user* turns. An operator's reply is
+        # activity on the session — so the session is still touched — but it
+        # is not a turn the visitor took, and counting it would inflate the
+        # metric precisely on the conversations a human had to step into.
+        count_user_turn=False,
     )
     return message
 

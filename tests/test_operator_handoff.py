@@ -3,8 +3,10 @@
 Covers the four behaviours the feature stands on — the bot going silent while
 a human holds the chat, control coming back on its own when that human goes
 quiet, exactly one winner for a contested conversation, and an operator reply
-reopening a chat the visitor had closed — plus the sweeper interaction and
-tenant isolation on every operator route.
+reopening a chat the visitor had closed — plus all three sweeper passes
+(neither of the two that skip live chats may touch one; the third releases a
+chat whose operator vanished), the rotation guard that keeps a live chat from
+forking, and tenant isolation on every operator route.
 """
 
 from __future__ import annotations
@@ -545,7 +547,10 @@ def test_sweeper_leaves_a_live_chat_alone(db_session: Session) -> None:
     answered. Closing its ticket underneath the operator is exactly wrong.
     """
     from backend.core.config import settings
-    from backend.jobs.chat_session_sweeper import auto_close_stale_tickets
+    from backend.jobs.chat_session_sweeper import (
+        auto_close_stale_tickets,
+        sweep_inactive_chats,
+    )
     from backend.models import Tenant
 
     tenant_row = Tenant(name="Sweeper Live")
@@ -571,6 +576,14 @@ def test_sweeper_leaves_a_live_chat_alone(db_session: Session) -> None:
     )
     db_session.add_all([live_chat, bot_chat])
     db_session.commit()
+    # Both chats carry a visitor turn: the empty-chat branch of
+    # sweep_inactive_chats stamps the marker silently without emitting, so a
+    # message-less pair would make the returned count say nothing.
+    for chat in (live_chat, bot_chat):
+        db_session.add(
+            Message(chat_id=chat.id, role=MessageRole.user, content="help me")
+        )
+    db_session.commit()
 
     tickets = []
     for index, chat in enumerate((live_chat, bot_chat)):
@@ -595,6 +608,166 @@ def test_sweeper_leaves_a_live_chat_alone(db_session: Session) -> None:
         db_session.get(EscalationTicket, tickets[1].id).status
         is EscalationStatus.auto_closed
     )
+
+    # The other pass must skip it too, and for a sharper reason: the marker
+    # this pass writes makes ``should_rotate`` return True, so stamping a live
+    # chat would send the visitor's next message into a brand-new ``bot`` chat
+    # and let the bot answer over the operator.
+    reported = sweep_inactive_chats(db_session)
+
+    assert reported == 1
+    db_session.expire_all()
+    assert db_session.get(Chat, live_chat.id).session_ended_event_at is None
+    assert db_session.get(Chat, bot_chat.id).session_ended_event_at is not None
+
+
+def test_a_live_chat_never_rotates_even_when_marked_reported() -> None:
+    """The two flags can be true at once, and that pair must not rotate.
+
+    Reopening a chat deliberately keeps ``session_ended_event_at`` set (so the
+    sweeper does not emit a second ``chat_session_ended``), which leaves a
+    reopened handoff simultaneously marked-as-reported and live. Rotating it
+    would fork the conversation: a fresh Chat in ``operator_state = bot``, the
+    bot answering the visitor, and the operator's thread orphaned.
+    """
+    from backend.chat.rotation import should_rotate
+
+    chat = Chat(
+        tenant_id=uuid.uuid4(),
+        session_id=uuid.uuid4(),
+        operator_state=OperatorState.live,
+        session_ended_event_at=_utcnow() - timedelta(hours=3),
+        updated_at=_utcnow() - timedelta(hours=3),
+    )
+
+    assert should_rotate(chat) is False
+
+    # Released, the very same row rotates again — the guard is the live state,
+    # not a permanent exemption.
+    chat.operator_state = OperatorState.bot
+    assert should_rotate(chat) is True
+
+
+def test_sweeper_releases_a_chat_whose_operator_vanished(db_session: Session) -> None:
+    """The pin is reachable without any rotation bug: an operator takes a
+    chat, the visitor never writes again, and lazy release — which only fires
+    on a visitor turn *in that chat* — never gets a chance to run. The chat
+    would stay ``live`` with an assignee forever, and its open ticket would be
+    permanently exempt from ``auto_close_stale_tickets``.
+
+    The release must also leave ``updated_at`` alone, so the released chat is
+    eligible for the later passes in the same tick instead of looking freshly
+    active at the exact moment we concluded it was abandoned.
+    """
+    from backend.core.config import settings
+    from backend.jobs.chat_session_sweeper import (
+        auto_close_stale_tickets,
+        release_idle_operator_chats,
+    )
+    from backend.models import Tenant
+
+    tenant_row = Tenant(name="Vanished Op")
+    db_session.add(tenant_row)
+    db_session.commit()
+    db_session.refresh(tenant_row)
+
+    operator = _second_user_in_tenant(
+        db_session, tenant_row.id, email="gone@vanished.example"
+    )
+    stale_at = _utcnow() - timedelta(
+        seconds=settings.conversation_idle_timeout_seconds + 3600
+    )
+    chat = Chat(
+        tenant_id=tenant_row.id,
+        session_id=uuid.uuid4(),
+        operator_state=OperatorState.live,
+        assigned_operator_id=operator.id,
+        operator_joined_at=stale_at,
+        created_at=stale_at,
+        updated_at=stale_at,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    ticket = EscalationTicket(
+        tenant_id=tenant_row.id,
+        ticket_number="ESC-VANISHED",
+        primary_question="help",
+        trigger=EscalationTrigger.low_similarity,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    # Before the release the ticket is untouchable, however stale it looks.
+    assert auto_close_stale_tickets(db_session) == 0
+
+    released = release_idle_operator_chats(db_session)
+
+    assert released == 1
+    db_session.expire_all()
+    refreshed = db_session.get(Chat, chat.id)
+    assert refreshed.operator_state is OperatorState.bot
+    assert refreshed.assigned_operator_id is None
+    assert refreshed.operator_released_at is not None
+    # Not bumped: otherwise the chat looks active again and the ticket below
+    # would never age out.
+    assert refreshed.updated_at == stale_at
+
+    # Same tick, and the ticket is now eligible.
+    assert auto_close_stale_tickets(db_session) == 1
+    db_session.expire_all()
+    assert (
+        db_session.get(EscalationTicket, ticket.id).status
+        is EscalationStatus.auto_closed
+    )
+
+
+def test_sweeper_leaves_a_working_operator_alone(db_session: Session) -> None:
+    """An operator who replied a minute ago keeps the chat, however long the
+    visitor has been silent. The release window is measured on *operator*
+    activity — the same rule the turn-time release uses.
+    """
+    from backend.core.config import settings
+    from backend.jobs.chat_session_sweeper import release_idle_operator_chats
+    from backend.models import Tenant
+
+    tenant_row = Tenant(name="Working Op")
+    db_session.add(tenant_row)
+    db_session.commit()
+    db_session.refresh(tenant_row)
+
+    operator = _second_user_in_tenant(
+        db_session, tenant_row.id, email="busy@working.example"
+    )
+    stale_at = _utcnow() - timedelta(
+        seconds=settings.conversation_idle_timeout_seconds + 3600
+    )
+    chat = Chat(
+        tenant_id=tenant_row.id,
+        session_id=uuid.uuid4(),
+        operator_state=OperatorState.live,
+        assigned_operator_id=operator.id,
+        operator_joined_at=stale_at,
+        created_at=stale_at,
+        updated_at=stale_at,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.operator,
+            content="Still here, checking with billing.",
+            operator_user_id=operator.id,
+            created_at=_utcnow() - timedelta(minutes=1),
+        )
+    )
+    db_session.commit()
+
+    assert release_idle_operator_chats(db_session) == 0
+    db_session.expire_all()
+    assert db_session.get(Chat, chat.id).operator_state is OperatorState.live
 
 
 # --------------------------------------------------------------------------

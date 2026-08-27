@@ -13,12 +13,14 @@ messages. Idle is measured on ``Chat.updated_at`` — the same signal the
 ``chat_session_ended`` analytics sweeper uses, so the whole system shares one
 definition of an ended conversation.
 
-The one exception: a live escalation ticket still collecting the user's email
-(``escalation_awaiting_ticket_id``) blocks rotation — abandoning it would
-leave the ticket without contact info. The other escalation flags are mere
-pending questions with no ticket behind them; they are abandoned with the old
-row. All their readers are scoped to the current chat, so stale flags on an
-archived row are inert.
+Two things block rotation. A live operator handoff (``operator_state ==
+live``) blocks it because rotating would put the bot on a new Chat while a
+human is mid-conversation on the old one. A live escalation ticket still
+collecting the user's email (``escalation_awaiting_ticket_id``) blocks it
+because abandoning it would leave the ticket without contact info. The other
+escalation flags are mere pending questions with no ticket behind them; they
+are abandoned with the old row. All their readers are scoped to the current
+chat, so stale flags on an archived row are inert.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, select
 
 from backend.core.config import settings
-from backend.models import Chat
+from backend.models import Chat, OperatorState
 from backend.models.base import _utcnow
 
 
@@ -63,11 +65,25 @@ def should_rotate(chat: Chat, *, now: datetime | None = None) -> bool:
     today's acknowledge_closed_or_start_new behavior.
 
     A chat the sweeper already reported ended (``session_ended_event_at``
-    set) rotates unconditionally: the marker is the system's own declaration
-    that the conversation is over. This also makes rotation robust against
+    set) rotates: the marker is the system's own declaration that the
+    conversation is over. This also makes rotation robust against
     ``updated_at`` refreshes caused by non-activity writes (the marker commit
     itself bumps it via the column's ``onupdate``).
+
+    A chat a human operator currently holds (``OperatorState.live``) never
+    rotates, whatever else is true of it. Rotating would create a fresh Chat
+    in ``operator_state = bot`` for the visitor's next message — the bot would
+    answer on top of the human mid-conversation, and the operator's thread
+    would be orphaned, with their next reply landing in a chat the visitor no
+    longer sees. This outranks the ended-marker rule above rather than
+    complementing it: a chat can hold both at once (a reopened chat keeps
+    ``session_ended_event_at`` deliberately set, see
+    ``operator/service.ingest_from_operator``), and that combination must not
+    rotate. The sweeper releases a genuinely abandoned handoff back to ``bot``
+    first, so this guard only ever holds a chat someone is really in.
     """
+    if chat.operator_state is OperatorState.live:
+        return False
     if chat.escalation_awaiting_ticket_id is not None:
         return False
     if chat.session_ended_event_at is not None:

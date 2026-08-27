@@ -1,9 +1,19 @@
 """Background job: report inactive chat sessions, and age out stale tickets.
 
-Two passes per tick, sharing the ``conversation_idle_timeout_seconds`` window:
-:func:`sweep_inactive_chats` emits ``chat_session_ended``, and
-:func:`auto_close_stale_tickets` closes escalation tickets whose conversation
-is over (see its docstring for why tickets never leave ``open`` otherwise).
+Three passes per tick, in this order:
+
+1. :func:`release_idle_operator_chats` hands back a chat whose human operator
+   went silent past ``OPERATOR_RELEASE_IDLE_SECONDS``. It runs first because
+   the other two skip ``live`` chats entirely, so a chat pinned by a vanished
+   operator would otherwise be invisible to both forever.
+2. :func:`sweep_inactive_chats` emits ``chat_session_ended``.
+3. :func:`auto_close_stale_tickets` closes escalation tickets whose
+   conversation is over (see its docstring for why tickets never leave
+   ``open`` otherwise).
+
+Passes 2 and 3 share the ``conversation_idle_timeout_seconds`` window; pass 1
+uses the operator window, which is much shorter and measured on operator
+activity rather than visitor activity.
 
 
 Widget chats are stateless per-turn HTTP with no explicit "close" signal, so
@@ -65,6 +75,17 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     to the post-escalation "anything else?" follow-up; escalation on its own
     does not set it) are skipped: that path emits its own event.
 
+    Chats a human operator currently holds (``OperatorState.live``) are
+    skipped for the same reason ``auto_close_stale_tickets`` skips them:
+    ``updated_at`` tracks visitor turns only, so a handoff being actively
+    worked looks idle. The consequence here is worse than a premature event —
+    ``session_ended_event_at`` makes ``should_rotate`` return True, so the
+    visitor's next message would open a *new* chat with ``operator_state =
+    bot`` and the bot would answer over the operator, whose thread is now
+    orphaned. ``release_idle_operator_chats`` runs first each tick, so a chat
+    whose operator really has gone is already back in ``bot`` by the time this
+    pass looks at it.
+
     Two idle windows, read at call time so tests can override settings:
 
     * Chats with messages use ``conversation_idle_timeout_seconds`` — the same
@@ -91,6 +112,7 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
         .filter(
             Chat.session_ended_event_at.is_(None),
             Chat.ended_at.is_(None),
+            Chat.operator_state != OperatorState.live,
             or_(
                 and_(has_messages_exists, Chat.updated_at < long_cutoff),
                 and_(~has_messages_exists, Chat.updated_at < empty_cutoff),
@@ -142,6 +164,74 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
             duration_ms=duration_ms,
             outcome="timeout",
         )
+        count += 1
+    return count
+
+
+def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> int:
+    """Hand back chats whose operator went silent. Returns the count released.
+
+    The chat path releases lazily, on the visitor's next message (see
+    ``backend/chat/handlers/operator.py``). That covers every abandoned
+    handoff *except* the one nobody writes in again — and that is not a rare
+    shape: an operator answers, the visitor is satisfied and leaves. Without
+    this pass the chat stays ``live`` with ``assigned_operator_id`` set
+    forever, which in turn keeps its open ticket permanently exempt from
+    :func:`auto_close_stale_tickets` — re-introducing the very "tickets stay
+    open forever" bug that pass exists to fix.
+
+    Idleness is the same rule the turn-time release uses
+    (:func:`~backend.chat.handlers.operator.operator_is_idle`: the later of
+    ``operator_joined_at`` and the last ``MessageRole.operator`` message, aged
+    past ``OPERATOR_RELEASE_IDLE_SECONDS``), and the write is the same column
+    set (``released_to_bot_values``). One rule, one shape, two triggers.
+
+    Ordered first in the tick, ahead of the two passes above, and deliberately
+    so: a chat released here is eligible for both of them *in the same tick*
+    rather than a cycle later. That requires not touching ``updated_at`` — a
+    release is an operational state change, not visitor activity — hence the
+    query-level UPDATE pinning it, exactly as :func:`sweep_inactive_chats`
+    does for its marker. Letting the column's ``onupdate`` fire would make
+    every abandoned chat look freshly active at the moment we conclude it was
+    abandoned, and its ticket would never age out.
+    """
+    from backend.chat.handlers.operator import operator_is_idle, released_to_bot_values
+
+    reference = now or _utcnow()
+    live = (
+        db.query(Chat)
+        .filter(Chat.operator_state == OperatorState.live)
+        .order_by(Chat.updated_at)
+        .limit(_MAX_SESSIONS_PER_SWEEP)
+        .all()
+    )
+    count = 0
+    for chat in live:
+        if not operator_is_idle(db, chat):
+            continue
+        try:
+            db.query(Chat).filter(
+                Chat.id == chat.id,
+                # Re-check under the write: a visitor turn between the read
+                # above and here may have released the chat already (or an
+                # operator may have replied). Losing that race must be a
+                # no-op, not a second release stamping a later timestamp.
+                Chat.operator_state == OperatorState.live,
+            ).update(
+                {
+                    **released_to_bot_values(),
+                    "operator_released_at": reference,
+                    "updated_at": chat.updated_at,
+                },
+                synchronize_session=False,
+            )
+            db.commit()
+        except Exception:
+            logger.exception(
+                "chat_session_sweeper failed to release chat %s", chat.id
+            )
+            db.rollback()
+            continue
         count += 1
     return count
 
@@ -211,6 +301,14 @@ def _sweep_once() -> None:
 
     db = SessionLocal()
     try:
+        # First: a chat still held by a vanished operator is invisible to both
+        # passes below (they exclude ``live``). Releasing it here makes it
+        # eligible for them in this same tick.
+        released = release_idle_operator_chats(db)
+        if released:
+            logger.info(
+                "chat_session_sweeper: released %d idle operator chats", released
+            )
         count = sweep_inactive_chats(db)
         if count:
             logger.info("chat_session_sweeper: reported %d inactive sessions", count)

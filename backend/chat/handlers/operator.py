@@ -6,14 +6,20 @@ guards, no retrieval, no LLM call. The operator is the one answering, and a
 bot reply arriving alongside a human one is the failure mode this whole
 feature exists to avoid.
 
-Release is lazy and happens here, on the visitor's next message, rather than
-in a background sweep. An operator can answer once and vanish — by e-mail, or
-by closing the console — and without a release the bot would stay muted for
-good. Doing it at turn time keeps the async-only localization helpers on the
-event loop where they belong (a sweeper thread would need an ``await_only``
-bridge or a queued job for no gain) and removes every race between a sweep and
-a live turn. The single uncovered case is a visitor who never writes again,
-and then there is nobody to un-mute the bot for.
+Release happens here, on the visitor's next message. An operator can answer
+once and vanish — by e-mail, or by closing the console — and without a release
+the bot would stay muted for good. Doing it at turn time removes every race
+between a sweep and a live turn, and it costs the visitor nothing: the same
+message that triggers the release is answered.
+
+That covers every case *except* the chat nobody writes in again, which stays
+pinned ``live`` with an assignee and an open ticket exempt from
+``auto_close_stale_tickets`` forever. ``release_idle_operator_chats`` in
+``backend/jobs/chat_session_sweeper.py`` is the backstop for exactly that
+chat; both paths write the same columns via :func:`released_to_bot_values`
+and read the same idleness rule via :func:`operator_is_idle`, so a chat
+released by a sweep and one released by a turn are indistinguishable
+afterwards.
 """
 
 from __future__ import annotations
@@ -48,8 +54,13 @@ def last_operator_activity_at(db: Session, chat: Chat) -> datetime | None:
     return max(candidates) if candidates else None
 
 
-def release_to_bot(db: Session, chat: Chat) -> None:
-    """Hand the conversation back to the bot.
+def released_to_bot_values() -> dict[str, object]:
+    """The column values that constitute "handed back to the bot".
+
+    A single definition shared by the ORM release below and the sweeper's
+    bulk-UPDATE release (``backend/jobs/chat_session_sweeper.py``), which
+    cannot go through the ORM because it must pin ``updated_at``. Two release
+    paths writing two different shapes is exactly the drift this avoids.
 
     ``assigned_operator_id`` is cleared, not kept as a record of who held it:
     the transcript already carries authorship on ``messages.operator_user_id``,
@@ -57,15 +68,23 @@ def release_to_bot(db: Session, chat: Chat) -> None:
     reading as "waiting for an operator" and permanently block the next
     ``/take`` (whose claim predicate is ``assigned_operator_id IS NULL``).
     """
-    chat.operator_state = OperatorState.bot
-    chat.assigned_operator_id = None
-    # Naive UTC — the column is ``DateTime`` with no timezone and asyncpg
-    # refuses aware values. See ``models/base._utcnow``.
-    chat.operator_released_at = _utcnow()
+    return {
+        "operator_state": OperatorState.bot,
+        "assigned_operator_id": None,
+        # Naive UTC — the column is ``DateTime`` with no timezone and asyncpg
+        # refuses aware values. See ``models/base._utcnow``.
+        "operator_released_at": _utcnow(),
+    }
+
+
+def release_to_bot(db: Session, chat: Chat) -> None:
+    """Hand the conversation back to the bot (ORM path, on a live turn)."""
+    for column, value in released_to_bot_values().items():
+        setattr(chat, column, value)
     db.add(chat)
 
 
-def _is_stale(db: Session, chat: Chat) -> bool:
+def operator_is_idle(db: Session, chat: Chat) -> bool:
     """True when the operator has been silent past the release threshold."""
     last_activity = last_operator_activity_at(db, chat)
     if last_activity is None:
@@ -105,7 +124,7 @@ class OperatorHandler(PipelineHandler):
         ctx.db = sync_db
         chat = ctx.chat
 
-        if _is_stale(sync_db, chat):
+        if operator_is_idle(sync_db, chat):
             release_to_bot(sync_db, chat)
             sync_db.commit()
             if ctx.trace is not None:

@@ -16,13 +16,17 @@ different return shapes. A single frozen dataclass makes the contract obvious:
 - ``evidence`` — what triggered it (matched pattern / short note), for debugging.
 
 ``blocked`` is *derived* from ``reason`` via :meth:`Verdict.of` so the two can
-never disagree. The ``reason`` enum values are byte-for-byte the string tokens
-the chat pipeline already routes on (``"offtopic"``, ``"support_complaint"`` …),
-so ``verdict.reason.value`` is a drop-in for the legacy ``reason`` strings.
+never disagree. The one deliberate exception is :meth:`Verdict.observation`, for
+a guard that runs where there is nothing to gate: it reports ``blocked=False``
+whatever it detected, because it diverted nothing. The ``reason`` enum values
+are byte-for-byte the string tokens the chat pipeline already routes on
+(``"offtopic"``, ``"support_complaint"`` …), so ``verdict.reason.value`` is a
+drop-in for the legacy ``reason`` strings.
 
 To add a new guard: pick (or add) a :class:`VerdictReason`, decide whether it is
-blocking (add it to ``_BLOCKING`` if so), and return ``Verdict.of(reason, ...)``.
-See ``AGENTS.md → "Guards subsystem"`` for the full walkthrough.
+blocking (add it to ``_BLOCKING`` if so), and return ``Verdict.of(reason, ...)``
+— or ``Verdict.observation(reason, ...)`` if the guard only watches. See
+``AGENTS.md → "Guards subsystem"`` for the full walkthrough.
 """
 
 from __future__ import annotations
@@ -110,10 +114,10 @@ class Verdict:
         score: float = 0.0,
         evidence: str | None = None,
     ) -> Verdict:
-        """Build a verdict, deriving ``blocked`` from ``reason``.
+        """Build a gating verdict, deriving ``blocked`` from ``reason``.
 
-        The single construction path guarantees ``blocked`` and ``reason`` can
-        never drift apart.
+        For a guard that can actually divert the turn. The single construction
+        path guarantees ``blocked`` and ``reason`` cannot drift apart.
         """
         return cls(
             blocked=reason in _BLOCKING,
@@ -121,3 +125,27 @@ class Verdict:
             score=score,
             evidence=evidence,
         )
+
+    @classmethod
+    def observation(
+        cls,
+        reason: VerdictReason,
+        *,
+        score: float = 0.0,
+        evidence: str | None = None,
+    ) -> Verdict:
+        """Build a verdict from a guard that only watched. Never ``blocked``.
+
+        Some paths run a detector where there is nothing to gate — the live
+        operator handoff runs the structural injection check on a turn the bot
+        never answers. ``blocked`` asks whether this guard diverted the turn
+        away from the normal answer path, and an observing guard did not, so
+        ``False`` is the field's literal meaning rather than a softened one.
+
+        The detection is not lost: ``reason`` still carries it. Blocking and
+        detecting are synonyms only where every detection gates, which is
+        exactly what stops being true here — and telling the two apart is what
+        keeps a delivered message out of the false-positive numbers a reviewer
+        reads off ``guard_events``.
+        """
+        return cls(blocked=False, reason=reason, score=score, evidence=evidence)

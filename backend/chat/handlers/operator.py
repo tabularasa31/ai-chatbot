@@ -2,9 +2,15 @@
 
 Registered first in ``default_router()``. When ``chat.operator_state`` is
 ``live`` the visitor's message is persisted and nothing is generated: no
-guards, no retrieval, no LLM call. The operator is the one answering, and a
+retrieval, no LLM call, and no guard standing between the message and a
+reply, because there is no reply. The operator is the one answering, and a
 bot reply arriving alongside a human one is the failure mode this whole
 feature exists to avoid.
+
+One guard still runs, and gates nothing: the structural injection check, whose
+verdict goes to ``guard_events`` so a visitor probing the bot mid-handoff is
+visible in monitoring rather than silent for as long as the operator holds the
+chat. See :func:`_monitor_injection`.
 
 Release happens here, on the visitor's next message. An operator can answer
 once and vanish — by e-mail, or by closing the console — and without a release
@@ -24,6 +30,7 @@ afterwards.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -42,6 +49,8 @@ from backend.models.base import _utcnow
 
 if TYPE_CHECKING:
     from backend.operator.sessions import ClosedStretch
+
+logger = logging.getLogger(__name__)
 
 
 def last_operator_activity_at(db: Session, chat: Chat) -> datetime | None:
@@ -127,6 +136,46 @@ def operator_is_idle(db: Session, chat: Chat) -> bool:
     return last_activity < cutoff
 
 
+def _monitor_injection(ctx: HandlerContext, chat: Chat) -> None:
+    """Record a structural injection verdict for a message the bot swallowed.
+
+    A turn the bot answers is measured by the guards on its way to the LLM. A
+    turn a human answers reaches no LLM at all, so before this the guards
+    subsystem simply had nothing to say about a handoff — a visitor probing the
+    bot went unrecorded for as long as the operator held the chat, and there is
+    no limit on how many messages that is.
+
+    Only level 1 runs, and it changes nothing about the turn: the verdict is
+    not read here and the message reaches the operator exactly as written. The
+    row is written with ``blocked=False`` for that reason — a pattern hit here
+    is a detection, not a block, and recording it as a block would put a
+    message a human read into our own false-positive numbers. See
+    :func:`~backend.guards.injection_detector.monitor_injection_structural` for
+    why the semantic level stays out and why blocking is off the table.
+
+    One row per swallowed turn, matching the ``guard_events`` contract of a row
+    per guard invocation. Verdicts of ``ok`` are the denominator: without them a
+    detection rate cannot be read off the table, and the handoff population
+    would not be comparable with the ordinary chat path, which also records its
+    passes.
+
+    Best-effort like every other guard-event write — nothing here may cost the
+    visitor their message. The lazy import is inside the ``try`` for that
+    reason and not only to break the cycle: an import that can fail belongs
+    where its failure is caught.
+    """
+    try:
+        from backend.guards.injection_detector import monitor_injection_structural
+
+        monitor_injection_structural(
+            ctx.question,
+            tenant_id=str(ctx.tenant_id),
+            chat_id=str(chat.id),
+        )
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("operator handoff injection monitoring failed", exc_info=True)
+
+
 class OperatorHandler(PipelineHandler):
     """Mutes the bot for the duration of a live operator handoff.
 
@@ -190,6 +239,7 @@ class OperatorHandler(PipelineHandler):
                 user_content=ctx.question,
                 optional_entity_types=ctx.optional_entity_types,
             )
+            _monitor_injection(ctx, chat)
 
         if ctx.trace is not None:
             ctx.trace.update(

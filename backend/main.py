@@ -58,6 +58,7 @@ from backend.observability import (
 )
 from backend.operator.routes import operator_router
 from backend.search.routes import search_router
+from backend.tenants.members_routes import members_router
 from backend.tenants.routes import tenants_router
 from backend.widget.routes import widget_router
 
@@ -191,6 +192,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, include_in_schema=False)
 app.include_router(bots_router)
+# Before ``tenants_router``: its ``/{tenant_id}`` catch-all would otherwise
+# match ``/tenants/members`` first.
+app.include_router(members_router)
 app.include_router(tenants_router, prefix="/tenants")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings", include_in_schema=False)

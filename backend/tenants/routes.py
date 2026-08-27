@@ -108,6 +108,7 @@ def get_my_client(
         **base.model_dump(),
         is_admin=current_user.is_admin,
         is_verified=current_user.is_verified,
+        role=current_user.role,
     )
 
 

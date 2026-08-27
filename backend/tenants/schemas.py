@@ -6,7 +6,59 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+
+
+#: The two membership roles. Spelled out rather than referenced from
+#: ``backend.auth.roles`` because ``Literal`` only accepts literals; that
+#: module stays the source of truth for the values themselves.
+TenantRole = Literal["owner", "operator"]
+
+#: Derived, not stored: a member who has not yet set a password from their
+#: invite link is ``pending``. See ``members_service`` for why that needs no
+#: column of its own.
+TenantMemberStatus = Literal["active", "pending"]
+
+
+class TenantMemberResponse(BaseModel):
+    """One row of the members screen."""
+
+    id: uuid.UUID
+    email: str
+    role: TenantRole
+    status: TenantMemberStatus
+    created_at: datetime
+
+
+class TenantMemberListResponse(BaseModel):
+    """All members of the current workspace."""
+
+    items: list[TenantMemberResponse]
+
+
+class InviteMemberRequest(BaseModel):
+    """Request body for inviting someone into the workspace."""
+
+    email: EmailStr
+    role: TenantRole = "operator"
+
+
+class InviteMemberResponse(BaseModel):
+    """Result of an invite.
+
+    ``invite_sent`` is False when the invitee already had a usable password
+    (an existing account with no workspace): they were added outright and no
+    set-password link was issued.
+    """
+
+    member: TenantMemberResponse
+    invite_sent: bool
+
+
+class UpdateMemberRoleRequest(BaseModel):
+    """Request body for changing a member's role."""
+
+    role: TenantRole
 
 
 class CreateTenantRequest(BaseModel):
@@ -81,6 +133,7 @@ class TenantMeResponse(TenantResponse):
 
     is_admin: bool
     is_verified: bool
+    role: TenantRole
 
 
 class CreateTenantResponse(TenantResponse):

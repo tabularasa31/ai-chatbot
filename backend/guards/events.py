@@ -11,8 +11,11 @@ Design constraints:
   the time we record.
 - **Off the hot path.** The DB write runs in a fire-and-forget background task
   on its own :class:`AsyncSession`, so it adds no latency to the response and
-  never touches the request's session (which the pipeline closes before the
-  relevance guard even returns).
+  does its work on no session the request is using. Scheduling it is not free
+  of the request, though: ``record_guard_event`` is called synchronously and
+  emits to PostHog inline before it returns, and the operator-handoff call site
+  schedules from inside ``run_sync`` while the request's async session is still
+  checked out. What the detached task never does is *touch* that session.
 - **No message content.** Only a SHA-256 of the trigger evidence is stored,
   never the raw user text.
 """

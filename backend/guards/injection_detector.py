@@ -407,19 +407,27 @@ async def async_detect_injection_semantic(
 # Main entry points
 # ---------------------------------------------------------------------------
 
-def _to_verdict(result: InjectionDetectionResult) -> Verdict:
-    """Adapt the internal two-level result into the uniform guard contract."""
+def _to_verdict(result: InjectionDetectionResult, *, gating: bool = True) -> Verdict:
+    """Adapt the internal two-level result into the uniform guard contract.
+
+    ``gating`` says whether this detector's verdict could actually divert the
+    turn. It is ``False`` only where the detector merely watches (the operator
+    handoff), and it decides nothing but ``blocked`` — the reason, score and
+    evidence are identical either way, so the two populations stay comparable
+    on everything except the action taken.
+    """
+    build = Verdict.of if gating else Verdict.observation
     if not result.detected:
-        return Verdict.of(VerdictReason.OK, score=result.score or 0.0)
+        return build(VerdictReason.OK, score=result.score or 0.0)
     if result.level == 1:
-        return Verdict.of(
+        return build(
             VerdictReason.INJECTION_STRUCTURAL,
             score=result.score if result.score is not None else 1.0,
             evidence=result.pattern,
         )
     # Evidence is omitted for the semantic level — the cosine ``score`` is the
     # signal; a constant string would hash to a useless constant.
-    return Verdict.of(VerdictReason.INJECTION_SEMANTIC, score=result.score or 0.0)
+    return build(VerdictReason.INJECTION_SEMANTIC, score=result.score or 0.0)
 
 
 async def async_detect_injection(
@@ -488,9 +496,11 @@ def _finalize_injection(
     tenant_id: str,
     chat_id: str | None,
     start: float,
+    *,
+    gating: bool = True,
 ) -> Verdict:
     """Convert to a Verdict and, for real chat turns, log the guard event."""
-    verdict = _to_verdict(result)
+    verdict = _to_verdict(result, gating=gating)
     if chat_id is not None:
         from backend.guards.events import record_guard_event
 
@@ -535,9 +545,27 @@ def monitor_injection_structural(
 
     Recording goes through :func:`_finalize_injection`, the same conversion and
     the same ``kind="injection"`` row shape the gating call site writes, so the
-    two populations stay comparable in the FP/FN dashboard. ``reason``
-    separates the levels (``injection_structural`` vs ``injection_semantic`` vs
-    ``ok``), so nothing is lost by sharing the kind.
+    two populations stay comparable in the FP/FN dashboard. ``reason`` separates
+    the levels (``injection_structural`` vs ``injection_semantic`` vs ``ok``),
+    so nothing is lost by sharing the kind.
+
+    What the row must *not* share is ``blocked``. ``guard_events`` exists to
+    measure how often we block a legitimate question, and a message that was
+    delivered to a human belongs on neither side of that ratio. Recorded as
+    blocked it would inflate the block rate and hand the manual FP/FN review
+    tool a false positive no visitor ever experienced. Hence ``gating=False``:
+    the detection stays in ``reason``, and ``blocked`` says what actually
+    happened to the turn, which is nothing.
+
+    That split is also how an analyst tells the two apart without a new column.
+    On the gating path ``injection_structural`` always implies ``blocked``, so
+    ``reason = 'injection_structural' AND NOT blocked`` selects exactly the
+    rows this function wrote.
+
+    Expect a higher pattern-hit rate here than on the ordinary path, not a
+    lower one. People paste log lines and e-mail addresses to other people, and
+    the leet patterns are unanchored — ``4dmin@example.com`` matches the
+    ``admin`` one. That is another reason these rows must not read as blocks.
 
     ``chat_id`` is required rather than optional: a verdict with no turn to
     attach it to would not be recorded at all, and a silently skipped write is
@@ -547,4 +575,4 @@ def monitor_injection_structural(
     result = detect_injection_structural(text)
     if result.detected:
         _log_detection(tenant_id, result)
-    return _finalize_injection(result, tenant_id, chat_id, start)
+    return _finalize_injection(result, tenant_id, chat_id, start, gating=False)

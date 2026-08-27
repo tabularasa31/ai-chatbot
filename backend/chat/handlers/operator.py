@@ -146,7 +146,10 @@ def _monitor_injection(ctx: HandlerContext, chat: Chat) -> None:
     no limit on how many messages that is.
 
     Only level 1 runs, and it changes nothing about the turn: the verdict is
-    not read here and the message reaches the operator exactly as written. See
+    not read here and the message reaches the operator exactly as written. The
+    row is written with ``blocked=False`` for that reason — a pattern hit here
+    is a detection, not a block, and recording it as a block would put a
+    message a human read into our own false-positive numbers. See
     :func:`~backend.guards.injection_detector.monitor_injection_structural` for
     why the semantic level stays out and why blocking is off the table.
 
@@ -157,11 +160,13 @@ def _monitor_injection(ctx: HandlerContext, chat: Chat) -> None:
     passes.
 
     Best-effort like every other guard-event write — nothing here may cost the
-    visitor their message.
+    visitor their message. The lazy import is inside the ``try`` for that
+    reason and not only to break the cycle: an import that can fail belongs
+    where its failure is caught.
     """
-    from backend.guards.injection_detector import monitor_injection_structural
-
     try:
+        from backend.guards.injection_detector import monitor_injection_structural
+
         monitor_injection_structural(
             ctx.question,
             tenant_id=str(ctx.tenant_id),

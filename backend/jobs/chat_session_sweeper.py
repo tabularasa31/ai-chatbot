@@ -252,6 +252,24 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
     return count
 
 
+def _operator_answered_exists():
+    """True for chats where an operator actually wrote something.
+
+    Shared by the two passes that must tell "a human answered" apart from "a
+    human claimed the request and said nothing": the bounce, which acts on the
+    second, and auto-close, which must not bury it. One definition, so the two
+    cannot drift into disagreeing about what an answer is.
+    """
+    return (
+        select(Message.id)
+        .where(
+            Message.chat_id == Chat.id,
+            Message.role == MessageRole.operator,
+        )
+        .exists()
+    )
+
+
 def bounce_abandoned_claims(db: Session, *, now: datetime | None = None) -> int:
     """Return dropped claims to the queue. Returns the count bounced.
 
@@ -294,14 +312,7 @@ def bounce_abandoned_claims(db: Session, *, now: datetime | None = None) -> int:
     """
     reference = now or _utcnow()
     cutoff = reference - timedelta(seconds=settings.operator_claim_bounce_seconds)
-    answered_exists = (
-        select(Message.id)
-        .where(
-            Message.chat_id == Chat.id,
-            Message.role == MessageRole.operator,
-        )
-        .exists()
-    )
+    answered_exists = _operator_answered_exists()
     abandoned = (
         db.query(EscalationTicket)
         .join(Chat, EscalationTicket.chat_id == Chat.id)
@@ -367,8 +378,15 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
     Tickets with no ``chat_id`` (direct API creations) are left alone — there is
     no conversation to age them against.
 
+    A claim that produced **no answer at all** is never closed here, whether or
+    not it has already bounced. Closing it would destroy the only trace that a
+    visitor asked for a human, a human took the request, and nobody ever
+    replied — the queue is the only place that shows. Such a ticket stays
+    visible until someone deals with it. The class is narrow by construction
+    and it is meant to be conspicuous.
+
     Both *active* statuses age out, ``in_progress`` as well as ``open``. A
-    claimed ticket is not permanently exempt: an operator answered and the
+    claimed ticket that was answered is not permanently exempt: an operator answered and the
     conversation then ended naturally is the ordinary happy path, and leaving
     it ``in_progress`` forever would recreate the never-closing backlog this
     pass exists to drain, one status over. A claim that produced *no* answer
@@ -392,6 +410,14 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
             EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
             Chat.updated_at < cutoff,
             Chat.operator_state != OperatorState.live,
+            # An operator took this request and never wrote a word. Closing it
+            # destroys the only trace that someone was left waiting, so it
+            # stays in the queue until a human deals with it. Also removes any
+            # dependence on the relative ordering of
+            # ``conversation_idle_timeout_seconds`` and
+            # ``operator_claim_bounce_seconds``: a ticket whose bounce is still
+            # ahead of it cannot be closed out from under the bounce.
+            or_(Chat.operator_joined_at.is_(None), _operator_answered_exists()),
         )
         .order_by(EscalationTicket.created_at)
         .limit(_MAX_SESSIONS_PER_SWEEP)

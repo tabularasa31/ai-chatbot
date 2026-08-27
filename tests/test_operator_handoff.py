@@ -697,6 +697,20 @@ def test_sweeper_releases_a_chat_whose_operator_vanished(db_session: Session) ->
         chat_id=chat.id,
     )
     db_session.add(ticket)
+    # The operator answered before vanishing. Without that, auto-close would
+    # refuse the ticket on the abandoned-claim rule and this test would be
+    # asserting that rule instead of the release it is about. Inserted by
+    # chat_id rather than through the relationship so ``chats.updated_at``
+    # stays pinned.
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.operator,
+            content="Looking into it now.",
+            operator_user_id=operator.id,
+            created_at=stale_at,
+        )
+    )
     db_session.commit()
 
     # Before the release the ticket is untouchable, however stale it looks.
@@ -1217,6 +1231,110 @@ def test_an_abandoned_claim_bounces_back_to_open_and_notifies_once(
     assert (
         db_session.get(EscalationTicket, ticket.id).status
         is EscalationStatus.in_progress
+    )
+
+
+def test_auto_close_never_buries_a_claim_that_produced_no_answer(
+    db_session: Session,
+) -> None:
+    """A visitor asked for a human, a human took it, nobody ever replied.
+
+    Auto-closing that would destroy the only trace of it — the queue is the
+    only place it shows. It stays visible until someone deals with it, however
+    long the conversation has been quiet.
+    """
+    from backend.core.config import settings
+    from backend.jobs.chat_session_sweeper import auto_close_stale_tickets
+
+    tenant_row = _bare_tenant(db_session, "Buried Co")
+    operator = _second_user_in_tenant(
+        db_session, tenant_row.id, email="silent@buried.example"
+    )
+    long_gone = timedelta(seconds=settings.conversation_idle_timeout_seconds + 86400)
+    chat, ticket = _claimed_chat_with_ticket(
+        db_session,
+        tenant_row.id,
+        operator_id=operator.id,
+        claimed_ago=long_gone,
+    )
+    # Released back to the bot, so nothing else shields it from auto-close.
+    ticket.status = EscalationStatus.open
+    ticket.claim_bounced_at = _utcnow()
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.query(Chat).filter(Chat.id == chat.id).update(
+        {
+            "operator_state": OperatorState.bot,
+            "assigned_operator_id": None,
+            # Named explicitly: a bulk UPDATE still applies the column's
+            # ``onupdate`` otherwise, and the chat would stop looking stale.
+            # The sweeper's own release pins it the same way.
+            "updated_at": chat.updated_at,
+        },
+        synchronize_session=False,
+    )
+    db_session.commit()
+
+    assert auto_close_stale_tickets(db_session) == 0
+
+    db_session.expire_all()
+    assert db_session.get(EscalationTicket, ticket.id).status is EscalationStatus.open
+
+
+def test_auto_close_still_closes_a_claim_that_was_answered(
+    db_session: Session,
+) -> None:
+    """Answered then quiet is the ordinary drain, not an abandoned claim.
+
+    The exemption above must not turn every chat an operator ever touched into
+    a ticket that never closes.
+    """
+    from backend.core.config import settings
+    from backend.jobs.chat_session_sweeper import auto_close_stale_tickets
+
+    tenant_row = _bare_tenant(db_session, "Answered Co")
+    operator = _second_user_in_tenant(
+        db_session, tenant_row.id, email="spoke@answered.example"
+    )
+    long_gone = timedelta(seconds=settings.conversation_idle_timeout_seconds + 86400)
+    chat, ticket = _claimed_chat_with_ticket(
+        db_session,
+        tenant_row.id,
+        operator_id=operator.id,
+        claimed_ago=long_gone,
+    )
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.operator,
+            content="Fixed it, sorry for the trouble.",
+            operator_user_id=operator.id,
+            created_at=_utcnow() - long_gone,
+        )
+    )
+    db_session.commit()
+    # Bulk UPDATE, not an ORM write: touching the instance would fire
+    # ``Chat.updated_at``'s ``onupdate`` and the chat would stop looking stale,
+    # which is the same trap the sweeper's own release avoids.
+    db_session.query(Chat).filter(Chat.id == chat.id).update(
+        {
+            "operator_state": OperatorState.bot,
+            "assigned_operator_id": None,
+            # Named explicitly: a bulk UPDATE still applies the column's
+            # ``onupdate`` otherwise, and the chat would stop looking stale.
+            # The sweeper's own release pins it the same way.
+            "updated_at": chat.updated_at,
+        },
+        synchronize_session=False,
+    )
+    db_session.commit()
+
+    assert auto_close_stale_tickets(db_session) == 1
+
+    db_session.expire_all()
+    assert (
+        db_session.get(EscalationTicket, ticket.id).status
+        is EscalationStatus.auto_closed
     )
 
 

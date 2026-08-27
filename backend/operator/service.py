@@ -153,10 +153,15 @@ def ingest_from_operator(
     chat_reopened = chat.ended_at is not None
     if chat_reopened:
         chat.ended_at = None
-        # The visitor is back in an open conversation, so the analytics marker
-        # must not keep the row out of the sweeper's partial index — a second
-        # idle period has to be reported on its own merits.
-        chat.session_ended_event_at = None
+        # ``session_ended_event_at`` is deliberately left set. Re-arming it
+        # would make the sweeper emit a second ``chat_session_ended`` for this
+        # chat, and that event measures ``duration_ms`` from ``chat.created_at``
+        # — so the repeat would not describe the operator-served stretch, it
+        # would restate the first event with the idle wait folded in. Session
+        # counts would double and average duration would inflate.
+        #
+        # The operator-served stretch needs its own event, measured from
+        # ``operator_joined_at``, rather than a second helping of this one.
 
     claimed = actor.user_id is not None and chat.assigned_operator_id is None
     if claimed:

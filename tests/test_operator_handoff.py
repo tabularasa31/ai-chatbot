@@ -467,6 +467,42 @@ def test_operator_message_reopens_a_chat_the_visitor_closed(
     assert refreshed.operator_state is OperatorState.live
 
 
+def test_reopening_a_chat_keeps_the_session_ended_marker(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Reopening must not re-arm ``chat_session_ended`` for this chat.
+
+    The event measures ``duration_ms`` from ``chat.created_at``, so a second
+    emission would not describe the operator-served stretch — it would restate
+    the first one with the idle wait folded in, doubling session counts and
+    inflating average duration. The operator stretch gets its own event,
+    measured from ``operator_joined_at``, instead of a second helping of this
+    one.
+    """
+    ws = _make_workspace(tenant, db_session, email="marker@example.com", name="Marker Co")
+    reported_at = _utcnow() - timedelta(minutes=30)
+    chat = _make_chat(
+        db_session,
+        ws.tenant_id,
+        ended_at=_utcnow() - timedelta(minutes=20),
+    )
+    chat.session_ended_event_at = reported_at
+    db_session.commit()
+
+    resp = tenant.post(
+        f"/operator/chats/{chat.id}/messages",
+        headers=ws.auth,
+        json={"text": "Picking this up now."},
+    )
+
+    assert resp.status_code == 200, resp.text
+    db_session.expire_all()
+    refreshed = db_session.get(Chat, chat.id)
+    assert refreshed.ended_at is None
+    assert refreshed.session_ended_event_at == reported_at
+
+
 def test_operator_message_does_not_reassign_a_colleagues_chat(
     tenant: TestClient,
     db_session: Session,

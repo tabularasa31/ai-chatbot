@@ -62,6 +62,36 @@ class OperatorState(str, enum.Enum):
     live = "live"
 
 
+class OperatorSessionEndReason(str, enum.Enum):
+    """Why an operator-served stretch of a conversation ended.
+
+    Recorded on ``operator_sessions.ended_reason`` and carried on the
+    ``operator_session_ended`` analytics event. The distinctions are the ones
+    a support team reads differently, not merely the code paths: a stretch an
+    operator closed deliberately, one that timed out with nobody left in the
+    room, and one handed back because the visitor came back to a silent
+    operator all mean different things about how the handoff went.
+    """
+
+    # An operator handed the chat back explicitly (console button / API).
+    released = "released"
+    # The operator went silent past ``OPERATOR_RELEASE_IDLE_SECONDS`` and
+    # nobody wrote again — the sweeper's backstop release closed the stretch.
+    # The ordinary end of a conversation that simply finished.
+    idle_timeout = "idle_timeout"
+    # The visitor wrote again while the operator was idle past the same
+    # window, so the bot took the turn (lazy release in ``OperatorHandler``).
+    # Same rule as ``idle_timeout``, different trigger — and the difference
+    # matters: here the conversation was still going when the human dropped
+    # out of it.
+    visitor_returned = "visitor_returned"
+    # The row was found open while its chat was already back in ``bot``: a
+    # release whose row-close did not land (a crash between the two writes) or
+    # a chat that was live before this table existed. Closed by the sweeper's
+    # reconciliation pass at the chat's own release time, not sweep time.
+    reconciled = "reconciled"
+
+
 class MessageFeedback(str, enum.Enum):
     none = "none"
     up = "up"

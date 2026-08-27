@@ -595,6 +595,57 @@ def _session_duration_ms(created_at: datetime | None, ended_at: datetime | None)
     return max(0, int(delta))
 
 
+def _emit_operator_session_ended_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+    operator_session_id: str,
+    operator_user_id: str | None,
+    session_id: str | None = None,
+    duration_ms: int | None = None,
+    first_response_ms: int | None = None,
+    answered: bool = False,
+    ended_reason: str | None = None,
+) -> None:
+    """Report one operator-served stretch of a conversation.
+
+    Deliberately not a second ``chat_session_ended``: that event describes the
+    whole chat from ``created_at``, is emitted at most once, and a repeat for
+    the operator stretch would restate it with the idle wait folded in —
+    doubling session counts and inflating average duration (see 1bd8bd5). A
+    stretch is also repeatable within one chat, so it carries its own id.
+
+    ``first_response_ms`` runs from the escalation ticket's ``created_at``,
+    not from the moment the operator joined; ``None`` when the stretch was
+    never answered or had no ticket behind it. ``answered=False`` is the
+    claim that produced nothing — the shape ``bounce_abandoned_claims``
+    catches from the ticket side.
+    """
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "operator_session_ended",
+            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "chat_id": chat_id,
+                "session_id": session_id,
+                "operator_session_id": operator_session_id,
+                "operator_user_id": operator_user_id,
+                "duration_ms": duration_ms,
+                "first_response_ms": first_response_ms,
+                "answered": answered,
+                "ended_reason": ended_reason,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit operator_session_ended event", exc_info=True)
+
+
 def _emit_chat_session_ended_event(
     *,
     tenant_public_id: str | None,

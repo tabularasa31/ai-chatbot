@@ -21,8 +21,9 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from backend.escalation.service import mark_ticket_in_progress
-from backend.models import Chat, Message, OperatorState
+from backend.models import Chat, Message, OperatorSessionEndReason, OperatorState
 from backend.models.base import _utcnow
+from backend.operator.sessions import open_operator_session, record_operator_reply
 
 
 class OperatorChannel(str, enum.Enum):
@@ -120,6 +121,11 @@ def claim_chat(db: Session, *, chat_id: uuid.UUID, tenant_id: uuid.UUID, user_id
     Applies :func:`taken_over_values` so this and ``/messages`` agree on what
     "an operator has this chat" means — reopening a closed chat included.
     """
+    # Naive UTC — the column is ``DateTime`` with no timezone and asyncpg
+    # refuses aware values. See ``models/base._utcnow``. Taken once so the
+    # chat's join stamp and the stretch's ``joined_at`` are the same instant
+    # rather than two clocks that can be read against each other.
+    joined_at = _utcnow()
     updated = (
         db.query(Chat)
         .filter(
@@ -132,9 +138,7 @@ def claim_chat(db: Session, *, chat_id: uuid.UUID, tenant_id: uuid.UUID, user_id
                 **taken_over_values(),
                 "assigned_operator_id": user_id,
                 "operator_state": OperatorState.live,
-                # Naive UTC — the column is ``DateTime`` with no timezone and
-                # asyncpg refuses aware values. See ``models/base._utcnow``.
-                "operator_joined_at": _utcnow(),
+                "operator_joined_at": joined_at,
                 "operator_released_at": None,
             },
             synchronize_session=False,
@@ -144,6 +148,18 @@ def claim_chat(db: Session, *, chat_id: uuid.UUID, tenant_id: uuid.UUID, user_id
         # Same commit as the claim: the inbox must never show a chat as taken
         # while its ticket still reads ``open``, in either direction.
         mark_ticket_in_progress(db, chat_id=chat_id)
+        # Likewise same commit: the stretch a human is about to serve starts
+        # being recorded the moment they take it, not the moment they reply.
+        # A row without its claim (or a claim without its row) would leave the
+        # handoff observable only in the half that landed. Ordered after the
+        # ticket move so the stretch resolves the ticket it is working.
+        open_operator_session(
+            db,
+            chat_id=chat_id,
+            tenant_id=tenant_id,
+            operator_user_id=user_id,
+            joined_at=joined_at,
+        )
     db.commit()
     return bool(updated)
 
@@ -164,7 +180,7 @@ def release_chat(db: Session, chat: Chat) -> Chat:
     if chat.operator_state is OperatorState.bot:
         return chat
 
-    release_to_bot(db, chat)
+    release_to_bot(db, chat, reason=OperatorSessionEndReason.released)
     db.commit()
     db.refresh(chat)
     return chat
@@ -218,9 +234,10 @@ def ingest_from_operator(
     if claimed:
         chat.assigned_operator_id = actor.user_id
 
+    replied_at = _utcnow()
     if chat.operator_state is not OperatorState.live:
         chat.operator_state = OperatorState.live
-        chat.operator_joined_at = _utcnow()
+        chat.operator_joined_at = replied_at
         chat.operator_released_at = None
     db.add(chat)
     # Answering *is* taking, so this runs on every ingest, not only when the
@@ -229,6 +246,19 @@ def ingest_from_operator(
     # user) claims nothing but is still a human working the request. The call
     # only ever moves a ticket out of ``open``, so repeating it is a no-op.
     mark_ticket_in_progress(db, chat_id=chat.id)
+    # Stamped before the message is written rather than from the persisted
+    # row's ``created_at``, because ``_persist_operator_message`` commits: the
+    # stretch has to be staged by then to land in the same transaction as the
+    # reply it describes. The two instants differ by the width of a flush.
+    # Opens the stretch when none is — an operator answering an unclaimed chat
+    # never pressed "take".
+    record_operator_reply(
+        db,
+        chat_id=chat.id,
+        tenant_id=tenant_id,
+        operator_user_id=actor.user_id,
+        at=replied_at,
+    )
 
     message = _persist_operator_message(
         db,

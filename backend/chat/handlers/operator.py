@@ -30,7 +30,13 @@ from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.core.config import settings
-from backend.models import Chat, Message, MessageRole, OperatorState
+from backend.models import (
+    Chat,
+    Message,
+    MessageRole,
+    OperatorSessionEndReason,
+    OperatorState,
+)
 from backend.models.base import _utcnow
 
 
@@ -77,11 +83,31 @@ def released_to_bot_values() -> dict[str, object]:
     }
 
 
-def release_to_bot(db: Session, chat: Chat) -> None:
-    """Hand the conversation back to the bot (ORM path, on a live turn)."""
+def release_to_bot(
+    db: Session, chat: Chat, *, reason: OperatorSessionEndReason
+) -> None:
+    """Hand the conversation back to the bot (ORM path) and close the stretch.
+
+    ``reason`` is the caller's, because only the caller knows why: the
+    explicit release button and this module's lazy release apply the same
+    columns but mean different things to whoever reads the numbers later —
+    a stretch an operator ended, versus one the visitor walked back into
+    while the operator was silent.
+
+    :func:`~backend.operator.sessions.close_operator_session` commits, so the
+    released columns staged just above land in the same transaction as the
+    closed stretch. Callers keep their own ``commit()`` — it is then a no-op
+    on the ORM path and still correct for a chat that had no open stretch to
+    close (one that went ``live`` before this table existed).
+    """
+    from backend.operator.sessions import close_operator_session
+
     for column, value in released_to_bot_values().items():
         setattr(chat, column, value)
     db.add(chat)
+    close_operator_session(
+        db, chat=chat, reason=reason, ended_at=chat.operator_released_at
+    )
 
 
 def operator_is_idle(db: Session, chat: Chat) -> bool:
@@ -125,7 +151,12 @@ class OperatorHandler(PipelineHandler):
         chat = ctx.chat
 
         if operator_is_idle(sync_db, chat):
-            release_to_bot(sync_db, chat)
+            # ``visitor_returned``, not ``idle_timeout``: the operator went
+            # quiet past the same window either way, but here the visitor is
+            # still in the conversation and just got handed back to the bot.
+            release_to_bot(
+                sync_db, chat, reason=OperatorSessionEndReason.visitor_returned
+            )
             sync_db.commit()
             if ctx.trace is not None:
                 ctx.trace.update(

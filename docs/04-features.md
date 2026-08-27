@@ -37,6 +37,27 @@ Full reset flow:
 3. Link contains a one-time token (1-hour TTL)
 4. User sets a new password at `/reset-password`
 
+### Roles and team members
+
+A workspace has two roles, stored as a plain string in `users.role`:
+
+| | `owner` | `operator` |
+|---|---|---|
+| Inbox: read, reply, close | yes | yes |
+| Logs and transcripts | yes | yes |
+| Knowledge base | read + edit | read only |
+| Gap Analyzer: view, prepare a draft | yes | yes |
+| Publishing an FAQ | yes | no |
+| Settings, API keys, privacy config, member management, tenant deletion | yes | no |
+
+Publishing is owner-only because an FAQ publish changes the bot's answers for every visitor — a content decision, not an operational one.
+
+Routes enforce this with `require_owner` / `require_member` from `backend/auth/middleware.py`, built by `require_role(*roles)`. A member holding the wrong role gets **403**; a principal belonging to no workspace at all (`users.tenant_id` is nullable) gets **404**, the same answer every tenant-scoped route already gives them. Cross-tenant resources still answer **404**, because the role check only inspects the caller — the tenant-scoped lookup after it is what refuses the row.
+
+Four owner-only routes manage the team: `POST /tenants/members/invite`, `GET /tenants/members`, `PATCH /tenants/members/{id}`, `DELETE /tenants/members/{id}`. The last owner can be neither removed nor demoted, and nobody can remove themselves. Removal detaches (`tenant_id → NULL`, role back to `owner`) rather than deleting, so transcripts keep naming the operator who answered in them.
+
+**The invite token is the password-reset token** (`reset_password_token` + its expiry, redeemed by `POST /auth/reset-password`) with a 7-day TTL instead of the reset's hour. An invite and a reset are the same act — prove the address, set a password — and nothing needs to distinguish them at rest: the two links differ by path (`/accept-invite` vs `/reset-password`), and "invited but not accepted" is derivable as a member who is not yet verified.
+
 ### Admin flag
 
 Users can have `is_admin = true`. Admins see an **Admin** section in the **sidebar** (app shell) and can access platform-wide metrics (`GET /admin/metrics/*`) — total users, sessions, tokens used across all clients.

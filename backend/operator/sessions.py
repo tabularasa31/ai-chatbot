@@ -20,7 +20,6 @@ rest of the operator domain.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import datetime
 
@@ -33,8 +32,6 @@ from backend.models import (
     OperatorSessionEndReason,
 )
 from backend.models.base import _utcnow
-
-logger = logging.getLogger(__name__)
 
 
 def get_open_operator_session(db: Session, *, chat_id: uuid.UUID) -> OperatorSession | None:
@@ -172,6 +169,14 @@ def close_operator_session(
     closes. The emit follows the commit for the same reason the session
     sweeper's does: an event that is never sent twice is worth more than one
     that is never missed.
+
+    A commit failure propagates rather than being logged and swallowed. On the
+    ORM path this transaction carries the release itself, and swallowing would
+    hand the caller a chat it believes is back with the bot while the row still
+    reads ``live`` — the bot answering over a live operator is the one failure
+    the handoff exists to prevent. The sweeper's two callers, whose releases are
+    already committed, catch it themselves and move on to the next row, exactly
+    as its other passes do.
     """
     session = get_open_operator_session(db, chat_id=chat.id)
     if session is None:
@@ -179,14 +184,7 @@ def close_operator_session(
     session.ended_at = ended_at or _utcnow()
     session.ended_reason = reason
     db.add(session)
-    try:
-        db.commit()
-    except Exception:
-        logger.exception(
-            "failed to close operator session %s on chat %s", session.id, chat.id
-        )
-        db.rollback()
-        return None
+    db.commit()
     _emit_for(db, chat=chat, session=session)
     return session
 

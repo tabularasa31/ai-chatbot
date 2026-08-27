@@ -263,15 +263,24 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
             continue
         # After the release is durably committed, so the event is at-most-once
         # (same rule as the marker-then-emit order above). The bulk UPDATE
-        # cannot carry the stretch with it, so a crash in between leaves a row
-        # still open — :func:`close_orphaned_operator_sessions` closes it on a
-        # later tick at the chat's own release time.
-        close_operator_session(
-            db,
-            chat=chat,
-            reason=OperatorSessionEndReason.idle_timeout,
-            ended_at=reference,
-        )
+        # cannot carry the stretch with it, so a failure here — or a crash in
+        # between — leaves a row still open, which
+        # :func:`close_orphaned_operator_sessions` closes on a later tick at
+        # the chat's own release time. The release itself already stands, so
+        # the count is incremented either way.
+        try:
+            close_operator_session(
+                db,
+                chat=chat,
+                reason=OperatorSessionEndReason.idle_timeout,
+                ended_at=reference,
+            )
+        except Exception:
+            logger.exception(
+                "chat_session_sweeper failed to close operator session on chat %s",
+                chat.id,
+            )
+            db.rollback()
         count += 1
     return count
 
@@ -505,12 +514,20 @@ def close_orphaned_operator_sessions(db: Session, *, now: datetime | None = None
     )
     count = 0
     for chat in chats:
-        closed = close_operator_session(
-            db,
-            chat=chat,
-            reason=OperatorSessionEndReason.reconciled,
-            ended_at=chat.operator_released_at or reference,
-        )
+        try:
+            closed = close_operator_session(
+                db,
+                chat=chat,
+                reason=OperatorSessionEndReason.reconciled,
+                ended_at=chat.operator_released_at or reference,
+            )
+        except Exception:
+            logger.exception(
+                "chat_session_sweeper failed to reconcile operator session on chat %s",
+                chat.id,
+            )
+            db.rollback()
+            continue
         if closed is not None:
             count += 1
     return count

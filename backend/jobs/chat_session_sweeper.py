@@ -1,6 +1,6 @@
 """Background job: report inactive chat sessions, and age out stale tickets.
 
-Four passes per tick, in this order:
+Five passes per tick, in this order:
 
 1. :func:`release_idle_operator_chats` hands back a chat whose human operator
    went silent past ``OPERATOR_RELEASE_IDLE_SECONDS``. It runs first because
@@ -13,6 +13,16 @@ Four passes per tick, in this order:
 4. :func:`auto_close_stale_tickets` closes escalation tickets whose
    conversation is over (see its docstring for why tickets never leave
    ``open`` otherwise).
+5. :func:`close_orphaned_operator_sessions` closes an ``operator_sessions``
+   row whose chat is already back in ``bot`` — the backstop for a release
+   whose stretch-close did not land. Last, because it is a backstop and
+   because it must not disturb the ordering the four passes above rely on; it
+   writes to no table any of them read.
+
+Pass 1 is where most operator stretches are reported: a support conversation
+ends when it ends and nobody presses "release", so the idle backstop, not the
+button, is what closes the typical stretch and emits
+``operator_session_ended``.
 
 Passes 2 and 4 share the ``conversation_idle_timeout_seconds`` window. Pass 1
 uses ``OPERATOR_RELEASE_IDLE_SECONDS`` and pass 3
@@ -59,6 +69,8 @@ from backend.models import (
     EscalationTicket,
     Message,
     MessageRole,
+    OperatorSession,
+    OperatorSessionEndReason,
     OperatorState,
 )
 from backend.models.base import _utcnow
@@ -212,6 +224,10 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
     abandoned, and its ticket would never age out.
     """
     from backend.chat.handlers.operator import operator_is_idle, released_to_bot_values
+    from backend.operator.sessions import (
+        close_operator_session,
+        emit_operator_session_ended,
+    )
 
     reference = now or _utcnow()
     live = (
@@ -241,6 +257,21 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
                 },
                 synchronize_session=False,
             )
+            # Same transaction as the release, deliberately. Closing the
+            # stretch in a second transaction leaves a window in which the
+            # chat reads ``bot`` while its stretch is still open — and an
+            # operator answering in that window would have their *new* stretch
+            # merged into the old open row and then closed along with it,
+            # losing the second stretch permanently: the chat is ``live``
+            # again with nothing open, and the reconciliation pass below only
+            # looks at chats that are not ``live``. Reported nowhere, which is
+            # the exact failure this table exists to end.
+            released = close_operator_session(
+                db,
+                chat=chat,
+                reason=OperatorSessionEndReason.idle_timeout,
+                ended_at=reference,
+            )
             db.commit()
         except Exception:
             logger.exception(
@@ -248,6 +279,9 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
             )
             db.rollback()
             continue
+        # Only after the commit, so the event is at-most-once — the same rule
+        # as the marker-then-emit order above.
+        emit_operator_session_ended(released)
         count += 1
     return count
 
@@ -442,6 +476,73 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
     return count
 
 
+def close_orphaned_operator_sessions(db: Session, *, now: datetime | None = None) -> int:
+    """Close stretches left open by a chat that is already back in ``bot``.
+
+    Every release closes its own stretch in the same transaction, so this pass
+    normally finds nothing. It exists for the rows no release will ever reach:
+    a chat that went ``live`` before ``operator_sessions`` existed, and a
+    stretch whose release landed while its close did not (a crash between the
+    write and the commit, or a future release path that forgets). Without it
+    such a row stays open forever and its stretch is never reported, which is
+    the exact failure this table was added to end.
+
+    It cannot cover a chat that is currently ``live`` — that is a stretch in
+    progress, not an orphan — which is why the release paths close their own
+    stretch atomically rather than relying on this pass to tidy up after them.
+
+    Closed at ``chats.operator_released_at`` rather than sweep time: the
+    stretch really ended when the chat was handed back, and stamping the
+    moment we noticed would inflate every duration by up to one tick.
+
+    Touches ``operator_sessions`` only — no chat, no ticket — so it cannot
+    interfere with :func:`auto_close_stale_tickets`. Ordered last in the tick
+    for the same reason: it is a backstop, and the four passes above keep the
+    ordering their docstrings describe.
+    """
+    from backend.operator.sessions import (
+        close_operator_session,
+        emit_operator_session_ended,
+    )
+
+    reference = now or _utcnow()
+    # No eager loads: each close commits, which expires everything loaded here,
+    # so the tenant/bot the event needs are re-read per row anyway. This pass
+    # normally selects nothing at all, and is capped like every other.
+    chats = (
+        db.query(Chat)
+        .join(OperatorSession, OperatorSession.chat_id == Chat.id)
+        .filter(
+            OperatorSession.ended_at.is_(None),
+            Chat.operator_state != OperatorState.live,
+        )
+        .order_by(OperatorSession.joined_at)
+        .limit(_MAX_SESSIONS_PER_SWEEP)
+        .all()
+    )
+    count = 0
+    for chat in chats:
+        try:
+            closed = close_operator_session(
+                db,
+                chat=chat,
+                reason=OperatorSessionEndReason.reconciled,
+                ended_at=chat.operator_released_at or reference,
+            )
+            db.commit()
+        except Exception:
+            logger.exception(
+                "chat_session_sweeper failed to reconcile operator session on chat %s",
+                chat.id,
+            )
+            db.rollback()
+            continue
+        if closed is not None:
+            emit_operator_session_ended(closed)
+            count += 1
+    return count
+
+
 def _sweep_once() -> None:
     from backend.core.db import SessionLocal
 
@@ -466,6 +567,11 @@ def _sweep_once() -> None:
         closed = auto_close_stale_tickets(db)
         if closed:
             logger.info("chat_session_sweeper: auto-closed %d stale tickets", closed)
+        orphaned = close_orphaned_operator_sessions(db)
+        if orphaned:
+            logger.info(
+                "chat_session_sweeper: closed %d orphaned operator sessions", orphaned
+            )
     finally:
         db.close()
 

@@ -9,9 +9,12 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
 from backend.auth.schemas import (
+    AcceptInvitationRequest,
+    AcceptInvitationResponse,
     AuthResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
+    InvitationPreviewResponse,
     LoginRequest,
     RegisterRequest,
     RegisterResponse,
@@ -34,6 +37,12 @@ from backend.core.limiter import limiter
 from backend.email.service import send_email
 from backend.models import User
 from backend.models.base import _utcnow
+from backend.tenants.members_service import (
+    accept_invitation,
+    find_invitation_by_token,
+    invitation_needs_password,
+    workspace_name,
+)
 from backend.tenants.service import (
     ensure_tenant_for_user,
 )
@@ -270,6 +279,53 @@ def reset_password_endpoint(
         )
     return ResetPasswordResponse(
         message="Password updated successfully. You can now log in."
+    )
+
+
+@auth_router.get("/invitation", response_model=InvitationPreviewResponse)
+def get_invitation_route(
+    token: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> InvitationPreviewResponse:
+    """Describe a live invitation so the accept page knows what to ask.
+
+    Public and session-free on purpose: the invitee may have no account yet,
+    and one who does should not have to sign in first to answer. Holding the
+    token is what this answers to, and the token was mailed to the address it
+    names. 400 for anything not live — unknown, spent, or expired.
+    """
+    invitation = find_invitation_by_token(token, db)
+    return InvitationPreviewResponse(
+        email=invitation.email,
+        workspace_name=workspace_name(invitation.tenant_id, db),
+        role=invitation.role,
+        needs_password=invitation_needs_password(invitation, db),
+    )
+
+
+@auth_router.post("/invitation/accept", response_model=AcceptInvitationResponse)
+@limiter.limit("10/hour")
+def accept_invitation_route(
+    request: Request,
+    body: AcceptInvitationRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> AcceptInvitationResponse:
+    """Join a workspace by following an invitation.
+
+    The affirmative act. This is the only path by which anyone acquires a
+    ``tenant_id``, so a workspace can never gain a member who did not answer
+    for themselves.
+
+    Errors: 400 (invalid, spent or expired link; missing password for a new
+    account; a password sent for an account that already has one), 409 (the
+    account acquired a workspace since the invitation was sent).
+    """
+    result = accept_invitation(token=body.token, password=body.password, db=db)
+    return AcceptInvitationResponse(
+        email=result.user.email,
+        workspace_name=result.workspace_name,
+        role=result.user.role,
+        password_set=result.password_set,
     )
 
 

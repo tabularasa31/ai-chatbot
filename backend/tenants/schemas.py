@@ -13,9 +13,10 @@ from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 #: module stays the source of truth for the values themselves.
 TenantRole = Literal["owner", "operator"]
 
-#: Derived, not stored: a member who has not yet set a password from their
-#: invite link is ``pending``. See ``members_service`` for why that needs no
-#: column of its own.
+#: ``pending`` is an invitation that has been sent and not yet accepted — a
+#: ``tenant_invitations`` row, not a member. ``active`` is someone who has
+#: actually joined. The team screen shows both in one list, so both carry the
+#: same shape; the id addresses whichever row it came from.
 TenantMemberStatus = Literal["active", "pending"]
 
 
@@ -40,18 +41,6 @@ class InviteMemberRequest(BaseModel):
 
     email: EmailStr
     role: TenantRole = "operator"
-
-
-class InviteMemberResponse(BaseModel):
-    """Result of an invite.
-
-    ``invite_sent`` is False when the invitee already had a usable password
-    (an existing account with no workspace): they were added outright and no
-    set-password link was issued.
-    """
-
-    member: TenantMemberResponse
-    invite_sent: bool
 
 
 class UpdateMemberRoleRequest(BaseModel):

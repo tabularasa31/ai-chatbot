@@ -79,15 +79,6 @@ export default function PlanSettingsPage() {
         </p>
       </div>
 
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-        <p className="text-sm text-amber-900">
-          <span className="font-medium">Not switched on yet.</span> The handoff
-          features listed under Pro are still in development. Choosing Pro
-          records your choice; it does not change how your bot or your
-          escalations behave today.
-        </p>
-      </div>
-
       {(error || loadError) && (
         <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
           {error ||

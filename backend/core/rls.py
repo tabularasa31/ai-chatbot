@@ -65,7 +65,6 @@ TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "pii_events",
     "quick_answers",
     "tenant_faq",
-    "tenant_invitations",
     "tenant_profiles",
     "url_sources",
 )

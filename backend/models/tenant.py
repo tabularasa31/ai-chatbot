@@ -2,17 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import (
-    JSON,
-    Boolean,
-    Column,
-    DateTime,
-    ForeignKey,
-    Index,
-    String,
-    Text,
-    UniqueConstraint,
-)
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
@@ -99,12 +89,6 @@ class Tenant(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    invitations = relationship(
-        "TenantInvitation",
-        back_populates="tenant",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
 
 
 # Status values for TenantApiKey.status. Kept as plain strings (no Enum) to
@@ -112,60 +96,6 @@ class Tenant(Base):
 TENANT_API_KEY_STATUS_ACTIVE = "active"
 TENANT_API_KEY_STATUS_REVOKING = "revoking"
 TENANT_API_KEY_STATUS_REVOKED = "revoked"
-
-class TenantInvitation(Base):
-    """An asked-but-not-yet-joined membership.
-
-    Membership itself lives on ``users`` (``tenant_id`` + ``role``). This row
-    is the state *before* that: someone has been asked to join, and has not
-    yet said yes. It is deliberately not a user row — a pending invitation
-    must grant nothing, and anything written onto ``users`` grants access the
-    moment it lands.
-
-    One row per (tenant, e-mail): re-inviting overwrites the token and expiry
-    in place, so a lost e-mail is fixed by sending another and the previous
-    link dies. ``accepted_at`` keeps the row as a record afterwards, with
-    ``token`` cleared so an accepted link cannot be replayed even before it
-    would have expired.
-    """
-
-    __tablename__ = "tenant_invitations"
-
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    email = Column(String(255), nullable=False)
-    role = Column(String(32), nullable=False)
-    # Cleared on acceptance; NULL is not unique-constrained in either dialect,
-    # so accepted rows coexist freely.
-    token = Column(String(128), unique=True, nullable=True, index=True)
-    expires_at = Column(DateTime, nullable=False)
-    accepted_at = Column(DateTime, nullable=True)
-    invited_by_user_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
-    )
-
-    tenant = relationship("Tenant", back_populates="invitations")
-
-    __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "email", name="uq_tenant_invitations_tenant_email"
-        ),
-    )
-
 
 TENANT_API_KEY_REASONS = ("leaked", "scheduled", "compromise", "manual", "other")
 

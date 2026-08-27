@@ -117,57 +117,6 @@ class ResetPasswordResponse(BaseModel):
     message: str
 
 
-class InvitationPreviewResponse(BaseModel):
-    """What the accept-invite page needs before it can ask anything.
-
-    ``needs_password`` is False for an address that already has an account:
-    joining a workspace is not a credential action, so the page must not ask
-    an existing account to overwrite a password it is still using.
-    """
-
-    email: str
-    workspace_name: str
-    role: str
-    needs_password: bool
-
-
-class AcceptInvitationRequest(BaseModel):
-    """Request body for accepting an invitation.
-
-    ``password`` is required only when the address has no account yet, and
-    rejected when it has one — see ``InvitationPreviewResponse``.
-    """
-
-    token: str
-    password: str | None = None
-
-    @field_validator("password")
-    @classmethod
-    def validate_password_strength(cls, v: str | None) -> str | None:
-        """Same rules as registration; ``None`` means "not setting one"."""
-        if v is None:
-            return v
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters long")
-        if not _PASSWORD_PATTERN.match(v):
-            raise ValueError(
-                "Password must include at least one uppercase letter, "
-                "one number, and one special character"
-            )
-        return v
-
-
-class AcceptInvitationResponse(BaseModel):
-    """Result of joining. No token: accepting proves a mailbox, which is
-    reason enough to join a workspace but not to hand out a session."""
-
-    email: str
-    workspace_name: str
-    role: str
-    password_set: bool
-    message: str = "You've joined the workspace. You can now log in."
-
-
 class ErrorResponse(BaseModel):
     """Error response model."""
 

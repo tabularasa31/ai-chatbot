@@ -17,18 +17,18 @@ const TIERS: Tier[] = [
   {
     value: "free",
     name: "Free",
-    price: "Free",
+    price: "No charge",
     summary: "How escalations work today, and how they keep working if you stay here.",
     points: [
       "An escalation emails your support inbox.",
       "When you reply, your answer goes straight to the visitor's own email address — it never passes through Chat9.",
-      "The chat thread never learns the question was answered, so you close the ticket by hand.",
+      "The chat thread never learns the question was answered, and neither does Chat9.",
     ],
   },
   {
     value: "pro",
     name: "Pro",
-    price: "Free during the beta",
+    price: "No charge during the beta",
     summary: "The operator handoff: your reply comes back into the conversation.",
     points: [
       "An escalation emails your support inbox, the same as today.",
@@ -158,7 +158,9 @@ export default function PlanSettingsPage() {
                       ? "Switching…"
                       : tier.value === "pro"
                         ? "Switch to Pro"
-                        : "Switch back to Free"}
+                        : current === "pro"
+                          ? "Switch back to Free"
+                          : "Switch to Free"}
                 </button>
 
                 {tier.value === "pro" && !isCurrent && (

@@ -91,6 +91,12 @@ export type DisclosureConfigResponse = {
   level: DisclosureLevel;
 };
 
+export type TenantPlan = "free" | "pro";
+
+export type TenantPlanResponse = {
+  plan: TenantPlan;
+};
+
 export type SupportSettingsResponse = {
   l2_email: string | null;
   escalation_language: string | null;
@@ -634,6 +640,24 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to revoke API key"));
       return data as TenantApiKeyResponse;
+    },
+  },
+  plan: {
+    async get(): Promise<TenantPlanResponse> {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/plan`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load your plan"));
+      return data as TenantPlanResponse;
+    },
+    async update(plan: TenantPlan): Promise<TenantPlanResponse> {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/plan`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to change your plan"));
+      return data as TenantPlanResponse;
     },
   },
   support: {

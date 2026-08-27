@@ -9,8 +9,6 @@ body or path, so there is no tenant id to tamper with. Member lookups are
 scoped to that workspace, so a user id from another one answers 404.
 """
 
-from __future__ import annotations
-
 import logging
 import uuid
 from typing import Annotated

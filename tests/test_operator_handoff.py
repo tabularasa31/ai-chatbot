@@ -820,3 +820,229 @@ def test_operator_routes_require_authentication(
         in (401, 403)
     )
     assert tenant.post(f"/operator/chats/{chat.id}/release").status_code in (401, 403)
+
+
+# --------------------------------------------------------------------------
+# The escalation automaton does not survive a handoff
+# --------------------------------------------------------------------------
+
+
+def _open_ticket(db: Session, tenant_id: uuid.UUID, chat: Chat) -> EscalationTicket:
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number=f"ESC-{uuid.uuid4().hex[:6]}",
+        primary_question="my invoice is wrong",
+        trigger=EscalationTrigger.low_similarity,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+    )
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def _arm_every_escalation_flag(
+    db: Session, chat: Chat, ticket: EscalationTicket
+) -> None:
+    """Put the chat in every escalation FSM state at once.
+
+    Not a realistic combination — the automaton is in one state at a time —
+    but each of these independently makes ``EscalationStateMachine.can_handle``
+    claim the turn, so arming all five asserts the reset covers the whole set
+    rather than whichever one the test happened to pick.
+    """
+    chat.escalation_awaiting_ticket_id = ticket.id
+    chat.escalation_pre_confirm_pending = True
+    chat.escalation_pre_confirm_context = {
+        "trigger": "low_similarity",
+        "primary_question": "my invoice is wrong",
+    }
+    chat.escalation_awaiting_request = True
+    chat.escalation_followup_pending = True
+    db.add(chat)
+    db.commit()
+
+
+def _assert_automaton_disarmed(db: Session, chat_id: uuid.UUID) -> None:
+    db.expire_all()
+    refreshed = db.get(Chat, chat_id)
+    assert refreshed.escalation_awaiting_ticket_id is None
+    assert refreshed.escalation_pre_confirm_pending is False
+    assert refreshed.escalation_pre_confirm_context is None
+    assert refreshed.escalation_awaiting_request is False
+    assert refreshed.escalation_followup_pending is False
+
+
+def test_take_clears_the_escalation_automaton_but_not_the_ticket(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A human has taken the request, so the bot's escalation dance is over.
+
+    The ticket is the unit of work and the operator is working it — clearing
+    the automaton state must not delete, resolve or detach it.
+    """
+    ws = _make_workspace(tenant, db_session, email="fsm1@example.com", name="Fsm One")
+    chat = _make_chat(db_session, ws.tenant_id)
+    ticket = _open_ticket(db_session, ws.tenant_id, chat)
+    _arm_every_escalation_flag(db_session, chat, ticket)
+
+    resp = tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth)
+
+    assert resp.status_code == 200, resp.text
+    _assert_automaton_disarmed(db_session, chat.id)
+    surviving = db_session.get(EscalationTicket, ticket.id)
+    assert surviving is not None
+    assert surviving.status is EscalationStatus.open
+    assert surviving.chat_id == chat.id
+
+
+def test_operator_message_clears_the_escalation_automaton_but_not_the_ticket(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """The other entry point must agree: an operator who just starts typing
+    has taken the request exactly as much as one who pressed "take".
+    """
+    ws = _make_workspace(tenant, db_session, email="fsm2@example.com", name="Fsm Two")
+    chat = _make_chat(db_session, ws.tenant_id)
+    ticket = _open_ticket(db_session, ws.tenant_id, chat)
+    _arm_every_escalation_flag(db_session, chat, ticket)
+
+    resp = tenant.post(
+        f"/operator/chats/{chat.id}/messages",
+        headers=ws.auth,
+        json={"text": "Ann here — I've fixed the invoice, take a look."},
+    )
+
+    assert resp.status_code == 200, resp.text
+    _assert_automaton_disarmed(db_session, chat.id)
+    surviving = db_session.get(EscalationTicket, ticket.id)
+    assert surviving is not None
+    assert surviving.status is EscalationStatus.open
+    assert surviving.chat_id == chat.id
+
+
+def _spy_on_classifier(monkeypatch, name: str) -> list[str]:
+    """Record calls to one escalation classifier without running it.
+
+    Mocked at the classifier boundary rather than through a canned completion
+    string: these paths route through narrow LLM calls whose decisions the
+    generic chat-completion stub cannot express, so a single canned string
+    makes the outcome depend on prompt-matching luck.
+    """
+    from backend.chat import service as chat_service
+
+    calls: list[str] = []
+
+    async def _spy(*, latest_user_text: str, api_key: str, **_kwargs):
+        calls.append(latest_user_text)
+        return "unclear", 0
+
+    monkeypatch.setattr(chat_service, name, _spy)
+    return calls
+
+
+def _handoff_and_release(
+    client: TestClient, ws: _Workspace, chat: Chat, *, text: str
+) -> None:
+    assert (
+        client.post(
+            f"/operator/chats/{chat.id}/messages",
+            headers=ws.auth,
+            json={"text": text},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(f"/operator/chats/{chat.id}/release", headers=ws.auth).status_code
+        == 200
+    )
+
+
+def test_thanking_the_operator_is_not_read_as_a_pending_followup_answer(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """The reported symptom, ``escalation_followup_pending`` variant.
+
+    The operator resolves the issue and leaves; the visitor writes "great,
+    thanks Ann!". With the follow-up gate still armed the FSM claims the turn
+    and answers with ticket copy. The gate must be gone.
+    """
+    ws = _make_workspace(tenant, db_session, email="thanks@example.com", name="Thanks Co")
+    _seed_knowledge(db_session, ws.tenant_id)
+    _arm_openai(mock_openai_client, answer="Happy to help — refunds take 14 days.")
+    calls = _spy_on_classifier(monkeypatch, "classify_followup_reply")
+
+    chat = _make_chat(db_session, ws.tenant_id)
+    ticket = _open_ticket(db_session, ws.tenant_id, chat)
+    chat.escalation_followup_pending = True
+    chat.escalation_awaiting_ticket_id = ticket.id
+    db_session.add(chat)
+    db_session.commit()
+
+    _handoff_and_release(tenant, ws, chat, text="Fixed it — sorry about that!")
+
+    resp = tenant.post(
+        "/chat",
+        headers={"X-API-Key": ws.api_key},
+        json={"question": "great, thanks Ann!", "session_id": str(chat.session_id)},
+    )
+
+    assert resp.status_code == 200, resp.text
+    # The follow-up classifier is only reached from the armed gate. Never
+    # called means the FSM never claimed the turn.
+    assert calls == []
+    assert resp.json()["ticket_number"] is None
+    _assert_automaton_disarmed(db_session, chat.id)
+
+
+def test_thanking_the_operator_is_not_read_as_a_pre_confirm_answer(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """Same symptom, ``escalation_pre_confirm_pending`` variant.
+
+    Here the stakes are higher than a confusing reply: an armed pre-confirm
+    gate reading "yes" out of a thank-you would mint a *second* ticket for a
+    request a human has already handled.
+    """
+    ws = _make_workspace(tenant, db_session, email="preconf@example.com", name="Preconf Co")
+    _seed_knowledge(db_session, ws.tenant_id)
+    _arm_openai(mock_openai_client, answer="Refunds take 14 days.")
+    calls = _spy_on_classifier(monkeypatch, "classify_pre_confirm_reply")
+
+    chat = _make_chat(db_session, ws.tenant_id)
+    chat.escalation_pre_confirm_pending = True
+    chat.escalation_pre_confirm_context = {
+        "trigger": "low_similarity",
+        "primary_question": "my invoice is wrong",
+    }
+    db_session.add(chat)
+    db_session.commit()
+
+    _handoff_and_release(tenant, ws, chat, text="Ann here — invoice corrected.")
+
+    resp = tenant.post(
+        "/chat",
+        headers={"X-API-Key": ws.api_key},
+        json={"question": "great, thanks Ann!", "session_id": str(chat.session_id)},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert calls == []
+    assert resp.json()["ticket_number"] is None
+    _assert_automaton_disarmed(db_session, chat.id)
+    # No second ticket minted behind the operator's back.
+    assert (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .count()
+        == 0
+    )

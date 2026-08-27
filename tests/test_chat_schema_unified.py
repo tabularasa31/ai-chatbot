@@ -50,11 +50,17 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
 
     private_schema = spec["components"]["schemas"]["ChatTurnResponse"]
     private_properties = private_schema["properties"]
+    # delivered_to_operator is on BOTH contours, unlike source_documents /
+    # tokens_used. It is not a trace field: without it this contour cannot
+    # tell "a human is handling this" (empty text by design) from "the turn
+    # broke", and custom server-side integrations need that as much as the
+    # widget does.
     assert set(private_properties.keys()) == {
         "text",
         "session_id",
         "chat_ended",
         "ticket_number",
+        "delivered_to_operator",
         "source_documents",
         "tokens_used",
     }

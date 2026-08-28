@@ -33,7 +33,8 @@ function RoleBadge({ role }: { role: TenantRoleValue }) {
 
 export default function MembersPage() {
   const { data: client } = useClientMe();
-  const { data: members, error: loadError, isLoading, mutate } = useMembers();
+  const { data, error: loadError, isLoading, mutate } = useMembers();
+  const members = data?.items;
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<TenantRole>("operator");
@@ -66,7 +67,8 @@ export default function MembersPage() {
       const result = await api.members.invite(address, role);
       setEmail("");
       setNotice(
-        `Invite sent to ${result.member.email}. The link expires in 7 days.`
+        `Invite sent to ${result.member.email}. They hold a seat from now; ` +
+          `the link expires in 7 days.`
       );
       await mutate();
     } catch (err) {
@@ -129,6 +131,15 @@ export default function MembersPage() {
           conversations and reads the knowledge base; an owner also holds
           settings, API keys, and publishing. Removing someone deletes their
           account; their past replies stay in the transcripts.
+        </p>
+        <p className="text-slate-500 text-sm mt-2">
+          Inviting someone gives them a seat, which is what lets them answer —
+          $10 per seat per month. Removing them gives the seat back. Nothing is
+          charged while Chat9 is in beta; see{" "}
+          <a href="/settings/seats" className="text-violet-600 hover:underline">
+            Seats
+          </a>
+          .
         </p>
       </div>
 

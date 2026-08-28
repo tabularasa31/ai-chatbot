@@ -4,12 +4,11 @@ import type {
   TenantMeResponse,
   BotResponse,
   SupportSettingsResponse,
-  TenantPlanResponse,
   DisclosureConfigResponse,
   ChatSessionSummary,
   ChatSessionLogs,
   EscalationTicket,
-  TenantMember,
+  TenantMemberList,
 } from "@/lib/api";
 
 export function useClientMe() {
@@ -21,15 +20,11 @@ export function useBots() {
 }
 
 export function useMembers() {
-  return useSWR<TenantMember[]>("tenant/members", () => api.members.list());
+  return useSWR<TenantMemberList>("tenant/members", () => api.members.list());
 }
 
 export function useSupportSettings() {
   return useSWR<SupportSettingsResponse>("support-settings", () => api.support.get());
-}
-
-export function usePlan() {
-  return useSWR<TenantPlanResponse>("tenant-plan", () => api.plan.get());
 }
 
 export function useBotDisclosure(botId: string | null | undefined) {

@@ -154,7 +154,8 @@
 │       Decision: answer / clarify / escalate / reject /   │
 │       caveat / inline-clarify                            │
 │    9. Increment chats.clarification_count only when      │
-│       decision is a blocking clarify                     │
+│       decision is a blocking clarify AND the reply       │
+│       actually asked a question                          │
 │   10. Track token usage                                  │
 │   11. Save the message with its original text            │
 │   12. Return JSON {text, session_id, chat_ended,         │
@@ -240,8 +241,11 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
       confidence → KB medium with partial answer (inline clarify) →
       low confidence (blocking clarify, budget-gated, or escalate)
     - `chats.clarification_count` is incremented only when the decision
-      is a blocking clarify; the counter is committed in the same
-      transaction as the assistant message
+      is a blocking clarify *and* the generated reply actually ends in a
+      question: decide() runs after generation, so a turn it classified as
+      a clarify can still come back as a plain answer, and charging that
+      turn spends the budget on a question nobody was asked. The counter is
+      committed in the same transaction as the assistant message
    ↓
 12. Return JSON `{text, session_id, chat_ended, ticket_number?}` (private
     `/chat` also includes `source_documents` and `tokens_used`). The

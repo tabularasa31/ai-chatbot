@@ -120,6 +120,16 @@ class ChatPipelineResult:
     # when decide()'s confidence classification disagreed with the LLM's
     # self-assessment that it couldn't answer from the docs.
     llm_offered_ticket: bool = False
+    # Language-agnostic signal from the LLM: True when the answer ended with
+    # HANDOFF_MARKER, meaning the only way forward the reply can offer is
+    # reaching a human. The handler — not the model — then appends the
+    # localized handoff offer and arms the pre-confirm gate.
+    llm_needs_human: bool = False
+    # Clarify reason the decision engine derived BEFORE generation, when the
+    # prompt required this turn to end in a clarifying question. None when no
+    # clarification was required. Read by the handler to charge the
+    # per-session clarification budget only for turns that actually asked.
+    clarify_required_reason: str | None = None
     # pipeline timing (ms); 0 means the stage was skipped
     retrieval_ms: int = 0
     llm_ms: int = 0

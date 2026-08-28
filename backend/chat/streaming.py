@@ -99,19 +99,33 @@ def _strip_thought_tags(text: str) -> str:
 # machine-emitted and stripped before the reply reaches the user.
 OFFER_MARKER = "<offered_ticket/>"
 
+# Sentinel the LLM appends when the only way forward its reply can offer is
+# reaching a human — including the case where the documentation's own last
+# step is "write to support". The model only has to classify the turn; the
+# backend composes the localized handoff offer and arms the pre-confirm gate.
+# Composing that sentence is exactly the step the model kept skipping, which
+# left users staring at a support channel they could not reach.
+HANDOFF_MARKER = "<needs_human/>"
 
-_OFFER_MARKER_TERMINAL_RE = re.compile(
-    re.escape(OFFER_MARKER) + r"[\s\.,!?;:\"'»)\]]*\Z"
-)
+ALL_MARKERS: tuple[str, ...] = (OFFER_MARKER, HANDOFF_MARKER)
 
 
-def _strip_and_detect_offer_marker(text: str) -> tuple[str, bool]:
-    """Return (text with terminal OFFER_MARKER removed, True if it was the suffix).
+def _terminal_marker_re(marker: str) -> re.Pattern[str]:
+    return re.compile(re.escape(marker) + r"[\s\.,!?;:\"'»)\]]*\Z")
 
-    The prompt contract says the marker is appended as the very last token of
+
+_TERMINAL_MARKER_RES: dict[str, re.Pattern[str]] = {
+    marker: _terminal_marker_re(marker) for marker in ALL_MARKERS
+}
+
+
+def _strip_and_detect_terminal_marker(text: str, marker: str) -> tuple[str, bool]:
+    """Return (text with a terminal ``marker`` removed, True if it was the suffix).
+
+    The prompt contract says a marker is appended as the very last token of
     the reply. In practice the LLM often appends an extra period, quote, or
-    whitespace right after the marker (a common LLM tic when the sentinel
-    gets templated into a sentence). We tolerate any trailing punctuation /
+    whitespace right after it (a common LLM tic when the sentinel gets
+    templated into a sentence). We tolerate any trailing punctuation /
     whitespace, but a marker followed by substantive text is treated as
     mid-text and ignored — to avoid two failure modes:
       * silently rewriting legitimate content that happens to contain the
@@ -124,61 +138,141 @@ def _strip_and_detect_offer_marker(text: str) -> tuple[str, bool]:
     """
     if not text:
         return text, False
-    match = _OFFER_MARKER_TERMINAL_RE.search(text)
+    match = _TERMINAL_MARKER_RES[marker].search(text)
     if not match:
         return text, False
     cleaned = text[: match.start()].rstrip()
     return cleaned, True
 
 
-def _scrub_offer_marker_literal(text: str) -> str:
-    """Belt-and-suspenders strip of any remaining OFFER_MARKER occurrences.
+def _strip_and_detect_offer_marker(text: str) -> tuple[str, bool]:
+    """Terminal-only detection of :data:`OFFER_MARKER`."""
+    return _strip_and_detect_terminal_marker(text, OFFER_MARKER)
+
+
+def _strip_and_detect_handoff_marker(text: str) -> tuple[str, bool]:
+    """Terminal-only detection of :data:`HANDOFF_MARKER`."""
+    return _strip_and_detect_terminal_marker(text, HANDOFF_MARKER)
+
+
+def _strip_and_detect_markers(text: str) -> tuple[str, bool, bool]:
+    """Peel every terminal sentinel off ``text``.
+
+    Returns ``(cleaned_text, offered_ticket, needs_human)``. A reply may carry
+    both markers in either order, so peel until neither matches the tail
+    instead of assuming a single trailing sentinel.
+    """
+    offered = False
+    needs_human = False
+    cleaned = text
+    while True:
+        cleaned, hit_offer = _strip_and_detect_offer_marker(cleaned)
+        cleaned, hit_handoff = _strip_and_detect_handoff_marker(cleaned)
+        offered = offered or hit_offer
+        needs_human = needs_human or hit_handoff
+        if not (hit_offer or hit_handoff):
+            return cleaned, offered, needs_human
+
+
+def _strip_trailing_partial_marker(text: str) -> str:
+    """Drop a truncated sentinel left at the very end of ``text``.
+
+    A stream cut mid-marker (max_completion_tokens, client disconnect, a 5xx)
+    leaves something like ``<needs_hum``: the SSE filter already withholds it
+    from the user, but the assembled text is built from the raw chunks, so
+    without this the persisted reply — and the ``done`` payload the widget
+    renders over the stream — would show the fragment the viewer never saw.
+    """
+    if not text:
+        return text
+    stripped = text.rstrip()
+    idx = stripped.rfind("<")
+    if idx < 0:
+        return text
+    tail = stripped[idx:]
+    if any(marker.startswith(tail) and marker != tail for marker in ALL_MARKERS):
+        return stripped[:idx].rstrip()
+    return text
+
+
+def _scrub_marker_literals(text: str) -> str:
+    """Belt-and-suspenders strip of any remaining sentinel occurrence.
 
     Used after detection on assembled (non-streamed) answer text so a marker
     the LLM mis-emitted mid-reply cannot leak to the user even though it
-    didn't arm pre_confirm. The streaming path has its own filter
-    (OfferMarkerStreamFilter) that does the equivalent for SSE chunks.
+    didn't arm anything. The streaming path has its own filter
+    (MarkerStreamFilter) that does the equivalent for SSE chunks.
     """
+    if not text:
+        return text
+    for marker in ALL_MARKERS:
+        if marker in text:
+            text = text.replace(marker, "")
+    return text
+
+
+def _scrub_offer_marker_literal(text: str) -> str:
+    """Strip stray :data:`OFFER_MARKER` literals only."""
     if not text or OFFER_MARKER not in text:
         return text
     return text.replace(OFFER_MARKER, "")
 
 
-class OfferMarkerStreamFilter:
-    """Strip ``OFFER_MARKER`` from a streamed SSE token sequence (defensive UX).
+class MarkerStreamFilter:
+    """Strip control sentinels from a streamed SSE token sequence (defensive UX).
 
-    Wraps the downstream emit callback and buffers up to ``len(OFFER_MARKER)-1``
+    Wraps the downstream emit callback and buffers up to ``max marker length - 1``
     trailing chars so a marker arriving across two SSE chunks is never partially
     emitted to the user. Removes every occurrence (not only the terminal one)
     so a hallucinated or echoed literal in mid-reply never reaches the UI.
 
-    The filter does NOT decide whether the reply was a ticket offer — that
-    decision is terminal-only and lives in :func:`_strip_and_detect_offer_marker`,
-    which runs on the assembled raw text after the stream completes. This
-    separation prevents a mid-text literal from false-arming the pre-confirm
-    gate while still keeping the UI clean.
+    The filter does NOT decide what the reply signalled — that decision is
+    terminal-only and lives in :func:`_strip_and_detect_markers`, which runs on
+    the assembled raw text after the stream completes. This separation prevents
+    a mid-text literal from false-arming the pre-confirm gate while still
+    keeping the UI clean.
     """
 
-    def __init__(self, emit: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        emit: Callable[[str], None],
+        markers: tuple[str, ...] = ALL_MARKERS,
+    ) -> None:
         self._emit = emit
+        self._markers = markers
         self._buf = ""
+
+    def _earliest_marker(self) -> tuple[int, str | None]:
+        best_idx = -1
+        best_marker: str | None = None
+        for marker in self._markers:
+            idx = self._buf.find(marker)
+            if idx >= 0 and (best_idx < 0 or idx < best_idx):
+                best_idx, best_marker = idx, marker
+        return best_idx, best_marker
+
+    def _boundary_suffix_len(self) -> int:
+        """Longest tail of the buffer that could still grow into a marker."""
+        longest = 0
+        for marker in self._markers:
+            for prefix_len in range(min(len(marker) - 1, len(self._buf)), 0, -1):
+                if self._buf[-prefix_len:] == marker[:prefix_len]:
+                    longest = max(longest, prefix_len)
+                    break
+        return longest
 
     def feed(self, text: str) -> None:
         self._buf += text
         while True:
-            idx = self._buf.find(OFFER_MARKER)
-            if idx >= 0:
+            idx, marker = self._earliest_marker()
+            if marker is not None:
                 if idx > 0:
                     self._emit(self._buf[:idx])
-                self._buf = self._buf[idx + len(OFFER_MARKER):]
+                self._buf = self._buf[idx + len(marker):]
                 continue
-            # Preserve a possible split-boundary suffix so the marker isn't
+            # Preserve a possible split-boundary suffix so no marker is
             # partially leaked when it straddles two chunks.
-            safe_end = len(self._buf)
-            for prefix_len in range(min(len(OFFER_MARKER) - 1, len(self._buf)), 0, -1):
-                if self._buf[-prefix_len:] == OFFER_MARKER[:prefix_len]:
-                    safe_end = len(self._buf) - prefix_len
-                    break
+            safe_end = len(self._buf) - self._boundary_suffix_len()
             if safe_end > 0:
                 self._emit(self._buf[:safe_end])
             self._buf = self._buf[safe_end:]
@@ -186,8 +280,8 @@ class OfferMarkerStreamFilter:
 
     def flush_end(self) -> None:
         # Leftover possibilities:
-        #   * Exact full marker → drop (detected, never emit).
-        #   * A non-empty *prefix* of the marker (split-boundary suffix that
+        #   * An exact full marker → drop (detected, never emit).
+        #   * A non-empty *prefix* of a marker (split-boundary suffix that
         #     `feed` was holding back in case the rest arrived) → drop. This
         #     covers truncated streams (max_completion_tokens, client
         #     disconnect, OpenAI 5xx mid-stream) where the rest of the marker
@@ -196,11 +290,18 @@ class OfferMarkerStreamFilter:
         #   * Anything else → real content, emit it.
         if not self._buf:
             return
-        if self._buf == OFFER_MARKER or OFFER_MARKER.startswith(self._buf):
+        if any(
+            self._buf == marker or marker.startswith(self._buf)
+            for marker in self._markers
+        ):
             self._buf = ""
             return
         self._emit(self._buf)
         self._buf = ""
+
+
+# Legacy name kept for the offer-marker call sites and their tests.
+OfferMarkerStreamFilter = MarkerStreamFilter
 
 
 class ThoughtStreamFilter:

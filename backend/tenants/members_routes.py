@@ -28,11 +28,13 @@ from backend.auth.middleware import require_owner
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import User
+from backend.operator.sessions import emit_operator_session_ended
 from backend.seats.service import count_seats, grant_seat, release_seat
 from backend.tenants.members_service import (
     change_member_role,
     invite_member,
     list_members,
+    release_chats_held_by,
     remove_member,
     send_invite_email,
     workspace_name,
@@ -147,12 +149,25 @@ def give_up_own_seat_route(
     must be undoable. Nobody else's seat is reachable from here — for an
     invited member, giving the seat back is removing them.
 
-    Idempotent, and it never strands the workspace: an owner without a seat
-    still administers everything, and only stops answering from the console.
+    Every conversation you are holding is handed back to the bot first, in the
+    same transaction. Without that the seat you just gave up is the seat you
+    need to release them: the chat stays ``live`` with you assigned, the bot
+    stays muted, and ``/operator/chats/{id}/release`` answers 403 because it is
+    behind the seat. The visitor would type into nothing until the sweeper's
+    idle release fired, up to an hour later, and in a one-owner workspace
+    nobody else could free it.
+
+    Idempotent. It costs you nothing administratively — an owner without a seat
+    still runs the whole workspace, and only stops answering from the console.
     """
+    closed = release_chats_held_by(current_user, db)
     release_seat(current_user)
     db.commit()
     db.refresh(current_user)
+    # After the commit, as in ``remove_member``: the seat is given up either
+    # way, and a telemetry failure must not turn that into a 500.
+    for stretch in closed:
+        emit_operator_session_ended(stretch)  # type: ignore[arg-type]
     return _member_to_response(current_user)
 
 

@@ -411,22 +411,30 @@ def _stamp_attribution(member: User, db: Session) -> None:
     ).update({TenantApiKey.created_by_label: label}, synchronize_session=False)
 
 
-def _release_held_chats(member: User, db: Session) -> list[object]:
-    """Hand back every conversation the departing member was holding.
+def release_chats_held_by(member: User, db: Session) -> list[object]:
+    """Hand back every conversation this member is holding.
 
-    Without this the delete leaves a chat ``live`` with a null assignee, and
-    ``OperatorHandler`` keeps swallowing the visitor's turns — no human is
-    coming and the bot is muted, so the visitor types into nothing. The
-    sweeper's idle release does eventually free it, but only after
+    Two callers, and they are the same situation seen twice: a member being
+    removed, and an owner giving up their own seat. Either way the person stops
+    being able to answer, and a chat they are holding must not be left pinned
+    ``live`` behind them.
+
+    Without this the departure leaves a chat ``live`` with an assignee who
+    cannot write in it, and ``OperatorHandler`` keeps swallowing the visitor's
+    turns — no human is coming and the bot is muted, so the visitor types into
+    nothing. Worse for the seat case than for the removal: the person is still
+    there, still looking at the chat, and the release button is behind the very
+    seat they just gave up, so they meet a 403 on the one action that would fix
+    it. The sweeper's idle release does eventually free it, but only after
     ``OPERATOR_RELEASE_IDLE_SECONDS`` (an hour by default), and nobody is told
     in the meantime.
 
-    Reuses ``release_to_bot``, so a chat freed by a removal is indistinguish-
-    able from one released by hand — and that also closes the dangling open
+    Reuses ``release_to_bot``, so a chat freed here is indistinguishable from
+    one released by hand — and that also closes the dangling open
     ``operator_sessions`` stretch, which would otherwise sit open until the
-    reconciliation pass found it. Staged, not committed: the releases belong
-    to the same transaction as the delete. Returns the closed stretches for
-    the caller to report after the commit.
+    reconciliation pass found it. Staged, not committed: the releases belong to
+    the same transaction as whatever prompted them. Returns the closed
+    stretches for the caller to report after the commit.
     """
     from backend.chat.handlers.operator import release_to_bot
 
@@ -481,7 +489,7 @@ def remove_member(
         raise HTTPException(
             status_code=400, detail="The last owner cannot be removed"
         )
-    closed = _release_held_chats(member, db)
+    closed = release_chats_held_by(member, db)
     _stamp_attribution(member, db)
     db.delete(member)
     db.commit()

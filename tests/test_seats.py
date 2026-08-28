@@ -210,6 +210,66 @@ def test_giving_up_a_seat_closes_the_operator_routes_again(
 # ---------------------------------------------------------------------------
 
 
+def test_giving_up_a_seat_hands_back_the_chats_you_were_holding(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The seat you gave up is the seat the release button is behind.
+
+    So the release has to happen on the way out, or the conversation is pinned
+    ``live`` behind a 403 with the visitor typing into nothing.
+    """
+    from backend.models import OperatorSession
+
+    ws = _make_workspace(tenant, db_session, email="holding@example.com")
+    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
+    chat = _make_chat(db_session, ws.tenant_id)
+    taken = tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth)
+    assert taken.status_code == 200, taken.text
+    # The harness hands every request the one test session, so its identity map
+    # still holds this chat as it was before the (async) take. A real request
+    # gets a fresh session and reads the row as it stands; expiring here is what
+    # makes the test see what production sees.
+    db_session.expire_all()
+
+    given_up = tenant.delete("/tenants/members/me/seat", headers=ws.auth)
+
+    assert given_up.status_code == 200, given_up.text
+    db_session.expire_all()
+    refreshed = db_session.get(Chat, chat.id)
+    assert refreshed.operator_state is OperatorState.bot
+    assert refreshed.assigned_operator_id is None
+    # And the stretch is closed, not left dangling for the reconciliation pass.
+    stretches = (
+        db_session.query(OperatorSession)
+        .filter(OperatorSession.chat_id == chat.id)
+        .all()
+    )
+    assert stretches, "the take should have opened a stretch"
+    assert all(st.ended_at is not None for st in stretches)
+
+
+def test_giving_up_a_seat_leaves_a_colleagues_chat_alone(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Only your own conversations are handed back."""
+    ws = _make_workspace(tenant, db_session, email="mine-only@example.com")
+    colleague_token = _onboard(tenant, db_session, ws, email="colleague@example.com")
+    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
+    theirs = _make_chat(db_session, ws.tenant_id)
+    assert (
+        tenant.post(
+            f"/operator/chats/{theirs.id}/take", headers=_auth(colleague_token)
+        ).status_code
+        == 200
+    )
+    db_session.expire_all()  # see the note in the test above
+
+    assert tenant.delete("/tenants/members/me/seat", headers=ws.auth).status_code == 200
+
+    db_session.expire_all()
+    assert db_session.get(Chat, theirs.id).operator_state is OperatorState.live
+
+
 def test_an_operator_cannot_reach_the_seat_routes(
     tenant: TestClient, db_session: Session
 ) -> None:

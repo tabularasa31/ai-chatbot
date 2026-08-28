@@ -640,6 +640,34 @@ def test_tenant_has_any_seat_drops_a_member_detached_from_the_workspace(
     assert user_holds_seat(user_id=member.id, db=db_session) is False
 
 
+def test_a_detached_seat_does_not_follow_its_holder_into_a_new_workspace(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A founding owner starts seatless, whatever the row arrived holding.
+
+    ``users.tenant_id`` is nullable, so a row can outlive the workspace it was
+    seated in. Carrying the seat into the next one would be console access and
+    a phantom $10 on that workspace's screen for a seat nobody ever took.
+    """
+    ws = _make_workspace(tenant, db_session, email="rejoin@example.com")
+    owner = db_session.query(User).filter(User.id == ws.owner_id).one()
+    grant_seat(owner)
+    owner.tenant_id = None
+    db_session.commit()
+
+    created = tenant.post(
+        "/tenants", headers=ws.auth, json={"name": "Second Workspace"}
+    )
+
+    assert created.status_code in (200, 201), created.text
+    db_session.refresh(owner)
+    assert owner.seat_granted_at is None
+    assert holds_seat(owner) is False
+    new_tenant_id = uuid.UUID(created.json()["id"])
+    assert tenant_has_any_seat(tenant_id=new_tenant_id, db=db_session) is False
+    assert count_seats(tenant_id=new_tenant_id, db=db_session) == 0
+
+
 def test_user_holds_seat_answers_per_person(
     tenant: TestClient, db_session: Session
 ) -> None:

@@ -13,6 +13,7 @@ from backend.core.crypto import encrypt_value
 from backend.core.rls import set_tenant_context
 from backend.models import Bot, Tenant, TenantProfile, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
+from backend.seats.service import release_seat
 from backend.support_config import public_support_config_dict, with_support_config
 from backend.tenants.api_keys_service import (
     create_initial_api_key,
@@ -50,6 +51,12 @@ def create_tenant(
         user = db.query(User).filter(User.id == user_id).first()
         if user:
             user.tenant_id = tenant.id
+            # A founding owner starts seatless, whatever the row arrived
+            # holding. ``users.tenant_id`` is nullable (the FK is ON DELETE
+            # SET NULL), so a row can outlive the workspace it was seated in
+            # and carry that seat here — console access and a phantom $10 on
+            # the new workspace's screen, for a seat nobody ever took.
+            release_seat(user)
         db.add(Bot(tenant_id=tenant.id, name=name))
         # Eager-create the knowledge profile so GET /knowledge/profile
         # stays a pure read (no lazy-create side effects on GET).

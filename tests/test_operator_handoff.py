@@ -62,7 +62,15 @@ def _make_workspace(
     *,
     email: str,
     name: str,
+    seated: bool = True,
 ) -> _Workspace:
+    """A verified owner with a tenant, holding a seat unless told otherwise.
+
+    A founding owner is not seated by signing up — they take a seat only if
+    they mean to answer conversations themselves. Every test below is about
+    what happens once somebody does, so the default here is seated; the seat
+    gate itself is exercised with ``seated=False``.
+    """
     token = register_and_verify_user(client, db, email=email)
     resp = client.post(
         "/tenants",
@@ -71,6 +79,11 @@ def _make_workspace(
     )
     assert resp.status_code in (200, 201), resp.text
     set_client_openai_key(client, token)
+    if seated:
+        seat = client.put(
+            "/tenants/members/me/seat", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert seat.status_code == 200, seat.text
     body = resp.json()
     return _Workspace(token, uuid.UUID(body["id"]), body["api_key"])
 
@@ -142,6 +155,9 @@ def _second_user_in_tenant(db: Session, tenant_id: uuid.UUID, *, email: str) -> 
         role="owner",
         is_verified=True,
         tenant_id=tenant_id,
+        # Seated, as an invited colleague would be: the invite grants the
+        # seat, and these routes are gated on holding one.
+        seat_granted_at=_utcnow(),
     )
     db.add(user)
     db.commit()

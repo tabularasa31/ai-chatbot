@@ -27,6 +27,7 @@ from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
+from backend.email.reply_lane import escalation_reply_to, revoke_reply_token
 from backend.email.service import send_email
 from backend.models import (
     Chat,
@@ -993,7 +994,11 @@ def _notify_tenant_new_ticket(
             recipient,
             subject,
             body,
-            reply_to=ticket.user_email,
+            # The seat branch. A workspace holding a seat gets our inbound
+            # token address, so the reply comes back through us and into the
+            # visitor's widget; one holding none keeps the visitor's own
+            # address and today's straight-to-them path, unchanged.
+            reply_to=escalation_reply_to(ticket, db),
             extra_headers=headers,
         )
     except Exception as e:
@@ -1237,7 +1242,7 @@ def _notify_tenant_ticket_update(
             recipient,
             subject,
             body,
-            reply_to=ticket.user_email,
+            reply_to=escalation_reply_to(ticket, db),
             extra_headers=headers,
         )
     except Exception as e:
@@ -1462,6 +1467,11 @@ def resolve_ticket(
 
     ticket.status = EscalationStatus.resolved
     ticket.resolution_text = resolution_text
+    # The reply address dies with the request it belongs to: a resolved
+    # conversation is not somewhere a stranger holding an old notification
+    # should be able to write, and a token that outlives its ticket is a
+    # credential nobody is watching any more.
+    revoke_reply_token(ticket)
     # Naive UTC: ``resolved_at`` is ``DateTime`` (no ``timezone=True``); see
     # the note in ``_notify_tenant_new_ticket`` for the asyncpg rationale.
     ticket.resolved_at = _utcnow()
@@ -1640,7 +1650,7 @@ def notify_support_of_abandoned_claim(ticket: EscalationTicket, db: Session) -> 
             recipient,
             subject,
             body,
-            reply_to=ticket.user_email,
+            reply_to=escalation_reply_to(ticket, db),
             extra_headers=headers,
         )
     except Exception as e:

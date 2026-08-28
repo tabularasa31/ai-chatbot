@@ -38,6 +38,9 @@ class OperatorChannel(str, enum.Enum):
     """
 
     console = "console"
+    #: A reply to an escalation notification, arriving through
+    #: ``POST /email/inbound/<secret>``. The operator never opened a dashboard.
+    email = "email"
 
 
 @dataclass(frozen=True)

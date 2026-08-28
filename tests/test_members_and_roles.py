@@ -373,6 +373,9 @@ def test_the_last_owner_cannot_be_removed(
         ).status_code
         == 200
     )
+    # The founder takes a seat first: an operator without one could not answer,
+    # so a seatless owner cannot be demoted. See tests/test_seats.py.
+    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
     # Demote the founder (legally — a second owner exists), leaving one owner.
     assert (
         tenant.patch(
@@ -512,6 +515,9 @@ def test_succession_promote_then_demote_the_original_owner(
         ).status_code
         == 200
     )
+    # The founder takes a seat first: stepping down to operator means taking on
+    # the job an operator does, and that needs a seat. See tests/test_seats.py.
+    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
     # The successor demotes the founder. Nobody demotes themselves, so handing
     # over is always a two-party act.
     assert (

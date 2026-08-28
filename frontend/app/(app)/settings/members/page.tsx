@@ -208,6 +208,13 @@ export default function MembersPage() {
             {(members ?? []).map((member) => {
               const isSelf = member.id === selfId;
               const lastOwner = member.role === "owner" && ownerCount <= 1;
+              // An owner is the one account allowed to hold no seat. Demoting
+              // them would make an operator who cannot answer and cannot get a
+              // seat, so the server refuses it — say so before the round trip.
+              const seatlessOwner =
+                member.role === "owner" &&
+                member.status === "active" &&
+                !member.seat_granted_at;
               return (
                 <div key={member.id} className="py-3 flex items-center gap-3 flex-wrap">
                   <span className="text-sm text-slate-800">{member.email}</span>
@@ -220,7 +227,9 @@ export default function MembersPage() {
                   <div className="ml-auto flex items-center gap-2">
                     <select
                       value={member.role}
-                      disabled={busyId === member.id || lastOwner || isSelf}
+                      disabled={
+                        busyId === member.id || lastOwner || isSelf || seatlessOwner
+                      }
                       onChange={(e) =>
                         changeRole(member, e.target.value as TenantRole)
                       }
@@ -230,7 +239,9 @@ export default function MembersPage() {
                           ? "You cannot change your own role. Promote another owner and ask them."
                           : lastOwner
                             ? "The last owner cannot be demoted. Promote someone else first."
-                            : undefined
+                            : seatlessOwner
+                              ? "This owner holds no seat, and an operator without one cannot answer conversations. Ask them to take a seat on the Seats screen first."
+                              : undefined
                       }
                       className="px-2 py-1 border border-slate-200 rounded text-xs text-slate-700 outline-none focus:border-slate-400 disabled:opacity-40"
                     >

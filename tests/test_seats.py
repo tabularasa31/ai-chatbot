@@ -469,6 +469,101 @@ def test_removing_a_member_releases_their_seat(
     assert tenant_has_any_seat(tenant_id=ws.tenant_id, db=db_session) is False
 
 
+def test_a_seatless_owner_cannot_be_demoted(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The one place the two axes meet.
+
+    An owner may hold no seat; an operator may not, because answering is the
+    whole of the job and there is no route by which they could get one. So the
+    demotion is refused rather than allowed to create a member who can do
+    nothing.
+    """
+    ws = _make_workspace(tenant, db_session, email="alice@example.com")
+    # A second owner, so the last-owner guard is not what does the refusing.
+    bob_token = _onboard(tenant, db_session, ws, email="bob@example.com", role="owner")
+    alice = db_session.query(User).filter(User.id == ws.owner_id).one()
+    assert alice.seat_granted_at is None
+
+    demoted = tenant.patch(
+        f"/tenants/members/{alice.id}",
+        headers=_auth(bob_token),
+        json={"role": "operator"},
+    )
+
+    assert demoted.status_code == 400, demoted.text
+    detail = demoted.json()["detail"]
+    assert "seat" in detail.lower()
+    # Actionable, not merely a refusal: it names who and what to do.
+    assert "alice@example.com" in detail
+    assert "Seats" in detail
+    db_session.refresh(alice)
+    assert alice.role == "owner"
+
+
+def test_a_seated_owner_can_still_be_demoted(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The guard is about the seat, and lifts the moment there is one."""
+    ws = _make_workspace(tenant, db_session, email="seated-alice@example.com")
+    bob_token = _onboard(
+        tenant, db_session, ws, email="seated-bob@example.com", role="owner"
+    )
+    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
+
+    demoted = tenant.patch(
+        f"/tenants/members/{ws.owner_id}",
+        headers=_auth(bob_token),
+        json={"role": "operator"},
+    )
+
+    assert demoted.status_code == 200, demoted.text
+    assert demoted.json()["role"] == "operator"
+    assert demoted.json()["seat_granted_at"] is not None
+
+
+def test_a_pending_invitee_can_still_have_their_role_corrected(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Exempt from the guard: they are seated when they accept, whatever role.
+
+    Refusing here would block a free correction — the invite went out as owner
+    by mistake and nobody has accepted it yet.
+    """
+    ws = _make_workspace(tenant, db_session, email="corrector@example.com")
+    # A second *verified* owner, so the pre-existing last-owner guard (which
+    # counts only accepted owners) is not what answers here.
+    _onboard(tenant, db_session, ws, email="second-owner@example.com", role="owner")
+    with patch("backend.tenants.members_service.send_email"):
+        invited = tenant.post(
+            "/tenants/members/invite",
+            headers=ws.auth,
+            json={"email": "wrong-role@example.com", "role": "owner"},
+        )
+    assert invited.status_code == 201, invited.text
+    invitee = db_session.query(User).filter(User.email == "wrong-role@example.com").one()
+    assert invitee.seat_granted_at is None
+
+    corrected = tenant.patch(
+        f"/tenants/members/{invitee.id}",
+        headers=ws.auth,
+        json={"role": "operator"},
+    )
+
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["role"] == "operator"
+    # And accepting still seats them, in the role they were corrected to.
+    db_session.refresh(invitee)
+    accepted = tenant.post(
+        "/auth/reset-password",
+        json={"token": invitee.reset_password_token, "new_password": OTHER_PASSWORD},
+    )
+    assert accepted.status_code == 200, accepted.text
+    db_session.refresh(invitee)
+    assert invitee.role == "operator"
+    assert invitee.seat_granted_at is not None
+
+
 def test_changing_a_role_leaves_the_seat_alone(
     tenant: TestClient, db_session: Session
 ) -> None:

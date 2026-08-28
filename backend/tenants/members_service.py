@@ -364,6 +364,29 @@ def change_member_role(
     **The last owner** cannot be demoted by anyone, because a workspace with
     no owner has nobody who can invite, configure, or promote, and no route
     back.
+
+    **A seatless owner** cannot be demoted either, and that one is about seats
+    rather than roles. A seat and a role are orthogonal everywhere else, but
+    they meet here: an owner is the one account allowed to hold a membership
+    with no seat, because an owner without one still administers the whole
+    workspace. Demote them and that stops being true — they become an operator
+    whose entire job is answering conversations, which is exactly what they
+    have no seat for, and no way back: taking a seat is owner-only, being
+    re-invited answers 409 because they are already a member, and there is no
+    per-member seat route by design. The escape would be promoting them, seating
+    them, and demoting them again, which is the move that created the state.
+
+    Refusing is the right shape rather than granting a seat on their behalf.
+    Granting would be a per-member grant wearing a role change as a disguise,
+    and it would put $10 a month on the workspace as a side effect of an action
+    whose subject is a role — money must never move because of a click about
+    something else. Refusing keeps both invariants intact and costs one extra
+    step, which the message spells out: the target takes a seat themselves
+    (they are still an owner, so they can), and the demotion then succeeds.
+
+    A *pending* invitee is exempt: they hold no seat yet by design and are
+    seated when they accept, whatever role they accept into. Blocking their
+    role change would refuse a correction that costs nothing to make.
     """
     _lock_workspace(tenant_id, db)
     member = get_member(tenant_id, member_id, db)
@@ -381,6 +404,20 @@ def change_member_role(
         raise HTTPException(
             status_code=400,
             detail="The last owner cannot be demoted. Promote someone else first.",
+        )
+    if (
+        role != ROLE_OWNER
+        and member.is_verified
+        and member.seat_granted_at is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{member.email} holds no seat, and an operator without one "
+                "cannot answer conversations. Ask them to take a seat on the "
+                "Seats screen while they are still an owner, then change their "
+                "role."
+            ),
         )
     member.role = role
     db.commit()

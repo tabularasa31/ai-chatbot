@@ -20,13 +20,17 @@ The lesson is cheaper than the outage: a branch carrying a migration has to
 re-check ``alembic heads`` against fresh ``main`` immediately before merge, not
 when the branch was opened. Both of these were single-headed when written.
 
-Revision ID: merge_seats_and_low_confidence_v1
+Revision ID: merge_seats_low_confidence_v1
 Revises: low_confidence_second_attempt_v1, operator_seats_v1
 """
 
 from __future__ import annotations
 
-revision = "merge_seats_and_low_confidence_v1"
+# 29 characters. ``alembic_version.version_num`` is VARCHAR(32), and the
+# first name for this revision was 33 — the migration itself ran and then
+# the write of its own version number failed, which took production down a
+# second time. Keep any new id comfortably under the limit.
+revision = "merge_seats_low_confidence_v1"
 down_revision = ("low_confidence_second_attempt_v1", "operator_seats_v1")
 branch_labels = None
 depends_on = None

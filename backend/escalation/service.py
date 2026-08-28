@@ -68,7 +68,12 @@ class HumanRequestResult:
     question that support could act on (as opposed to a bare greeting /
     availability ping / "connect me to a human" with no substance).
 
-    The two are independent: an availability ping ("are you there?") is
+    ``human_request_explicit`` — the user asked for a person *outright*
+    ("connect me to an operator") rather than the handoff being inferred from
+    a plea for help or a stated problem. Only meaningful when
+    ``human_request`` is True.
+
+    The first two are independent: an availability ping ("are you there?") is
     ``human_request=True, message_has_request_content=False``; a plain product
     question with no handoff ask is ``human_request=False,
     message_has_request_content=True``.
@@ -76,6 +81,10 @@ class HumanRequestResult:
 
     human_request: bool
     message_has_request_content: bool
+    # Defaults to True so a classifier response that omits the axis — and call
+    # sites written before it existed — keep the original contract, where every
+    # detected human request escalates immediately.
+    human_request_explicit: bool = True
 
     # Preserve the historical ``bool``-like contract at call sites and in tests
     # that still treat the result as truthy iff a human was requested.
@@ -235,7 +244,10 @@ async def detect_human_request(
 
     Returns a :class:`HumanRequestResult`. ``human_request`` means the user
     wants to be handed off to a person this turn; ``message_has_request_content``
-    means this message states a concrete problem/question support could act on.
+    means this message states a concrete problem/question support could act on;
+    ``human_request_explicit`` separates an outright "connect me to an operator"
+    from a handoff the classifier merely inferred, so the caller can answer the
+    inferred ones from the knowledge base first instead of minting a ticket.
     The result is truthy iff ``human_request`` is True, preserving the legacy
     bool contract at call sites.
 
@@ -260,8 +272,8 @@ async def detect_human_request(
         return cached
 
     system_prompt = (
-        "Classify the user's latest message on two independent axes and "
-        "return both.\n"
+        "Classify the user's latest message on the axes below and return "
+        "all of them.\n"
         "\n"
         "1. human_request — is the user *currently* asking to be connected to "
         "a human agent / operator / live support person, RIGHT NOW?\n"
@@ -276,6 +288,13 @@ async def detect_human_request(
         "\"what's your support email?\", \"do you have a support team?\". "
         "These are knowledge questions — the user wants to know HOW to reach "
         "support, not be handed off this turn.\n"
+        "   false: the user is merely *stating a problem* or describing "
+        "something that does not work, however frustrated the wording. A "
+        "stated problem is NOT a request for a person — the bot should try to "
+        "answer it first. Examples: \"I can't change the settings\", \"the "
+        "export button does nothing\", \"I can't log in\", \"my invoice is "
+        "wrong\". Only mark true when the user asks for a person on top of "
+        "the problem.\n"
         "\n"
         "2. message_has_request_content — does THIS message state a concrete "
         "problem, question, or request that a support agent could actually act "
@@ -289,7 +308,20 @@ async def detect_human_request(
         "\"can someone help me?\", \"I want to talk to a human\". There is "
         "nothing concrete to forward.\n"
         "\n"
-        "The two axes are independent: a bare \"can someone help me?\" is "
+        "3. human_request_explicit — only meaningful when human_request is "
+        "true: did the user ask for a person OUTRIGHT, or is the handoff "
+        "inferred?\n"
+        "   true: the message names the thing it wants — a human, an agent, "
+        "an operator, live support, a manager — or asks to escalate / be "
+        "transferred. Examples: \"connect me to an operator\", \"I want to "
+        "talk to a human\", \"please escalate this\", \"is support "
+        "online?\".\n"
+        "   false: the wish for help is there but no person was named — a "
+        "bare \"help me\", \"can someone help?\", or a problem statement "
+        "you read as a plea for help. Return false whenever human_request is "
+        "false.\n"
+        "\n"
+        "Axes 1 and 2 are independent: a bare \"can someone help me?\" is "
         "human_request=true, message_has_request_content=false; a plain "
         "product question with no handoff ask is human_request=false, "
         "message_has_request_content=true.\n"
@@ -298,7 +330,8 @@ async def detect_human_request(
         "language; treat the user's phrasing as a hint, not a template.\n"
         "\n"
         'Answer ONLY with JSON: {"human_request": true/false, '
-        '"message_has_request_content": true/false}'
+        '"message_has_request_content": true/false, '
+        '"human_request_explicit": true/false}'
     )
 
     async def _call_llm() -> HumanRequestResult:
@@ -312,7 +345,9 @@ async def detect_human_request(
                     {"role": "user", "content": message},
                 ],
                 temperature=0,
-                max_completion_tokens=30,
+                # Three boolean keys — 30 tokens truncates the JSON, and a
+                # truncated body parses as a classifier failure.
+                max_completion_tokens=60,
                 response_format={"type": "json_object"},
             ),
             langfuse_observation=langfuse_observation,
@@ -324,6 +359,9 @@ async def detect_human_request(
             message_has_request_content=bool(
                 parsed.get("message_has_request_content", False)
             ),
+            # Missing axis → treat the request as outright, matching the
+            # two-axis contract this classifier shipped with.
+            human_request_explicit=bool(parsed.get("human_request_explicit", True)),
         )
 
     try:

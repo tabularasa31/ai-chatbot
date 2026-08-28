@@ -771,9 +771,25 @@ When the bot cannot adequately answer, the conversation is **escalated to a huma
 |---------|-------------|
 | Low similarity score | No retrieved chunk is relevant enough |
 | No documents | Client has no embedded documents |
-| User phrase | Message contains phrases like "talk to a person", "human", "agent" |
+| User phrase | The user asks for a person outright ("talk to a human", "connect me to an operator"). A message that merely *states a problem* ("I can't change the settings") does not qualify — see below |
 | Support complaint (`user_complaint`) | Relevance guard classified the message as a complaint about support silence ("they haven't replied for two weeks") — pre-confirm offer leads with an apology; ticket priority ranks with an explicit human request |
 | Manual escalation | Client calls `POST /chat/{session_id}/escalate` |
+
+### Outright vs. inferred human requests
+
+The human-request classifier (`detect_human_request`) returns three axes:
+whether the user wants a human this turn, whether the message carries a
+concrete problem support could act on, and whether the handoff was asked for
+**outright** rather than inferred.
+
+- Outright ask ("connect me to an operator") → escalates immediately, no
+  pre-confirm step; the request is itself the confirmation.
+- Inferred ask over a stated problem ("I can't change the settings") → not
+  escalated. The escalation FSM stands down and the RAG pipeline answers from
+  the knowledge base; if retrieval finds nothing, the ordinary low-similarity /
+  no-documents path escalates with its pre-confirm question.
+- Inferred ask with nothing to forward ("can someone help me?") → the bot asks
+  the user to describe their question instead of minting an empty ticket.
 
 ### What happens on escalation
 

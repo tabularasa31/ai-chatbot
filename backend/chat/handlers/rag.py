@@ -38,7 +38,14 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
-from backend.chat.decision import KbConfidence
+from backend.chat.decision import (
+    KB_HIGH_CONFIDENCE_THRESHOLD,
+    KB_LOW_CONFIDENCE_THRESHOLD,
+    KbConfidence,  # noqa: F401  (re-export)
+    classify_kb_confidence,
+    floor_kb_confidence,
+    reply_is_clarifying_question,
+)
 
 # --- Pipeline surface (moved out of this module; re-exported for callers) ---
 from backend.chat.events import (
@@ -105,7 +112,7 @@ from backend.chat.streaming import (
 )
 from backend.chat.types import (
     ChatPipelineResult,
-    RetrievalContext,
+    RetrievalContext,  # noqa: F401  (re-export)
     _empty_retrieval_context,  # noqa: F401  (re-export)
 )
 from backend.chat.types import (
@@ -123,44 +130,13 @@ logger = logging.getLogger(__name__)
 # loop-detection heuristic RagHandler feeds into decide().
 # ---------------------------------------------------------------------------
 
-LOW_CONFIDENCE_THRESHOLD = 0.4
-_ESCALATION_THRESHOLD = 0.45  # upper bound for "high" KB confidence (see _classify_kb_confidence)
-
-_KB_CONFIDENCE_RANK: dict[KbConfidence, int] = {"low": 0, "medium": 1, "high": 2}
-
-
-def _floor_kb_confidence(raw: KbConfidence, ceiling: KbConfidence) -> KbConfidence:
-    """Return the lower of two KbConfidence tiers."""
-    if _KB_CONFIDENCE_RANK[ceiling] < _KB_CONFIDENCE_RANK[raw]:
-        return ceiling
-    return raw
-
-
-def _classify_kb_confidence(retrieval: RetrievalContext | None) -> KbConfidence:
-    """Map retrieval confidence score to the three-tier KbConfidence used by decide().
-
-    When `retrieval.reliability.cap` is set (contradiction cap → ``low``,
-    source_overlap cap → ``medium``), the raw similarity-based tier is floored
-    by that cap so the cap actually reaches the decision engine. Without this
-    floor, caps live only in observability. We deliberately do NOT floor by
-    `reliability.score` because the reliability score uses stricter base
-    thresholds (`high` only at top score ≥0.8) than this classifier
-    (`high` at ≥0.45); flooring by score would silently downgrade many
-    uncapped high-confidence queries to medium.
-    """
-    if retrieval is None or retrieval.best_confidence_score is None:
-        return "low"
-    score = retrieval.best_confidence_score
-    if score >= _ESCALATION_THRESHOLD:
-        raw: KbConfidence = "high"
-    elif score >= LOW_CONFIDENCE_THRESHOLD:
-        raw = "medium"
-    else:
-        raw = "low"
-    cap = retrieval.reliability.cap
-    if cap is None:
-        return raw
-    return _floor_kb_confidence(raw, cap)
+# Retrieval-confidence tiering now lives in the decision engine, which is the
+# only consumer that acts on it (and needs it both before and after
+# generation). These aliases keep the historical names importable.
+LOW_CONFIDENCE_THRESHOLD = KB_LOW_CONFIDENCE_THRESHOLD
+_ESCALATION_THRESHOLD = KB_HIGH_CONFIDENCE_THRESHOLD
+_floor_kb_confidence = floor_kb_confidence
+_classify_kb_confidence = classify_kb_confidence
 
 
 @dataclass(frozen=True)
@@ -586,9 +562,16 @@ class RagHandler(PipelineHandler):
             escalate = True
             esc_trigger = EscalationTrigger.low_similarity
 
-        # Increment clarification counter when the pipeline produced a blocking clarify.
+        # Charge the per-session clarification budget only for turns that
+        # actually asked something. decide() classifies the turn, but the model
+        # writes it: a turn classified as a blocking clarify that came back as a
+        # plain answer used to consume a clarification anyway. The budget then
+        # ran out on questions nobody had been asked, and the next genuinely
+        # ambiguous turn escalated on clarify_loop_limit instead of asking.
         _clarification_count_before = chat.clarification_count
-        if _decision.is_blocking_clarify():
+        _clarify_asked = reply_is_clarifying_question(answer)
+        _clarification_charged = _decision.is_blocking_clarify() and _clarify_asked
+        if _clarification_charged:
             chat.clarification_count += 1
             ctx.db.add(chat)
             # Counter is committed in the same transaction as the assistant message below.
@@ -729,6 +712,83 @@ class RagHandler(PipelineHandler):
                 ):
                     _escalation_render_failed_on_zero_hits = True
 
+        # Dead-end rescue: the LLM ends a reply with HANDOFF_MARKER when the
+        # only way forward it can offer is reaching a human — including the
+        # case where the documentation's own last step is "write to support".
+        # Such a reply resolves nothing on its own, and when the channel it
+        # names sits behind a sign-in the user cannot complete (or is this very
+        # chat), it is a closed loop. So the offer is composed here rather than
+        # by the model: it lands in the user's language from the canonical
+        # template, and the pre-confirm gate is armed so their "yes" creates
+        # the ticket.
+        #
+        # Gated on the pending flag rather than on ``escalate``: the escalate
+        # branch above arms the gate itself, but when its renderer failed it
+        # disarmed the gate and left the raw RAG answer standing — exactly the
+        # dead end this block exists to close.
+        #
+        # A reply that already ends in a question is left alone, as is one the
+        # model marked as its own offer. Appending "shall I forward this?"
+        # after either asks twice in one reply — and after this turn's required
+        # clarification it is worse than noise, because the user's "yes"
+        # answers the clarification while the gate reads it as consent to open
+        # a ticket.
+        _handoff_offer_appended = False
+        if (
+            not chat.escalation_pre_confirm_pending
+            and result.llm_needs_human
+            and not result.llm_offered_ticket
+            and not reply_is_clarifying_question(answer)
+        ):
+            _handoff_start = perf_counter()
+            try:
+                # Templated path only (no chat_messages): the canonical text is
+                # localized once per language and cached, so rescuing a dead end
+                # costs no extra LLM round-trip on the critical path.
+                esc_offer = await_only(
+                    asyncio.wait_for(
+                        render_pre_confirm_text(
+                            variant="support_contact",
+                            response_language=ctx.language_context.response_language,
+                            api_key=ctx.api_key,
+                            tenant_id=str(ctx.tenant_id),
+                            bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                            chat_id=str(chat.id),
+                        ),
+                        timeout=settings.escalation_pre_confirm_render_timeout_seconds,
+                    )
+                )
+            except Exception as e:
+                # Includes TimeoutError: never stall a turn on the offer text.
+                logger.warning(
+                    "handoff offer render failed, using canonical template: %s", e
+                )
+                esc_offer = pre_confirm_fallback_result("support_contact")
+            record_stage_ms(
+                ctx.trace,
+                "handoff_offer_render_ms",
+                round((perf_counter() - _handoff_start) * 1000, 2),
+            )
+            answer = f"{answer}\n\n{esc_offer.message_to_user}"
+            tokens_used = tokens_used + esc_offer.tokens_used
+            chat.escalation_pre_confirm_pending = True
+            chat.escalation_pre_confirm_context = {
+                "trigger": EscalationTrigger.llm_self_offer.value,
+                "primary_question": ctx.question,
+                "best_similarity_score": retrieval.best_confidence_score,
+                "retrieved_chunks": chunks_preview_from_results(
+                    document_ids, scores, chunk_texts
+                ),
+            }
+            ctx.db.add(chat)
+            _handoff_offer_appended = True
+            logger.info(
+                "Appended handoff offer from LLM needs-human marker "
+                "(decide=%s, escalate=False) chat_id=%s",
+                _decision.kind.value,
+                chat.id,
+            )
+
         # Safety net: decide() may classify a turn as a confident answer while
         # the LLM still ends its reply with a ticket offer (the system prompt
         # allows this when it judges the docs incomplete). The LLM signals
@@ -825,7 +885,17 @@ class RagHandler(PipelineHandler):
                     **build_reliability_projection(retrieval.reliability),
                     **build_variant_trace_metadata(retrieval),
                     # Clarification policy trace fields (spec §Trace fields)
-                    **_decision.trace_dict(_clarification_count_before),
+                    **_decision.trace_dict(
+                        _clarification_count_before,
+                        clarification_charged=_clarification_charged,
+                    ),
+                    # Did the reply the model produced honour a required
+                    # clarification, and did we have to rescue a dead-end
+                    # answer that offered nothing but "go talk to a human"?
+                    "clarify_required_reason": result.clarify_required_reason,
+                    "clarify_asked": _clarify_asked,
+                    "llm_needs_human": bool(result.llm_needs_human),
+                    "handoff_offer_appended": _handoff_offer_appended,
                     # Loop-detection signals (always emitted so dashboards can
                     # distinguish "not evaluated" from "evaluated false").
                     **_decision.loop_trace_dict(_turn_ctx),

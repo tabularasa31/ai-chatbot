@@ -787,7 +787,7 @@ def test_widget_stream_language_mismatch_aborts_before_client_sees_it(
             )
             raise AssertionError("gate must abort before the fake returns")
         sc("Sí, el modo inline está disponible.")
-        return ("Sí, el modo inline está disponible.", 60, 40, 20, False)
+        return ("Sí, el modo inline está disponible.", 60, 40, 20, False, False)
 
     def _fake_detect(text: str) -> LanguageDetectionResult:
         if "beschikbaar" in text:

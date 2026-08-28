@@ -71,7 +71,25 @@ CLARIFICATION_POLICY = (
     "clarifying question instead of guessing.\n"
     "- If you can safely answer part of the question from the context, do so briefly first, "
     "then ask at most one short clarifying question.\n"
-    "- Honor any per-turn clarification limit stated in the user turn below.\n"
+    "- Honor any per-turn clarification instruction stated in the user turn below: when that turn "
+    "requires a clarifying question, asking it is the whole reply — a redirect to support or a list of "
+    "every possible case does not satisfy it.\n"
+)
+
+SUPPORT_CHANNEL_POLICY = (
+    "SUPPORT CHANNEL:\n"
+    "- You ARE the tenant's support chat. By writing to you the user has already reached support, "
+    "and the team can be brought into this very conversation.\n"
+    "- Never send the user to a support channel they are already using, and never send them to one gated "
+    "behind something they just told you is not working for them (signing in, receiving a code, an account "
+    "they cannot open, a panel they cannot load). A channel the user cannot reach right now is not an answer "
+    "— it is a dead end, and it is worse than saying nothing.\n"
+    "- The documentation's contact section is reference material about the tenant's channels, not an "
+    "instruction to redirect. Repeat it only when the user asked how to reach support, or when it names a "
+    "channel they can actually use right now — and append the `<needs_human/>` marker described above so the "
+    "handoff offer reaches them.\n"
+    "- When the user turn reports that the user is identified or that their contact email is on file, support "
+    "can already reply to them: never ask them to sign in, register, or hand over contact details first.\n"
 )
 
 DISCLOSURE_LEVEL_INSTRUCTIONS: dict[str, str] = {
@@ -92,7 +110,14 @@ DISCLOSURE_LEVEL_INSTRUCTIONS: dict[str, str] = {
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
-    """LLM-safe line: only plan_tier, locale, audience_tag (FR-6.4)."""
+    """LLM-safe line: only plan_tier, locale, audience_tag (FR-6.4).
+
+    Identity itself never reaches the prompt, but two booleans derived from it
+    do: whether the tenant's page identified this visitor, and whether we hold
+    an email support could answer on. Without them the model reads every
+    conversation as anonymous and recites the documentation's "sign in, then
+    write to support" path at people who are already signed in.
+    """
     if not ctx:
         return None
     parts: list[str] = []
@@ -100,6 +125,10 @@ def _user_context_prompt_line(ctx: dict | None) -> str | None:
         val = ctx.get(key)
         if val is not None and str(val).strip() != "":
             parts.append(f"{key}={val}")
+    if str(ctx.get("user_id") or "").strip() or str(ctx.get("email") or "").strip():
+        parts.append("identified=yes")
+    if str(ctx.get("email") or "").strip():
+        parts.append("contact_email_on_file=yes")
     if not parts:
         return None
     return "[User context: " + ", ".join(parts) + "]"
@@ -120,6 +149,7 @@ def build_rag_prompt(
     low_context: bool = False,
     strong_context: bool = False,
     allow_clarification: bool = True,
+    require_clarification: str | None = None,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -129,6 +159,8 @@ def build_rag_prompt(
         context_chunks: List of text chunks from search.
         allow_clarification: When False (clarification budget exhausted),
             the system prompt instructs the model NOT to ask clarifying questions.
+        require_clarification: Clarify reason from the decision engine when this
+            turn must end in a clarifying question, else None.
 
     Returns:
         Formatted prompt string for GPT.
@@ -155,8 +187,8 @@ def build_rag_prompt(
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
         "- When the documentation does not cover the question, say so honestly and offer to open a support ticket so the team can follow up by email — for example: \"I don't have that in the documentation. Want me to open a support ticket so the team can email you back?\". Wait for the user to confirm; the backend detects their agreement and routes the escalation. Never deflect with vague phrasing such as \"reach out to the support team\" without offering this explicit ticket. Phrase the offer in the user's language.\n"
-        "- Only make that ticket offer when you genuinely cannot resolve the question yourself from the provided context. When you HAVE fully answered the question from the documentation, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one. A definitive negative answer counts as resolved: when the context shows that a capability, integration, or option is unsupported, out of scope, or listed as a current limitation, state that plainly as the answer and stop — the absence of a dedicated documentation section on the topic is not by itself a reason to offer a ticket. The same holds when the context answers what the user actually asked even though it does not use their wording. EXCEPTION: when the only resolution your answer can give is to reach a human or a tenant-side support channel (a panel/dashboard chat, a ticket form, a phone number, an external support email), you have NOT resolved it yourself — you MUST then make the handoff offer described in the next rule, even though you produced an answer.\n"
-        "- When your reply tells the user to contact human support through a tenant-side channel (a panel/dashboard chat, a ticket form, a phone number, an external support email), keep that information, but in the SAME reply ALSO offer your own handoff, phrased as a simple yes/no question the user only has to confirm: offer to forward their request to the team so they get a reply by email, and ask them to confirm. Focus on the user's intent rather than exact wording; the following example is illustrative and non-exhaustive: \"…or I can forward your request to the team and they'll reply to your email — want me to do that?\". The backend forwards the user's earlier question on a \"yes\", so do NOT ask the user to re-type their question here — that would clear the handoff. Treat this as a ticket offer for the marker rule below. Phrase it in the user's language.\n"
+        "- Only make that ticket offer when you genuinely cannot resolve the question yourself from the provided context. When you HAVE fully answered the question from the documentation, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one. A definitive negative answer counts as resolved: when the context shows that a capability, integration, or option is unsupported, out of scope, or listed as a current limitation, state that plainly as the answer and stop — the absence of a dedicated documentation section on the topic is not by itself a reason to offer a ticket. The same holds when the context answers what the user actually asked even though it does not use their wording.\n"
+        "- Reaching people is not a resolution you can deliver in text. Whenever the only way forward your reply can offer is contacting a human — the documentation's last step is \"write to support\", the fix needs an operator, or the answer you found IS a support channel (a panel/dashboard chat, a ticket form, a phone number, a support email) — the turn is NOT resolved: append the literal marker `<needs_human/>` as the very last token of your reply. Keep the documentation's contact details in your text when they are useful to the user, but do NOT write the handoff offer yourself and do NOT ask the user to confirm anything — the backend appends its own offer, in the user's language, and wires their answer to the support handoff. The marker is stripped before the reply is shown.\n"
         "- Keep answers concise and focused on the user's intent: typically 2-4 short paragraphs (around 200 words). Use bullet lists for multi-step instructions. Expand only when the user explicitly asks for more depth.\n"
         # NOTE: the marker bullet must stay the LAST bullet in Rules:. Inserting
         # it earlier would invalidate the OpenAI prompt-cache prefix that
@@ -207,6 +239,7 @@ def build_rag_prompt(
         f"{system_rules}\n\n{OUTPUT_LANGUAGE_POLICY}"
         f"\n{CONTEXT_FORMAT_NOTE}"
         f"\n{CLARIFICATION_POLICY}"
+        f"\n{SUPPORT_CHANNEL_POLICY}"
     )
 
     # Per-request content lives in the user message (after the Context: split) so
@@ -217,13 +250,26 @@ def build_rag_prompt(
     response_language_name = language_display_name(response_language)
     language_directive = f"TARGET REPLY LANGUAGE: {response_language_name}."
 
-    if allow_clarification:
-        clarification_rules = None
-    else:
+    if not allow_clarification:
         clarification_rules = (
             "CLARIFICATION (this turn): Do not ask any clarifying question. Answer with the "
             "information available, or acknowledge that you cannot answer without more context."
         )
+    elif require_clarification:
+        # decide() classifies this turn as a blocking clarify. Before this
+        # instruction existed the verdict was purely descriptive — it reached
+        # the model only as the general "ask if one detail blocks you" policy,
+        # and the model routinely answered every possible reading of the
+        # question instead of asking which one applied.
+        clarification_rules = (
+            "CLARIFICATION (this turn): The retrieved documentation does not confidently cover this "
+            f"question ({require_clarification}), so this reply MUST end with exactly one short "
+            "clarifying question naming the detail you need from the user. At most one sentence of "
+            "directly supported partial answer may come first. Do not enumerate every possible case, "
+            "and do not redirect the user to another support channel instead of asking."
+        )
+    else:
+        clarification_rules = None
 
     dynamic_context_sections: list[str] = []
     if faq_context_items:
@@ -267,7 +313,8 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
             "question, by the same confidence bar the backend uses to decide whether a "
             "handoff is needed. Answer from the context below and do NOT offer to open a "
             "support ticket, unless the context genuinely does not contain what the user "
-            "asked for or the tenant-side support-channel exception applies."
+            "asked for. This does not silence the `<needs_human/>` marker: if the only way "
+            "forward your reply can offer is reaching a human, still append it."
         )
     if low_context:
         per_request_parts.append(
@@ -313,6 +360,7 @@ def build_rag_messages(
     low_context: bool = False,
     strong_context: bool = False,
     allow_clarification: bool = True,
+    require_clarification: str | None = None,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -329,6 +377,7 @@ def build_rag_messages(
         low_context=low_context,
         strong_context=strong_context,
         allow_clarification=allow_clarification,
+        require_clarification=require_clarification,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"

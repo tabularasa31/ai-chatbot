@@ -19,13 +19,10 @@ something else. ``guard_events_purge`` is the existing precedent for the shape
 this actually is — delete rows past a retention window on a periodic tick —
 and this follows it.
 
-**Interaction with the last-owner guard.** ``count_owners`` counts verified
-owners only, so an unaccepted invitation is never what holds a workspace's
-owner count above zero, and deleting one can never strand a workspace without
-an administrator. The ordering holds in the other direction too: were the
-count ever to include pending rows again, this job would become able to
-remove a workspace's only "owner" — which is precisely why that filter and
-this sweep belong to the same change.
+**It can never delete an owner.** Every invitee is created as an operator —
+the workspace's one owner is the person who created it, and no invitation can
+name a role — so the set this sweeps contains no administrators by
+construction, and no workspace can be stranded without one.
 
 Runs as a :class:`~backend.jobs._periodic.PeriodicJob` daemon thread. Across
 workers a Redis distributed lock gates each tick. Without Redis (local dev) it

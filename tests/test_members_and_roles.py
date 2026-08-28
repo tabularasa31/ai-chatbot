@@ -1,8 +1,12 @@
-"""Roles and team members, phase 0.5.
+"""Roles and team members.
+
+A workspace has exactly one owner — the person who created it — and everybody
+else is an operator. Nothing moves between the two: there is no promotion, no
+demotion, and no role on an invitation.
 
 Covers the four things the feature stands on — an invited colleague really
-lands in the same workspace, an operator reaches the work surfaces and is
-refused the owner ones, a workspace can never be left without an owner, and an
+lands in the same workspace as an operator, an operator reaches the work
+surfaces and is refused the owner ones, the owner cannot be removed, and an
 invite link is single-use and mortal — plus tenant isolation on every member
 route and the tenant-less principal that ``users.tenant_id`` being nullable
 makes possible.
@@ -71,14 +75,13 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _invite(
-    client: TestClient, workspace: _Workspace, *, email: str, role: str = "operator"
-):
+def _invite(client: TestClient, workspace: _Workspace, *, email: str):
+    """Invite somebody. Always an operator — the body carries no role."""
     with patch("backend.tenants.members_service.send_email") as sent:
         resp = client.post(
             "/tenants/members/invite",
             headers=workspace.auth,
-            json={"email": email, "role": role},
+            json={"email": email},
         )
     return resp, sent
 
@@ -151,16 +154,18 @@ def test_invited_colleague_sets_a_password_and_lands_in_the_same_tenant(
     assert rows["ops@acme.example.com"]["status"] == "active"
 
 
-def test_reinvite_reissues_the_token_and_may_change_the_role(
+def test_reinvite_reissues_the_token(
     tenant: TestClient, db_session: Session
 ) -> None:
+    """A lost e-mail is fixed by sending it again, and the old link dies."""
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
     assert _invite(tenant, ws, email="ops@acme.example.com")[0].status_code == 201
     first = _invite_token(db_session, "ops@acme.example.com")
 
-    resp, _sent = _invite(tenant, ws, email="ops@acme.example.com", role="owner")
+    resp, _sent = _invite(tenant, ws, email="ops@acme.example.com")
     assert resp.status_code == 201, resp.text
-    assert resp.json()["member"]["role"] == "owner"
+    # Still an operator, as every invitee is.
+    assert resp.json()["member"]["role"] == "operator"
 
     db_session.expire_all()
     second = _invite_token(db_session, "ops@acme.example.com")
@@ -253,7 +258,6 @@ def test_operator_is_refused_settings_keys_privacy_and_member_management(
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
     op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
     headers = _auth(op_token)
-    member_id = db_session.query(User).filter(User.email == "ops@acme.example.com").one().id
 
     refusals = [
         tenant.patch("/tenants/me", headers=headers, json={"name": "Renamed"}),
@@ -276,10 +280,7 @@ def test_operator_is_refused_settings_keys_privacy_and_member_management(
         tenant.post(
             "/tenants/members/invite",
             headers=headers,
-            json={"email": "third@acme.example.com", "role": "operator"},
-        ),
-        tenant.patch(
-            f"/tenants/members/{member_id}", headers=headers, json={"role": "owner"}
+            json={"email": "third@acme.example.com"},
         ),
         tenant.delete(f"/tenants/members/{ws.owner_id}", headers=headers),
     ]
@@ -355,143 +356,106 @@ def test_only_the_owner_may_publish_an_faq(
 
 
 # ---------------------------------------------------------------------------
-# The last-owner guard
+# One owner, fixed
 # ---------------------------------------------------------------------------
 
 
-def test_the_last_owner_cannot_be_removed(
+def test_an_invitation_cannot_name_a_role(
     tenant: TestClient, db_session: Session
 ) -> None:
-    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-    # Promote, so the operator can try to remove the founder without the
-    # self-removal rule being what refuses it.
-    successor = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    assert (
-        tenant.patch(
-            f"/tenants/members/{successor.id}", headers=ws.auth, json={"role": "owner"}
-        ).status_code
-        == 200
-    )
-    # The founder takes a seat first: an operator without one could not answer,
-    # so a seatless owner cannot be demoted. See tests/test_seats.py.
-    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
-    # Demote the founder (legally — a second owner exists), leaving one owner.
-    assert (
-        tenant.patch(
-            f"/tenants/members/{ws.owner_id}",
-            headers=_auth(op_token),
-            json={"role": "operator"},
-        ).status_code
-        == 200
-    )
+    """The one way a second owner could have been minted.
 
-    # Now the successor is the last owner, and the founder cannot remove them.
-    removed = tenant.delete(
-        f"/tenants/members/{successor.id}", headers=_auth(op_token)
-    )
-    assert removed.status_code == 400, removed.text
-    assert "yourself" in removed.json()["detail"].lower()
-    db_session.expire_all()
-    assert db_session.query(User).filter(User.id == successor.id).one().role == "owner"
-
-
-def test_nobody_can_demote_themselves(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """The lockout that used to be reachable, from both directions.
-
-    A sole owner demoting themselves is the unrecoverable move: the surface
-    that could put the role back is the one they just left. It is refused
-    whether or not the workspace has anyone else, and — the regression that
-    made this urgent — whether or not an unaccepted invitation makes the owner
-    count *look* like two.
+    A ``role`` in the body is not rejected, it is ignored — the schema simply
+    has no such field. What matters is the row it produces.
     """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
 
-    # Alone.
-    solo = tenant.patch(
-        f"/tenants/members/{ws.owner_id}", headers=ws.auth, json={"role": "operator"}
-    )
-    assert solo.status_code == 400, solo.text
-    assert "yourself" in solo.json()["detail"].lower()
+    with patch("backend.tenants.members_service.send_email"):
+        resp = tenant.post(
+            "/tenants/members/invite",
+            headers=ws.auth,
+            json={"email": "aspiring@acme.example.com", "role": "owner"},
+        )
 
-    # With a pending owner invitation outstanding — the row exists, has the
-    # owner role, and must not count for anything.
-    resp, _sent = _invite(tenant, ws, email="typo@exmaple.example.com", role="owner")
     assert resp.status_code == 201, resp.text
-    with_pending = tenant.patch(
-        f"/tenants/members/{ws.owner_id}", headers=ws.auth, json={"role": "operator"}
+    assert resp.json()["member"]["role"] == "operator"
+    member = (
+        db_session.query(User)
+        .filter(User.email == "aspiring@acme.example.com")
+        .one()
     )
-    assert with_pending.status_code == 400, with_pending.text
+    assert member.role == "operator"
+    # And accepting does not change that.
+    assert _accept(tenant, _invite_token(db_session, "aspiring@acme.example.com")).status_code == 200
+    db_session.refresh(member)
+    assert member.role == "operator"
 
-    db_session.expire_all()
-    assert db_session.query(User).filter(User.id == ws.owner_id).one().role == "owner"
-    # And the owner surfaces still answer to them.
-    assert tenant.get("/tenants/members", headers=ws.auth).status_code == 200
 
-
-def test_a_pending_invitation_does_not_count_as_an_owner(
+def test_the_workspace_has_exactly_one_owner(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """``count_owners`` sees people, not invitations."""
-    from backend.tenants.members_service import count_owners
-
+    """However many people join, the founder is the only owner."""
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    assert count_owners(ws.tenant_id, db_session) == 1
-    assert (
-        _invite(tenant, ws, email="pending@acme.example.com", role="owner")[
-            0
-        ].status_code
-        == 201
+    _onboard_operator(tenant, db_session, ws, email="one@acme.example.com")
+    _onboard_operator(tenant, db_session, ws, email="two@acme.example.com")
+
+    members = tenant.get("/tenants/members", headers=ws.auth).json()["items"]
+
+    owners = [m for m in members if m["role"] == "owner"]
+    assert len(owners) == 1
+    assert owners[0]["id"] == str(ws.owner_id)
+
+
+def test_there_is_no_route_that_changes_a_role(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The surface is gone, not merely guarded."""
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+
+    resp = tenant.patch(
+        f"/tenants/members/{member.id}", headers=ws.auth, json={"role": "owner"}
     )
-    db_session.expire_all()
-    assert count_owners(ws.tenant_id, db_session) == 1
 
-    # It becomes 2 only once the invitation is actually accepted.
-    assert _accept(tenant, _invite_token(db_session, "pending@acme.example.com")).status_code == 200
-    db_session.expire_all()
-    assert count_owners(ws.tenant_id, db_session) == 2
+    assert resp.status_code == 405, resp.text
+    db_session.refresh(member)
+    assert member.role == "operator"
 
 
-def test_the_last_owner_cannot_be_demoted_by_another_actor(
+def test_the_owner_cannot_be_removed(
     tenant: TestClient, db_session: Session
 ) -> None:
     """Defence in depth, exercised at the service layer.
 
-    Through the API this branch is unreachable: the actor must be an owner of
-    the workspace, so a target who is its *only* owner is always the actor
-    themselves, and the self-demotion rule refuses first. The guard stays for
-    any future caller that is not the member being changed.
+    Through the API this branch is unreachable, and deliberately kept anyway:
+    only an owner may remove, there is only ever one, so a target who is an
+    owner is always the actor themselves and the self-removal rule refuses
+    first. The guard is what would hold if a second owner ever appeared.
     """
-    from backend.tenants.members_service import change_member_role
+    from backend.tenants.members_service import remove_member
 
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+
     with pytest.raises(HTTPException) as exc:
-        change_member_role(
+        remove_member(
             tenant_id=ws.tenant_id,
             actor_id=uuid.uuid4(),
             member_id=ws.owner_id,
-            role="operator",
             db=db_session,
         )
+
     assert exc.value.status_code == 400
-    assert "last owner" in exc.value.detail.lower()
+    assert "owner" in exc.value.detail.lower()
+    db_session.expire_all()
+    assert db_session.query(User).filter(User.id == ws.owner_id).one() is not None
 
 
 def test_nobody_can_remove_themselves(
     tenant: TestClient, db_session: Session
 ) -> None:
+    """Refused before the owner guard has anything to say about it."""
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-    # Two owners, so the last-owner guard is not what refuses this.
-    second = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    assert (
-        tenant.patch(
-            f"/tenants/members/{second.id}", headers=ws.auth, json={"role": "owner"}
-        ).status_code
-        == 200
-    )
 
     resp = tenant.delete(f"/tenants/members/{ws.owner_id}", headers=ws.auth)
     assert resp.status_code == 400, resp.text
@@ -500,37 +464,6 @@ def test_nobody_can_remove_themselves(
     db_session.expire_all()
     owner = db_session.query(User).filter(User.id == ws.owner_id).one()
     assert owner.tenant_id == ws.tenant_id
-
-
-def test_succession_promote_then_demote_the_original_owner(
-    tenant: TestClient, db_session: Session
-) -> None:
-    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-    successor = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-
-    assert (
-        tenant.patch(
-            f"/tenants/members/{successor.id}", headers=ws.auth, json={"role": "owner"}
-        ).status_code
-        == 200
-    )
-    # The founder takes a seat first: stepping down to operator means taking on
-    # the job an operator does, and that needs a seat. See tests/test_seats.py.
-    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
-    # The successor demotes the founder. Nobody demotes themselves, so handing
-    # over is always a two-party act.
-    assert (
-        tenant.patch(
-            f"/tenants/members/{ws.owner_id}",
-            headers=_auth(op_token),
-            json={"role": "operator"},
-        ).status_code
-        == 200
-    )
-    # And the demoted founder is an operator from the next request on.
-    assert tenant.get("/tenants/members", headers=ws.auth).status_code == 403
-    assert tenant.get("/tenants/members", headers=_auth(op_token)).status_code == 200
 
 
 def test_removing_a_member_deletes_the_account_and_kills_their_session(
@@ -708,12 +641,6 @@ def test_member_routes_are_tenant_scoped(
 
     # A member id from another workspace is indistinguishable from a made-up one.
     assert (
-        tenant.patch(
-            f"/tenants/members/{stranger.id}", headers=ours.auth, json={"role": "owner"}
-        ).status_code
-        == 404
-    )
-    assert (
         tenant.delete(
             f"/tenants/members/{stranger.id}", headers=ours.auth
         ).status_code
@@ -861,31 +788,32 @@ def test_removal_hands_back_the_chats_the_member_was_holding(
 def test_removal_signs_the_api_keys_the_member_issued(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """Who issued a widget key is the first question when one leaks."""
+    """Who issued a widget key is the first question when one leaks.
+
+    The attribution is written onto a row this build can no longer produce
+    through the API: issuing a key is owner-only, there is one owner, and the
+    owner cannot be removed. It is still reachable for a row that predates the
+    role model being frozen, which is exactly the row somebody will be asking
+    about years later — so the key is pointed at the departing member
+    directly, and what is under test is the stamping, not the route that used
+    to create the state.
+    """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-    successor = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    assert (
-        tenant.patch(
-            f"/tenants/members/{successor.id}", headers=ws.auth, json={"role": "owner"}
-        ).status_code
-        == 200
-    )
+    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    leaver = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
     rotated = tenant.post(
         "/tenants/me/api-keys/rotate",
-        headers=_auth(op_token),
+        headers=ws.auth,
         json={"reason": "scheduled", "revoke_old_immediately": False},
     )
     assert rotated.status_code == 201, rotated.text
     key_id = uuid.UUID(rotated.json()["key"]["id"])
-    assert (
-        db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
-        .created_by_user_id
-        == successor.id
-    )
+    key = db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
+    key.created_by_user_id = leaver.id
+    db_session.commit()
 
     assert (
-        tenant.delete(f"/tenants/members/{successor.id}", headers=ws.auth).status_code
+        tenant.delete(f"/tenants/members/{leaver.id}", headers=ws.auth).status_code
         == 204
     )
     db_session.expire_all()
@@ -1061,25 +989,29 @@ def test_the_purge_leaves_a_signup_in_progress_alone(
     )
 
 
-def test_purging_an_owner_invitation_cannot_strand_a_workspace(
+def test_purging_an_invitation_cannot_strand_a_workspace(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """The ordering the two fixes depend on, asserted rather than assumed."""
+    """The sweep can never touch an administrator.
+
+    It used to need a count of verified owners to be sure of that. Now it is
+    true by construction: every invitee is an operator, so the set this sweeps
+    contains no owners at all.
+    """
     from backend.jobs.expired_invitations_purge import purge_expired_invitations
-    from backend.tenants.members_service import count_owners
 
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    assert _invite(tenant, ws, email="never@acme.example.com", role="owner")[
-        0
-    ].status_code == 201
+    assert _invite(tenant, ws, email="never@acme.example.com")[0].status_code == 201
     pending = db_session.query(User).filter(User.email == "never@acme.example.com").one()
+    assert pending.role == "operator"
     pending.reset_password_expires_at = _utcnow() - timedelta(minutes=1)
     db_session.commit()
 
-    before = count_owners(ws.tenant_id, db_session)
     assert purge_expired_invitations(db_session) == 1
+
     db_session.expire_all()
-    assert count_owners(ws.tenant_id, db_session) == before == 1
+    owner = db_session.query(User).filter(User.id == ws.owner_id).one()
+    assert owner.role == "owner"
     assert tenant.get("/tenants/members", headers=ws.auth).status_code == 200
 
 
@@ -1098,17 +1030,6 @@ def test_an_unknown_role_degrades_instead_of_breaking_the_dashboard(
     calls ``/tenants/me`` on mount.
     """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-
-    # First, while they are still an owner: the API refuses to write a role
-    # this build does not implement. Requests stay closed; only reads open up.
-    assert (
-        tenant.post(
-            "/tenants/members/invite",
-            headers=ws.auth,
-            json={"email": "x@acme.example.com", "role": "auditor"},
-        ).status_code
-        == 422
-    )
 
     owner = db_session.query(User).filter(User.id == ws.owner_id).one()
     owner.role = "auditor"

@@ -9,13 +9,6 @@ const ROLE_LABEL: Record<TenantRole, string> = {
   operator: "Operator",
 };
 
-const ROLE_HELP: Record<TenantRole, string> = {
-  owner:
-    "Full access: settings, API keys, privacy, the knowledge base, team management, and publishing answers.",
-  operator:
-    "Works conversations: the inbox, the logs, and read access to the knowledge base.",
-};
-
 function RoleBadge({ role }: { role: TenantRoleValue }) {
   const styles: Record<TenantRole, string> = {
     owner: "bg-violet-100 text-violet-700",
@@ -37,7 +30,6 @@ export default function MembersPage() {
   const members = data?.items;
 
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<TenantRole>("operator");
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState("");
   const [notice, setNotice] = useState("");
@@ -54,7 +46,6 @@ export default function MembersPage() {
       .catch(() => {});
   }, []);
 
-  const ownerCount = (members ?? []).filter((m) => m.role === "owner").length;
   const isOwner = client?.role === "owner";
 
   async function invite() {
@@ -64,7 +55,7 @@ export default function MembersPage() {
     setInviteError("");
     setNotice("");
     try {
-      const result = await api.members.invite(address, role);
+      const result = await api.members.invite(address);
       setEmail("");
       setNotice(
         `Invite sent to ${result.member.email}. Their seat — and the $10 a ` +
@@ -75,19 +66,6 @@ export default function MembersPage() {
       setInviteError(err instanceof Error ? err.message : "Failed to send the invite");
     } finally {
       setInviting(false);
-    }
-  }
-
-  async function changeRole(member: TenantMember, next: TenantRole) {
-    setBusyId(member.id);
-    setActionError("");
-    try {
-      await api.members.setRole(member.id, next);
-      await mutate();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to change the role");
-    } finally {
-      setBusyId(null);
     }
   }
 
@@ -127,10 +105,12 @@ export default function MembersPage() {
       <div>
         <h1 className="text-2xl font-semibold text-slate-800">Team</h1>
         <p className="text-slate-500 text-sm mt-1">
-          Invite colleagues to work the inbox with you. An operator answers
-          conversations and reads the knowledge base; an owner also holds
-          settings, API keys, and publishing. Removing someone deletes their
-          account; their past replies stay in the transcripts.
+          Invite colleagues to work the inbox with you. Everyone you invite is
+          an operator: they answer conversations and read the knowledge base,
+          while settings, API keys and publishing stay with you as the owner.
+          Roles do not change — a workspace has one owner, the person who
+          created it. Removing someone deletes their account; their past
+          replies stay in the transcripts.
         </p>
         <p className="text-slate-500 text-sm mt-2">
           A colleague gets a seat — which is what lets them answer — when they
@@ -147,7 +127,10 @@ export default function MembersPage() {
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-slate-800">Invite someone</h2>
-          <p className="text-slate-500 text-sm">{ROLE_HELP[role]}</p>
+          <p className="text-slate-500 text-sm">
+            They join as an operator: the inbox, the logs, and read access to
+            the knowledge base.
+          </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -160,15 +143,6 @@ export default function MembersPage() {
             aria-label="Colleague email"
             className="flex-1 min-w-[220px] px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:border-slate-400 placeholder:text-slate-400"
           />
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value as TenantRole)}
-            aria-label="Role"
-            className="px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:border-slate-400"
-          >
-            <option value="operator">Operator</option>
-            <option value="owner">Owner</option>
-          </select>
           <button
             type="button"
             onClick={invite}
@@ -207,14 +181,11 @@ export default function MembersPage() {
           <div className="divide-y divide-slate-100">
             {(members ?? []).map((member) => {
               const isSelf = member.id === selfId;
-              const lastOwner = member.role === "owner" && ownerCount <= 1;
-              // An owner is the one account allowed to hold no seat. Demoting
-              // them would make an operator who cannot answer and cannot get a
-              // seat, so the server refuses it — say so before the round trip.
-              const seatlessOwner =
-                member.role === "owner" &&
-                member.status === "active" &&
-                !member.seat_granted_at;
+              // The owner is unremovable, and is normally also the viewer.
+              // Keyed off the role rather than off `isSelf` alone because the
+              // self id arrives from a second request: for that first moment
+              // `isSelf` is false, and the button must not be live.
+              const isOwnerRow = member.role === "owner";
               return (
                 <div key={member.id} className="py-3 flex items-center gap-3 flex-wrap">
                   <span className="text-sm text-slate-800">{member.email}</span>
@@ -225,38 +196,15 @@ export default function MembersPage() {
                     </span>
                   )}
                   <div className="ml-auto flex items-center gap-2">
-                    <select
-                      value={member.role}
-                      disabled={
-                        busyId === member.id || lastOwner || isSelf || seatlessOwner
-                      }
-                      onChange={(e) =>
-                        changeRole(member, e.target.value as TenantRole)
-                      }
-                      aria-label={`Role for ${member.email}`}
-                      title={
-                        isSelf
-                          ? "You cannot change your own role. Promote another owner and ask them."
-                          : lastOwner
-                            ? "The last owner cannot be demoted. Promote someone else first."
-                            : seatlessOwner
-                              ? "This owner holds no seat, and an operator without one cannot answer conversations. Ask them to take a seat on the Seats screen first."
-                              : undefined
-                      }
-                      className="px-2 py-1 border border-slate-200 rounded text-xs text-slate-700 outline-none focus:border-slate-400 disabled:opacity-40"
-                    >
-                      <option value="operator">Operator</option>
-                      <option value="owner">Owner</option>
-                    </select>
                     <button
                       type="button"
                       onClick={() => remove(member)}
-                      disabled={busyId === member.id || lastOwner || isSelf}
+                      disabled={busyId === member.id || isOwnerRow || isSelf}
                       title={
-                        isSelf
-                          ? "You cannot remove yourself from the workspace."
-                          : lastOwner
-                            ? "The last owner cannot be removed."
+                        isOwnerRow
+                          ? "The owner cannot be removed. Deleting the workspace is the only way out."
+                          : isSelf
+                            ? "You cannot remove yourself from the workspace."
                             : undefined
                       }
                       className="text-xs px-2 py-1 text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-40"

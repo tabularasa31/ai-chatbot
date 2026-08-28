@@ -679,25 +679,16 @@ export const api = {
       const body = data as Partial<TenantMemberList>;
       return { items: body.items ?? [], seats: body.seats ?? 0 };
     },
-    async invite(email: string, role: TenantRole): Promise<InviteMemberResponse> {
+    /** Always invites an operator: the workspace's one owner created it. */
+    async invite(email: string): Promise<InviteMemberResponse> {
       const res = await apiFetch(`${BASE_URL}/tenants/members/invite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role }),
+        body: JSON.stringify({ email }),
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send the invite"));
       return data as InviteMemberResponse;
-    },
-    async setRole(memberId: string, role: TenantRole): Promise<TenantMember> {
-      const res = await apiFetch(`${BASE_URL}/tenants/members/${memberId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role }),
-      });
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to change the role"));
-      return data as TenantMember;
     },
     async remove(memberId: string): Promise<void> {
       const res = await apiFetch(`${BASE_URL}/tenants/members/${memberId}`, {

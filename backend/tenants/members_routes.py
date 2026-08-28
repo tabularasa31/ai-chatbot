@@ -1,16 +1,22 @@
 """Team member management — owner-only.
 
-Six routes: invite, list, change role, remove, and the two that take and give
-back the caller's own operator seat. All of them mounted before
-``tenants_router`` so ``/tenants/members`` is never swallowed by that router's
-``/{tenant_id}`` catch-all.
+Five routes: invite, list, remove, and the two that take and give back the
+caller's own operator seat. All of them mounted before ``tenants_router`` so
+``/tenants/members`` is never swallowed by that router's ``/{tenant_id}``
+catch-all.
 
-**There is no per-member seat control here, deliberately.** Inviting somebody
-grants their seat and removing them releases it, so an invited member is
-always seated and no route exists that could leave one stranded as a member
+**There is no role route, deliberately.** A workspace has exactly one owner —
+the person who created it — and that never moves. Everyone else is an
+operator. So there is nothing to promote to, nothing to demote from, and no
+request that could mint a second owner; the invite below does not take a role
+either.
+
+**There is no per-member seat control here either.** Inviting somebody grants
+their seat when they accept and removing them releases it, so a member is
+always seated and no route exists that could leave one stranded as somebody
 who cannot answer. The only account that can hold a workspace membership with
-no seat is that workspace's founding owner, who was never invited into it —
-which is why the two seat routes below address the caller and nobody else.
+no seat is the owner, who was never invited into it — which is why the two
+seat routes below address the caller and nobody else.
 
 Every handler resolves the workspace from the caller, never from the request
 body or path, so there is no tenant id to tamper with. Member lookups are
@@ -31,7 +37,6 @@ from backend.models import User
 from backend.operator.sessions import emit_operator_session_ended
 from backend.seats.service import count_seats, grant_seat, release_seat
 from backend.tenants.members_service import (
-    change_member_role,
     invite_member,
     list_members,
     release_chats_held_by,
@@ -44,7 +49,6 @@ from backend.tenants.schemas import (
     InviteMemberResponse,
     TenantMemberListResponse,
     TenantMemberResponse,
-    UpdateMemberRoleRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,19 +95,20 @@ def invite_member_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> InviteMemberResponse:
-    """Invite someone by e-mail.
+    """Invite someone by e-mail, as an operator.
 
     Creates an account that cannot yet be logged into and mails a
-    set-password link — following it is the invitee's own act of joining.
-    409 when the address already belongs to a member of this workspace or to
-    another workspace. Re-inviting someone whose invite is still outstanding
-    succeeds and re-issues the link.
+    set-password link — following it is the invitee's own act of joining, and
+    what grants their seat. 409 when the address already belongs to a member
+    of this workspace or to another workspace. Re-inviting someone whose
+    invite is still outstanding succeeds and re-issues the link.
+
+    There is no role to choose: the workspace already has its one owner.
     """
     tenant_id = _tenant_id(current_user)
     member, token = invite_member(
         tenant_id=tenant_id,
         email=str(body.email),
-        role=body.role,
         db=db,
     )
     send_invite_email(
@@ -169,27 +174,6 @@ def give_up_own_seat_route(
     for stretch in closed:
         emit_operator_session_ended(stretch)  # type: ignore[arg-type]
     return _member_to_response(current_user)
-
-
-@members_router.patch("/{member_id}", response_model=TenantMemberResponse)
-def update_member_role_route(
-    member_id: uuid.UUID,
-    body: UpdateMemberRoleRequest,
-    current_user: Annotated[User, Depends(require_owner)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantMemberResponse:
-    """Change a member's role.
-
-    The last owner cannot be demoted, and nobody can demote themselves.
-    """
-    member = change_member_role(
-        tenant_id=_tenant_id(current_user),
-        actor_id=current_user.id,
-        member_id=member_id,
-        role=body.role,
-        db=db,
-    )
-    return _member_to_response(member)
 
 
 @members_router.delete("/{member_id}", status_code=204, response_model=None)

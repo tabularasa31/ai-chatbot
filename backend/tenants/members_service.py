@@ -1,9 +1,17 @@
-"""Team membership: invite, list, change role, remove.
+"""Team membership: invite, list, remove.
 
 Membership is a property of the user row — ``users.tenant_id`` plus
 ``users.role`` — not a join table. A person belongs to exactly one workspace,
 which is what the existing schema already encodes (``Tenant.members`` is the
 reverse of ``User.tenant_id``).
+
+**One owner per workspace, fixed: the person who created it.** Everybody else
+is an operator, and nothing moves between the two — there is no promotion, no
+demotion, and no role on the invitation. An invite that could name a role
+would be an invite that could mint a second owner, and a workspace with two
+owners has to answer questions ("who may remove whom?") that a workspace with
+one never asks. ``users.role`` is still the column the auth dependencies read;
+it is simply written once, when the account is created, and never again.
 
 **The invite token is the password-reset token.** An invite and a reset are
 the same operation seen from two sides: prove you own this address, then set a
@@ -86,7 +94,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.auth.roles import ROLE_OWNER
+from backend.auth.roles import ROLE_OPERATOR, ROLE_OWNER
 from backend.core.config import settings
 from backend.core.security import hash_password
 from backend.email.service import send_email
@@ -199,49 +207,6 @@ def list_members(tenant_id: uuid.UUID, db: Session) -> list[User]:
     )
 
 
-def count_owners(tenant_id: uuid.UUID, db: Session) -> int:
-    """How many owners can actually administer the workspace.
-
-    ``is_verified`` is the whole point of this filter. A pending invitee is a
-    member row with a role and no person behind it, so counting them lets a
-    workspace lock itself out for real: invite ``typo@exmaple.com`` as owner,
-    the count reads 2, demote yourself, and the only remaining "owner" is a
-    link to an address that does not exist. Every owner surface then 403s,
-    including the one that could promote someone back, and the invite token
-    dies in seven days with nothing left behind it.
-
-    The same reasoning makes the expiry sweep safe: an unaccepted invitation
-    can never be what holds this count above zero, so deleting one can never
-    strand a workspace.
-    """
-    return (
-        db.query(User)
-        .filter(
-            User.tenant_id == tenant_id,
-            User.role == ROLE_OWNER,
-            User.is_verified.is_(True),
-        )
-        .count()
-    )
-
-
-def _lock_workspace(tenant_id: uuid.UUID, db: Session) -> None:
-    """Serialise the owner-count guards on the workspace row.
-
-    ``claim_chat`` gets its atomicity from a conditional UPDATE, because there
-    the contended thing *is* the row being written. Here it is an invariant
-    across a set of rows — "at least one verified owner remains" — and two
-    owners removing each other write to two different rows, so row locks on
-    the targets never meet. Both transactions do touch the workspace, so that
-    is where they are made to queue: the second one blocks, then re-counts
-    after the first has committed and sees 1 rather than 2.
-
-    ``FOR UPDATE`` is a no-op on SQLite, which serialises writers globally
-    anyway, so the tests exercise the logic and PostgreSQL supplies the lock.
-    """
-    db.query(Tenant).filter(Tenant.id == tenant_id).with_for_update().first()
-
-
 def get_member(tenant_id: uuid.UUID, member_id: uuid.UUID, db: Session) -> User:
     """Fetch a member of this workspace, or 404.
 
@@ -271,7 +236,6 @@ def invite_member(
     *,
     tenant_id: uuid.UUID,
     email: str,
-    role: str,
     db: Session,
 ) -> tuple[User, str]:
     """Add someone to the workspace by e-mail, and return them with a token.
@@ -285,8 +249,11 @@ def invite_member(
     * otherwise a brand-new account, unverified, with an unusable password,
       which becomes a real login only when the invitee follows the link.
 
-    Re-inviting someone whose invite is still outstanding re-issues the token
-    and applies the new role, so a lost e-mail is fixed by sending it again.
+    Re-inviting someone whose invite is still outstanding re-issues the token,
+    so a lost e-mail is fixed by sending it again.
+
+    Always an operator. The role is not a parameter because there is nothing
+    to choose: the workspace has its one owner already.
 
     No seat is granted here. The invitee is seated when they accept, so an
     invitation that is never claimed costs nothing at all — see the module
@@ -300,7 +267,6 @@ def invite_member(
                 status_code=409, detail="This person is already a member"
             )
         # Invite outstanding — re-issue it rather than refusing.
-        existing.role = role
         token = _issue_invite_token(existing)
         db.commit()
         db.refresh(existing)
@@ -328,7 +294,7 @@ def invite_member(
         # when the invitee sets their own password from the link.
         password_hash=hash_password(uuid.uuid4().hex + uuid.uuid4().hex),
         tenant_id=tenant_id,
-        role=role,
+        role=ROLE_OPERATOR,
         is_verified=False,
     )
     token = _issue_invite_token(member)
@@ -343,86 +309,6 @@ def invite_member(
         ) from exc
     db.refresh(member)
     return member, token
-
-
-def change_member_role(
-    *,
-    tenant_id: uuid.UUID,
-    actor_id: uuid.UUID,
-    member_id: uuid.UUID,
-    role: str,
-    db: Session,
-) -> User:
-    """Move a member between roles.
-
-    Two refusals, and they are not the same one. **Self-demotion** is refused
-    outright, exactly as ``remove_member`` refuses self-removal: dropping your
-    own last privilege is the one mistake with no undo, since the surface that
-    would restore it is the surface you just left. Promote a successor and let
-    them demote you — the same shape succession already has.
-
-    **The last owner** cannot be demoted by anyone, because a workspace with
-    no owner has nobody who can invite, configure, or promote, and no route
-    back.
-
-    **A seatless owner** cannot be demoted either, and that one is about seats
-    rather than roles. A seat and a role are orthogonal everywhere else, but
-    they meet here: an owner is the one account allowed to hold a membership
-    with no seat, because an owner without one still administers the whole
-    workspace. Demote them and that stops being true — they become an operator
-    whose entire job is answering conversations, which is exactly what they
-    have no seat for, and no way back: taking a seat is owner-only, being
-    re-invited answers 409 because they are already a member, and there is no
-    per-member seat route by design. The escape would be promoting them, seating
-    them, and demoting them again, which is the move that created the state.
-
-    Refusing is the right shape rather than granting a seat on their behalf.
-    Granting would be a per-member grant wearing a role change as a disguise,
-    and it would put $10 a month on the workspace as a side effect of an action
-    whose subject is a role — money must never move because of a click about
-    something else. Refusing keeps both invariants intact and costs one extra
-    step, which the message spells out: the target takes a seat themselves
-    (they are still an owner, so they can), and the demotion then succeeds.
-
-    A *pending* invitee is exempt: they hold no seat yet by design and are
-    seated when they accept, whatever role they accept into. Blocking their
-    role change would refuse a correction that costs nothing to make.
-    """
-    _lock_workspace(tenant_id, db)
-    member = get_member(tenant_id, member_id, db)
-    if member.role == role:
-        return member
-    if member.id == actor_id and role != ROLE_OWNER:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "You cannot demote yourself. Promote another owner and ask "
-                "them to change your role."
-            ),
-        )
-    if member.role == ROLE_OWNER and count_owners(tenant_id, db) <= 1:
-        raise HTTPException(
-            status_code=400,
-            detail="The last owner cannot be demoted. Promote someone else first.",
-        )
-    if (
-        role != ROLE_OWNER
-        and member.is_verified
-        and member.seat_granted_at is None
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"{member.email} holds no seat, and an operator without one "
-                "cannot answer conversations. Ask them to take a seat on the "
-                "Seats screen while they are still an owner, then change their "
-                "role."
-            ),
-        )
-    member.role = role
-    db.commit()
-    db.refresh(member)
-    return member
 
 
 def _stamp_attribution(member: User, db: Session) -> None:
@@ -502,10 +388,20 @@ def remove_member(
 ) -> None:
     """Delete a member's account, keeping their signature on the history.
 
-    Refuses self-removal (leaving is not the same act as being removed, and an
-    owner who removes themselves by accident has no way back in) and refuses
-    the last owner — the guard now protects a delete rather than a detach, so
-    what it prevents is a workspace with no owner *and* no way to appoint one.
+    Refuses self-removal: leaving is not the same act as being removed, and an
+    owner who removes themselves by accident has no way back in.
+
+    The owner is also refused outright, which with one fixed owner per
+    workspace is the same person the self-removal rule already caught — only
+    an owner may call this, and there is only ever one. The check is kept as
+    defence in depth rather than deleted with the role model that made it
+    reachable: it is one comparison on the row already in hand, it states the
+    invariant where a reader of this function will look for it, and if a
+    second owner ever appears (a data repair, a future hand-over) it is what
+    stops a workspace being left with none. It replaces a count across rows,
+    so the workspace-level lock that count needed is gone with it: the
+    predicate is now about the single row being deleted, and two concurrent
+    removals of different members cannot conspire.
 
     The account is gone the moment this commits: any JWT still in the
     departing member's browser stops resolving to a user, so
@@ -516,15 +412,14 @@ def remove_member(
     no way to leave a workspace paying for a seat nobody holds. A member
     removed before they ever accepted had no seat to release.
     """
-    _lock_workspace(tenant_id, db)
     member = get_member(tenant_id, member_id, db)
     if member.id == actor_id:
         raise HTTPException(
             status_code=400, detail="You cannot remove yourself from the workspace"
         )
-    if member.role == ROLE_OWNER and count_owners(tenant_id, db) <= 1:
+    if member.role == ROLE_OWNER:
         raise HTTPException(
-            status_code=400, detail="The last owner cannot be removed"
+            status_code=400, detail="The owner cannot be removed"
         )
     closed = release_chats_held_by(member, db)
     _stamp_attribution(member, db)

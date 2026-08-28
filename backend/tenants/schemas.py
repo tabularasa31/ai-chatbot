@@ -8,13 +8,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
-#: What a client may ASK for. Closed, so the API cannot be talked into writing
-#: a role this build does not implement. Spelled out rather than referenced
-#: from ``backend.auth.roles`` because ``Literal`` only accepts literals; that
-#: module stays the source of truth for the values themselves, and a third
-#: role means adding it in both places.
-TenantRoleRequest = Literal["owner", "operator"]
-
 #: What the API REPORTS. Deliberately open where the request type is closed.
 #: ``users.role`` is a plain ``String(32)`` precisely so a third role needs no
 #: data migration — but a closed response type turns the first row holding one
@@ -57,10 +50,14 @@ class TenantMemberListResponse(BaseModel):
 
 
 class InviteMemberRequest(BaseModel):
-    """Request body for inviting someone into the workspace."""
+    """Request body for inviting someone into the workspace.
+
+    No role: every invitee is an operator. The workspace's one owner is the
+    person who created it, and a role on this body would be a way to mint a
+    second.
+    """
 
     email: EmailStr
-    role: TenantRoleRequest = "operator"
 
 
 class InviteMemberResponse(BaseModel):
@@ -68,12 +65,6 @@ class InviteMemberResponse(BaseModel):
     created for the invitee has no usable password until they follow it."""
 
     member: TenantMemberResponse
-
-
-class UpdateMemberRoleRequest(BaseModel):
-    """Request body for changing a member's role."""
-
-    role: TenantRoleRequest
 
 
 class CreateTenantRequest(BaseModel):

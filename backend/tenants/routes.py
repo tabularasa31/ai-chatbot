@@ -6,7 +6,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_owner, require_verified_user
+from backend.auth.middleware import (
+    require_member,
+    require_owner,
+    require_verified_user,
+)
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import User
@@ -248,9 +252,14 @@ def put_privacy_route(
     response_model_exclude_none=True,
 )
 def get_support_settings_route(
-    current_user: Annotated[User, Depends(require_owner)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> SupportSettingsResponse:
+    """Readable by any member, writable only by an owner.
+
+    These are the support contacts the bot hands out to visitors, so the
+    operator working the inbox is exactly who gets asked about them.
+    """
     data = get_support_settings_for_user(current_user.id, db)
     return SupportSettingsResponse(**data)
 

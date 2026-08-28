@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type TenantMember, type TenantRole } from "@/lib/api";
+import { api, type TenantMember, type TenantRole, type TenantRoleValue } from "@/lib/api";
 import { useClientMe, useMembers } from "@/hooks/useApi";
 
 const ROLE_LABEL: Record<TenantRole, string> = {
@@ -16,14 +16,17 @@ const ROLE_HELP: Record<TenantRole, string> = {
     "Works conversations: the inbox, the logs, and read access to the knowledge base.",
 };
 
-function RoleBadge({ role }: { role: TenantRole }) {
+function RoleBadge({ role }: { role: TenantRoleValue }) {
   const styles: Record<TenantRole, string> = {
     owner: "bg-violet-100 text-violet-700",
     operator: "bg-slate-100 text-slate-600",
   };
+  // Falls back to the raw value: a role this build does not know still names
+  // itself rather than rendering as an empty badge.
+  const style = styles[role as TenantRole] ?? "bg-slate-100 text-slate-600";
   return (
-    <span className={`px-2 py-0.5 text-xs font-medium rounded ${styles[role]}`}>
-      {ROLE_LABEL[role]}
+    <span className={`px-2 py-0.5 text-xs font-medium rounded ${style}`}>
+      {ROLE_LABEL[role as TenantRole] ?? role}
     </span>
   );
 }
@@ -205,15 +208,17 @@ export default function MembersPage() {
                   <div className="ml-auto flex items-center gap-2">
                     <select
                       value={member.role}
-                      disabled={busyId === member.id || lastOwner}
+                      disabled={busyId === member.id || lastOwner || isSelf}
                       onChange={(e) =>
                         changeRole(member, e.target.value as TenantRole)
                       }
                       aria-label={`Role for ${member.email}`}
                       title={
-                        lastOwner
-                          ? "The last owner cannot be demoted. Promote someone else first."
-                          : undefined
+                        isSelf
+                          ? "You cannot change your own role. Promote another owner and ask them."
+                          : lastOwner
+                            ? "The last owner cannot be demoted. Promote someone else first."
+                            : undefined
                       }
                       className="px-2 py-1 border border-slate-200 rounded text-xs text-slate-700 outline-none focus:border-slate-400 disabled:opacity-40"
                     >

@@ -34,6 +34,7 @@ from backend.core.limiter import limiter
 from backend.email.service import send_email
 from backend.models import User
 from backend.models.base import _utcnow
+from backend.tenants.members_service import resend_invite_for_pending_member
 from backend.tenants.service import (
     ensure_tenant_for_user,
 )
@@ -225,7 +226,18 @@ def forgot_password(
 
     Always returns same message (security: don't reveal if email exists).
     Rate limited: 3/hour to prevent email spam.
+
+    A pending invitee is answered with their invitation instead of a reset:
+    the two share ``reset_password_token``, so issuing a reset here would void
+    the invite link and shorten its life to an hour. See
+    ``resend_invite_for_pending_member``. The response is the same either way,
+    so this reveals nothing new.
     """
+    if resend_invite_for_pending_member(body.email, db):
+        return ForgotPasswordResponse(
+            message="If this email is registered, you'll receive a password reset link shortly."
+        )
+
     token = create_reset_token(body.email, db)
 
     if token:

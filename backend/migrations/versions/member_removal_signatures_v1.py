@@ -18,10 +18,12 @@ message the departing person wrote as an operator, and every stretch they
 held, would lose its author with no trace that there had been one. Nothing
 reads those fields today (the console is phase 2), so the loss would go
 unnoticed until precisely the moment it mattered — "who handled this ticket"
-gets asked more after somebody leaves, not less. Three ``*_label`` columns
+gets asked more after somebody leaves, not less. Four ``*_label`` columns
 hold the departing member's e-mail, written in the same transaction as the
 delete. They stay NULL while the account exists: the author is read through
 the FK, and the label is the fallback once it is gone.
+``tenant_api_keys.created_by_label`` is here for the same reason as the other
+three: who issued a widget key is the first question asked when one leaks.
 
 Not covered, deliberately: ``chats.assigned_operator_id`` is live state (who
 holds this conversation now), not history, and ``pii_events.actor_user_id`` is
@@ -49,16 +51,17 @@ _LABEL_COLUMNS = (
     ("messages", "operator_label"),
     ("operator_sessions", "operator_label"),
     ("gap_dismissals", "dismissed_by_label"),
+    ("tenant_api_keys", "created_by_label"),
 )
 
 
 def _has_column(table: str, column: str) -> bool:
+    """Replay guard. Deliberately not exception-swallowing — see
+    :func:`_dismissed_by_fk_name`: a lookup that cannot answer must stop the
+    deploy, not quietly decide the column is missing (or present)."""
     if op.get_context().as_sql:
         return False
-    try:
-        cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
-    except Exception:
-        return False
+    cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
     return column in cols
 
 
@@ -69,16 +72,29 @@ def _dismissed_by_fk_name() -> str | None:
     whatever the server chose (``gap_dismissals_dismissed_by_fkey`` on
     PostgreSQL). Looking it up keeps the replay honest on a database whose
     constraint was named differently.
+
+    Nothing is swallowed here. This migration runs unattended on every Railway
+    release, and a silent ``None`` would leave the old NO ACTION constraint
+    standing beside the new one: the column would be nullable, the migration
+    would report success, and every member removal would then fail on a
+    foreign key — surfacing days later, in a request, instead of on the deploy
+    that caused it. ``None`` means "no such constraint, nothing to drop",
+    which is the legitimate replay case; anything else raises.
     """
     if op.get_context().as_sql:
         return "gap_dismissals_dismissed_by_fkey"
-    try:
-        fks = sa.inspect(op.get_bind()).get_foreign_keys("gap_dismissals")
-    except Exception:
-        return None
+    fks = sa.inspect(op.get_bind()).get_foreign_keys("gap_dismissals")
     for fk in fks:
         if fk.get("constrained_columns") == ["dismissed_by"]:
-            return fk.get("name") or "gap_dismissals_dismissed_by_fkey"
+            # An unnamed constraint cannot be dropped by name. Refusing here is
+            # the loud failure; guessing would drop the wrong thing or nothing.
+            name = fk.get("name")
+            if not name:
+                raise RuntimeError(
+                    "gap_dismissals.dismissed_by has an unnamed foreign key that "
+                    "cannot be dropped by name — drop it manually, then re-run."
+                )
+            return name
     return None
 
 

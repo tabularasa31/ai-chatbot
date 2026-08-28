@@ -126,6 +126,10 @@ class TenantApiKey(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Signature kept when the account is deleted; see ``Message.operator_label``.
+    # Who issued a key is the first question asked when one leaks, and the
+    # person who issued it having since left makes it more pressing, not less.
+    created_by_label = Column(String(255), nullable=True)
 
     tenant = relationship("Tenant", back_populates="api_keys")
 

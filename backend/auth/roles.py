@@ -9,6 +9,12 @@ read views of the knowledge base.
 value is additive later with no data migration. These constants are the
 single source of truth for the two values in use today; nothing outside this
 module should spell them as literals.
+
+**Adding a third role** means editing exactly two places: this module, and
+``TenantRoleRequest`` in ``backend/tenants/schemas.py`` (the closed set a
+client may ask for). Responses report ``users.role`` as a plain string on
+purpose, so a row holding a value an older build has never heard of degrades
+instead of failing validation — see that module for why.
 """
 
 from __future__ import annotations

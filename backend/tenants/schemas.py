@@ -8,10 +8,24 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
-#: The two membership roles. Spelled out rather than referenced from
-#: ``backend.auth.roles`` because ``Literal`` only accepts literals; that
-#: module stays the source of truth for the values themselves.
-TenantRole = Literal["owner", "operator"]
+#: What a client may ASK for. Closed, so the API cannot be talked into writing
+#: a role this build does not implement. Spelled out rather than referenced
+#: from ``backend.auth.roles`` because ``Literal`` only accepts literals; that
+#: module stays the source of truth for the values themselves, and a third
+#: role means adding it in both places.
+TenantRoleRequest = Literal["owner", "operator"]
+
+#: What the API REPORTS. Deliberately open where the request type is closed.
+#: ``users.role`` is a plain ``String(32)`` precisely so a third role needs no
+#: data migration — but a closed response type turns the first row holding one
+#: into a 500 on ``GET /tenants/me``, which the dashboard shell and the
+#: sidebar's role check both call on mount, so the whole app breaks for that
+#: user instead of degrading. It is reachable without any bug: deploy a build
+#: that adds ``admin``, let it write one row, roll back. Reporting the value
+#: truthfully is both more honest and safer — every consumer tests for
+#: ``owner`` explicitly and treats anything else as less privileged, so an
+#: unrecognised role loses access rather than gaining it.
+TenantRole = str
 
 #: Derived, not stored: a member who has not yet set a password from their
 #: invite link is ``pending``. See ``members_service`` for why that needs no
@@ -39,7 +53,7 @@ class InviteMemberRequest(BaseModel):
     """Request body for inviting someone into the workspace."""
 
     email: EmailStr
-    role: TenantRole = "operator"
+    role: TenantRoleRequest = "operator"
 
 
 class InviteMemberResponse(BaseModel):
@@ -52,7 +66,7 @@ class InviteMemberResponse(BaseModel):
 class UpdateMemberRoleRequest(BaseModel):
     """Request body for changing a member's role."""
 
-    role: TenantRole
+    role: TenantRoleRequest
 
 
 class CreateTenantRequest(BaseModel):

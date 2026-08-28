@@ -17,16 +17,16 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_owner
-from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
-from backend.email.service import send_email
-from backend.models import Tenant, User
+from backend.models import User
 from backend.tenants.members_service import (
     change_member_role,
     invite_member,
     list_members,
     remove_member,
+    send_invite_email,
+    workspace_name,
 )
 from backend.tenants.schemas import (
     InviteMemberRequest,
@@ -55,36 +55,6 @@ def _member_to_response(member: User) -> TenantMemberResponse:
 def _tenant_id(current_user: User) -> uuid.UUID:
     # ``require_owner`` already refused a principal without a workspace.
     return current_user.tenant_id  # type: ignore[return-value]
-
-
-def _workspace_name(tenant_id: uuid.UUID, db: Session) -> str:
-    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    return tenant.name if tenant else "your team"
-
-
-def _send_invite_email(
-    *, to: str, workspace: str, inviter_email: str, token: str
-) -> None:
-    """Tell the invitee they are in, and how to get in.
-
-    Sent on every invite: the account created for them has no usable password,
-    so this link is the only way it ever becomes a login. Failures are logged,
-    never raised — the membership is already committed, and an owner fixes a
-    lost e-mail by inviting again.
-    """
-    subject = f"You've been invited to {workspace} on Chat9"
-    body_text = (
-        "Hi,\n\n"
-        f"{inviter_email} invited you to join {workspace} on Chat9.\n\n"
-        "Set your password and get started:\n\n"
-        f"{settings.FRONTEND_URL}/accept-invite?token={token}\n\n"
-        "This link expires in 7 days.\n\n"
-        "If you weren't expecting this, you can ignore this email.\n"
-    )
-    try:
-        send_email(to=to, subject=subject, body=body_text)
-    except Exception as exc:  # pragma: no cover - transport failure
-        logger.warning("Failed to send invite email: %s", exc)
 
 
 @members_router.get("", response_model=TenantMemberListResponse)
@@ -122,9 +92,9 @@ def invite_member_route(
         role=body.role,
         db=db,
     )
-    _send_invite_email(
+    send_invite_email(
         to=member.email,
-        workspace=_workspace_name(tenant_id, db),
+        workspace=workspace_name(tenant_id, db),
         inviter_email=current_user.email,
         token=token,
     )
@@ -138,9 +108,13 @@ def update_member_role_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantMemberResponse:
-    """Change a member's role. The last owner cannot be demoted."""
+    """Change a member's role.
+
+    The last owner cannot be demoted, and nobody can demote themselves.
+    """
     member = change_member_role(
         tenant_id=_tenant_id(current_user),
+        actor_id=current_user.id,
         member_id=member_id,
         role=body.role,
         db=db,

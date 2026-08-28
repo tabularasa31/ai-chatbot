@@ -39,6 +39,10 @@ from backend.jobs.chat_session_sweeper import (
     shutdown_chat_session_sweeper_thread,
     start_chat_session_sweeper_thread,
 )
+from backend.jobs.expired_invitations_purge import (
+    shutdown_expired_invitations_purge_thread,
+    start_expired_invitations_purge_thread,
+)
 from backend.jobs.guard_events_purge import (
     shutdown_guard_events_purge_thread,
     start_guard_events_purge_thread,
@@ -87,6 +91,7 @@ async def lifespan(_: FastAPI):
     start_kb_snapshot_daily_thread()
     start_chat_session_sweeper_thread()
     start_guard_events_purge_thread()
+    start_expired_invitations_purge_thread()
     try:
         yield
     finally:
@@ -95,6 +100,7 @@ async def lifespan(_: FastAPI):
         shutdown_kb_snapshot_thread()
         shutdown_chat_session_sweeper_thread()
         shutdown_guard_events_purge_thread()
+        shutdown_expired_invitations_purge_thread()
         shutdown_metrics()
         shutdown_sentry()
         shutdown_observability()

@@ -59,18 +59,25 @@ export type TenantLlmAlertResponse = {
   since: string | null;
 };
 
+/**
+ * The roles this build knows. The API reports `users.role` as a plain string
+ * so an unrecognised value degrades rather than 500ing, so treat this as the
+ * set worth naming, not a guarantee — every check below tests for "owner"
+ * explicitly, which fails closed for anything else.
+ */
 export type TenantRole = "owner" | "operator";
+export type TenantRoleValue = TenantRole | (string & {});
 
 export type TenantMeResponse = TenantResponse & {
   is_admin: boolean;
   is_verified: boolean;
-  role: TenantRole;
+  role: TenantRoleValue;
 };
 
 export type TenantMember = {
   id: string;
   email: string;
-  role: TenantRole;
+  role: TenantRoleValue;
   /** "pending" until the invitee sets a password from their invite link. */
   status: "active" | "pending";
   created_at: string;

@@ -14,6 +14,9 @@ import uuid
 from datetime import timedelta
 from unittest.mock import patch
 
+import pytest
+from fastapi import HTTPException
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -24,6 +27,9 @@ from backend.models import (
     Message,
     MessageRole,
     OperatorSession,
+    OperatorState,
+    Tenant,
+    TenantApiKey,
     User,
 )
 from backend.models.base import _utcnow
@@ -68,7 +74,7 @@ def _auth(token: str) -> dict[str, str]:
 def _invite(
     client: TestClient, workspace: _Workspace, *, email: str, role: str = "operator"
 ):
-    with patch("backend.tenants.members_routes.send_email") as sent:
+    with patch("backend.tenants.members_service.send_email") as sent:
         resp = client.post(
             "/tenants/members/invite",
             headers=workspace.auth,
@@ -261,7 +267,6 @@ def test_operator_is_refused_settings_keys_privacy_and_member_management(
         tenant.put(
             "/tenants/me/privacy", headers=headers, json={"optional_entity_types": []}
         ),
-        tenant.get("/tenants/me/support-settings", headers=headers),
         tenant.put(
             "/tenants/me/support-settings",
             headers=headers,
@@ -279,6 +284,12 @@ def test_operator_is_refused_settings_keys_privacy_and_member_management(
         tenant.delete(f"/tenants/members/{ws.owner_id}", headers=headers),
     ]
     assert [r.status_code for r in refusals] == [403] * len(refusals)
+
+    # Readable, though: these are the support contacts the bot hands to
+    # visitors, and the operator working the inbox is who gets asked.
+    assert (
+        tenant.get("/tenants/me/support-settings", headers=headers).status_code == 200
+    )
 
     # The workspace is untouched by the attempt.
     me = tenant.get("/tenants/me", headers=ws.auth)
@@ -348,21 +359,121 @@ def test_only_the_owner_may_publish_an_faq(
 # ---------------------------------------------------------------------------
 
 
-def test_the_last_owner_cannot_be_removed_or_demoted(
+def test_the_last_owner_cannot_be_removed(
     tenant: TestClient, db_session: Session
 ) -> None:
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    # Promote, so the operator can try to remove the founder without the
+    # self-removal rule being what refuses it.
+    successor = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    assert (
+        tenant.patch(
+            f"/tenants/members/{successor.id}", headers=ws.auth, json={"role": "owner"}
+        ).status_code
+        == 200
+    )
+    # Demote the founder (legally — a second owner exists), leaving one owner.
+    assert (
+        tenant.patch(
+            f"/tenants/members/{ws.owner_id}",
+            headers=_auth(op_token),
+            json={"role": "operator"},
+        ).status_code
+        == 200
+    )
 
-    demote = tenant.patch(
+    # Now the successor is the last owner, and the founder cannot remove them.
+    removed = tenant.delete(
+        f"/tenants/members/{successor.id}", headers=_auth(op_token)
+    )
+    assert removed.status_code == 400, removed.text
+    assert "yourself" in removed.json()["detail"].lower()
+    db_session.expire_all()
+    assert db_session.query(User).filter(User.id == successor.id).one().role == "owner"
+
+
+def test_nobody_can_demote_themselves(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The lockout that used to be reachable, from both directions.
+
+    A sole owner demoting themselves is the unrecoverable move: the surface
+    that could put the role back is the one they just left. It is refused
+    whether or not the workspace has anyone else, and — the regression that
+    made this urgent — whether or not an unaccepted invitation makes the owner
+    count *look* like two.
+    """
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+
+    # Alone.
+    solo = tenant.patch(
         f"/tenants/members/{ws.owner_id}", headers=ws.auth, json={"role": "operator"}
     )
-    assert demote.status_code == 400, demote.text
-    assert "last owner" in demote.json()["detail"].lower()
+    assert solo.status_code == 400, solo.text
+    assert "yourself" in solo.json()["detail"].lower()
+
+    # With a pending owner invitation outstanding — the row exists, has the
+    # owner role, and must not count for anything.
+    resp, _sent = _invite(tenant, ws, email="typo@exmaple.example.com", role="owner")
+    assert resp.status_code == 201, resp.text
+    with_pending = tenant.patch(
+        f"/tenants/members/{ws.owner_id}", headers=ws.auth, json={"role": "operator"}
+    )
+    assert with_pending.status_code == 400, with_pending.text
 
     db_session.expire_all()
-    owner = db_session.query(User).filter(User.id == ws.owner_id).one()
-    assert owner.role == "owner"
+    assert db_session.query(User).filter(User.id == ws.owner_id).one().role == "owner"
+    # And the owner surfaces still answer to them.
+    assert tenant.get("/tenants/members", headers=ws.auth).status_code == 200
+
+
+def test_a_pending_invitation_does_not_count_as_an_owner(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """``count_owners`` sees people, not invitations."""
+    from backend.tenants.members_service import count_owners
+
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    assert count_owners(ws.tenant_id, db_session) == 1
+    assert (
+        _invite(tenant, ws, email="pending@acme.example.com", role="owner")[
+            0
+        ].status_code
+        == 201
+    )
+    db_session.expire_all()
+    assert count_owners(ws.tenant_id, db_session) == 1
+
+    # It becomes 2 only once the invitation is actually accepted.
+    assert _accept(tenant, _invite_token(db_session, "pending@acme.example.com")).status_code == 200
+    db_session.expire_all()
+    assert count_owners(ws.tenant_id, db_session) == 2
+
+
+def test_the_last_owner_cannot_be_demoted_by_another_actor(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Defence in depth, exercised at the service layer.
+
+    Through the API this branch is unreachable: the actor must be an owner of
+    the workspace, so a target who is its *only* owner is always the actor
+    themselves, and the self-demotion rule refuses first. The guard stays for
+    any future caller that is not the member being changed.
+    """
+    from backend.tenants.members_service import change_member_role
+
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    with pytest.raises(HTTPException) as exc:
+        change_member_role(
+            tenant_id=ws.tenant_id,
+            actor_id=uuid.uuid4(),
+            member_id=ws.owner_id,
+            role="operator",
+            db=db_session,
+        )
+    assert exc.value.status_code == 400
+    assert "last owner" in exc.value.detail.lower()
 
 
 def test_nobody_can_remove_themselves(
@@ -401,11 +512,12 @@ def test_succession_promote_then_demote_the_original_owner(
         ).status_code
         == 200
     )
-    # With a second owner in place the demotion is now legal.
+    # The successor demotes the founder. Nobody demotes themselves, so handing
+    # over is always a two-party act.
     assert (
         tenant.patch(
             f"/tenants/members/{ws.owner_id}",
-            headers=ws.auth,
+            headers=_auth(op_token),
             json={"role": "operator"},
         ).status_code
         == 200
@@ -670,3 +782,335 @@ def test_a_principal_without_a_workspace_is_refused(
         ).status_code
         == 404
     )
+
+
+# ---------------------------------------------------------------------------
+# What a removal has to clean up behind it
+# ---------------------------------------------------------------------------
+
+
+def test_removal_hands_back_the_chats_the_member_was_holding(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A live chat with no operator is a visitor typing into nothing.
+
+    ``OperatorHandler`` swallows every visitor turn while a chat is ``live``,
+    so a chat left held by a deleted account answers with neither a human nor
+    the bot until the sweeper's idle release fires — up to an hour later, with
+    nobody told.
+    """
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    member_id = member.id
+
+    held = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
+    untouched = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
+    db_session.add_all([held, untouched])
+    db_session.commit()
+    db_session.refresh(held)
+    db_session.refresh(untouched)
+
+    assert (
+        tenant.post(f"/operator/chats/{held.id}/take", headers=_auth(op_token)).status_code
+        == 200
+    )
+    db_session.expire_all()
+    assert db_session.query(Chat).filter(Chat.id == held.id).one().operator_state is (
+        OperatorState.live
+    )
+    stretch = (
+        db_session.query(OperatorSession)
+        .filter(OperatorSession.chat_id == held.id)
+        .one()
+    )
+    assert stretch.ended_at is None
+
+    assert (
+        tenant.delete(f"/tenants/members/{member_id}", headers=ws.auth).status_code
+        == 204
+    )
+
+    db_session.expire_all()
+    freed = db_session.query(Chat).filter(Chat.id == held.id).one()
+    assert freed.operator_state is OperatorState.bot
+    assert freed.assigned_operator_id is None
+    assert freed.operator_released_at is not None
+    # The open stretch is closed too, not left dangling for the reconciliation
+    # pass to find.
+    stretch = (
+        db_session.query(OperatorSession)
+        .filter(OperatorSession.chat_id == held.id)
+        .one()
+    )
+    assert stretch.ended_at is not None
+    assert stretch.operator_label == "ops@acme.example.com"
+    # A chat they never held is not touched.
+    assert (
+        db_session.query(Chat).filter(Chat.id == untouched.id).one().operator_state
+        is OperatorState.bot
+    )
+
+
+def test_removal_signs_the_api_keys_the_member_issued(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Who issued a widget key is the first question when one leaks."""
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    successor = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    assert (
+        tenant.patch(
+            f"/tenants/members/{successor.id}", headers=ws.auth, json={"role": "owner"}
+        ).status_code
+        == 200
+    )
+    rotated = tenant.post(
+        "/tenants/me/api-keys/rotate",
+        headers=_auth(op_token),
+        json={"reason": "scheduled", "revoke_old_immediately": False},
+    )
+    assert rotated.status_code == 201, rotated.text
+    key_id = uuid.UUID(rotated.json()["key"]["id"])
+    assert (
+        db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
+        .created_by_user_id
+        == successor.id
+    )
+
+    assert (
+        tenant.delete(f"/tenants/members/{successor.id}", headers=ws.auth).status_code
+        == 204
+    )
+    db_session.expire_all()
+    key = db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
+    assert key.created_by_user_id is None
+    assert key.created_by_label == "ops@acme.example.com"
+
+
+def test_deleting_a_workspace_deletes_its_members(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Otherwise it produces the orphan removal exists to avoid — and burns
+    the address, since nothing but this code could ever free it."""
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    assert (
+        tenant.delete(f"/tenants/{ws.tenant_id}", headers=ws.auth).status_code == 204
+    )
+
+    db_session.expire_all()
+    assert db_session.query(Tenant).filter(Tenant.id == ws.tenant_id).first() is None
+    for email in ("owner@acme.example.com", "ops@acme.example.com"):
+        assert db_session.query(User).filter(User.email == email).first() is None
+
+    # The addresses are free again: they can sign up from scratch.
+    with patch("backend.auth.routes.send_email"):
+        again = tenant.post(
+            "/auth/register",
+            json={"email": "ops@acme.example.com", "password": PASSWORD},
+        )
+    assert again.status_code == 200, again.text
+
+
+# ---------------------------------------------------------------------------
+# The invite token and the reset token share a column
+# ---------------------------------------------------------------------------
+
+
+def test_forgot_password_resends_the_invite_instead_of_voiding_it(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The two acts are the same wish — let me in — so they must not fight.
+
+    A pending invitee cannot log in, so "Forgot password" is exactly what they
+    press. Issuing a reset would overwrite the invite token and cut its life
+    to an hour, after which the invite link they eventually find reports
+    "invalid or expired" and the owner starts re-inviting in a loop.
+    """
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    assert _invite(tenant, ws, email="ops@acme.example.com")[0].status_code == 201
+    original_expiry = (
+        db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    ).reset_password_expires_at
+
+    with patch("backend.tenants.members_service.send_email") as invite_mail, patch(
+        "backend.auth.routes.send_email"
+    ) as reset_mail:
+        resp = tenant.post(
+            "/auth/forgot-password", json={"email": "ops@acme.example.com"}
+        )
+    assert resp.status_code == 200, resp.text
+    # An invite went out, not a reset.
+    assert invite_mail.call_count == 1
+    assert reset_mail.call_count == 0
+    assert "/accept-invite?token=" in invite_mail.call_args.kwargs["body"]
+
+    db_session.expire_all()
+    invitee = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    # Re-issued on the invite's own clock, not shortened to the reset's hour.
+    assert invitee.reset_password_expires_at > _utcnow() + timedelta(days=6)
+    assert original_expiry is not None
+    # And the link in that mail is the one that works.
+    token = invite_mail.call_args.kwargs["body"].split("token=")[1].split()[0]
+    assert _accept(tenant, token).status_code == 200
+
+
+def test_forgot_password_still_resets_for_a_real_member(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The invite branch must not swallow ordinary password resets."""
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+
+    with patch("backend.tenants.members_service.send_email") as invite_mail, patch(
+        "backend.auth.routes.send_email"
+    ) as reset_mail:
+        resp = tenant.post(
+            "/auth/forgot-password", json={"email": "ops@acme.example.com"}
+        )
+    assert resp.status_code == 200
+    assert invite_mail.call_count == 0
+    assert reset_mail.call_count == 1
+    assert "/reset-password?token=" in reset_mail.call_args.kwargs["body"]
+
+
+# ---------------------------------------------------------------------------
+# Invitations nobody accepted do not linger
+# ---------------------------------------------------------------------------
+
+
+def test_expired_invitations_are_purged_and_free_the_address(
+    tenant: TestClient, db_session: Session
+) -> None:
+    from backend.jobs.expired_invitations_purge import purge_expired_invitations
+
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    assert _invite(tenant, ws, email="typo@exmaple.example.com")[0].status_code == 201
+    assert _invite(tenant, ws, email="live@acme.example.com")[0].status_code == 201
+    _onboard_operator(tenant, db_session, ws, email="joined@acme.example.com")
+
+    stale = (
+        db_session.query(User).filter(User.email == "typo@exmaple.example.com").one()
+    )
+    stale.reset_password_expires_at = _utcnow() - timedelta(minutes=1)
+    db_session.commit()
+
+    assert purge_expired_invitations(db_session) == 1
+
+    db_session.expire_all()
+    # The dead invitation is gone; the live one and the accepted one are not.
+    assert (
+        db_session.query(User).filter(User.email == "typo@exmaple.example.com").first()
+        is None
+    )
+    assert (
+        db_session.query(User).filter(User.email == "live@acme.example.com").first()
+        is not None
+    )
+    assert (
+        db_session.query(User).filter(User.email == "joined@acme.example.com").first()
+        is not None
+    )
+    # The mistyped address can be used by whoever really owns it.
+    with patch("backend.auth.routes.send_email"):
+        assert (
+            tenant.post(
+                "/auth/register",
+                json={"email": "typo@exmaple.example.com", "password": PASSWORD},
+            ).status_code
+            == 200
+        )
+
+
+def test_the_purge_leaves_a_signup_in_progress_alone(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """An unverified account with no workspace is someone mid-signup, not an
+    invitation — deleting it would destroy an account being created."""
+    from backend.jobs.expired_invitations_purge import purge_expired_invitations
+
+    with patch("backend.auth.routes.send_email"):
+        assert (
+            tenant.post(
+                "/auth/register",
+                json={"email": "signing.up@acme.example.com", "password": PASSWORD},
+            ).status_code
+            == 200
+        )
+    registrant = (
+        db_session.query(User).filter(User.email == "signing.up@acme.example.com").one()
+    )
+    assert registrant.tenant_id is None
+    # Even with a long-expired reset token of their own.
+    registrant.reset_password_token = uuid.uuid4().hex
+    registrant.reset_password_expires_at = _utcnow() - timedelta(days=30)
+    db_session.commit()
+
+    assert purge_expired_invitations(db_session) == 0
+    db_session.expire_all()
+    assert (
+        db_session.query(User).filter(User.email == "signing.up@acme.example.com").first()
+        is not None
+    )
+
+
+def test_purging_an_owner_invitation_cannot_strand_a_workspace(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The ordering the two fixes depend on, asserted rather than assumed."""
+    from backend.jobs.expired_invitations_purge import purge_expired_invitations
+    from backend.tenants.members_service import count_owners
+
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    assert _invite(tenant, ws, email="never@acme.example.com", role="owner")[
+        0
+    ].status_code == 201
+    pending = db_session.query(User).filter(User.email == "never@acme.example.com").one()
+    pending.reset_password_expires_at = _utcnow() - timedelta(minutes=1)
+    db_session.commit()
+
+    before = count_owners(ws.tenant_id, db_session)
+    assert purge_expired_invitations(db_session) == 1
+    db_session.expire_all()
+    assert count_owners(ws.tenant_id, db_session) == before == 1
+    assert tenant.get("/tenants/members", headers=ws.auth).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# A role this build has never heard of
+# ---------------------------------------------------------------------------
+
+
+def test_an_unknown_role_degrades_instead_of_breaking_the_dashboard(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """``users.role`` is a free string; the response type must not be closed.
+
+    Reachable without a bug: deploy a build that adds a third role, let it
+    write one row, roll back. A 500 here takes out the whole app shell, which
+    calls ``/tenants/me`` on mount.
+    """
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+
+    # First, while they are still an owner: the API refuses to write a role
+    # this build does not implement. Requests stay closed; only reads open up.
+    assert (
+        tenant.post(
+            "/tenants/members/invite",
+            headers=ws.auth,
+            json={"email": "x@acme.example.com", "role": "auditor"},
+        ).status_code
+        == 422
+    )
+
+    owner = db_session.query(User).filter(User.id == ws.owner_id).one()
+    owner.role = "auditor"
+    db_session.commit()
+
+    me = tenant.get("/tenants/me", headers=ws.auth)
+    assert me.status_code == 200, me.text
+    # Reported truthfully, and it buys no privilege: every check tests for
+    # "owner" explicitly, so an unknown role fails closed.
+    assert me.json()["role"] == "auditor"
+    assert tenant.get("/tenants/members", headers=ws.auth).status_code == 403

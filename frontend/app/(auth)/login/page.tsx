@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, hasSession, markSession } from "@/lib/api";
+import { api, hasSession, markSession, takeSignOutReason } from "@/lib/api";
 import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 import { AuthTransition } from "@/components/AuthTransition";
 
@@ -18,10 +18,15 @@ function LoginForm() {
 
   const notVerified = searchParams.get("error") === "email_not_verified";
   const sessionExpired = searchParams.get("error") === "session_expired";
+
   // Set by the owner's own workspace deletion, which takes their account with
   // it. Without this the sign-in screen is unexplained, and the sign-in they
-  // are about to attempt cannot work.
-  const workspaceDeleted = searchParams.get("deleted") === "workspace";
+  // are about to attempt cannot work. Read once on mount because reading it
+  // consumes it — a reload should not repeat the message.
+  const [workspaceDeleted, setWorkspaceDeleted] = useState(false);
+  useEffect(() => {
+    if (takeSignOutReason() === "workspace_deleted") setWorkspaceDeleted(true);
+  }, []);
 
   const onAuthTransitionComplete = useCallback(() => {
     router.replace("/dashboard");

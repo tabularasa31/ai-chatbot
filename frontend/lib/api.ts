@@ -461,6 +461,55 @@ export function clearSession(): void {
   document.cookie = `${SESSION_KEY}=; path=/; max-age=0; samesite=lax${secure}`;
 }
 
+/** Why the sign-in screen is being shown, when we sent the user there on purpose. */
+export type SignOutReason = "workspace_deleted";
+
+const SIGN_OUT_REASON_KEY = "chat9_sign_out_reason";
+
+/**
+ * Sign out and go to the sign-in screen, on purpose.
+ *
+ * For the case where losing the session is the *outcome* the user asked for
+ * rather than something that went wrong — today, an owner deleting their own
+ * workspace, which deletes their account with it.
+ *
+ * The reason travels in `sessionStorage` rather than a query parameter,
+ * because the URL does not survive the trip. Clearing the session cookie makes
+ * `middleware.ts` answer the app router's next request for the current route
+ * with a redirect to a bare `/login`, and that is the URL the address bar ends
+ * up with — losing any query string we set. `sessionStorage` is same-origin
+ * and same-tab, so it arrives whichever redirect wins.
+ *
+ * Claiming `authRedirectInProgress` handles the other half of the same race: a
+ * page that just destroyed its own session still has revalidations in flight,
+ * and each lands as a 401 that `handleUnauthorized` would answer by
+ * redirecting to `/login?error=session_expired` — telling somebody who deleted
+ * their workspace deliberately that their session expired.
+ */
+export function signOutAndLeave(reason: SignOutReason): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(SIGN_OUT_REASON_KEY, reason);
+  } catch {
+    // Private mode or blocked storage: the sign-in screen just says less.
+  }
+  clearSession();
+  authRedirectInProgress = true;
+  window.location.replace("/login");
+}
+
+/** Read and consume the reason set by `signOutAndLeave`. Sign-in screen only. */
+export function takeSignOutReason(): SignOutReason | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const reason = window.sessionStorage.getItem(SIGN_OUT_REASON_KEY);
+    if (reason) window.sessionStorage.removeItem(SIGN_OUT_REASON_KEY);
+    return reason === "workspace_deleted" ? reason : null;
+  } catch {
+    return null;
+  }
+}
+
 function handleUnauthorized(): void {
   if (typeof window === "undefined") return;
 

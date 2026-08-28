@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { api, clearSession } from "@/lib/api";
+import { api, signOutAndLeave } from "@/lib/api";
 
 /**
  * The owner's only exit.
@@ -47,11 +47,10 @@ export default function DeleteWorkspaceCard({
     try {
       await api.clients.delete(workspaceId);
       // The owner's account went with the workspace, so there is no session
-      // left and nothing on this page can be refetched. Leave immediately
-      // rather than let a background request discover the 401 and report it
-      // as an expired session.
-      clearSession();
-      window.location.replace("/login?deleted=workspace");
+      // left and nothing on this page can be refetched. Leave immediately,
+      // carrying the reason, so the sign-in screen explains itself instead of
+      // appearing out of nowhere.
+      signOutAndLeave("workspace_deleted");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete the workspace");
       setDeleting(false);

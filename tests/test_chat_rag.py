@@ -728,22 +728,28 @@ def test_generate_answer_adds_translation_tokens_to_total(
     assert tokens == 80 + 25
 
 
-def test_build_rag_prompt_negative_answer_counts_as_resolved() -> None:
-    """A documented limitation is an answer, not a reason to offer a ticket."""
+def test_build_rag_prompt_does_not_volunteer_a_support_ticket() -> None:
+    """A gap in the documentation is answered honestly, not handed to a person.
+    The only rule that may put a handoff in front of the user is the
+    `<needs_human/>` one, which fires when the user has nowhere else to go."""
     prompt = build_rag_prompt("Q?", ["chunk"])
-    assert "A definitive negative answer counts as resolved" in prompt
-    assert "is not by itself a reason to offer a ticket" in prompt
+    assert "Do NOT volunteer a support ticket" in prompt
+    assert "not by itself a reason to hand the conversation to a person" in prompt
+    assert "A definitive negative answer is a resolved answer" in prompt
+    assert "that rule is the ONLY reason to put a handoff in front of the user" in prompt
+    assert "`<needs_human/>`" in prompt
 
 
-def test_build_rag_prompt_strong_context_suppresses_ticket_offer() -> None:
-    """strong_context adds the per-request line telling the model not to
-    volunteer a support ticket, and it lives in the user message so the cached
-    system prefix stays byte-identical."""
+def test_build_rag_prompt_strong_context_line_goes_to_the_user_message() -> None:
+    """strong_context tells the model the retrieval cleared the handoff bar, so
+    it answers from the context instead of reporting a documentation gap. It
+    lives in the user message so the cached system prefix stays byte-identical."""
     system_prompt, user_message = build_rag_messages(
         "Q?", ["chunk"], strong_context=True
     )
     assert "CONTEXT MATCH (this turn)" in user_message
-    assert "do NOT offer to open a " in user_message
+    assert "rather than reporting it as undocumented" in user_message
+    assert "does not silence the `<needs_human/>` marker" in user_message
     assert "CONTEXT MATCH (this turn)" not in system_prompt
 
     baseline_system, baseline_user = build_rag_messages("Q?", ["chunk"])

@@ -572,8 +572,8 @@ def test_run_generation_sets_strong_context_when_retrieval_clears_the_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The escalation verdict computed before generation must reach the prompt,
-    so the model is told not to volunteer a support ticket on a turn the
-    backend already classified as needing no handoff."""
+    so the model answers from the retrieved context instead of reporting a
+    documentation gap on a turn the backend classified as needing no handoff."""
     calls = _capture_generation_kwargs(
         monkeypatch,
         retrieval_ctx=_retrieval_ctx(

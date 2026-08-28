@@ -6,7 +6,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import (
+    require_member,
+    require_owner,
+    require_verified_user,
+)
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import User
@@ -112,6 +116,7 @@ def get_my_client(
         **base.model_dump(),
         is_admin=current_user.is_admin,
         is_verified=current_user.is_verified,
+        role=current_user.role,
     )
 
 
@@ -120,7 +125,7 @@ def get_my_client(
     response_model=TenantApiKeyListResponse,
 )
 def list_api_keys_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantApiKeyListResponse:
     """List widget API keys for the current tenant (no plaintext)."""
@@ -142,7 +147,7 @@ def list_api_keys_route(
 def rotate_api_key_route(
     request: Request,
     body: RotateTenantApiKeyRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> RotateTenantApiKeyResponse:
     """Issue a new widget API key. Existing active key enters a 24h
@@ -184,7 +189,7 @@ def rotate_api_key_route(
 def revoke_api_key_route(
     request: Request,
     key_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantApiKeyResponse:
     """Immediately revoke a single key (no grace). Refuses if it would
@@ -228,7 +233,7 @@ def get_llm_alert_route(
 
 @tenants_router.get("/me/privacy", response_model=PrivacyConfigResponse)
 def get_privacy_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PrivacyConfigResponse:
     data = get_redaction_config_for_user(current_user.id, db)
@@ -238,7 +243,7 @@ def get_privacy_route(
 @tenants_router.put("/me/privacy", response_model=PrivacyConfigResponse)
 def put_privacy_route(
     body: UpdatePrivacyConfigRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PrivacyConfigResponse:
     data = update_redaction_config_for_user(current_user.id, body.optional_entity_types, db)
@@ -251,9 +256,14 @@ def put_privacy_route(
     response_model_exclude_none=True,
 )
 def get_support_settings_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> SupportSettingsResponse:
+    """Readable by any member, writable only by an owner.
+
+    These are the support contacts the bot hands out to visitors, so the
+    operator working the inbox is exactly who gets asked about them.
+    """
     data = get_support_settings_for_user(current_user.id, db)
     return SupportSettingsResponse(**data)
 
@@ -265,7 +275,7 @@ def get_support_settings_route(
 )
 def put_support_settings_route(
     body: UpdateSupportSettingsRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> SupportSettingsResponse:
     # Pass only the fields the tenant explicitly included in the request body.
@@ -324,7 +334,7 @@ def put_plan_route(
 @tenants_router.patch("/me", response_model=TenantResponse)
 def update_my_client(
     body: UpdateTenantRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantResponse:
     """
@@ -375,7 +385,7 @@ def get_tenant_by_id_route(
 @tenants_router.delete("/{tenant_id}", status_code=204, response_model=None, include_in_schema=False)
 def delete_tenant_route(
     tenant_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """

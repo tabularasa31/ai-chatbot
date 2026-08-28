@@ -59,9 +59,32 @@ export type TenantLlmAlertResponse = {
   since: string | null;
 };
 
+/**
+ * The roles this build knows. The API reports `users.role` as a plain string
+ * so an unrecognised value degrades rather than 500ing, so treat this as the
+ * set worth naming, not a guarantee — every check below tests for "owner"
+ * explicitly, which fails closed for anything else.
+ */
+export type TenantRole = "owner" | "operator";
+export type TenantRoleValue = TenantRole | (string & {});
+
 export type TenantMeResponse = TenantResponse & {
   is_admin: boolean;
   is_verified: boolean;
+  role: TenantRoleValue;
+};
+
+export type TenantMember = {
+  id: string;
+  email: string;
+  role: TenantRoleValue;
+  /** "pending" until the invitee sets a password from their invite link. */
+  status: "active" | "pending";
+  created_at: string;
+};
+
+export type InviteMemberResponse = {
+  member: TenantMember;
 };
 
 export type CreateTenantResponse = TenantResponse & {
@@ -640,6 +663,42 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to revoke API key"));
       return data as TenantApiKeyResponse;
+    },
+  },
+  members: {
+    async list(): Promise<TenantMember[]> {
+      const res = await apiFetch(`${BASE_URL}/tenants/members`);
+      const data = await parseJsonSafe(res);
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load team members"));
+      return ((data as { items?: TenantMember[] }).items ?? []) as TenantMember[];
+    },
+    async invite(email: string, role: TenantRole): Promise<InviteMemberResponse> {
+      const res = await apiFetch(`${BASE_URL}/tenants/members/invite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, role }),
+      });
+      const data = await parseJsonSafe(res);
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send the invite"));
+      return data as InviteMemberResponse;
+    },
+    async setRole(memberId: string, role: TenantRole): Promise<TenantMember> {
+      const res = await apiFetch(`${BASE_URL}/tenants/members/${memberId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      const data = await parseJsonSafe(res);
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to change the role"));
+      return data as TenantMember;
+    },
+    async remove(memberId: string): Promise<void> {
+      const res = await apiFetch(`${BASE_URL}/tenants/members/${memberId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        throw new Error(getErrorMessage(await parseJsonSafe(res), "Failed to remove the member"));
+      }
     },
   },
   plan: {

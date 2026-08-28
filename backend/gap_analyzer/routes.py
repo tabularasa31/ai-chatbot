@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import require_member, require_owner
 from backend.core.db import get_db
 from backend.gap_analyzer.enums import GapRunMode, GapSource
 from backend.gap_analyzer.jobs import start_gap_analyzer_job_runner
@@ -63,7 +63,7 @@ def _resolve_client_id(*, db: Session, current_user: User) -> uuid.UUID:
 
 @gap_analyzer_router.get("", response_model=GapAnalyzerResponse)
 def get_gap_analyzer(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
     mode_a_status: ModeAStatusFilter = Query("active"),
     mode_b_status: ModeBStatusFilter = Query("active"),
@@ -83,7 +83,7 @@ def get_gap_analyzer(
 
 @gap_analyzer_router.get("/summary", response_model=GapSummaryOnlyResponse)
 def get_gap_analyzer_summary(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapSummaryOnlyResponse:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
@@ -93,7 +93,7 @@ def get_gap_analyzer_summary(
 
 @gap_analyzer_router.post("/recalculate", response_model=RecalculateCommandResult, status_code=202)
 async def recalculate_gap_analyzer(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
     mode: GapRunMode = Query(...),
 ) -> RecalculateCommandResult:
@@ -110,7 +110,7 @@ def dismiss_gap(
     source: GapSource,
     gap_id: uuid.UUID,
     payload: GapDismissRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapActionResponse:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
@@ -133,7 +133,7 @@ def dismiss_gap(
 def reactivate_gap(
     source: GapSource,
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapActionResponse:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
@@ -153,7 +153,7 @@ def reactivate_gap(
 @gap_analyzer_router.post("/mode_a/{gap_id}/draft", response_model=GapDraftResponse)
 def draft_mode_a_gap(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapDraftResponse:
     """Template-driven transient draft for Mode A docs-side gaps.
@@ -195,7 +195,7 @@ def _handle_draft_errors(call):
 @gap_analyzer_router.post("/mode_b/{gap_id}/draft", response_model=DraftPayload)
 async def generate_mode_b_draft(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
@@ -210,7 +210,7 @@ async def generate_mode_b_draft(
 async def refine_mode_b_draft(
     gap_id: uuid.UUID,
     payload: RefineDraftRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
@@ -226,7 +226,7 @@ async def refine_mode_b_draft(
 @gap_analyzer_router.get("/mode_b/{gap_id}/draft", response_model=DraftPayload)
 def get_mode_b_draft(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
@@ -240,7 +240,7 @@ def get_mode_b_draft(
 def update_mode_b_draft(
     gap_id: uuid.UUID,
     payload: UpdateDraftRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
@@ -262,7 +262,7 @@ def update_mode_b_draft(
 @gap_analyzer_router.delete("/mode_b/{gap_id}/draft", response_model=DiscardDraftResponse)
 def discard_mode_b_draft(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DiscardDraftResponse:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
@@ -278,7 +278,7 @@ def discard_mode_b_draft(
 def publish_mode_b_draft(
     gap_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PublishResult:
     """Promote the persisted draft into ``tenant_faq``. Requires explicit admin click.
@@ -310,7 +310,7 @@ def publish_mode_b_draft(
 @gap_analyzer_router.post("/mode_b/{gap_id}/resolve", response_model=GapActionResponse)
 def resolve_mode_b_gap(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapActionResponse:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)

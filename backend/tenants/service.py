@@ -313,11 +313,26 @@ def delete_tenant(
     db: Session,
 ) -> None:
     """
-    Delete tenant. Verifies ownership before delete.
+    Delete tenant and its members. Verifies ownership before delete.
     CASCADE deletes all related documents/chats (already in DB schema).
     Raises 404 if not found or not owner.
     """
     tenant = get_tenant_by_id(tenant_id, user_id, db, require_owner=True)
+    # Members go with the workspace. ``users.tenant_id`` is ON DELETE SET NULL,
+    # so without this every member survives as an account belonging to nothing
+    # — the exact orphan that removing a member was changed to avoid, and worse
+    # here because it also burns the address: inviting them elsewhere answers
+    # "already registered to another workspace" when they belong to none, and
+    # /auth/register refuses the address too. Nobody could free it but us.
+    #
+    # No attribution stamping, unlike ``remove_member``: everything a label
+    # would preserve — messages, operator stretches, gap dismissals, API keys —
+    # is scoped to this tenant and cascades away with it, so there is no
+    # surviving history left to sign.
+    members = db.query(User).filter(User.tenant_id == tenant_id).all()
+    for member in members:
+        db.delete(member)
+    db.flush()
     db.delete(tenant)
     db.commit()
     invalidate_tenant(tenant_id)

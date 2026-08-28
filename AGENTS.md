@@ -13,7 +13,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Backend | Python 3.11, FastAPI 0.111, Pydantic v2 (2.5), SQLAlchemy 2.0, Alembic |
 | Database | PostgreSQL 15 with **pgvector** (production, see `docker-compose.yml`); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/service.py`) |
 | Cache / coordination | Redis 7 (foundational infra: rate-limit storage, caches, distributed locks). Optional locally — see "Redis" section below. |
-| Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single tenant/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user` |
+| Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single tenant/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user`, and role-gated ones add `require_owner` / `require_member` (see `backend/auth/roles.py`) |
 | LLM | OpenAI API (per-tenant key; see `backend/core/openai_client.py`) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion, fumadocs-ui for content |
 | Widget | Standalone Vite + Preact build at `frontend/apps/widget-app`, deployed to `widget.getchat9.live/v1/` on its own Vercel project. Loader at `frontend/apps/widget-loader` (TS → IIFE) is co-deployed at `widget.getchat9.live/widget.js`. The dashboard exposes `/widget/{chat,escalate,history,config}` API proxy routes that the widget-app calls cross-origin via the CORS middleware in `frontend/middleware.ts`. |

@@ -363,6 +363,12 @@ class Message(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # The author's signature, written only when their account is deleted —
+    # ``SET NULL`` above would otherwise erase "who answered this customer"
+    # with no trace that there had been an answerer. NULL while the account
+    # still exists: read the author through the FK, and fall back to this
+    # once it is gone. See ``tenants/members_service.remove_member``.
+    operator_label = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

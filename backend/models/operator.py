@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Index, text
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from backend.models.base import Base, _utcnow
@@ -81,6 +81,9 @@ class OperatorSession(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Signature kept when the account is deleted; see ``Message.operator_label``.
+    # "Who handled this" is asked more often after someone leaves, not less.
+    operator_label = Column(String(255), nullable=True)
     # The request being worked, resolved when the stretch opens. It is the
     # anchor for time-to-first-human-reply: that clock starts when the visitor
     # asked for a human, not when an operator picked the chat up. Measuring

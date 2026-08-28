@@ -164,7 +164,13 @@ def test_get_client_by_id_wrong_user(tenant: TestClient, db_session: Session) ->
 
 
 def test_delete_client_success(tenant: TestClient, db_session: Session) -> None:
-    """Delete tenant → 204, verify gone."""
+    """Delete tenant → 204, verify gone — the owner's account with it.
+
+    Members go with the workspace (``delete_tenant``), so afterwards the
+    token has no principal at all: 401, not 404. Leaving the account behind
+    would strand it with ``tenant_id = NULL`` and permanently burn the
+    address, since invites and registration both refuse an existing e-mail.
+    """
     token = register_and_verify_user(tenant, db_session, email="del@example.com")
     create_resp = tenant.post(
         "/tenants",
@@ -183,7 +189,7 @@ def test_delete_client_success(tenant: TestClient, db_session: Session) -> None:
         "/tenants/me",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert get_resp.status_code == 404
+    assert get_resp.status_code == 401
 
 
 def test_delete_client_wrong_user(tenant: TestClient, db_session: Session) -> None:

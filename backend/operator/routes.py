@@ -6,10 +6,11 @@ bot. Every one of them is tenant-scoped through
 another tenant returns 404 rather than 403 — unreachable, not merely
 forbidden.
 
-Authorization is ``require_verified_user`` plus tenant ownership of the chat.
-A dedicated ``operator`` role and a ``require_role`` dependency arrive in
-phase 0.5; the routes are shaped so narrowing them is adding one dependency,
-not restructuring the handlers.
+Authorization is ``require_member`` — a verified user holding ``owner`` or
+``operator`` in this workspace (phase 0.5) — plus tenant ownership of the
+chat. Working the inbox is what an operator is for, so both roles pass; the
+refusal this adds over phase 0 is for a principal who belongs to no workspace
+at all, or holds a role that is not one of the two.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import require_member
 from backend.core.db import get_async_db, run_sync
 from backend.models import Chat, User
 from backend.operator.schemas import (
@@ -72,7 +73,7 @@ def _require_chat(db, *, chat_id: uuid.UUID, user: User) -> tuple[Chat, uuid.UUI
 )
 async def take_chat(
     chat_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorChatStateResponse:
     """Claim a conversation and mute the bot in it.
@@ -105,7 +106,7 @@ async def take_chat(
 async def send_operator_message(
     chat_id: uuid.UUID,
     body: OperatorMessageRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorMessageResponse:
     """Answer the visitor directly.
@@ -143,7 +144,7 @@ async def send_operator_message(
 )
 async def release_chat_route(
     chat_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(require_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorChatStateResponse:
     """Hand the conversation back to the bot.

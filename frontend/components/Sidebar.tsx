@@ -10,6 +10,7 @@ type NavItem = {
   label: string;
   icon: React.ReactNode;
   adminOnly?: boolean;
+  ownerOnly?: boolean;
   badgeKey?: "gapAnalyzer";
 };
 
@@ -90,6 +91,7 @@ const settingsNav: NavItem[] = [
   {
     href: "/settings",
     label: "Settings",
+    ownerOnly: true,
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M2 4h11M2 7.5h7M2 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
@@ -100,8 +102,23 @@ const settingsNav: NavItem[] = [
     ),
   },
   {
+    href: "/settings/members",
+    label: "Team",
+    ownerOnly: true,
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <circle cx="5.75" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.3" />
+        <path d="M1.75 12.5c0-2.2 1.79-3.5 4-3.5s4 1.3 4 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        <path d="M10.25 3.1a2.25 2.25 0 010 4.3M11.5 9.4c1.2.45 1.9 1.5 1.9 3.1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
     href: "/settings/plan",
     label: "Plan",
+    // Only an owner can change the tier, and there is nothing to do here
+    // without that. Hiding it beats offering a switch that answers 403.
+    ownerOnly: true,
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <rect x="1.5" y="3.5" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
@@ -112,6 +129,7 @@ const settingsNav: NavItem[] = [
   {
     href: "/widget-settings",
     label: "Widget",
+    ownerOnly: true,
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M4.5 5L2 7.5 4.5 10M10.5 5L13 7.5 10.5 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
@@ -137,10 +155,19 @@ const adminNav: NavItem[] = [
 export function Sidebar() {
   const pathname = usePathname();
   const [isAdmin, setIsAdmin] = useState(false);
+  // Assume owner until /tenants/me says otherwise: the dashboard's own owner
+  // sees no flicker, and an operator loses the owner-only links a moment later.
+  const [isOwner, setIsOwner] = useState(true);
   const [gapBadgeCount, setGapBadgeCount] = useState(0);
 
   useEffect(() => {
-    api.clients.getMe().then((c) => setIsAdmin(c.is_admin)).catch(() => {});
+    api.clients
+      .getMe()
+      .then((c) => {
+        setIsAdmin(c.is_admin);
+        setIsOwner(c.role === "owner");
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -200,9 +227,11 @@ export function Sidebar() {
           Configure
         </p>
         <div className="flex flex-col gap-0.5">
-          {settingsNav.map((item) => (
-            <NavLink key={item.href} item={item} />
-          ))}
+          {settingsNav
+            .filter((item) => !item.ownerOnly || isOwner)
+            .map((item) => (
+              <NavLink key={item.href} item={item} />
+            ))}
         </div>
       </div>
 

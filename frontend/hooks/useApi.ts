@@ -9,6 +9,7 @@ import type {
   ChatSessionSummary,
   ChatSessionLogs,
   EscalationTicket,
+  TenantMember,
 } from "@/lib/api";
 
 export function useClientMe() {
@@ -17,6 +18,10 @@ export function useClientMe() {
 
 export function useBots() {
   return useSWR<BotResponse[]>("bots", () => api.bots.list());
+}
+
+export function useMembers() {
+  return useSWR<TenantMember[]>("tenant/members", () => api.members.list());
 }
 
 export function useSupportSettings() {

@@ -39,6 +39,10 @@ from backend.jobs.chat_session_sweeper import (
     shutdown_chat_session_sweeper_thread,
     start_chat_session_sweeper_thread,
 )
+from backend.jobs.expired_invitations_purge import (
+    shutdown_expired_invitations_purge_thread,
+    start_expired_invitations_purge_thread,
+)
 from backend.jobs.guard_events_purge import (
     shutdown_guard_events_purge_thread,
     start_guard_events_purge_thread,
@@ -58,6 +62,7 @@ from backend.observability import (
 )
 from backend.operator.routes import operator_router
 from backend.search.routes import search_router
+from backend.tenants.members_routes import members_router
 from backend.tenants.routes import tenants_router
 from backend.widget.routes import widget_router
 
@@ -86,6 +91,7 @@ async def lifespan(_: FastAPI):
     start_kb_snapshot_daily_thread()
     start_chat_session_sweeper_thread()
     start_guard_events_purge_thread()
+    start_expired_invitations_purge_thread()
     try:
         yield
     finally:
@@ -94,6 +100,7 @@ async def lifespan(_: FastAPI):
         shutdown_kb_snapshot_thread()
         shutdown_chat_session_sweeper_thread()
         shutdown_guard_events_purge_thread()
+        shutdown_expired_invitations_purge_thread()
         shutdown_metrics()
         shutdown_sentry()
         shutdown_observability()
@@ -191,6 +198,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, include_in_schema=False)
 app.include_router(bots_router)
+# Before ``tenants_router``: its ``/{tenant_id}`` catch-all would otherwise
+# match ``/tenants/members`` first.
+app.include_router(members_router)
 app.include_router(tenants_router, prefix="/tenants")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings", include_in_schema=False)

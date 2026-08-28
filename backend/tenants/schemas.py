@@ -6,7 +6,67 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+
+#: What a client may ASK for. Closed, so the API cannot be talked into writing
+#: a role this build does not implement. Spelled out rather than referenced
+#: from ``backend.auth.roles`` because ``Literal`` only accepts literals; that
+#: module stays the source of truth for the values themselves, and a third
+#: role means adding it in both places.
+TenantRoleRequest = Literal["owner", "operator"]
+
+#: What the API REPORTS. Deliberately open where the request type is closed.
+#: ``users.role`` is a plain ``String(32)`` precisely so a third role needs no
+#: data migration — but a closed response type turns the first row holding one
+#: into a 500 on ``GET /tenants/me``, which the dashboard shell and the
+#: sidebar's role check both call on mount, so the whole app breaks for that
+#: user instead of degrading. It is reachable without any bug: deploy a build
+#: that adds ``admin``, let it write one row, roll back. Reporting the value
+#: truthfully is both more honest and safer — every consumer tests for
+#: ``owner`` explicitly and treats anything else as less privileged, so an
+#: unrecognised role loses access rather than gaining it.
+TenantRole = str
+
+#: Derived, not stored: a member who has not yet set a password from their
+#: invite link is ``pending``. See ``members_service`` for why that needs no
+#: column of its own.
+TenantMemberStatus = Literal["active", "pending"]
+
+
+class TenantMemberResponse(BaseModel):
+    """One row of the members screen."""
+
+    id: uuid.UUID
+    email: str
+    role: TenantRole
+    status: TenantMemberStatus
+    created_at: datetime
+
+
+class TenantMemberListResponse(BaseModel):
+    """All members of the current workspace."""
+
+    items: list[TenantMemberResponse]
+
+
+class InviteMemberRequest(BaseModel):
+    """Request body for inviting someone into the workspace."""
+
+    email: EmailStr
+    role: TenantRoleRequest = "operator"
+
+
+class InviteMemberResponse(BaseModel):
+    """Result of an invite. A set-password link is always sent — the account
+    created for the invitee has no usable password until they follow it."""
+
+    member: TenantMemberResponse
+
+
+class UpdateMemberRoleRequest(BaseModel):
+    """Request body for changing a member's role."""
+
+    role: TenantRoleRequest
 
 
 class CreateTenantRequest(BaseModel):
@@ -81,6 +141,7 @@ class TenantMeResponse(TenantResponse):
 
     is_admin: bool
     is_verified: bool
+    role: TenantRole
 
 
 class CreateTenantResponse(TenantResponse):

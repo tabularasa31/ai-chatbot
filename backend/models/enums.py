@@ -92,6 +92,26 @@ class OperatorSessionEndReason(str, enum.Enum):
     reconciled = "reconciled"
 
 
+class TenantPlan(str, enum.Enum):
+    """The tenant's subscription tier.
+
+    A plan value rather than a boolean such as ``live_handoff_enabled``: it is
+    a customer entitlement, not an on/off switch for our own code, and it
+    survives the arrival of a second paid level without a schema change and
+    without a second column to keep consistent with the first.
+
+    Stored as a plain string (no DB enum type), matching
+    ``Tenant.llm_alert_type`` and ``TenantApiKey.status`` — adding a tier then
+    costs a row update rather than an ``ALTER TYPE`` on a live database.
+    """
+
+    # Today's behaviour, and the default for every tenant.
+    free = "free"
+    # The paid tier. Nothing reads this value yet; the live-operator e-mail
+    # lane is the first consumer.
+    pro = "pro"
+
+
 class MessageFeedback(str, enum.Enum):
     none = "none"
     up = "up"

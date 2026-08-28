@@ -86,26 +86,57 @@ async def delete_traces_for_tenant(tenant_id: str) -> int:
     client = _build_client()
     tag = tenant_trace_tag(tenant_id)
 
-    trace_ids: list[str] = []
-    page = 1
-    while page <= _MAX_PAGES:
-        response = await client.trace.list(page=page, limit=_PAGE_SIZE, tags=tag)
-        batch = list(response.data or [])
-        trace_ids.extend(t.id for t in batch)
-        if len(batch) < _PAGE_SIZE:
-            break
-        page += 1
+    try:
+        trace_ids: list[str] = []
+        page = 1
+        exhausted = False
+        while page <= _MAX_PAGES:
+            response = await client.trace.list(page=page, limit=_PAGE_SIZE, tags=tag)
+            batch = list(response.data or [])
+            trace_ids.extend(t.id for t in batch)
+            if len(batch) < _PAGE_SIZE:
+                exhausted = True
+                break
+            page += 1
 
-    if not trace_ids:
-        logger.info("langfuse_purge_empty tenant_id=%s", tenant_id)
-        return 0
+        if not exhausted:
+            # Deleting only what was collected and reporting success would be a
+            # partial purge recorded as a complete one. Fail instead, so the
+            # caller retries and somebody sees it.
+            raise RuntimeError(
+                f"Langfuse paging hit the {_MAX_PAGES}-page cap for {tenant_id}"
+            )
 
-    for start in range(0, len(trace_ids), _DELETE_BATCH):
-        await client.trace.delete_multiple(
-            trace_ids=trace_ids[start : start + _DELETE_BATCH]
-        )
+        if not trace_ids:
+            logger.info("langfuse_purge_empty tenant_id=%s", tenant_id)
+            return 0
+
+        for start in range(0, len(trace_ids), _DELETE_BATCH):
+            await client.trace.delete_multiple(
+                trace_ids=trace_ids[start : start + _DELETE_BATCH]
+            )
+    finally:
+        # The generated client owns an httpx.AsyncClient and exposes no close
+        # of its own; without this the worker leaks a connection pool per
+        # deletion.
+        await _aclose(client)
 
     logger.info(
         "langfuse_purge_done tenant_id=%s traces=%d", tenant_id, len(trace_ids)
     )
     return len(trace_ids)
+
+
+async def _aclose(client: Any) -> None:
+    """Close the httpx client the Fern-generated wrapper holds, if reachable."""
+    httpx_client = getattr(
+        getattr(client, "_client_wrapper", None), "httpx_client", None
+    )
+    inner = getattr(httpx_client, "httpx_client", httpx_client)
+    aclose = getattr(inner, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:
+        logger.debug("langfuse_purge_client_close_failed", exc_info=True)

@@ -1,18 +1,22 @@
 """Delete a workspace's addresses from Brevo.
 
-Brevo is where the e-mail side of a workspace accumulates: sending to an
+Brevo is where the e-mail side of a workspace accumulates: sending *to* an
 address through the transactional API leaves a contact behind for it. For a
-departing workspace that set is its members' addresses, the support inbox its
-escalations were routed to, and the visitors' addresses those escalations
-carried as ``Reply-To``. All of it is personal data we hold only because that
-workspace existed, so it goes when the workspace does.
+departing workspace that is its members' addresses and the support inbox its
+escalations were routed to. Visitors' addresses are passed in as well, though
+today they ride out only as ``replyTo`` — which Brevo does not turn into a
+contact — so those deletes usually 404 and are treated as already-done.
 
 Contacts are account-wide in Brevo, not per workspace, so an address can be one
-we still hold for somebody else — the same person owning a second workspace, or
-a visitor who also wrote to a workspace that is staying. The caller passes the
-addresses; :func:`delete_contacts` deletes exactly those, and the *decision* of
-which addresses are still ours to keep is made against our own database in
-``backend/jobs/workspace_purge.py`` before the call.
+we still hold for somebody else — the same person owning a second workspace, a
+visitor who also wrote to a workspace that is staying, or an agency's shared
+support inbox configured on several. Deleting a contact also discards its
+unsubscribe state, so an over-broad delete does not merely lose a record: it
+makes a previously opted-out address sendable again.
+
+This module therefore deletes exactly the addresses it is handed and decides
+nothing. Which addresses are still ours to keep is worked out against our own
+database in ``backend/jobs/workspace_purge.py`` before the call.
 """
 
 from __future__ import annotations

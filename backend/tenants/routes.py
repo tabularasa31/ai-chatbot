@@ -339,7 +339,13 @@ def get_tenant_by_id_route(
     response_model=None,
     summary="Delete your workspace",
 )
+# The most destructive route in the file, and now a documented one. The
+# neighbouring key routes are limited at 10-20/hour; this needs far less, since
+# an owner has exactly one workspace and succeeding once leaves them with no
+# credentials to try again.
+@limiter.limit("5/hour", key_func=owner_jwt_rate_limit_key)
 def delete_tenant_route(
+    request: Request,
     tenant_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],

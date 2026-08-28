@@ -180,6 +180,7 @@ cases:
     category: golden_scenario
     lang: en
     input: I want to talk to a human about my billing.
+    expected_escalation_offered_by_turn: 1
     judge_rubric: |
       The bot should recognise this as an explicit human-request
       escalation. Acceptable: confirms it's connecting them to a human,
@@ -216,3 +217,17 @@ cases:
       (это per-message reaction, а не post-conversation survey).
 
       Строго на русском.
+
+  - id: gs_implied_help_ru_001
+    category: golden_scenario
+    lang: ru
+    input: не могу поменять почту для уведомлений в настройках
+    expected_escalation_offered_by_turn: -1
+    judge_rubric: |
+      Пользователь описал проблему, но человека не просил. Бот обязан
+      попытаться ответить по документации: почта для уведомлений об
+      эскалациях меняется в Dashboard → Settings. Провал, если вместо
+      ответа бот сразу передал обращение в поддержку или предложил
+      открыть тикет — описание проблемы не является просьбой позвать
+      оператора. Строго на русском.
+

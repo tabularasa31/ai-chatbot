@@ -81,7 +81,10 @@ class EscalationStateMachine(PipelineHandler):
     (closed / awaiting email / pending follow-up) or when the user explicitly
     asks for a human in this turn. ``handle`` dispatches to the right internal
     method by checking flags in the same priority order the legacy inline code
-    used: closed > awaiting-email > follow-up > explicit-request.
+    used: closed > awaiting-email > follow-up > explicit-request. It returns
+    ``None`` — falling through to RagHandler — when no branch claims the turn,
+    including when the human request was inferred rather than asked for
+    outright.
     """
 
     def can_handle(self, ctx: HandlerContext) -> bool:
@@ -153,7 +156,19 @@ class EscalationStateMachine(PipelineHandler):
         # stated problem first elicits the actual question. Failures propagate
         # rather than degrading to RagHandler once the ticket and support
         # email have been committed.
+        #
+        # Only an *outright* ask engages this branch. A handoff the classifier
+        # merely inferred — "I can't change the settings" read as a plea for
+        # help — is answered instead: RagHandler takes the turn, and the
+        # ordinary low_similarity / no_documents path escalates with its
+        # pre_confirm question if the knowledge base has nothing. Keeping the
+        # inferred case out of the FSM entirely also keeps the elicitation
+        # state below honest: ``escalation_awaiting_request`` is only ever
+        # entered by an outright ask, so the reply that fills it in escalates
+        # against a handoff the user really did ask for.
         if ctx.explicit_human_request:
+            if not ctx.human_request_explicit:
+                return self._decline_implied_request(ctx)
             if self._has_forwardable_request(ctx):
                 return self._handle_explicit_request(ctx)
             return self._enter_awaiting_request(ctx)
@@ -687,6 +702,26 @@ class EscalationStateMachine(PipelineHandler):
             escalation_reason="explicit_human_request",
             trace_source="escalation_explicit_request",
         )
+
+    def _decline_implied_request(self, ctx: HandlerContext) -> None:
+        """Inferred handoff — let RagHandler take the turn instead.
+
+        Returning ``None`` hands the turn to the next handler in the chain.
+        The span records why the FSM stood down, so a trace still shows that
+        the human-request classifier fired on this turn.
+        """
+        if ctx.trace is not None:
+            ctx.trace.span(
+                name="human-request-detection",
+                input={"question": ctx.redacted_question},
+            ).end(
+                output={
+                    "matched": True,
+                    "explicit": False,
+                    "action": "answer_first",
+                }
+            )
+        return None
 
     # ------------------------------------------------------------------
     # Awaiting-request state — the user asked for a human but hasn't stated a

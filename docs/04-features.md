@@ -771,9 +771,32 @@ When the bot cannot adequately answer, the conversation is **escalated to a huma
 |---------|-------------|
 | Low similarity score | No retrieved chunk is relevant enough |
 | No documents | Client has no embedded documents |
-| User phrase | Message contains phrases like "talk to a person", "human", "agent" |
+| User phrase | The user asks for a person outright ("talk to a human", "connect me to an operator"). A message that merely *states a problem* ("I can't change the settings") does not qualify — see below |
 | Support complaint (`user_complaint`) | Relevance guard classified the message as a complaint about support silence ("they haven't replied for two weeks") — pre-confirm offer leads with an apology; ticket priority ranks with an explicit human request |
 | Manual escalation | Client calls `POST /chat/{session_id}/escalate` |
+
+### Outright vs. inferred human requests
+
+The human-request classifier (`detect_human_request`) returns three axes:
+whether the user wants a human this turn, whether the message carries a
+concrete problem support could act on, and whether the handoff was asked for
+**outright** rather than inferred.
+
+- Outright ask ("connect me to an operator") → escalates immediately, no
+  pre-confirm step; the request is itself the confirmation.
+- Outright ask with nothing to forward yet ("connect me to a human") → the bot
+  asks the user to describe their question instead of minting an empty ticket,
+  then escalates once the detail arrives.
+- Inferred ask ("I can't change the settings", "please help me") → not
+  escalated at all. The escalation FSM stands down and the RAG pipeline answers
+  from the knowledge base; if retrieval finds nothing, the ordinary
+  low-similarity / no-documents path offers the handoff and asks for consent
+  through the pre-confirm question.
+
+Inferred asks are kept out of the FSM entirely so the elicitation state above
+is only ever opened by an outright ask — the reply that fills it in escalates
+on content alone, so a state opened by an inferred plea would escalate a
+handoff nobody asked for.
 
 ### What happens on escalation
 

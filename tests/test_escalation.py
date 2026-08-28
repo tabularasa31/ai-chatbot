@@ -63,13 +63,18 @@ def test_should_escalate_ok() -> None:
 
 def _mock_llm_human_request(result: bool):
     """Patch the OpenAI call inside detect_human_request to return a fixed result."""
+    return _mock_llm_human_request_payload({"human_request": result})
+
+
+def _mock_llm_human_request_payload(payload: dict):
+    """Same, with the full classifier JSON body spelled out by the caller."""
     import json
     from contextlib import ExitStack
     from unittest.mock import AsyncMock, MagicMock, patch
 
     response = MagicMock()
     response.choices = [MagicMock()]
-    response.choices[0].message.content = json.dumps({"human_request": result})
+    response.choices[0].message.content = json.dumps(payload)
 
     class _Stack:
         def __enter__(self):
@@ -111,6 +116,38 @@ async def test_detect_human_request_russian() -> None:
     with _mock_llm_human_request(True):
         result = await detect_human_request("хочу поговорить с человеком", "sk-test")
         assert result.human_request is True
+
+
+@pytest.mark.asyncio
+async def test_detect_human_request_explicitness_axis_is_parsed() -> None:
+    """A handoff the classifier only inferred comes back flagged as such.
+
+    The caller uses this to answer a stated problem from the knowledge base
+    instead of escalating it — see EscalationStateMachine's implied-request
+    fall-through.
+    """
+    with _mock_llm_human_request_payload(
+        {
+            "human_request": True,
+            "message_has_request_content": True,
+            "human_request_explicit": False,
+        }
+    ):
+        result = await detect_human_request("не могу менять настройки", "sk-test")
+    assert result.human_request is True
+    assert result.message_has_request_content is True
+    assert result.human_request_explicit is False
+
+
+@pytest.mark.asyncio
+async def test_detect_human_request_defaults_to_explicit_when_axis_missing() -> None:
+    """A response without the third axis keeps the original escalate-now contract."""
+    with _mock_llm_human_request_payload(
+        {"human_request": True, "message_has_request_content": True}
+    ):
+        result = await detect_human_request("соедините с оператором", "sk-test")
+    assert result.human_request is True
+    assert result.human_request_explicit is True
 
 
 def _mock_llm_support_contact(result: bool):

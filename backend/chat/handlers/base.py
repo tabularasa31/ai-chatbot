@@ -99,6 +99,13 @@ class HandlerContext:
     stream_callback: Callable[[str], None] | None = None
     status_callback: Callable[[str], None] | None = None
     explicit_human_request: bool = False
+    # Only meaningful when ``explicit_human_request`` is True: whether the user
+    # asked for a person outright ("connect me to an operator") rather than the
+    # classifier inferring the handoff from a stated problem. An inferred
+    # request whose message carries a real question is answered from the
+    # knowledge base first instead of minting a ticket. Defaults to True so
+    # call sites that predate the axis keep escalating immediately.
+    human_request_explicit: bool = True
     # True when the user is asking *how* to reach support (informational), as
     # opposed to ``explicit_human_request`` (hand me off now). Classified once
     # up front (in parallel with the human-request classifier) and read by the

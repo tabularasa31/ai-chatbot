@@ -65,6 +65,7 @@ def _make_handler_context(
     chat: Chat,
     question_text: str = "anything",
     explicit_human_request: bool = False,
+    human_request_explicit: bool = True,
     message_has_request_content: bool = False,
 ) -> HandlerContext:
     return HandlerContext(
@@ -83,6 +84,7 @@ def _make_handler_context(
         db=db,
         session_id=chat.session_id,
         explicit_human_request=explicit_human_request,
+        human_request_explicit=human_request_explicit,
         message_has_request_content=message_has_request_content,
     )
 
@@ -238,6 +240,135 @@ def test_explicit_request_escalates_immediately_without_pre_confirm(
     assert captured["primary_question"] == "my billing is broken, connect me to a human please"
     # The pre_confirm gate must NOT be engaged for an explicit human request.
     assert not chat.escalation_pre_confirm_pending
+
+
+def test_implied_request_with_content_falls_through_to_rag(
+    db_session: Session,
+) -> None:
+    """A stated problem read as a plea for help must be answered, not escalated.
+
+    Regression for the prod case where "не могу менять настройки" ("I can't
+    change the settings") minted a support ticket on the spot: the classifier
+    flags a human request, but it was inferred rather than asked for, and the
+    message carries a real question. The FSM must stand down so RagHandler can
+    answer from the knowledge base; escalation then only happens through the
+    ordinary low_similarity / no_documents path, with its pre_confirm step.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="I can't change the settings",
+        explicit_human_request=True,
+        human_request_explicit=False,
+        message_has_request_content=True,
+    )
+
+    def _fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("An inferred human request must not mint a ticket")
+
+    with patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fail):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is None, "Inferred request over a real question falls through to RAG"
+    assert not chat.escalation_awaiting_request
+    assert not chat.escalation_pre_confirm_pending
+
+
+def test_implied_request_without_content_also_falls_through(
+    db_session: Session,
+) -> None:
+    """An inferred plea never engages the FSM, with or without content.
+
+    The elicitation state is reserved for outright asks: it promises the user
+    a handoff, and the reply that fills it in escalates on content alone. If an
+    inferred plea could open it, the reported bug would simply move one turn
+    downstream — "помогите" then "не могу поменять почту" would mint the very
+    ticket this change exists to prevent.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="can someone help me?",
+        explicit_human_request=True,
+        human_request_explicit=False,
+        message_has_request_content=False,
+    )
+
+    def _fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("An inferred request must not open the elicitation state")
+
+    with patch.object(EscalationStateMachine, "_emit_awaiting_request_message", _fail):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is None
+    assert not chat.escalation_awaiting_request
+
+
+def test_outright_request_without_content_still_elicits_question(
+    db_session: Session,
+) -> None:
+    """A bare "connect me to a human" keeps the elicitation branch.
+
+    There is nothing to forward yet, so the bot asks for the question instead
+    of minting an empty ticket — unchanged by the inferred-request gate.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="connect me to a human",
+        explicit_human_request=True,
+        human_request_explicit=True,
+        message_has_request_content=False,
+    )
+
+    with patch.object(
+        EscalationStateMachine, "_emit_awaiting_request_message", lambda _s, _c, **_k: "elicited"
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome == "elicited"
+    assert chat.escalation_awaiting_request is True
+
+
+def test_implied_request_after_prior_content_falls_through(
+    db_session: Session,
+) -> None:
+    """Sticky chat content does not resurrect the escalation branch either.
+
+    The user described a problem earlier and now says "please help me" with no
+    content of their own. RagHandler takes the turn; if it cannot answer, the
+    ordinary low_similarity path offers the handoff and asks for consent —
+    which is what the user gets instead of an unrequested ticket.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.has_substantive_content = True
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="please help me",
+        explicit_human_request=True,
+        human_request_explicit=False,
+        message_has_request_content=False,
+    )
+
+    def _fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("An inferred request must not mint a ticket")
+
+    with patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fail):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is None
 
 
 def _make_pre_confirm_chat(db: Session, tenant: Tenant, *, clarify: bool = False) -> Chat:

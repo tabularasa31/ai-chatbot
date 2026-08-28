@@ -545,7 +545,14 @@ class RagHandler(PipelineHandler):
             max_clarifications=MAX_CLARIFICATIONS_PER_SESSION,
             guard_failed=result.is_reject,
             guard_reason=result.reject_reason,
-            explicit_human_request=ctx.explicit_human_request,
+            # Only an outright handoff ask counts here. An inferred one that
+            # the escalation FSM stood down on (implied ask over a real
+            # question) reaches RAG precisely to be answered, so labelling the
+            # turn escalate(explicit_human_request) would contradict the reply
+            # we are about to send.
+            explicit_human_request=(
+                ctx.explicit_human_request and ctx.human_request_explicit
+            ),
             faq_direct_hit=result.is_faq_direct,
             faq_top_score=faq_match_obj.top_score if faq_match_obj else None,
             kb_confidence=_kb_confidence,

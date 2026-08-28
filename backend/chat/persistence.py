@@ -81,6 +81,7 @@ def _finalize_persisted_messages(
     tenant_id: uuid.UUID,
     extra_tokens: int,
     set_rephrase_flag: bool = False,
+    set_low_confidence_flag: bool = False,
     count_user_turn: bool = True,
 ) -> None:
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
@@ -90,6 +91,10 @@ def _finalize_persisted_messages(
     # the tracker, so two unrelated zero-hits turns separated by an unrelated
     # turn don't collapse into the consecutive-failure path.
     chat.last_reply_was_rephrase_prompt = set_rephrase_flag
+    # Same single-write-point rule for the weak-retrieval tracker: any reply
+    # that did not come from weak retrieval resets it, so two weak turns
+    # separated by a good one never collapse into the second-attempt path.
+    chat.last_reply_was_low_confidence = set_low_confidence_flag
     db.add(chat)
     # Flush the turn's own rows (messages + chat update) BEFORE the best-effort
     # session-turn tracking savepoint. ``begin_nested()`` implicitly flushes all
@@ -219,6 +224,7 @@ def _persist_turn(
     optional_entity_types: set[str] | None = None,
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
+    set_low_confidence_flag: bool = False,
 ) -> tuple[Message, Message]:
     _persist_start = perf_counter()
     _persist_span = None
@@ -250,6 +256,7 @@ def _persist_turn(
         tenant_id=tenant_id,
         extra_tokens=extra_tokens,
         set_rephrase_flag=set_rephrase_flag,
+        set_low_confidence_flag=set_low_confidence_flag,
     )
     if _persist_span is not None:
         _persist_span.end(
@@ -274,6 +281,7 @@ def _persist_turn_with_response_language(
     language_context: ResolvedLanguageContext | None = None,
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
+    set_low_confidence_flag: bool = False,
 ) -> tuple[Message, Message]:
     _set_last_response_language(
         db=db,
@@ -294,6 +302,7 @@ def _persist_turn_with_response_language(
         optional_entity_types=optional_entity_types,
         trace=trace,
         set_rephrase_flag=set_rephrase_flag,
+        set_low_confidence_flag=set_low_confidence_flag,
     )
 
 

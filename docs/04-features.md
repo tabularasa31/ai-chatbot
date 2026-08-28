@@ -934,8 +934,14 @@ Two PostHog events are emitted on every escalation:
 | `low_confidence_no_path` | RAG confidence too low and no clarification path available |
 | `clarify_loop_limit` | Max clarification rounds reached without resolution |
 | `guard_reject` | Guard pipeline rejected the turn and escalation was forced |
-| `low_similarity` | No retrieved chunk met the similarity threshold (T-1) |
+| `low_similarity` | No retrieved chunk met the similarity threshold (T-1), on a **second consecutive** weak turn — see below |
 | `no_docs` | Tenant has no embedded documents (T-2) |
+
+#### Second-attempt rule for weak retrieval
+
+`low_similarity` means retrieval returned chunks but scored them below the handoff floor — the generated answer may still be useful, and the user may only need to rephrase. The first such turn therefore keeps its answer and offers nothing; it only records `chats.last_reply_was_low_confidence`. A second *consecutive* weak turn is treated as evidence the user is stuck and escalates through the pre-confirm gate as before. Any reply that did not come from weak retrieval resets the tracker, and it is treated as stale once the inactivity sweeper has reported the session ended.
+
+`no_documents` is unaffected: retrieval found nothing at all, so there is no answer to preserve, and that path already asks the user to rephrase once before it escalates.
 
 #### Escalation rate alert
 

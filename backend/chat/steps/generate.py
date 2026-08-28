@@ -293,6 +293,7 @@ async def _async_generate_answer_native(
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
     low_context: bool = False,
+    strong_context: bool = False,
     allow_clarification: bool = True,
     require_clarification: str | None = None,
     trace: TraceHandle | None = None,
@@ -333,6 +334,7 @@ async def _async_generate_answer_native(
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
         low_context=low_context,
+        strong_context=strong_context,
         allow_clarification=allow_clarification,
         require_clarification=require_clarification,
     )
@@ -677,6 +679,28 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     if trace is not None:
         trace.update(metadata={"require_clarification": _require_clarification})
 
+    # --- Escalation decision (computed before generation) ---
+    # ``should_escalate`` is a pure function of the retrieval scores, which are
+    # final by this point. Computing it here lets the prompt carry the same
+    # verdict: when retrieval cleared the handoff threshold, the model is told
+    # not to volunteer a support ticket on top of an answer it can give from
+    # the context. The result is reused for the pipeline result below.
+    escalate, esc_trigger = _svc.should_escalate(
+        retrieval.best_confidence_score,
+        len(retrieval.chunk_texts),
+        best_rank_score=retrieval.best_rank_score,
+    )
+
+    # ``low_context`` keys off ``reliability.score``, which is derived from the
+    # rank score alone, while ``should_escalate`` takes the max of rank score
+    # and vector similarity. A paraphrased question against a differently-worded
+    # KB clears the escalation floor on vector similarity while its rank score
+    # stays below it, so both flags would otherwise fire and put contradictory
+    # instructions in consecutive lines of the same prompt ("relevant match,
+    # do not offer a ticket" next to "low relevance, say it is not documented").
+    # Low reliability wins — it is the more conservative of the two.
+    _low_context = not state.reranker_rescued and retrieval.reliability.score == "low"
+
     _generate_kwargs: dict[str, Any] = dict(
         api_key=run.api_key,
         user_context_line=run.user_context_line,
@@ -686,7 +710,8 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         faq_context_items=state.faq_context_items,
         quick_answer_items=state.quick_answer_items,
         agent_instructions=run.agent_instructions,
-        low_context=not state.reranker_rescued and retrieval.reliability.score == "low",
+        low_context=_low_context,
+        strong_context=not escalate and not _low_context,
         allow_clarification=run.allow_clarification,
         require_clarification=_require_clarification,
         trace=trace,
@@ -829,13 +854,6 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     raw_answer = _strip_inline_citations(raw_answer)
 
     final_answer = raw_answer
-
-    # --- Escalation decision ---
-    escalate, esc_trigger = _svc.should_escalate(
-        retrieval.best_confidence_score,
-        len(retrieval.chunk_texts),
-        best_rank_score=retrieval.best_rank_score,
-    )
 
     return ChatPipelineResult(
         raw_answer=raw_answer,

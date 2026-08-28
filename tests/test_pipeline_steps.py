@@ -18,6 +18,7 @@ from backend.chat.language import ResolvedLanguageContext
 from backend.chat.steps import pre_retrieval, refusal, retrieval
 from backend.chat.types import PipelineRun, RetrievalContext
 from backend.guards.types import Verdict, VerdictReason
+from backend.search.service import build_reliability_assessment
 
 
 def _language_context() -> ResolvedLanguageContext:
@@ -534,6 +535,88 @@ def test_low_retrieval_guard_no_recheck_when_not_bypassed(
 # ---------------------------------------------------------------------------
 # generation seam
 # ---------------------------------------------------------------------------
+
+
+def _capture_generation_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    retrieval_ctx,
+    escalate: bool,
+) -> dict:
+    """Run the generation step against a fake LLM and return the kwargs the
+    prompt builder was handed."""
+    calls: dict = {}
+
+    async def _fake_generate(question, chunks, **kwargs):
+        calls.update(kwargs)
+        return ("generated answer", 11, 5, 6, False, False)
+
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer", _fake_generate
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *args, **kwargs: (escalate, None),
+    )
+
+    from backend.chat.steps import generate
+
+    run = _make_run()
+    run.state.retrieval = retrieval_ctx
+    run.state.strategy = "rag_only"
+    asyncio.run(generate.run_generation(run))
+    return calls
+
+
+def test_run_generation_sets_strong_context_when_retrieval_clears_the_bar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The escalation verdict computed before generation must reach the prompt,
+    so the model answers from the retrieved context instead of reporting a
+    documentation gap on a turn the backend classified as needing no handoff."""
+    calls = _capture_generation_kwargs(
+        monkeypatch,
+        retrieval_ctx=_retrieval_ctx(
+            reliability=build_reliability_assessment(top_score=0.9, result_count=3)
+        ),
+        escalate=False,
+    )
+    assert calls["strong_context"] is True
+    assert calls["low_context"] is False
+
+
+def test_run_generation_clears_strong_context_when_escalating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _capture_generation_kwargs(
+        monkeypatch,
+        retrieval_ctx=_retrieval_ctx(
+            reliability=build_reliability_assessment(top_score=0.9, result_count=3)
+        ),
+        escalate=True,
+    )
+    assert calls["strong_context"] is False
+
+
+def test_run_generation_never_sets_strong_and_low_context_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """low_context reads reliability.score (rank score only) while
+    should_escalate takes max(rank, vector similarity), so a paraphrased
+    question can clear the escalation floor on vector similarity while its rank
+    score stays low. The two prompt lines contradict each other, so the
+    conservative one must win."""
+    calls = _capture_generation_kwargs(
+        monkeypatch,
+        retrieval_ctx=_retrieval_ctx(
+            best_rank_score=0.385,
+            best_confidence_score=0.60,
+            reliability=build_reliability_assessment(top_score=0.385, result_count=3),
+        ),
+        escalate=False,
+    )
+    assert calls["low_context"] is True
+    assert calls["strong_context"] is False
 
 
 def test_run_generation_resolves_seam_via_rag_module(

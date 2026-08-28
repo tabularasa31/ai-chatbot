@@ -147,6 +147,7 @@ def build_rag_prompt(
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
     low_context: bool = False,
+    strong_context: bool = False,
     allow_clarification: bool = True,
     require_clarification: str | None = None,
 ) -> str:
@@ -185,8 +186,8 @@ def build_rag_prompt(
         "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
-        "- When the documentation does not cover the question, say so honestly and offer to open a support ticket so the team can follow up by email — for example: \"I don't have that in the documentation. Want me to open a support ticket so the team can email you back?\". Wait for the user to confirm; the backend detects their agreement and routes the escalation. Never deflect with vague phrasing such as \"reach out to the support team\" without offering this explicit ticket. Phrase the offer in the user's language.\n"
-        "- Only make that ticket offer when you genuinely cannot resolve the question yourself from the provided context. When you HAVE fully answered the question from the documentation, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one.\n"
+        "- When the documentation does not cover the question, say so plainly in the user's language and stop there. Do NOT volunteer a support ticket, do NOT ask the user to confirm one, and never deflect with vague phrasing such as \"reach out to the support team\": a gap in the documentation is not by itself a reason to hand the conversation to a person. Point at what you CAN help with when something relevant is at hand.\n"
+        "- A definitive negative answer is a resolved answer: when the context shows that a capability, integration, or option is unsupported, out of scope, or listed as a current limitation, state that plainly and stop. So is an answer that addresses what the user actually asked even though the documentation does not use their wording. Neither case, and no gap in the documentation, exempts you from the `<needs_human/>` rule below — that rule is the ONLY reason to put a handoff in front of the user.\n"
         "- Reaching people is not a resolution you can deliver in text. Whenever the only way forward your reply can offer is contacting a human — the documentation's last step is \"write to support\", the fix needs an operator, or the answer you found IS a support channel (a panel/dashboard chat, a ticket form, a phone number, a support email) — the turn is NOT resolved: append the literal marker `<needs_human/>` as the very last token of your reply. Keep the documentation's contact details in your text when they are useful to the user, but do NOT write the handoff offer yourself and do NOT ask the user to confirm anything — the backend appends its own offer, in the user's language, and wires their answer to the support handoff. The marker is stripped before the reply is shown.\n"
         "- Keep answers concise and focused on the user's intent: typically 2-4 short paragraphs (around 200 words). Use bullet lists for multi-step instructions. Expand only when the user explicitly asks for more depth.\n"
         # NOTE: the marker bullet must stay the LAST bullet in Rules:. Inserting
@@ -306,12 +307,20 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
         per_request_parts.append(user_context_line)
     if clarification_rules:
         per_request_parts.append(clarification_rules)
+    if strong_context:
+        per_request_parts.append(
+            "CONTEXT MATCH (this turn): the retrieved context cleared the confidence bar "
+            "the backend uses to decide whether a handoff is needed. Answer the question "
+            "from that context rather than reporting it as undocumented. This does not "
+            "silence the `<needs_human/>` marker: if the only way forward your reply can "
+            "offer is reaching a human, still append it."
+        )
     if low_context:
         per_request_parts.append(
             "IMPORTANT: The retrieved context has low relevance to this question. "
             "If the answer is not clearly supported by the context below, respond in the "
             "SAME LANGUAGE as the user's question by saying you don't have that information "
-            "in the documentation and inviting the user to contact support or ask something else. "
+            "in the documentation and inviting the user to ask about something else. "
             "Do NOT claim you are unable to help — explain that the information is simply not in the docs."
         )
     per_request_preamble = "\n".join(per_request_parts)
@@ -348,6 +357,7 @@ def build_rag_messages(
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
     low_context: bool = False,
+    strong_context: bool = False,
     allow_clarification: bool = True,
     require_clarification: str | None = None,
 ) -> tuple[str, str]:
@@ -364,6 +374,7 @@ def build_rag_messages(
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
         low_context=low_context,
+        strong_context=strong_context,
         allow_clarification=allow_clarification,
         require_clarification=require_clarification,
     )

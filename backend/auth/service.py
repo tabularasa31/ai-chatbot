@@ -12,6 +12,7 @@ from backend.core.config import settings
 from backend.core.security import ALGORITHM, create_access_token, hash_password, verify_password
 from backend.models import User
 from backend.models.base import _utcnow
+from backend.seats.events import capture_seat_granted, emit_seat_change
 from backend.seats.service import grant_seat
 
 ACCESS_TOKEN_EXPIRE_SECONDS = 24 * 60 * 60  # 24 hours
@@ -154,7 +155,13 @@ def reset_password(token: str, new_password: str, db: Session) -> bool:
     user.is_verified = True
     user.verification_token = None
     user.verification_expires_at = None
+    granted = None
     if accepting_an_invite:
+        # Described before the grant and reported after the commit — the
+        # builder reads the pre-grant state to tell a first seat from an
+        # idempotent repeat. See ``backend.seats.events``.
+        granted = capture_seat_granted(db, user=user)
         grant_seat(user)
     db.commit()
+    emit_seat_change(granted)
     return True

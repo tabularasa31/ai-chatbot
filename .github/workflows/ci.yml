@@ -66,6 +66,12 @@ jobs:
               - 'frontend/pnpm-lock.yaml'
               - 'frontend/pnpm-workspace.yaml'
               - '.github/workflows/ci.yml'
+              # The API reference is generated from the route table, so these
+              # shape the docs site as surely as anything under frontend/.
+              - 'backend/main.py'
+              - 'backend/**/routes.py'
+              - 'backend/**/schemas.py'
+              - 'scripts/generate-openapi.py'
             # Standalone widget surface — Vite + Preact widget-app, IIFE
             # widget-loader, shared types. Lockfile and workspace manifest overlap
             # with dashboard on purpose: a dependency bump forces both jobs to
@@ -187,6 +193,20 @@ jobs:
           node-version: "20"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # The docs site renders an API reference generated from the route table,
+      # so the build imports the backend. It used to fetch the schema from the
+      # deployed API instead, which meant an outage failed this job on every
+      # branch -- and a red suite blocks the deploy that would end the outage.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
 
       - name: Install dependencies
         working-directory: frontend

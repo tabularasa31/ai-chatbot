@@ -4,6 +4,7 @@ import type {
   TenantMeResponse,
   BotResponse,
   SupportSettingsResponse,
+  TenantPlanResponse,
   DisclosureConfigResponse,
   ChatSessionSummary,
   ChatSessionLogs,
@@ -25,6 +26,10 @@ export function useMembers() {
 
 export function useSupportSettings() {
   return useSWR<SupportSettingsResponse>("support-settings", () => api.support.get());
+}
+
+export function usePlan() {
+  return useSWR<TenantPlanResponse>("tenant-plan", () => api.plan.get());
 }
 
 export function useBotDisclosure(botId: string | null | undefined) {

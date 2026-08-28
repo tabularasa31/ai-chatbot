@@ -24,6 +24,7 @@ from backend.models.enums import (
     PiiEventDirection,
     SourceSchedule,
     SourceStatus,
+    TenantPlan,
 )
 from backend.models.gap import (
     GapAnalyzerJob,
@@ -86,6 +87,7 @@ __all__ = [
     "Tenant",
     "TenantApiKey",
     "TenantFaq",
+    "TenantPlan",
     "TenantProfile",
     "UrlSource",
     "UrlSourceRun",

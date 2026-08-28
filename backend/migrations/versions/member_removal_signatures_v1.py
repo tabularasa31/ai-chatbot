@@ -34,7 +34,7 @@ Additive and backfill-free: existing rows keep NULL labels, which is correct,
 because every account they point at still exists.
 
 Revision ID: member_removal_signatures_v1
-Revises: operator_sessions_v1
+Revises: tenant_plan_v1
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "member_removal_signatures_v1"
-down_revision = "operator_sessions_v1"
+down_revision = "tenant_plan_v1"
 branch_labels = None
 depends_on = None
 

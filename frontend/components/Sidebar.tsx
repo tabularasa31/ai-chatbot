@@ -114,6 +114,19 @@ const settingsNav: NavItem[] = [
     ),
   },
   {
+    href: "/settings/plan",
+    label: "Plan",
+    // Only an owner can change the tier, and there is nothing to do here
+    // without that. Hiding it beats offering a switch that answers 403.
+    ownerOnly: true,
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <rect x="1.5" y="3.5" width="12" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+        <path d="M1.5 6.5h12" stroke="currentColor" strokeWidth="1.3" />
+      </svg>
+    ),
+  },
+  {
     href: "/widget-settings",
     label: "Widget",
     ownerOnly: true,

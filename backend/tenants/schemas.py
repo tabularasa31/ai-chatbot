@@ -166,6 +166,11 @@ class TenantListResponse(BaseModel):
 
 RedactionEntityLiteral = Literal["ID_DOC", "IP", "URL_TOKEN"]
 
+# Mirrors backend.models.enums.TenantPlan. Spelled out as a Literal so the
+# OpenAPI schema names the tiers and FastAPI rejects an unknown one with a
+# 422 before any service code runs.
+TenantPlanLiteral = Literal["free", "pro"]
+
 
 class PrivacyConfigResponse(BaseModel):
     """Tenant-wide regex redaction settings."""
@@ -185,6 +190,27 @@ class SupportSettingsResponse(BaseModel):
     l2_email: str | None = None
     escalation_language: str | None = None
     fallback_email: str | None = None
+
+
+class TenantPlanResponse(BaseModel):
+    """The tenant's current subscription tier.
+
+    ``plan`` is a ``TenantPlan`` value. Nothing in the product behaves
+    differently based on it yet — the live-operator e-mail lane is the first
+    consumer.
+    """
+
+    plan: TenantPlanLiteral
+
+
+class UpdateTenantPlanRequest(BaseModel):
+    """PUT body for /tenants/me/plan.
+
+    Owner-only. Switching is free in both directions: no payment is taken and
+    no billing system exists behind this endpoint.
+    """
+
+    plan: TenantPlanLiteral
 
 
 class TenantLlmAlertResponse(BaseModel):

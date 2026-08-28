@@ -412,7 +412,7 @@ def test_successful_turn_resets_rephrase_flag(
     )
     monkeypatch.setattr(
         "backend.chat.handlers.rag.async_generate_answer",
-        _as_async(lambda *_a, **_kw: ("OK answer", 5, 10, 5, False)),
+        _as_async(lambda *_a, **_kw: ("OK answer", 5, 10, 5, False, False)),
     )
 
     session_id = uuid.uuid4()

@@ -403,7 +403,7 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 
 - Maximum **1 blocking clarifying question per conversation** (`CLARIFICATION_TURN_LIMIT`, default 1, configurable via env var). The budget resets when conversation rotation opens a new Chat row (see "Sessions, conversations, and history") — i.e. only after a long idle gap (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, 7 days) or `Start new chat`, not on a return within the widget session.
 - `chats.clarification_count` tracks how many blocking clarifications have been issued in the conversation.
-- Counter increments only on `Decision.clarify(type=blocking)`, atomically in the same DB transaction as the assistant message.
+- Counter increments only on `Decision.clarify(type=blocking)` whose reply actually ends in a question, atomically in the same DB transaction as the assistant message. The decision is made after generation, so a clarify turn the model answered instead of asking costs nothing — otherwise the budget ran out on questions the user was never asked.
 - Inline clarifications (`type=inline`, appended after a partial answer) are budget-free and never increment the counter.
 - When the budget is exhausted and the turn would otherwise produce a blocking clarify:
   - if medium-confidence chunks are available → `answer_with_caveat` (caveated answer, no follow-up question)

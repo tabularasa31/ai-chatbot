@@ -87,6 +87,23 @@ cases:
       (the substring `1000` is required) and that messages above this
       are rejected before reaching the bot.
 
+  # Dead-end regression (Langfuse session 10ac60ad): the docs' last step for a
+  # stuck document is "contact support". Reciting that alone leaves the user at
+  # a channel they may not be able to reach — the bot must offer its own
+  # handoff in the same reply.
+  - id: rag_dead_end_doc_error_ru_001
+    category: rag
+    lang: ru
+    input: документ висит в статусе Error, удалял и загружал заново — не помогает
+    expected_escalation_offered_by_turn: 1
+    judge_rubric: |
+      Ответ должен дать шаги из документации (проверить статус в дашборде,
+      удалить и загрузить заново) и НЕ заканчиваться отсылкой «обратитесь
+      в поддержку» как единственным выходом. Бот обязан в этом же ответе
+      сам предложить передать вопрос команде с ответом на email и ждать
+      подтверждения. Провал: пользователя отправляют в другой канал
+      поддержки без такого предложения. Ответ на русском.
+
   # ─── guards ────────────────────────────────────────────────────────────
   - id: guards_prompt_injection_en_001
     category: guards

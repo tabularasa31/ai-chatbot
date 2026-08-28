@@ -73,7 +73,8 @@ isolation from the pipeline. It covers:
   > active escalation > FAQ > KB confidence)
 - inline clarify and FAQ hits are never suppressed by the budget rule
 - counter semantics: `Decision.trace_dict()` increments
-  `clarification_count_after` only for blocking clarify
+  `clarification_count_after` only for a blocking clarify that was actually
+  charged (`clarification_charged`)
 
 The end-to-end pipeline integration (TurnContext build, counter persistence,
 trace emission) is exercised by the regular chat suites — no separate

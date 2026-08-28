@@ -19,6 +19,7 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
+from backend.chat.decision import requires_blocking_clarify
 from backend.chat.language import (
     _language_root,
     async_localize_text_to_language_result,
@@ -29,10 +30,10 @@ from backend.chat.prompts import build_rag_messages
 from backend.chat.streaming import (
     LanguageGateStreamFilter,
     LanguageMismatchStreamAbortError,
-    OfferMarkerStreamFilter,
+    MarkerStreamFilter,
     ThoughtStreamFilter,
-    _scrub_offer_marker_literal,
-    _strip_and_detect_offer_marker,
+    _scrub_marker_literals,
+    _strip_and_detect_markers,
     _strip_inline_citations,
     _strip_thought_tags,
     _thought_truncated,
@@ -292,6 +293,7 @@ async def _async_generate_answer_native(
     agent_instructions: str | None = None,
     low_context: bool = False,
     allow_clarification: bool = True,
+    require_clarification: str | None = None,
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
@@ -299,7 +301,7 @@ async def _async_generate_answer_native(
     metrics_tenant_id: str | None = None,
     metrics_bot_id: str | None = None,
     prior_messages: list[dict[str, str]] | None = None,
-) -> tuple[str, int, int, int, bool]:
+) -> tuple[str, int, int, int, bool, bool]:
     """Native async LLM answer generation.
 
     Uses ``AsyncOpenAI`` + ``async_call_openai_with_retry``. The stream loop is
@@ -316,7 +318,7 @@ async def _async_generate_answer_native(
             target_language=response_language,
             api_key=api_key,
         )
-        return (result.text, 0, 0, 0, False)
+        return (result.text, 0, 0, 0, False, False)
 
     system_prompt, user_message = build_rag_messages(
         question,
@@ -331,6 +333,7 @@ async def _async_generate_answer_native(
         agent_instructions=agent_instructions,
         low_context=low_context,
         allow_clarification=allow_clarification,
+        require_clarification=require_clarification,
     )
     messages = _assemble_chat_messages(
         system_prompt=system_prompt,
@@ -408,8 +411,8 @@ async def _async_generate_answer_native(
             )
             chunks: list[str] = []
             total_tokens = 0
-            _offer_filter = OfferMarkerStreamFilter(stream_callback)
-            _filter = ThoughtStreamFilter(_offer_filter.feed, on_phase_change=status_callback)
+            _marker_filter = MarkerStreamFilter(stream_callback)
+            _filter = ThoughtStreamFilter(_marker_filter.feed, on_phase_change=status_callback)
             try:
                 async for chunk in stream:
                     if isinstance(getattr(chunk, "model", None), str):
@@ -429,7 +432,7 @@ async def _async_generate_answer_native(
                         chunks.append(delta)
                         _filter.feed(delta)
                 _filter.flush_end()
-                _offer_filter.flush_end()
+                _marker_filter.flush_end()
             except LanguageMismatchStreamAbortError:
                 # The language gate rejected the streamed head before anything
                 # reached the client. Stop consuming OpenAI tokens immediately;
@@ -466,16 +469,18 @@ async def _async_generate_answer_native(
                 cached_tokens_raw = _usage_cached_tokens(response.usage)
             if response.choices:
                 finish_reason = getattr(response.choices[0], "finish_reason", None)
-        # Language-agnostic ticket-offer signal: the LLM appends
-        # OFFER_MARKER when (and only when) it ends its reply with a
-        # support-ticket offer. Detect once on the post-thought-strip text;
-        # the boolean is surfaced through the return tuple so
-        # _handle_sync can arm escalation_pre_confirm_pending without
-        # natural-language pattern matching. The follow-up scrub removes
-        # any mid-text occurrence (against prompt contract) so the literal
-        # never reaches the UI even when detection itself stayed False.
-        answer_text, offered_ticket = _strip_and_detect_offer_marker(answer_text)
-        answer_text = _scrub_offer_marker_literal(answer_text)
+        # Language-agnostic control signals: the LLM appends OFFER_MARKER when
+        # it ends its reply with a support-ticket offer, and HANDOFF_MARKER
+        # when the only way forward its reply can offer is reaching a human.
+        # Detect once on the post-thought-strip text; the booleans are surfaced
+        # through the return tuple so _handle_sync can arm
+        # escalation_pre_confirm_pending (and, for the handoff marker, append
+        # the offer itself) without natural-language pattern matching. The
+        # follow-up scrub removes any mid-text occurrence (against prompt
+        # contract) so a literal never reaches the UI even when detection
+        # itself stayed False.
+        answer_text, offered_ticket, needs_human = _strip_and_detect_markers(answer_text)
+        answer_text = _scrub_marker_literals(answer_text)
         log_llm_tokens(
             operation="generate",
             target_language=response_language,
@@ -549,7 +554,7 @@ async def _async_generate_answer_native(
             _output_tokens += extra_tokens
         else:
             final_text = answer_text.strip()
-        return (final_text, total_tokens, _input_tokens, _output_tokens, offered_ticket)
+        return (final_text, total_tokens, _input_tokens, _output_tokens, offered_ticket, needs_human)
     except LanguageMismatchStreamAbortError as abort_exc:
         # Not an error: the language gate aborted the stream early so the
         # caller can regenerate in the expected language. End the observation
@@ -585,7 +590,7 @@ async def async_generate_answer(
     question: str,
     context_chunks: list[str],
     **kwargs: Any,
-) -> tuple[str, int, int, int, bool]:
+) -> tuple[str, int, int, int, bool, bool]:
     """Generation entry point and the test seam for the LLM hop.
 
     Kept as a thin wrapper (rather than exposing the native function
@@ -659,6 +664,18 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         )
         _gated_stream_callback = _gate.feed
 
+    # decide() only runs after generation, so its blocking-clarify verdict used
+    # to be descriptive: the model saw nothing but the general clarification
+    # policy and regularly answered every reading of an ambiguous question
+    # instead of asking which one applied. Deriving the same verdict from the
+    # retrieval signals here makes it an instruction for this turn.
+    _require_clarification = requires_blocking_clarify(
+        retrieval=retrieval,
+        clarification_budget_available=run.allow_clarification,
+    )
+    if trace is not None:
+        trace.update(metadata={"require_clarification": _require_clarification})
+
     _generate_kwargs: dict[str, Any] = dict(
         api_key=run.api_key,
         user_context_line=run.user_context_line,
@@ -670,6 +687,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         agent_instructions=run.agent_instructions,
         low_context=not state.reranker_rescued and retrieval.reliability.score == "low",
         allow_clarification=run.allow_clarification,
+        require_clarification=_require_clarification,
         trace=trace,
         retry_bot_id=run.retry_bot_id,
         status_callback=run.status_callback,
@@ -684,8 +702,16 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     _input_toks = 0
     _output_toks = 0
     llm_offered_ticket = False
+    llm_needs_human = False
     try:
-        raw_answer, tokens_used, _input_toks, _output_toks, llm_offered_ticket = await _rag.async_generate_answer(
+        (
+            raw_answer,
+            tokens_used,
+            _input_toks,
+            _output_toks,
+            llm_offered_ticket,
+            llm_needs_human,
+        ) = await _rag.async_generate_answer(
             run.question,
             retrieval.chunk_texts,
             response_language=language_context.response_language,
@@ -712,7 +738,14 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
                     "stream_aborted_early": True,
                 },
             )
-        retry_answer, retry_tokens, retry_in, retry_out, retry_offered_ticket = await _rag.async_generate_answer(
+        (
+            retry_answer,
+            retry_tokens,
+            retry_in,
+            retry_out,
+            retry_offered_ticket,
+            retry_needs_human,
+        ) = await _rag.async_generate_answer(
             run.question,
             retrieval.chunk_texts,
             response_language=_expected_lang,
@@ -729,6 +762,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         _input_toks += retry_in
         _output_toks += retry_out
         llm_offered_ticket = llm_offered_ticket or retry_offered_ticket
+        llm_needs_human = llm_needs_human or retry_needs_human
         _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
         record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)
         if lang_span is not None:
@@ -816,6 +850,8 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         escalation_recommended=escalate,
         escalation_trigger=esc_trigger,
         llm_offered_ticket=llm_offered_ticket,
+        llm_needs_human=llm_needs_human,
+        clarify_required_reason=_require_clarification,
         retrieval_ms=int(retrieval.retrieval_duration_ms),
         llm_ms=llm_ms,
         llm_lang_retry_ms=_lang_retry_ms,

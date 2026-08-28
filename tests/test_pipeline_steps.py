@@ -547,7 +547,7 @@ def test_run_generation_resolves_seam_via_rag_module(
         calls["question"] = question
         calls["chunks"] = chunks
         calls["response_language"] = kwargs.get("response_language")
-        return ("generated answer", 11, 5, 6, False)
+        return ("generated answer", 11, 5, 6, False, False)
 
     def _fake_should_escalate(*args, **kwargs):
         return (False, None)

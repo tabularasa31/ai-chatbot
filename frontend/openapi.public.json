@@ -1,0 +1,6481 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI Chatbot API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/documents": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "List Documents Route",
+        "description": "List documents for current user's tenant (protected JWT).",
+        "operationId": "list_documents_route_documents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Upload Document Route",
+        "description": "Upload a document (protected JWT, multipart/form-data).\n\nReturns 201 Created. Errors: 400 unsupported type/size, 404 no tenant, 422 parse error.",
+        "operationId": "upload_document_route_documents_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_document_route_documents_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/documents/sources": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "List Knowledge Sources Route",
+        "description": "List file documents and URL sources for the Knowledge page.",
+        "operationId": "list_knowledge_sources_route_documents_sources_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeSourcesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/documents/sources/url": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Create Url Source Route",
+        "description": "Create a new URL source and start indexing in the background.",
+        "operationId": "create_url_source_route_documents_sources_url_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UrlSourceCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UrlSourceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/documents/sources/{source_id}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get Url Source Route",
+        "description": "Return detail, recent crawl history, and indexed pages for one URL source.",
+        "operationId": "get_url_source_route_documents_sources__source_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UrlSourceDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Update Url Source Route",
+        "description": "Update editable URL source settings.",
+        "operationId": "update_url_source_route_documents_sources__source_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UrlSourceUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UrlSourceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Delete Url Source Route",
+        "description": "Delete a URL source and all indexed pages/chunks associated with it.",
+        "operationId": "delete_url_source_route_documents_sources__source_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/sources/{source_id}/refresh": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Refresh Url Source Route",
+        "description": "Trigger an immediate re-crawl for a URL source.",
+        "operationId": "refresh_url_source_route_documents_sources__source_id__refresh_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UrlSourceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/sources/{source_id}/pages/{document_id}": {
+      "delete": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Delete Source Page Route",
+        "description": "Delete one indexed page from a URL source and exclude it from future refreshes.",
+        "operationId": "delete_source_page_route_documents_sources__source_id__pages__document_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/health": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get Document Health Route",
+        "description": "Return stored health_status for a document (does not re-run the check).\n404 if health_status is null.",
+        "operationId": "get_document_health_route_documents__document_id__health_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentHealthStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}/health/run": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Run Document Health Check Route",
+        "description": "Run health check synchronously and return updated health_status.",
+        "operationId": "run_document_health_check_route_documents__document_id__health_run_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentHealthStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{document_id}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get Document Detail Route",
+        "description": "Get single document with full parsed_text for preview (protected JWT).\n404 if not found or not owner.",
+        "operationId": "get_document_detail_route_documents__document_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Delete Document Route",
+        "description": "Delete document (protected JWT).\n204 No Content. 404 if not found or not owner.",
+        "operationId": "delete_document_route_documents__document_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat",
+        "description": "Chat endpoint (PUBLIC \u2014 no JWT, uses X-API-Key).\n\nReturns RAG-generated answer with source documents.\nErrors: 401 (invalid/missing API key), 422 (invalid question), 503 (OpenAI unavailable).\n\nHonors the optional `Idempotency-Key` header: a retry within 24h replays\nthe original response instead of re-running the LLM pipeline.",
+        "operationId": "chat_chat_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Browser-Locale",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Browser-Locale"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatTurnResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/{session_id}/escalate": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Escalate",
+        "operationId": "chat_escalate_chat__session_id__escalate_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualEscalateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualEscalateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/sessions": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Sessions",
+        "description": "List all chat sessions for the authenticated tenant (inbox-style).\nJWT auth required. Returns sessions sorted by last_activity DESC.",
+        "operationId": "get_sessions_chat_sessions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSessionListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/chat/logs/session/{session_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get Session Logs Route",
+        "description": "Get full message log for a session (read-only).\nJWT auth required. Returns 404 if session not found or not owner.\n\nMessages are returned as stored \u2014 the original wording. Redaction is an\negress concern applied when text is sent to OpenAI or to a support inbox,\nnot to the tenant reading back their own conversations.",
+        "operationId": "get_session_logs_route_chat_logs_session__session_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessageLogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/messages/{message_id}/feedback": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Set Message Feedback",
+        "description": "Set feedback (up/down) and optional ideal_answer on an assistant message.\nJWT auth required. 400 if message is not assistant, 404 if not found or not owner.",
+        "operationId": "set_message_feedback_chat_messages__message_id__feedback_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageFeedbackResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/bad-answers": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List Bad Answers",
+        "description": "List assistant messages with feedback=down for the authenticated tenant.\nJWT auth required. Returns question (previous user msg), answer, ideal_answer.",
+        "operationId": "list_bad_answers_chat_bad_answers_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadAnswerListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/history/{session_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Get History",
+        "description": "Get chat history for a session (protected JWT).\n\nReturns 404 if session not found or not owner.",
+        "operationId": "get_history_chat_history__session_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/escalations": {
+      "get": {
+        "tags": [
+          "escalations"
+        ],
+        "summary": "List Escalations",
+        "operationId": "list_escalations_escalations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscalationListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/escalations/{ticket_id}": {
+      "get": {
+        "tags": [
+          "escalations"
+        ],
+        "summary": "Get Escalation",
+        "operationId": "get_escalation_escalations__ticket_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticket_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ticket Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscalationTicketOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/escalations/{ticket_id}/resolve": {
+      "post": {
+        "tags": [
+          "escalations"
+        ],
+        "summary": "Resolve Escalation",
+        "operationId": "resolve_escalation_escalations__ticket_id__resolve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticket_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ticket Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EscalationResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscalationTicketOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer": {
+      "get": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Get Gap Analyzer",
+        "operationId": "get_gap_analyzer_gap_analyzer_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "mode_a_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "active",
+                "dismissed",
+                "archived",
+                "all"
+              ],
+              "type": "string",
+              "default": "active",
+              "title": "Mode A Status"
+            }
+          },
+          {
+            "name": "mode_b_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "active",
+                "closed",
+                "dismissed",
+                "inactive",
+                "drafting",
+                "in_review",
+                "resolved",
+                "archived",
+                "all"
+              ],
+              "type": "string",
+              "default": "active",
+              "title": "Mode B Status"
+            }
+          },
+          {
+            "name": "mode_a_sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "coverage_asc",
+                "newest"
+              ],
+              "type": "string",
+              "default": "coverage_asc",
+              "title": "Mode A Sort"
+            }
+          },
+          {
+            "name": "mode_b_sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "signal_desc",
+                "coverage_asc",
+                "newest"
+              ],
+              "type": "string",
+              "default": "signal_desc",
+              "title": "Mode B Sort"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GapAnalyzerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer/summary": {
+      "get": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Get Gap Analyzer Summary",
+        "operationId": "get_gap_analyzer_summary_gap_analyzer_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GapSummaryOnlyResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/gap-analyzer/recalculate": {
+      "post": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Recalculate Gap Analyzer",
+        "operationId": "recalculate_gap_analyzer_gap_analyzer_recalculate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GapRunMode"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecalculateCommandResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer/{source}/{gap_id}/dismiss": {
+      "post": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Dismiss Gap",
+        "operationId": "dismiss_gap_gap_analyzer__source___gap_id__dismiss_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GapSource"
+            }
+          },
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GapDismissRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GapActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer/{source}/{gap_id}/reactivate": {
+      "post": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Reactivate Gap",
+        "operationId": "reactivate_gap_gap_analyzer__source___gap_id__reactivate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/GapSource"
+            }
+          },
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GapActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer/mode_a/{gap_id}/draft": {
+      "post": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Draft Mode A Gap",
+        "description": "Template-driven transient draft for Mode A docs-side gaps.\n\nMode B uses the LLM workflow under ``/gap-analyzer/mode_b/{gap_id}/*``.",
+        "operationId": "draft_mode_a_gap_gap_analyzer_mode_a__gap_id__draft_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GapDraftResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer/mode_b/{gap_id}/draft": {
+      "post": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Generate Mode B Draft",
+        "operationId": "generate_mode_b_draft_gap_analyzer_mode_b__gap_id__draft_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftPayload"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Get Mode B Draft",
+        "operationId": "get_mode_b_draft_gap_analyzer_mode_b__gap_id__draft_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftPayload"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Update Mode B Draft",
+        "operationId": "update_mode_b_draft_gap_analyzer_mode_b__gap_id__draft_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftPayload"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Discard Mode B Draft",
+        "operationId": "discard_mode_b_draft_gap_analyzer_mode_b__gap_id__draft_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscardDraftResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer/mode_b/{gap_id}/draft/refine": {
+      "post": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Refine Mode B Draft",
+        "operationId": "refine_mode_b_draft_gap_analyzer_mode_b__gap_id__draft_refine_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefineDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftPayload"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer/mode_b/{gap_id}/publish": {
+      "post": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Publish Mode B Draft",
+        "description": "Promote the persisted draft into ``tenant_faq``. Requires explicit admin click.\n\nThis is the ONLY endpoint that writes to the knowledge base \u2014 generate /\nrefine / save endpoints never touch ``tenant_faq``.",
+        "operationId": "publish_mode_b_draft_gap_analyzer_mode_b__gap_id__publish_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gap-analyzer/mode_b/{gap_id}/resolve": {
+      "post": {
+        "tags": [
+          "gap-analyzer"
+        ],
+        "summary": "Resolve Mode B Gap",
+        "operationId": "resolve_mode_b_gap_gap_analyzer_mode_b__gap_id__resolve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gap_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Gap Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GapActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/profile": {
+      "get": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Get Knowledge Profile",
+        "operationId": "get_knowledge_profile_api_v1_knowledge_profile_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeProfileResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Patch Knowledge Profile",
+        "operationId": "patch_knowledge_profile_api_v1_knowledge_profile_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeProfilePatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/knowledge/faq": {
+      "get": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "List Knowledge Faq",
+        "operationId": "list_knowledge_faq_api_v1_knowledge_faq_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "approved",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "true",
+                "false",
+                "all"
+              ],
+              "type": "string",
+              "default": "all",
+              "title": "Approved"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "docs",
+                "logs",
+                "swagger",
+                "gap_analyzer",
+                "all"
+              ],
+              "type": "string",
+              "default": "all",
+              "title": "Source"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeFaqListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/faq/approve-all": {
+      "post": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Approve All Faq",
+        "operationId": "approve_all_faq_api_v1_knowledge_faq_approve_all_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeFaqApproveAllResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/knowledge/faq/{faq_id}/approve": {
+      "post": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Approve Faq",
+        "operationId": "approve_faq_api_v1_knowledge_faq__faq_id__approve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "faq_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Faq Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeFaqApproveResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/faq/{faq_id}/reject": {
+      "post": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Reject Faq",
+        "operationId": "reject_faq_api_v1_knowledge_faq__faq_id__reject_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "faq_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Faq Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeFaqRejectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/faq/{faq_id}": {
+      "put": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Update Faq",
+        "operationId": "update_faq_api_v1_knowledge_faq__faq_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "faq_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Faq Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeFaqUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeFaqItemResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Delete Faq",
+        "operationId": "delete_faq_api_v1_knowledge_faq__faq_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "faq_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Faq Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeFaqRejectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/widget/health": {
+      "get": {
+        "tags": [
+          "widget"
+        ],
+        "summary": "Widget Health",
+        "description": "Health check for widget endpoints.",
+        "operationId": "widget_health_widget_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Widget Health Widget Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/widget/config": {
+      "get": {
+        "tags": [
+          "widget"
+        ],
+        "summary": "Widget Config",
+        "operationId": "widget_config_widget_config_get",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Bot public ID",
+              "title": "Bot Id"
+            },
+            "description": "Bot public ID"
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Browser locale hint (e.g. ru-RU)",
+              "title": "Locale"
+            },
+            "description": "Browser locale hint (e.g. ru-RU)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/widget/session/init": {
+      "post": {
+        "tags": [
+          "widget"
+        ],
+        "summary": "Widget Session Init",
+        "description": "Start a widget session. Optional `user_hints` attaches untrusted\npersonalization fields (name/email/locale/...) supplied by the tenant\nfrontend; sessions still work without them.",
+        "operationId": "widget_session_init_widget_session_init_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WidgetSessionInitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetSessionInitResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/widget/chat": {
+      "post": {
+        "tags": [
+          "widget"
+        ],
+        "summary": "Widget Chat",
+        "description": "PUBLIC endpoint for embedded widget.\nNo authentication required (bot public_id = permission).",
+        "operationId": "widget_chat_widget_chat_post",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Bot public ID",
+              "title": "Bot Id"
+            },
+            "description": "Bot public ID"
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional session ID",
+              "title": "Session Id"
+            },
+            "description": "Optional session ID"
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Browser locale hint (e.g. ru-RU)",
+              "title": "Locale"
+            },
+            "description": "Browser locale hint (e.g. ru-RU)"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WidgetChatRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Server-sent events stream (`text/event-stream`). Each frame is `type: 'chunk'` (incremental text) or `type: 'done'`; the `done` frame's payload conforms to `WidgetChatTurnResponse`.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetChatTurnResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/widget/history": {
+      "get": {
+        "tags": [
+          "widget"
+        ],
+        "summary": "Widget History",
+        "description": "Return message history for a widget session (public, no auth).",
+        "operationId": "widget_history_widget_history_get",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Bot public ID",
+              "title": "Bot Id"
+            },
+            "description": "Bot public ID"
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Chat session UUID",
+              "title": "Session Id"
+            },
+            "description": "Chat session UUID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/widget/escalate": {
+      "post": {
+        "tags": [
+          "widget"
+        ],
+        "summary": "Widget Escalate",
+        "description": "Manual escalation for embedded widget (bot public_id + session).",
+        "operationId": "widget_escalate_widget_escalate_post",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Bot public ID",
+              "title": "Bot Id"
+            },
+            "description": "Bot public ID"
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Chat session UUID",
+              "title": "Session Id"
+            },
+            "description": "Chat session UUID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualEscalateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualEscalateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "description": "Health/readiness endpoint.\n\n- Redis unset \u2192 `200 {status: ok, redis: disabled}` (single-worker dev).\n- Redis configured and reachable \u2192 `200 {status: ok, redis: ok}`.\n- Redis configured but unreachable \u2192 `503 {status: degraded, redis: unavailable}`.\n\nThe 503 is intentional: rate-limit storage is now Redis-backed\n(see `backend/core/limiter.py`), so when Redis is down the limiter raises\non every protected request and the instance can't reliably serve chat /\nauth / widget. Reporting unhealthy lets Railway pull the instance out of\nrotation instead of returning 500s to clients.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AuthResponse": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "expires_in",
+          "user"
+        ],
+        "title": "AuthResponse",
+        "description": "Response with JWT token and user info."
+      },
+      "BadAnswerItem": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Message Id"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "ideal_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ideal Answer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "session_id",
+          "question",
+          "answer",
+          "ideal_answer",
+          "created_at"
+        ],
+        "title": "BadAnswerItem"
+      },
+      "BadAnswerListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BadAnswerItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "BadAnswerListResponse"
+      },
+      "Body_upload_document_route_documents_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_document_route_documents_post"
+      },
+      "BotCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Instructions"
+          },
+          "website_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website Url"
+          },
+          "link_safety_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Safety Enabled"
+          },
+          "allowed_domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "BotCreate"
+      },
+      "BotList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BotResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "BotList"
+      },
+      "BotResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "public_id": {
+            "type": "string",
+            "title": "Public Id"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "link_safety_enabled": {
+            "type": "boolean",
+            "title": "Link Safety Enabled",
+            "default": false
+          },
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Domains"
+          },
+          "agent_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Instructions"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "name",
+          "public_id",
+          "is_active",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "BotResponse"
+      },
+      "BotUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "agent_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Instructions"
+          },
+          "link_safety_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Safety Enabled"
+          },
+          "allowed_domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Domains"
+          }
+        },
+        "type": "object",
+        "title": "BotUpdate"
+      },
+      "ChatHistoryResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "type": "array",
+            "title": "Messages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "messages"
+        ],
+        "title": "ChatHistoryResponse",
+        "description": "Chat history for a session."
+      },
+      "ChatMessageLogItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "feedback": {
+            "type": "string",
+            "enum": [
+              "none",
+              "up",
+              "down"
+            ],
+            "title": "Feedback"
+          },
+          "ideal_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ideal Answer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "chat_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "session_id",
+          "role",
+          "content",
+          "feedback",
+          "ideal_answer",
+          "created_at"
+        ],
+        "title": "ChatMessageLogItem",
+        "description": "Single message in chat logs (read-only)."
+      },
+      "ChatMessageLogResponse": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageLogItem"
+            },
+            "type": "array",
+            "title": "Messages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "messages"
+        ],
+        "title": "ChatMessageLogResponse",
+        "description": "Full message log for a session."
+      },
+      "ChatRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Question",
+            "description": "User question"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Optional session ID; auto-generated if not provided"
+          },
+          "bot_public_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot Public Id",
+            "description": "Optional bot to address. If omitted (or empty), the tenant's default bot is used. Must belong to the authenticated tenant and be active."
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "ChatRequest",
+        "description": "Request body for chat endpoint."
+      },
+      "ChatSessionListResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/ChatSessionSummaryResponse"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions"
+        ],
+        "title": "ChatSessionListResponse",
+        "description": "List of chat sessions for a client."
+      },
+      "ChatSessionSummaryResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "message_count": {
+            "type": "integer",
+            "title": "Message Count"
+          },
+          "last_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Question"
+          },
+          "last_answer_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Answer Preview"
+          },
+          "last_activity": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Activity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "message_count",
+          "last_activity"
+        ],
+        "title": "ChatSessionSummaryResponse",
+        "description": "Summary of a chat session for inbox list."
+      },
+      "ChatTurnResponse": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "chat_ended": {
+            "type": "boolean",
+            "title": "Chat Ended",
+            "default": false
+          },
+          "ticket_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticket Number"
+          },
+          "delivered_to_operator": {
+            "type": "boolean",
+            "title": "Delivered To Operator",
+            "default": false
+          },
+          "source_documents": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Documents"
+          },
+          "tokens_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Used"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "session_id"
+        ],
+        "title": "ChatTurnResponse",
+        "description": "Response for a single chat turn.\n\nReturned by `/chat` as JSON.\n\n``delivered_to_operator`` marks the muted path, exactly as on\n``WidgetChatTurnResponse``: a human operator holds the chat, so the\nmessage was recorded and handed on and ``text`` is empty by design.\nWithout it this contour \u2014 the X-API-Key one, used by custom server-side\nintegrations \u2014 has no way to tell \"a human is handling this\" from \"the\nturn broke\", since both look like ``{\"text\": \"\", ...}``. Defaults False,\nso existing callers are unaffected."
+      },
+      "DiscardDraftResponse": {
+        "properties": {
+          "gap_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Gap Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "closed",
+              "dismissed",
+              "inactive",
+              "drafting",
+              "in_review",
+              "resolved"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gap_id",
+          "status"
+        ],
+        "title": "DiscardDraftResponse"
+      },
+      "DisclosureConfigResponse": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "detailed",
+              "standard",
+              "corporate"
+            ],
+            "title": "Level"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level"
+        ],
+        "title": "DisclosureConfigResponse"
+      },
+      "DisclosureConfigUpdate": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "detailed",
+              "standard",
+              "corporate"
+            ],
+            "title": "Level"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level"
+        ],
+        "title": "DisclosureConfigUpdate"
+      },
+      "DocumentDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "file_type": {
+            "type": "string",
+            "title": "File Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "parsed_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parsed Text"
+          },
+          "parsed_text_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parsed Text Length"
+          },
+          "health_status": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "filename",
+          "file_type",
+          "status",
+          "created_at",
+          "updated_at",
+          "parsed_text"
+        ],
+        "title": "DocumentDetailResponse",
+        "description": "Document detail with full parsed_text for preview drawer."
+      },
+      "DocumentHealthStatusResponse": {
+        "properties": {
+          "score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "checked_at": {
+            "type": "string",
+            "title": "Checked At"
+          },
+          "warnings": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "checked_at",
+          "warnings"
+        ],
+        "title": "DocumentHealthStatusResponse",
+        "description": "Stored document health check result (from DB)."
+      },
+      "DocumentListResponse": {
+        "properties": {
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentResponse"
+            },
+            "type": "array",
+            "title": "Documents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "documents"
+        ],
+        "title": "DocumentListResponse",
+        "description": "List of documents in API responses."
+      },
+      "DocumentResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "file_type": {
+            "type": "string",
+            "title": "File Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "health_status": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "filename",
+          "file_type",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DocumentResponse",
+        "description": "Document data in API responses."
+      },
+      "DraftPayload": {
+        "properties": {
+          "gap_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Gap Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "markdown": {
+            "type": "string",
+            "title": "Markdown"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "draft_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Draft Updated At"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "closed",
+              "dismissed",
+              "inactive",
+              "drafting",
+              "in_review",
+              "resolved"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gap_id",
+          "title",
+          "question",
+          "markdown",
+          "language",
+          "draft_updated_at",
+          "status"
+        ],
+        "title": "DraftPayload",
+        "description": "Mode B draft state stored on gap_clusters.draft_* columns."
+      },
+      "EscalationListResponse": {
+        "properties": {
+          "tickets": {
+            "items": {
+              "$ref": "#/components/schemas/EscalationTicketOut"
+            },
+            "type": "array",
+            "title": "Tickets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tickets"
+        ],
+        "title": "EscalationListResponse"
+      },
+      "EscalationResolveRequest": {
+        "properties": {
+          "resolution_text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Resolution Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resolution_text"
+        ],
+        "title": "EscalationResolveRequest"
+      },
+      "EscalationTicketOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "ticket_number": {
+            "type": "string",
+            "title": "Ticket Number"
+          },
+          "primary_question": {
+            "type": "string",
+            "title": "Primary Question"
+          },
+          "conversation_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Summary"
+          },
+          "trigger": {
+            "type": "string",
+            "title": "Trigger"
+          },
+          "best_similarity_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Similarity Score"
+          },
+          "retrieved_chunks_preview": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieved Chunks Preview"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          },
+          "user_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Email"
+          },
+          "user_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Name"
+          },
+          "plan_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Tier"
+          },
+          "user_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Note"
+          },
+          "priority": {
+            "type": "string",
+            "title": "Priority"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "resolution_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Text"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "chat_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "ticket_number",
+          "primary_question",
+          "trigger",
+          "priority",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "EscalationTicketOut"
+      },
+      "ForgotPasswordRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "ForgotPasswordRequest",
+        "description": "Request body for forgot password."
+      },
+      "ForgotPasswordResponse": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "ForgotPasswordResponse",
+        "description": "Response for forgot password (always generic for security)."
+      },
+      "GapActionResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success",
+            "default": true
+          },
+          "source": {
+            "$ref": "#/components/schemas/GapSource"
+          },
+          "gap_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Gap Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "closed",
+              "dismissed",
+              "inactive",
+              "drafting",
+              "in_review",
+              "resolved"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "gap_id",
+          "status"
+        ],
+        "title": "GapActionResponse"
+      },
+      "GapAnalyzerResponse": {
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/GapSummaryResponse"
+          },
+          "mode_a_items": {
+            "items": {
+              "$ref": "#/components/schemas/GapItemResponse"
+            },
+            "type": "array",
+            "title": "Mode A Items"
+          },
+          "mode_b_items": {
+            "items": {
+              "$ref": "#/components/schemas/GapItemResponse"
+            },
+            "type": "array",
+            "title": "Mode B Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "summary",
+          "mode_a_items",
+          "mode_b_items"
+        ],
+        "title": "GapAnalyzerResponse"
+      },
+      "GapCommandStatus": {
+        "type": "string",
+        "enum": [
+          "accepted",
+          "in_progress",
+          "rate_limited"
+        ],
+        "title": "GapCommandStatus"
+      },
+      "GapDismissReason": {
+        "type": "string",
+        "enum": [
+          "feature_request",
+          "not_relevant",
+          "already_covered",
+          "other"
+        ],
+        "title": "GapDismissReason"
+      },
+      "GapDismissRequest": {
+        "properties": {
+          "reason": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GapDismissReason"
+              }
+            ],
+            "default": "other"
+          }
+        },
+        "type": "object",
+        "title": "GapDismissRequest"
+      },
+      "GapDraftResponse": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/GapSource"
+          },
+          "gap_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Gap Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "markdown": {
+            "type": "string",
+            "title": "Markdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "gap_id",
+          "title",
+          "markdown"
+        ],
+        "title": "GapDraftResponse"
+      },
+      "GapItemResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "source": {
+            "$ref": "#/components/schemas/GapSource"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "coverage_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Score"
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "uncovered",
+              "partial",
+              "covered",
+              "unknown"
+            ],
+            "title": "Classification",
+            "default": "unknown"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "closed",
+              "dismissed",
+              "inactive",
+              "drafting",
+              "in_review",
+              "resolved"
+            ],
+            "title": "Status"
+          },
+          "is_new": {
+            "type": "boolean",
+            "title": "Is New",
+            "default": false
+          },
+          "question_count": {
+            "type": "integer",
+            "title": "Question Count",
+            "default": 0
+          },
+          "aggregate_signal_weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggregate Signal Weight"
+          },
+          "example_questions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Example Questions",
+            "default": []
+          },
+          "linked_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GapSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "linked_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linked Label"
+          },
+          "linked_example_questions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Linked Example Questions",
+            "default": []
+          },
+          "also_missing_in_docs": {
+            "type": "boolean",
+            "title": "Also Missing In Docs",
+            "default": false
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          },
+          "has_draft": {
+            "type": "boolean",
+            "title": "Has Draft",
+            "default": false
+          },
+          "draft_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Updated At"
+          },
+          "published_faq_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Faq Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "label",
+          "status"
+        ],
+        "title": "GapItemResponse"
+      },
+      "GapRunMode": {
+        "type": "string",
+        "enum": [
+          "mode_a",
+          "mode_b",
+          "both"
+        ],
+        "title": "GapRunMode"
+      },
+      "GapSource": {
+        "type": "string",
+        "enum": [
+          "mode_a",
+          "mode_b"
+        ],
+        "title": "GapSource"
+      },
+      "GapSummaryOnlyResponse": {
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/GapSummaryResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "summary"
+        ],
+        "title": "GapSummaryOnlyResponse"
+      },
+      "GapSummaryResponse": {
+        "properties": {
+          "total_active": {
+            "type": "integer",
+            "title": "Total Active",
+            "default": 0
+          },
+          "uncovered_count": {
+            "type": "integer",
+            "title": "Uncovered Count",
+            "default": 0
+          },
+          "partial_count": {
+            "type": "integer",
+            "title": "Partial Count",
+            "default": 0
+          },
+          "impact_statement": {
+            "type": "string",
+            "title": "Impact Statement"
+          },
+          "new_badge_count": {
+            "type": "integer",
+            "title": "New Badge Count",
+            "default": 0
+          },
+          "last_updated": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Updated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "impact_statement"
+        ],
+        "title": "GapSummaryResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "InviteMemberRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "InviteMemberRequest",
+        "description": "Request body for inviting someone into the workspace.\n\nNo role: every invitee is an operator. The workspace's one owner is the\nperson who created it, and a role on this body would be a way to mint a\nsecond."
+      },
+      "InviteMemberResponse": {
+        "properties": {
+          "member": {
+            "$ref": "#/components/schemas/TenantMemberResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "member"
+        ],
+        "title": "InviteMemberResponse",
+        "description": "Result of an invite. A set-password link is always sent \u2014 the account\ncreated for the invitee has no usable password until they follow it."
+      },
+      "KnowledgeFaqApproveAllResponse": {
+        "properties": {
+          "approved_count": {
+            "type": "integer",
+            "title": "Approved Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "approved_count"
+        ],
+        "title": "KnowledgeFaqApproveAllResponse"
+      },
+      "KnowledgeFaqApproveResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "approved": {
+            "type": "boolean",
+            "title": "Approved"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "approved"
+        ],
+        "title": "KnowledgeFaqApproveResponse"
+      },
+      "KnowledgeFaqItemResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "approved": {
+            "type": "boolean",
+            "title": "Approved"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "gap_source_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Source Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "question",
+          "answer",
+          "confidence",
+          "source",
+          "approved",
+          "created_at"
+        ],
+        "title": "KnowledgeFaqItemResponse"
+      },
+      "KnowledgeFaqListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeFaqItemResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "pending_count": {
+            "type": "integer",
+            "title": "Pending Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "pending_count"
+        ],
+        "title": "KnowledgeFaqListResponse"
+      },
+      "KnowledgeFaqRejectResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "deleted"
+        ],
+        "title": "KnowledgeFaqRejectResponse"
+      },
+      "KnowledgeFaqUpdateRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question",
+          "answer"
+        ],
+        "title": "KnowledgeFaqUpdateRequest"
+      },
+      "KnowledgeProfilePatchRequest": {
+        "properties": {
+          "product_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Name"
+          },
+          "topics": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topics"
+          },
+          "glossary": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Glossary"
+          },
+          "support_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Email"
+          },
+          "support_urls": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Urls"
+          }
+        },
+        "type": "object",
+        "title": "KnowledgeProfilePatchRequest"
+      },
+      "KnowledgeProfileResponse": {
+        "properties": {
+          "product_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Name"
+          },
+          "topics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Topics"
+          },
+          "glossary": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Glossary"
+          },
+          "support_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Email"
+          },
+          "support_urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Support Urls"
+          },
+          "aliases": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "extraction_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "done",
+              "failed"
+            ],
+            "title": "Extraction Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "product_name",
+          "support_email",
+          "updated_at",
+          "extraction_status"
+        ],
+        "title": "KnowledgeProfileResponse"
+      },
+      "KnowledgeSourcesResponse": {
+        "properties": {
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentResponse"
+            },
+            "type": "array",
+            "title": "Documents"
+          },
+          "url_sources": {
+            "items": {
+              "$ref": "#/components/schemas/UrlSourceResponse"
+            },
+            "type": "array",
+            "title": "Url Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "documents",
+          "url_sources"
+        ],
+        "title": "KnowledgeSourcesResponse"
+      },
+      "LoginRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "description": "Request body for user login."
+      },
+      "ManualEscalateRequest": {
+        "properties": {
+          "user_note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Note"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "user_request",
+              "answer_rejected",
+              "llm_unavailable"
+            ],
+            "title": "Trigger",
+            "default": "user_request"
+          },
+          "failure_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Type"
+          },
+          "original_user_message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original User Message"
+          }
+        },
+        "type": "object",
+        "title": "ManualEscalateRequest"
+      },
+      "ManualEscalateResponse": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "ticket_number": {
+            "type": "string",
+            "title": "Ticket Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message",
+          "ticket_number"
+        ],
+        "title": "ManualEscalateResponse"
+      },
+      "MessageFeedbackRequest": {
+        "properties": {
+          "feedback": {
+            "$ref": "#/components/schemas/MessageFeedbackValue"
+          },
+          "ideal_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ideal Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "feedback"
+        ],
+        "title": "MessageFeedbackRequest"
+      },
+      "MessageFeedbackResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "feedback": {
+            "$ref": "#/components/schemas/MessageFeedbackValue"
+          },
+          "ideal_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ideal Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "feedback",
+          "ideal_answer"
+        ],
+        "title": "MessageFeedbackResponse"
+      },
+      "MessageFeedbackValue": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down",
+          "none"
+        ],
+        "title": "MessageFeedbackValue"
+      },
+      "MessageResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "content",
+          "created_at"
+        ],
+        "title": "MessageResponse",
+        "description": "Single message in chat history."
+      },
+      "OperatorChatStateResponse": {
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Chat Id"
+          },
+          "operator_state": {
+            "type": "string",
+            "title": "Operator State"
+          },
+          "assigned_operator_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Operator Id"
+          },
+          "operator_joined_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Joined At"
+          },
+          "operator_released_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Released At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chat_id",
+          "operator_state"
+        ],
+        "title": "OperatorChatStateResponse",
+        "description": "Handoff state of one chat, returned by every operator write route."
+      },
+      "OperatorMessageRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "OperatorMessageRequest"
+      },
+      "OperatorMessageResponse": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Message Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "chat": {
+            "$ref": "#/components/schemas/OperatorChatStateResponse"
+          },
+          "chat_reopened": {
+            "type": "boolean",
+            "title": "Chat Reopened",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "created_at",
+          "chat"
+        ],
+        "title": "OperatorMessageResponse",
+        "description": "The persisted operator message plus the resulting chat state."
+      },
+      "PrivacyConfigResponse": {
+        "properties": {
+          "optional_entity_types": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "ID_DOC",
+                "IP",
+                "URL_TOKEN"
+              ]
+            },
+            "type": "array",
+            "title": "Optional Entity Types"
+          }
+        },
+        "type": "object",
+        "required": [
+          "optional_entity_types"
+        ],
+        "title": "PrivacyConfigResponse",
+        "description": "Tenant-wide regex redaction settings."
+      },
+      "PublishResult": {
+        "properties": {
+          "gap_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Gap Id"
+          },
+          "faq_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Faq Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "closed",
+              "dismissed",
+              "inactive",
+              "drafting",
+              "in_review",
+              "resolved"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gap_id",
+          "faq_id",
+          "status"
+        ],
+        "title": "PublishResult"
+      },
+      "QuickAnswerResponse": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "value",
+          "source_url",
+          "detected_at"
+        ],
+        "title": "QuickAnswerResponse"
+      },
+      "RecalculateCommandResult": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/GapRunMode"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GapCommandStatus"
+          },
+          "command_kind": {
+            "const": "orchestration",
+            "title": "Command Kind",
+            "default": "orchestration"
+          },
+          "http_status_code": {
+            "const": 202,
+            "title": "Http Status Code",
+            "default": 202
+          },
+          "accepted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "retry_after_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry After Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "mode",
+          "status"
+        ],
+        "title": "RecalculateCommandResult"
+      },
+      "RefineDraftRequest": {
+        "properties": {
+          "guidance": {
+            "type": "string",
+            "title": "Guidance"
+          }
+        },
+        "type": "object",
+        "required": [
+          "guidance"
+        ],
+        "title": "RefineDraftRequest"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "RegisterRequest",
+        "description": "Request body for user registration."
+      },
+      "RegisterResponse": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user"
+        ],
+        "title": "RegisterResponse",
+        "description": "Response for registration (no token \u2014 issued only after email verification)."
+      },
+      "ResetPasswordRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "new_password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "New Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "title": "ResetPasswordRequest",
+        "description": "Request body for password reset."
+      },
+      "ResetPasswordResponse": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "ResetPasswordResponse",
+        "description": "Response for password reset."
+      },
+      "RotateTenantApiKeyRequest": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "leaked",
+              "scheduled",
+              "compromise",
+              "other"
+            ],
+            "title": "Reason",
+            "default": "scheduled"
+          },
+          "revoke_old_immediately": {
+            "type": "boolean",
+            "title": "Revoke Old Immediately",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "RotateTenantApiKeyRequest"
+      },
+      "RotateTenantApiKeyResponse": {
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          },
+          "key": {
+            "$ref": "#/components/schemas/TenantApiKeyResponse"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "Store this key securely. It will not be shown again."
+          }
+        },
+        "type": "object",
+        "required": [
+          "api_key",
+          "key"
+        ],
+        "title": "RotateTenantApiKeyResponse",
+        "description": "One-time plaintext key surfaced after a successful rotation."
+      },
+      "SourcePageResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "chunk_count": {
+            "type": "integer",
+            "title": "Chunk Count"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "url",
+          "chunk_count",
+          "updated_at"
+        ],
+        "title": "SourcePageResponse"
+      },
+      "SupportSettingsResponse": {
+        "properties": {
+          "l2_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "L2 Email"
+          },
+          "escalation_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalation Language"
+          },
+          "fallback_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Email"
+          }
+        },
+        "type": "object",
+        "title": "SupportSettingsResponse",
+        "description": "Tenant-wide support inbox settings."
+      },
+      "TenantApiKeyListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TenantApiKeyResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "TenantApiKeyListResponse"
+      },
+      "TenantApiKeyResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "key_hint": {
+            "type": "string",
+            "title": "Key Hint"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoking",
+              "revoked"
+            ],
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "revoked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked Reason"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "key_hint",
+          "status",
+          "created_at"
+        ],
+        "title": "TenantApiKeyResponse",
+        "description": "A single tenant API key as exposed in the dashboard."
+      },
+      "TenantLlmAlertResponse": {
+        "properties": {
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          }
+        },
+        "type": "object",
+        "title": "TenantLlmAlertResponse",
+        "description": "Active LLM-failure alert for the tenant dashboard banner.\n\n`type` is `null` when no alert is active. Possible non-null values match\n`backend.chat.llm_unavailable.LlmFailureType` (currently\n`quota_exhausted` or `invalid_api_key` \u2014 only actionable failures\nraise an alert)."
+      },
+      "TenantMeResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "api_key_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Hint"
+          },
+          "public_id": {
+            "type": "string",
+            "title": "Public Id"
+          },
+          "has_openai_key": {
+            "type": "boolean",
+            "title": "Has Openai Key"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin"
+          },
+          "is_verified": {
+            "type": "boolean",
+            "title": "Is Verified"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "public_id",
+          "has_openai_key",
+          "created_at",
+          "updated_at",
+          "is_admin",
+          "is_verified",
+          "role"
+        ],
+        "title": "TenantMeResponse",
+        "description": "Extended client response for /clients/me with user context."
+      },
+      "TenantMemberListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TenantMemberResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "seats": {
+            "type": "integer",
+            "title": "Seats",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "TenantMemberListResponse",
+        "description": "All members of the current workspace, and what they are priced at."
+      },
+      "TenantMemberResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "pending"
+            ],
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "seat_granted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seat Granted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "role",
+          "status",
+          "created_at"
+        ],
+        "title": "TenantMemberResponse",
+        "description": "One row of the members screen."
+      },
+      "TenantResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "api_key_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Hint"
+          },
+          "public_id": {
+            "type": "string",
+            "title": "Public Id"
+          },
+          "has_openai_key": {
+            "type": "boolean",
+            "title": "Has Openai Key"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "public_id",
+          "has_openai_key",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TenantResponse",
+        "description": "Tenant data in API responses.\n\nThe widget API key is not returned here \u2014 it is only ever surfaced\nonce via /api-keys/rotate. Use ``api_key_hint`` (last 4 chars of the\nprimary active key) to identify the active key in the UI."
+      },
+      "UpdateDraftRequest": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Question"
+          },
+          "markdown": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Markdown"
+          },
+          "if_match": {
+            "type": "string",
+            "format": "date-time",
+            "title": "If Match"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "question",
+          "markdown",
+          "if_match"
+        ],
+        "title": "UpdateDraftRequest"
+      },
+      "UpdatePrivacyConfigRequest": {
+        "properties": {
+          "optional_entity_types": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "ID_DOC",
+                "IP",
+                "URL_TOKEN"
+              ]
+            },
+            "type": "array",
+            "title": "Optional Entity Types"
+          }
+        },
+        "type": "object",
+        "required": [
+          "optional_entity_types"
+        ],
+        "title": "UpdatePrivacyConfigRequest",
+        "description": "PUT body for /clients/me/privacy."
+      },
+      "UpdateSupportSettingsRequest": {
+        "properties": {
+          "l2_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "L2 Email"
+          },
+          "escalation_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalation Language"
+          }
+        },
+        "type": "object",
+        "title": "UpdateSupportSettingsRequest",
+        "description": "PUT body for /clients/me/support-settings."
+      },
+      "UpdateTenantRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "openai_api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openai Api Key"
+          }
+        },
+        "type": "object",
+        "title": "UpdateTenantRequest",
+        "description": "Request body for updating a client."
+      },
+      "UrlSourceCreateRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "format": "uri",
+            "title": "Url"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "schedule": {
+            "type": "string",
+            "enum": [
+              "daily",
+              "weekly",
+              "manual"
+            ],
+            "title": "Schedule",
+            "default": "weekly"
+          },
+          "exclusions": {
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Exclusions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "UrlSourceCreateRequest"
+      },
+      "UrlSourceDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "source_type": {
+            "const": "url",
+            "title": "Source Type",
+            "default": "url"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "schedule": {
+            "type": "string",
+            "enum": [
+              "daily",
+              "weekly",
+              "manual"
+            ],
+            "title": "Schedule"
+          },
+          "pages_found": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages Found"
+          },
+          "pages_indexed": {
+            "type": "integer",
+            "title": "Pages Indexed"
+          },
+          "chunks_created": {
+            "type": "integer",
+            "title": "Chunks Created"
+          },
+          "last_crawled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Crawled At"
+          },
+          "next_crawl_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Crawl At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "warning_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning Message"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "exclusion_patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclusion Patterns"
+          },
+          "recent_runs": {
+            "items": {
+              "$ref": "#/components/schemas/UrlSourceRunResponse"
+            },
+            "type": "array",
+            "title": "Recent Runs"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/SourcePageResponse"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "quick_answers": {
+            "items": {
+              "$ref": "#/components/schemas/QuickAnswerResponse"
+            },
+            "type": "array",
+            "title": "Quick Answers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "status",
+          "schedule",
+          "pages_indexed",
+          "chunks_created",
+          "created_at",
+          "updated_at",
+          "recent_runs",
+          "pages"
+        ],
+        "title": "UrlSourceDetailResponse"
+      },
+      "UrlSourceFailureResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "reason"
+        ],
+        "title": "UrlSourceFailureResponse"
+      },
+      "UrlSourceResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "source_type": {
+            "const": "url",
+            "title": "Source Type",
+            "default": "url"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "schedule": {
+            "type": "string",
+            "enum": [
+              "daily",
+              "weekly",
+              "manual"
+            ],
+            "title": "Schedule"
+          },
+          "pages_found": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages Found"
+          },
+          "pages_indexed": {
+            "type": "integer",
+            "title": "Pages Indexed"
+          },
+          "chunks_created": {
+            "type": "integer",
+            "title": "Chunks Created"
+          },
+          "last_crawled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Crawled At"
+          },
+          "next_crawl_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Crawl At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "warning_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning Message"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "exclusion_patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclusion Patterns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "status",
+          "schedule",
+          "pages_indexed",
+          "chunks_created",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "UrlSourceResponse"
+      },
+      "UrlSourceRunResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "pages_found": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages Found"
+          },
+          "pages_indexed": {
+            "type": "integer",
+            "title": "Pages Indexed"
+          },
+          "failed_urls": {
+            "items": {
+              "$ref": "#/components/schemas/UrlSourceFailureResponse"
+            },
+            "type": "array",
+            "title": "Failed Urls"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "pages_indexed",
+          "failed_urls",
+          "created_at"
+        ],
+        "title": "UrlSourceRunResponse"
+      },
+      "UrlSourceUpdateRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "daily",
+                  "weekly",
+                  "manual"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule"
+          },
+          "exclusions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusions"
+          }
+        },
+        "type": "object",
+        "title": "UrlSourceUpdateRequest"
+      },
+      "UserResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "created_at"
+        ],
+        "title": "UserResponse",
+        "description": "User data in API responses."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VerifyEmailRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "VerifyEmailRequest",
+        "description": "Request body for email verification."
+      },
+      "VerifyEmailResponse": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "expires_in",
+          "user"
+        ],
+        "title": "VerifyEmailResponse",
+        "description": "Response for email verification \u2014 includes JWT token."
+      },
+      "WidgetChatRequest": {
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locale"
+          }
+        },
+        "type": "object",
+        "title": "WidgetChatRequest"
+      },
+      "WidgetConfigResponse": {
+        "properties": {
+          "link_safety_enabled": {
+            "type": "boolean",
+            "title": "Link Safety Enabled",
+            "default": false
+          },
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Domains"
+          },
+          "link_safety_labels": {
+            "$ref": "#/components/schemas/WidgetLinkSafetyLabels"
+          }
+        },
+        "type": "object",
+        "required": [
+          "link_safety_labels"
+        ],
+        "title": "WidgetConfigResponse"
+      },
+      "WidgetHistoryMessage": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "WidgetHistoryMessage"
+      },
+      "WidgetHistoryResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/WidgetHistoryMessage"
+            },
+            "type": "array",
+            "title": "Messages"
+          },
+          "chat_ended": {
+            "type": "boolean",
+            "title": "Chat Ended"
+          },
+          "ticket_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticket Number"
+          },
+          "boundary_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Boundary Indices",
+            "default": []
+          },
+          "conversation_rotated": {
+            "type": "boolean",
+            "title": "Conversation Rotated",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "messages",
+          "chat_ended"
+        ],
+        "title": "WidgetHistoryResponse"
+      },
+      "WidgetLinkSafetyLabels": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "continue_label": {
+            "type": "string",
+            "title": "Continue Label"
+          },
+          "cancel_label": {
+            "type": "string",
+            "title": "Cancel Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "body",
+          "continue_label",
+          "cancel_label"
+        ],
+        "title": "WidgetLinkSafetyLabels"
+      },
+      "WidgetSessionInitRequest": {
+        "properties": {
+          "bot_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Bot Id"
+          },
+          "user_hints": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Hints"
+          },
+          "locale": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locale"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bot_id"
+        ],
+        "title": "WidgetSessionInitRequest"
+      },
+      "WidgetSessionInitResponse": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "hints",
+              "anonymous"
+            ],
+            "title": "Mode"
+          },
+          "resumed": {
+            "type": "boolean",
+            "title": "Resumed",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "mode"
+        ],
+        "title": "WidgetSessionInitResponse"
+      },
+      "WidgetChatTurnResponse": {
+        "$defs": {
+          "LlmFailureState": {
+            "description": "Widget-facing failure descriptor.\n\nEmitted in the SSE ``done`` event alongside the localized fallback ``text``.\nOld widgets that ignore this field still render the text \u2014 backward-compat\nrequirement (AC5).",
+            "properties": {
+              "type": {
+                "$ref": "#/components/schemas/LlmFailureType"
+              },
+              "retryable": {
+                "title": "Retryable",
+                "type": "boolean"
+              },
+              "can_escalate": {
+                "default": true,
+                "title": "Can Escalate",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type",
+              "retryable"
+            ],
+            "title": "LlmFailureState",
+            "type": "object"
+          },
+          "LlmFailureType": {
+            "enum": [
+              "provider_unavailable",
+              "provider_timeout",
+              "rate_limited",
+              "quota_exhausted",
+              "invalid_api_key",
+              "unknown_llm_error"
+            ],
+            "title": "LlmFailureType",
+            "type": "string"
+          }
+        },
+        "description": "Widget `done` event payload for `/widget/chat` SSE responses.\n\n``outcome`` and ``failure_state`` are populated only for the degraded\nLLM-unavailable path. Old widgets that ignore them still render ``text``\n(backward-compat \u2014 AC5 of LLM Unavailable spec).\n\n``delivered_to_operator`` marks the muted path: a human operator holds the\nchat, so the visitor's message was recorded and handed on and ``text`` is\nempty by design. Old widgets that ignore the flag see an empty ``text``\nand render nothing, which is the correct behaviour anyway.",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          },
+          "chat_ended": {
+            "default": false,
+            "title": "Chat Ended",
+            "type": "boolean"
+          },
+          "ticket_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ticket Number"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "const": "llm_unavailable"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outcome"
+          },
+          "failure_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmFailureState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "delivered_to_operator": {
+            "default": false,
+            "title": "Delivered To Operator",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "session_id"
+        ],
+        "title": "WidgetChatTurnResponse",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "tags": [],
+  "servers": [
+    {
+      "url": "https://api.getchat9.live"
+    }
+  ]
+}

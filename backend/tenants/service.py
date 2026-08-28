@@ -13,6 +13,11 @@ from backend.core.crypto import encrypt_value
 from backend.core.rls import set_tenant_context
 from backend.models import Bot, Tenant, TenantProfile, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
+from backend.seats.events import (
+    RELEASE_WORKSPACE_DELETED,
+    capture_seat_released,
+    emit_seat_change,
+)
 from backend.seats.service import release_seat
 from backend.support_config import public_support_config_dict, with_support_config
 from backend.tenants.api_keys_service import (
@@ -281,9 +286,27 @@ def delete_tenant(
     # is scoped to this tenant and cascades away with it, so there is no
     # surviving history left to sign.
     members = db.query(User).filter(User.tenant_id == tenant_id).all()
+    # Every seat in the workspace comes back here too. Described before the
+    # deletes, for the same reason as in ``remove_member``: the seat and the
+    # operator stretches that say whether its holder ever answered are both
+    # unreadable once the rows are gone. Skipping this would leave the
+    # workspace's seats permanently outstanding in analytics — a whole tenant
+    # churning while its seat count never returns to zero.
+    # Interleaved, and flushed each time round, rather than described in one
+    # pass first: the seat count each event reports is the count once that
+    # release lands, so the deletes have to accumulate between them — and the
+    # session runs with ``autoflush=False``, so nothing accumulates unasked.
+    # Otherwise every member of a five-person workspace would report four
+    # remaining seats and the count would never reach zero.
+    released = []
     for member in members:
+        released.append(
+            capture_seat_released(db, user=member, reason=RELEASE_WORKSPACE_DELETED)
+        )
         db.delete(member)
-    db.flush()
+        db.flush()
     db.delete(tenant)
     db.commit()
     invalidate_tenant(tenant_id)
+    for change in released:
+        emit_seat_change(change)

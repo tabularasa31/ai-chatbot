@@ -118,6 +118,7 @@ def build_rag_prompt(
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
     low_context: bool = False,
+    strong_context: bool = False,
     allow_clarification: bool = True,
 ) -> str:
     """
@@ -154,7 +155,7 @@ def build_rag_prompt(
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
         "- When the documentation does not cover the question, say so honestly and offer to open a support ticket so the team can follow up by email — for example: \"I don't have that in the documentation. Want me to open a support ticket so the team can email you back?\". Wait for the user to confirm; the backend detects their agreement and routes the escalation. Never deflect with vague phrasing such as \"reach out to the support team\" without offering this explicit ticket. Phrase the offer in the user's language.\n"
-        "- Only make that ticket offer when you genuinely cannot resolve the question yourself from the provided context. When you HAVE fully answered the question from the documentation, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one. EXCEPTION: when the only resolution your answer can give is to reach a human or a tenant-side support channel (a panel/dashboard chat, a ticket form, a phone number, an external support email), you have NOT resolved it yourself — you MUST then make the handoff offer described in the next rule, even though you produced an answer.\n"
+        "- Only make that ticket offer when you genuinely cannot resolve the question yourself from the provided context. When you HAVE fully answered the question from the documentation, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one. A definitive negative answer counts as resolved: when the context shows that a capability, integration, or option is unsupported, out of scope, or listed as a current limitation, state that plainly as the answer and stop — the absence of a dedicated documentation section on the topic is not by itself a reason to offer a ticket. The same holds when the context answers what the user actually asked even though it does not use their wording. EXCEPTION: when the only resolution your answer can give is to reach a human or a tenant-side support channel (a panel/dashboard chat, a ticket form, a phone number, an external support email), you have NOT resolved it yourself — you MUST then make the handoff offer described in the next rule, even though you produced an answer.\n"
         "- When your reply tells the user to contact human support through a tenant-side channel (a panel/dashboard chat, a ticket form, a phone number, an external support email), keep that information, but in the SAME reply ALSO offer your own handoff, phrased as a simple yes/no question the user only has to confirm: offer to forward their request to the team so they get a reply by email, and ask them to confirm. Focus on the user's intent rather than exact wording; the following example is illustrative and non-exhaustive: \"…or I can forward your request to the team and they'll reply to your email — want me to do that?\". The backend forwards the user's earlier question on a \"yes\", so do NOT ask the user to re-type their question here — that would clear the handoff. Treat this as a ticket offer for the marker rule below. Phrase it in the user's language.\n"
         "- Keep answers concise and focused on the user's intent: typically 2-4 short paragraphs (around 200 words). Use bullet lists for multi-step instructions. Expand only when the user explicitly asks for more depth.\n"
         # NOTE: the marker bullet must stay the LAST bullet in Rules:. Inserting
@@ -260,6 +261,14 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
         per_request_parts.append(user_context_line)
     if clarification_rules:
         per_request_parts.append(clarification_rules)
+    if strong_context:
+        per_request_parts.append(
+            "CONTEXT MATCH (this turn): retrieval returned a relevant match for this "
+            "question, by the same confidence bar the backend uses to decide whether a "
+            "handoff is needed. Answer from the context below and do NOT offer to open a "
+            "support ticket, unless the context genuinely does not contain what the user "
+            "asked for or the tenant-side support-channel exception applies."
+        )
     if low_context:
         per_request_parts.append(
             "IMPORTANT: The retrieved context has low relevance to this question. "
@@ -302,6 +311,7 @@ def build_rag_messages(
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
     low_context: bool = False,
+    strong_context: bool = False,
     allow_clarification: bool = True,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
@@ -317,6 +327,7 @@ def build_rag_messages(
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
         low_context=low_context,
+        strong_context=strong_context,
         allow_clarification=allow_clarification,
     )
     if "\n\nContext:\n" not in prompt:

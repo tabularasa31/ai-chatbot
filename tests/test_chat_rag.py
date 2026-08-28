@@ -726,3 +726,26 @@ def test_generate_answer_adds_translation_tokens_to_total(
 
     assert answer == "Translated answer in English."
     assert tokens == 80 + 25
+
+
+def test_build_rag_prompt_negative_answer_counts_as_resolved() -> None:
+    """A documented limitation is an answer, not a reason to offer a ticket."""
+    prompt = build_rag_prompt("Q?", ["chunk"])
+    assert "A definitive negative answer counts as resolved" in prompt
+    assert "is not by itself a reason to offer a ticket" in prompt
+
+
+def test_build_rag_prompt_strong_context_suppresses_ticket_offer() -> None:
+    """strong_context adds the per-request line telling the model not to
+    volunteer a support ticket, and it lives in the user message so the cached
+    system prefix stays byte-identical."""
+    system_prompt, user_message = build_rag_messages(
+        "Q?", ["chunk"], strong_context=True
+    )
+    assert "CONTEXT MATCH (this turn)" in user_message
+    assert "do NOT offer to open a " in user_message
+    assert "CONTEXT MATCH (this turn)" not in system_prompt
+
+    baseline_system, baseline_user = build_rag_messages("Q?", ["chunk"])
+    assert "CONTEXT MATCH (this turn)" not in baseline_user
+    assert baseline_system == system_prompt

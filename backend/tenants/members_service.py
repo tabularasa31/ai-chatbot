@@ -433,9 +433,9 @@ def remove_member(
         )
     closed = release_chats_held_by(member, db)
     # Read before the delete, and it has to be: ``users.seat_granted_at`` goes
-    # with the row, and ``operator_sessions.operator_user_id`` is SET NULL, so
-    # after the commit every removed member would report a seat that never
-    # answered anybody — the exact churn signal the event exists to carry.
+    # with the row, and ``messages.operator_user_id`` is SET NULL, so after the
+    # commit every removed member would report a seat that never answered
+    # anybody — the exact churn signal the event exists to carry.
     released = capture_seat_released(db, user=member, reason=RELEASE_MEMBER_REMOVED)
     _stamp_attribution(member, db)
     db.delete(member)

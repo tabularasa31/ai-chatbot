@@ -13,11 +13,11 @@ read before it.** Same shape, and for the same reasons, as
 
 * reading before means the facts are still there to read. Two of them are
   destroyed by the very write being described — ``seat_granted_at`` is nulled
-  by a release, and the ``operator_sessions`` rows that answer "did they ever
-  reply" have their ``operator_user_id`` set to NULL when a removed member's
-  account is deleted. After the commit, ``answered`` would be ``False`` for
-  every departing member, which is precisely the churn signal these events
-  exist to carry;
+  by a release, and the ``messages`` rows that answer "did they ever reply"
+  have their ``operator_user_id`` set to NULL when a removed member's account
+  is deleted. After the commit, ``answered`` would be ``False`` for every
+  departing member, which is precisely the churn signal these events exist to
+  carry;
 * emitting after means the seat change is already durable. The emit touches
   no database and swallows everything, so telemetry cannot turn a completed
   removal into a 500 for the owner who asked for it.
@@ -49,7 +49,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from backend.models import OperatorSession, User
+from backend.models import Message, MessageRole, User
 from backend.models.base import _utcnow
 from backend.observability.metrics import capture_event
 
@@ -108,9 +108,16 @@ def _tenant_public_id(user: User) -> str | None:
 
     ``None`` when the person belongs to no workspace: ``users.tenant_id`` is
     nullable, and a seat outside a workspace is not a seat anybody is paying
-    for. It is also what keeps the founding-owner scrub in
-    ``tenants.service.create_tenant`` from ever reporting anything — see
-    :func:`capture_seat_released`.
+    for.
+
+    It is emphatically **not** what keeps the founding-owner scrub in
+    ``tenants.service.create_tenant`` quiet. That scrub runs *after*
+    ``user.tenant_id`` has been pointed at the new workspace, so this would
+    happily hand back the new workspace's id and the event would claim it
+    released a seat it never sold. The only thing keeping it quiet is that
+    nobody wrote the call — see :func:`capture_seat_released`, and
+    ``tests/test_seat_analytics.py`` for the test that fails if somebody adds
+    one for symmetry.
     """
     tenant = getattr(user, "tenant", None)
     public_id = getattr(tenant, "public_id", None)
@@ -146,25 +153,40 @@ def _seats_excluding(db: Session, *, tenant_id: uuid.UUID, user_id: uuid.UUID) -
 
 
 def _ever_answered(db: Session, *, user_id: uuid.UUID, since: datetime) -> bool:
-    """Did this person reply to anybody since they took this seat?
+    """Did this person write a reply to anybody since they took this seat?
 
-    ``operator_sessions.first_reply_at`` is the stamp of the first human reply
-    of a stretch, so a stretch carrying one is proof that a real answer
-    reached a real visitor. Bounded below by ``since`` — the moment this seat
-    was granted — because a seat given back and taken again is a new seat, and
-    an answer from the previous holding is not evidence about this one.
+    Over ``messages``, and deliberately not over ``operator_sessions``, which
+    would be the smaller read and is where ``operator_session_ended`` gets its
+    own ``answered``. A stretch's ``operator_user_id`` is whoever *opened* it —
+    stamped once by ``open_operator_session`` and never re-stamped, because two
+    colleagues working one thread are one stretch with one clock, and
+    ``record_operator_reply`` sets only ``first_reply_at``. So the opener and
+    the replier can be two different people, and asking that table who answered
+    would credit the reply to the colleague who took the chat and never wrote a
+    word, while reporting the one who actually answered as a seat that produced
+    nothing. Both errors at once, silently, in exactly the multi-operator
+    workspace this property exists to measure.
 
-    ``operator_sessions.operator_user_id`` carries no index, so this is a scan
-    of a small table. It runs when a seat is released, which is an
-    administrative action nobody performs in a loop, and never on the reply
-    path.
+    ``messages.operator_user_id`` is per-reply attribution, written on every
+    operator ingest, so it answers about the person rather than about the
+    stretch. NULL there means an unattributed reply — phase 1 accepts an
+    inbound e-mail whose From address matches no user — and an answer nobody
+    can be credited for is not evidence about anybody's seat.
+
+    Bounded below by ``since``, the moment this seat was granted: a seat given
+    back and taken again is a new seat, and an answer from the previous holding
+    says nothing about this one.
+
+    That column carries no index, so this is a scan. It runs when a seat is
+    released — an administrative action nobody performs in a loop — and never
+    on the reply path.
     """
     return (
-        db.query(OperatorSession.id)
+        db.query(Message.id)
         .filter(
-            OperatorSession.operator_user_id == user_id,
-            OperatorSession.first_reply_at.isnot(None),
-            OperatorSession.first_reply_at >= since,
+            Message.role == MessageRole.operator,
+            Message.operator_user_id == user_id,
+            Message.created_at >= since,
         )
         .first()
         is not None

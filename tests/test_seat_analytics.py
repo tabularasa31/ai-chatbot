@@ -30,9 +30,17 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Chat, OperatorSession, OperatorState, Tenant, User
+from backend.models import (
+    Chat,
+    Message,
+    MessageRole,
+    OperatorSession,
+    OperatorState,
+    Tenant,
+    User,
+)
 from backend.models.base import _utcnow
-from tests.test_seats import _make_workspace, _onboard
+from tests.test_seats import _auth, _make_chat, _make_workspace, _onboard
 
 GRANTED = "seat_granted"
 RELEASED = "seat_released"
@@ -64,14 +72,21 @@ def _public_id(db: Session, tenant_id: uuid.UUID) -> str:
     return str(db.query(Tenant).filter(Tenant.id == tenant_id).one().public_id)
 
 
-def _stretch(
+def _operator_reply(
     db: Session,
     *,
     tenant_id: uuid.UUID,
     operator_user_id: uuid.UUID,
-    first_reply_at,
-) -> OperatorSession:
-    """A finished operator-served stretch, with or without a reply in it."""
+    at,
+) -> Message:
+    """One answer a person actually wrote, in a conversation of its own.
+
+    A ``messages`` row rather than an ``operator_sessions`` one, because that
+    is where the reply is attributed to its author — see
+    ``seats.events._ever_answered``. The surrounding stretch is written too, as
+    the real ingest path would, so the fixture is not quietly simpler than
+    production.
+    """
     chat = Chat(
         tenant_id=tenant_id,
         session_id=uuid.uuid4(),
@@ -79,17 +94,26 @@ def _stretch(
     )
     db.add(chat)
     db.flush()
-    stretch = OperatorSession(
-        tenant_id=tenant_id,
-        chat_id=chat.id,
-        operator_user_id=operator_user_id,
-        joined_at=_utcnow(),
-        first_reply_at=first_reply_at,
-        ended_at=_utcnow(),
+    db.add(
+        OperatorSession(
+            tenant_id=tenant_id,
+            chat_id=chat.id,
+            operator_user_id=operator_user_id,
+            joined_at=at,
+            first_reply_at=at,
+            ended_at=_utcnow(),
+        )
     )
-    db.add(stretch)
+    reply = Message(
+        chat_id=chat.id,
+        role=MessageRole.operator,
+        content="Hello, this is a human.",
+        operator_user_id=operator_user_id,
+        created_at=at,
+    )
+    db.add(reply)
     db.commit()
-    return stretch
+    return reply
 
 
 # ---------------------------------------------------------------------------
@@ -170,24 +194,31 @@ def test_an_invitation_nobody_accepts_reports_nothing(
 def test_giving_up_your_own_seat_reports_the_release(
     tenant: TestClient, db_session: Session, seat_events: list[dict]
 ) -> None:
-    """How long it was held and whether it ever produced an answer."""
+    """How long it was held and whether it ever produced an answer.
+
+    The seat is backdated so both duration properties are pinned to a real
+    value rather than to whatever the test took to run.
+    """
     ws = _make_workspace(tenant, db_session, email="gives-up@example.com")
     tenant.put("/tenants/members/me/seat", headers=ws.auth)
+    owner = db_session.query(User).filter(User.id == ws.owner_id).one()
+    owner.seat_granted_at = _utcnow() - timedelta(days=3, hours=2)
+    db_session.commit()
     seat_events.clear()
 
     assert tenant.delete("/tenants/members/me/seat", headers=ws.auth).status_code == 200
 
-    event = _one(seat_events, RELEASED)
-    assert event["properties"] == {
+    props = _one(seat_events, RELEASED)["properties"]
+    assert props == {
         "holder": "owner",
         "user_id": str(ws.owner_id),
         "seats": 0,
-        "held_ms": event["properties"]["held_ms"],
-        "held_days": 0,
+        "held_ms": props["held_ms"],
+        "held_days": 3,
         "answered": False,
         "reason": "given_up",
     }
-    assert event["properties"]["held_ms"] >= 0
+    assert 3 * 86_400_000 <= props["held_ms"] < 4 * 86_400_000
 
 
 def test_giving_up_a_seat_you_do_not_hold_reports_nothing(
@@ -214,12 +245,16 @@ def test_removing_a_member_reports_the_release(
     removed = tenant.delete(f"/tenants/members/{member.id}", headers=ws.auth)
 
     assert removed.status_code == 204, removed.text
-    event = _one(seat_events, RELEASED)
-    assert event["properties"]["holder"] == "member"
-    assert event["properties"]["user_id"] == member_id
-    assert event["properties"]["reason"] == "member_removed"
-    assert event["properties"]["seats"] == 0
-    assert event["properties"]["answered"] is False
+    props = _one(seat_events, RELEASED)["properties"]
+    assert props == {
+        "holder": "member",
+        "user_id": member_id,
+        "seats": 0,
+        "held_ms": props["held_ms"],
+        "held_days": 0,
+        "answered": False,
+        "reason": "member_removed",
+    }
 
 
 def test_removing_a_member_who_answered_says_so(
@@ -234,11 +269,11 @@ def test_removing_a_member_who_answered_says_so(
     ws = _make_workspace(tenant, db_session, email="answered-owner@example.com")
     _onboard(tenant, db_session, ws, email="answers@example.com")
     member = db_session.query(User).filter(User.email == "answers@example.com").one()
-    _stretch(
+    _operator_reply(
         db_session,
         tenant_id=ws.tenant_id,
         operator_user_id=member.id,
-        first_reply_at=_utcnow(),
+        at=_utcnow(),
     )
     seat_events.clear()
 
@@ -262,11 +297,11 @@ def test_a_reply_from_an_earlier_holding_does_not_count(
     ws = _make_workspace(tenant, db_session, email="second-holding@example.com")
     tenant.put("/tenants/members/me/seat", headers=ws.auth)
     owner = db_session.query(User).filter(User.id == ws.owner_id).one()
-    _stretch(
+    _operator_reply(
         db_session,
         tenant_id=ws.tenant_id,
         operator_user_id=owner.id,
-        first_reply_at=owner.seat_granted_at - timedelta(hours=1),
+        at=owner.seat_granted_at - timedelta(hours=1),
     )
     seat_events.clear()
 
@@ -295,6 +330,95 @@ def test_deleting_the_workspace_returns_every_seat(
     # The count walks down to zero rather than reporting "everybody else" three
     # times over.
     assert sorted(e["properties"]["seats"] for e in releases) == [0, 1, 2]
+
+
+def test_answered_follows_who_wrote_the_reply_not_who_took_the_chat(
+    tenant: TestClient, db_session: Session, seat_events: list[dict]
+) -> None:
+    """The multi-operator workspace, where the two can be different people.
+
+    ``operator_sessions.operator_user_id`` is whoever opened the stretch and is
+    never re-stamped — two colleagues on one thread share one stretch — so
+    reading ``answered`` from there credits the reply to the person who took
+    the chat and never wrote a word, and reports the person who actually
+    answered as a seat that produced nothing. Both wrong at once, silently, in
+    exactly the workspace shape the property exists to measure.
+    """
+    ws = _make_workspace(tenant, db_session, email="two-operators@example.com")
+    colleague_token = _onboard(tenant, db_session, ws, email="writes@example.com")
+    colleague = db_session.query(User).filter(User.email == "writes@example.com").one()
+    colleague_id = str(colleague.id)
+    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
+    chat = _make_chat(db_session, ws.tenant_id)
+
+    # The owner claims the conversation and never writes a word in it.
+    took = tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth)
+    assert took.status_code == 200, took.text
+    # The colleague answers the visitor in that same claimed conversation.
+    answered = tenant.post(
+        f"/operator/chats/{chat.id}/messages",
+        headers=_auth(colleague_token),
+        json={"text": "Hello, this is a human."},
+    )
+    assert answered.status_code == 200, answered.text
+    # One stretch, opened by the owner, replied to by the colleague.
+    stretches = (
+        db_session.query(OperatorSession)
+        .filter(OperatorSession.chat_id == chat.id)
+        .all()
+    )
+    assert len(stretches) == 1
+    assert str(stretches[0].operator_user_id) == str(ws.owner_id)
+    assert stretches[0].first_reply_at is not None
+    seat_events.clear()
+
+    removed = tenant.delete(f"/tenants/members/{colleague.id}", headers=ws.auth)
+
+    assert removed.status_code == 204, removed.text
+    colleague_release = _one(seat_events, RELEASED)
+    assert colleague_release["properties"]["user_id"] == colleague_id
+    assert colleague_release["properties"]["answered"] is True
+    seat_events.clear()
+
+    assert tenant.delete("/tenants/members/me/seat", headers=ws.auth).status_code == 200
+
+    owner_release = _one(seat_events, RELEASED)
+    assert owner_release["properties"]["user_id"] == str(ws.owner_id)
+    assert owner_release["properties"]["answered"] is False
+
+
+def test_the_founding_owner_seat_scrub_reports_nothing(
+    tenant: TestClient, db_session: Session, seat_events: list[dict]
+) -> None:
+    """Creating a workspace clears a stale seat, and that is not a release.
+
+    ``create_tenant`` points ``users.tenant_id`` at the new workspace *before*
+    scrubbing the seat, so nothing about the row would stop an event being
+    attributed to a workspace that never sold it. The only thing keeping it
+    quiet is that no call was written — this is what fails if somebody adds one
+    for symmetry.
+    """
+    from backend.core.security import hash_password
+    from backend.tenants.service import create_tenant
+
+    # A row that outlived an earlier workspace: detached, still carrying the
+    # seat it held there.
+    stale = User(
+        email="outlived-a-workspace@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        tenant_id=None,
+        is_verified=True,
+        seat_granted_at=_utcnow() - timedelta(days=30),
+    )
+    db_session.add(stale)
+    db_session.commit()
+
+    create_tenant(stale.id, "Second Try", db_session)
+
+    db_session.refresh(stale)
+    assert stale.seat_granted_at is None
+    assert stale.tenant_id is not None
+    assert seat_events == []
 
 
 # ---------------------------------------------------------------------------

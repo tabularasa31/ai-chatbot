@@ -30,14 +30,22 @@ themselves; that case is the whole reason the seat stays its own attribute
 rather than being derived from membership.
 
 **The two questions, asked at two different moments.** They are separate
-functions rather than one with a flag because they are asked by different
+functions rather than one with a flag because they will be asked by different
 code at different times and a wrong answer means a different failure:
 
-* :func:`tenant_has_any_seat` runs when an escalation notification is
-  composed, and decides whether ``Reply-To`` carries our inbound token
-  address or the visitor's own;
-* :func:`user_holds_seat` runs when a reply arrives, and decides whether it
-  enters the chat thread.
+* :func:`tenant_has_any_seat` — for the moment an escalation notification is
+  composed: whether ``Reply-To`` carries our inbound token address or the
+  visitor's own;
+* :func:`user_holds_seat` — for the moment a reply arrives: whether it enters
+  the chat thread.
+
+**Nothing calls either of them yet.** They are seams cut for phase 1b, the
+inbound e-mail lane, which does not exist: every escalation notification today
+passes ``reply_to=ticket.user_email`` unconditionally, and there is no branch
+on a seat anywhere in the mail path. Whoever builds that lane has to add the
+calls — reading this module is not evidence that the gate is already there.
+The one place a seat is enforced today is ``require_seated_member``, which
+gates ``/operator/*``: the console, where the reply does reach the transcript.
 
 Both take keyword-only arguments named after the entity they are about, so
 handing one the other's id does not silently type-check into a plausible
@@ -73,10 +81,11 @@ def holds_seat(user: User | None) -> bool:
 def tenant_has_any_seat(*, tenant_id: uuid.UUID, db: Session) -> bool:
     """Does this **workspace** have at least one seated person?
 
-    Asked when an escalation notification is composed: with a seat somewhere
-    in the workspace the reply can come back through us, so ``Reply-To``
-    carries our token address; with none it must carry the visitor's own, or
-    the answer lands nowhere.
+    No caller yet — see the module docstring. Written for the moment an
+    escalation notification is composed: with a seat somewhere in the
+    workspace the reply can come back through us, so ``Reply-To`` would carry
+    our token address; with none it must carry the visitor's own, or the
+    answer lands nowhere.
 
     Counts only people still attached to this workspace, so a member removed
     (row deleted) or detached (``tenant_id`` nulled) stops counting the
@@ -96,11 +105,11 @@ def tenant_has_any_seat(*, tenant_id: uuid.UUID, db: Session) -> bool:
 def user_holds_seat(*, user_id: uuid.UUID, db: Session) -> bool:
     """Does this **person** hold a seat?
 
-    Asked when a reply arrives and has been attributed to an account: a
-    seated author's answer enters the chat thread, an unseated one's does
-    not. A user id that no longer exists answers ``False`` rather than
-    raising — a deleted account is exactly a person who no longer holds a
-    seat.
+    No caller yet — see the module docstring. Written for the moment a reply
+    arrives and has been attributed to an account: a seated author's answer
+    would enter the chat thread, an unseated one's would not. A user id that
+    no longer exists answers ``False`` rather than raising — a deleted account
+    is exactly a person who no longer holds a seat.
     """
     return holds_seat(db.query(User).filter(User.id == user_id).first())
 

@@ -227,9 +227,11 @@ export default function SeatsPage() {
       </div>
 
       <p className="text-xs text-slate-500">
-        Some of what a seat gets you is still being built: today the operator
-        actions are an API, and the console, replies by email and the
-        documentation loop are on the way.
+        Some of what a seat gets you is still being built. Answering a
+        conversation works today, though through the API until the console
+        screen lands. Replying by email does not come back into the
+        conversation yet — for now every emailed reply takes the ordinary path,
+        seat or no seat — and the documentation loop is still to come.
       </p>
     </div>
   );

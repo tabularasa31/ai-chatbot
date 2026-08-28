@@ -154,13 +154,24 @@ def give_up_own_seat_route(
     must be undoable. Nobody else's seat is reachable from here — for an
     invited member, giving the seat back is removing them.
 
-    Every conversation you are holding is handed back to the bot first, in the
-    same transaction. Without that the seat you just gave up is the seat you
-    need to release them: the chat stays ``live`` with you assigned, the bot
-    stays muted, and ``/operator/chats/{id}/release`` answers 403 because it is
-    behind the seat. The visitor would type into nothing until the sweeper's
-    idle release fired, up to an hour later, and in a one-owner workspace
-    nobody else could free it.
+    Every conversation you were holding **when this request read them** is
+    handed back to the bot, in the same transaction as the release. Without
+    that the seat you just gave up is the seat you need to release them: the
+    chat stays ``live`` with you assigned, the bot stays muted, and
+    ``/operator/chats/{id}/release`` answers 403 because it is behind the
+    seat. The visitor would type into nothing until the sweeper's idle release
+    fired, up to an hour later, and in a one-owner workspace nobody else could
+    free it.
+
+    "When this request read them" is the honest limit, and there is a race
+    behind it: a take that passed the seat check just before this commit can
+    claim a chat just after it, leaving exactly the pinned conversation this
+    hand-back exists to prevent. It needs the same person acting from two
+    places at once — the seat being given up is the caller's own, so nobody
+    else can be taking chats with it — and the sweeper still frees the chat on
+    its idle pass. Left open rather than closed with a lock across the seat
+    and the operator tables, which would be a large mechanism for a
+    single-user timing accident.
 
     Idempotent. It costs you nothing administratively — an owner without a seat
     still runs the whole workspace, and only stops answering from the console.
@@ -182,7 +193,7 @@ def remove_member_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    """Delete a member's account. Not yourself, and not the last owner.
+    """Delete a member's account. Not yourself, and not the owner.
 
     Their history keeps their signature — see
     ``members_service._stamp_attribution``.

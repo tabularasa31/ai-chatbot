@@ -34,6 +34,7 @@ from backend.models import (
     OperatorState,
     User,
 )
+from backend.auth.roles import ROLE_OPERATOR
 from backend.models.base import _utcnow
 from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -144,19 +145,22 @@ def _make_chat(
 
 
 def _second_user_in_tenant(db: Session, tenant_id: uuid.UUID, *, email: str) -> User:
-    """A colleague on the same tenant.
+    """A colleague on the same tenant: an operator, and seated.
 
-    Created directly: invites arrive in phase 0.5, but the assignment race is
-    a phase-0 guarantee and needs two operators to exercise.
+    Exactly what an invitation produces. A workspace has one owner — the
+    person who created it — and everybody invited into it is an operator who
+    holds a seat from the moment they accept.
+
+    Built directly rather than through the invite flow because these tests
+    are about the handoff rather than about joining, and the assignment race
+    needs two people who can both answer.
     """
     user = User(
         email=email,
         password_hash="x",
-        role="owner",
+        role=ROLE_OPERATOR,
         is_verified=True,
         tenant_id=tenant_id,
-        # Seated, as an invited colleague would be: the invite grants the
-        # seat, and these routes are gated on holding one.
         seat_granted_at=_utcnow(),
     )
     db.add(user)

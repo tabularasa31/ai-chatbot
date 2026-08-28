@@ -51,11 +51,23 @@ def create_tenant(
         user = db.query(User).filter(User.id == user_id).first()
         if user:
             user.tenant_id = tenant.id
-            # A founding owner starts seatless, whatever the row arrived
-            # holding. ``users.tenant_id`` is nullable (the FK is ON DELETE
-            # SET NULL), so a row can outlive the workspace it was seated in
-            # and carry that seat here — console access and a phantom $10 on
-            # the new workspace's screen, for a seat nobody ever took.
+            # Imported here rather than at module scope: ``backend.auth``
+            # eagerly imports its routes, which import this module, so a
+            # top-level import of the roles constant closes a cycle.
+            from backend.auth.roles import ROLE_OWNER
+
+            # Creating a workspace is what makes somebody its owner, so say
+            # so rather than relying on the column default. ``users.role``
+            # defaults to ``owner`` for a row created by registration, but a
+            # row that outlived an earlier workspace as an operator keeps
+            # that value — and this build has no route that could repair it,
+            # so the workspace would have a creator who can administer
+            # nothing, cannot seat themselves and cannot even delete it.
+            user.role = ROLE_OWNER
+            # And a founding owner starts seatless, whatever the row arrived
+            # holding. Same nullable ``tenant_id``, same stale row: carrying
+            # a seat here would be console access and a phantom $10 on the
+            # new workspace's screen, for a seat nobody ever took.
             release_seat(user)
         db.add(Bot(tenant_id=tenant.id, name=name))
         # Eager-create the knowledge profile so GET /knowledge/profile

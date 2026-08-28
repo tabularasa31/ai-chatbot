@@ -89,16 +89,18 @@ export default function SeatsPage() {
       <div>
         <h1 className="text-2xl font-semibold text-slate-800">Seats</h1>
         <p className="text-slate-500 text-sm mt-1">
-          A seat is what lets someone answer. Everyone in the workspace can sign
-          in and read; a seat is what turns reading into working — the operator
-          console, replies that land in the chat thread where the visitor sees
-          them, and answers that become source material for documentation
-          drafts.
+          A seat is what lets someone answer inside Chat9. Everyone in the
+          workspace can sign in and read; a seat adds the operator API — take a
+          live conversation, write a reply the visitor sees in the widget, hand
+          it back to the bot. Seats are also what the workspace is priced on.
         </p>
         <p className="text-slate-500 text-sm mt-2">
-          Without a seat, a reply takes the ordinary email path: out of your own
-          mailbox, into the visitor&apos;s, never through Chat9 and never into
-          the conversation.
+          What a seat will add, once built: a console screen for that API
+          instead of the API itself, replies sent by email coming back into the
+          conversation, and answers becoming source material for documentation
+          drafts. None of those work yet — today an emailed reply takes the
+          ordinary path out of your own mailbox and into the visitor&apos;s,
+          whether or not anyone here holds a seat.
         </p>
       </div>
 
@@ -169,7 +171,7 @@ export default function SeatsPage() {
         ) : (
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm text-slate-600">
-              You have no seat, so your replies take the ordinary email path.
+              You have no seat, so you cannot take or answer a conversation.
             </span>
             <button
               type="button"
@@ -227,11 +229,9 @@ export default function SeatsPage() {
       </div>
 
       <p className="text-xs text-slate-500">
-        Some of what a seat gets you is still being built. Answering a
-        conversation works today, though through the API until the console
-        screen lands. Replying by email does not come back into the
-        conversation yet — for now every emailed reply takes the ordinary path,
-        seat or no seat — and the documentation loop is still to come.
+        The console screen, replies by email and the documentation loop are all
+        still being built; what a seat unlocks today is described at the top of
+        this page.
       </p>
     </div>
   );

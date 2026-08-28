@@ -556,6 +556,34 @@ def test_a_detached_seat_does_not_follow_its_holder_into_a_new_workspace(
     assert count_seats(tenant_id=new_tenant_id, db=db_session) == 0
 
 
+def test_founding_a_workspace_writes_the_owner_role(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Creating a workspace is what makes somebody its owner.
+
+    ``users.role`` defaults to ``owner``, so the ordinary path would pass
+    without this being written. A row that outlived an earlier workspace
+    carries ``operator`` instead, and this build has no route that could
+    repair it: the creator would administer nothing, could not seat
+    themselves, and could not delete the workspace either.
+    """
+    ws = _make_workspace(tenant, db_session, email="refound@example.com")
+    owner = db_session.query(User).filter(User.id == ws.owner_id).one()
+    owner.role = "operator"
+    grant_seat(owner)
+    owner.tenant_id = None
+    db_session.commit()
+
+    created = tenant.post("/tenants", headers=ws.auth, json={"name": "Second"})
+
+    assert created.status_code in (200, 201), created.text
+    db_session.refresh(owner)
+    assert owner.role == "owner"
+    assert owner.seat_granted_at is None
+    # And the owner surfaces answer to them.
+    assert tenant.get("/tenants/members", headers=ws.auth).status_code == 200
+
+
 def test_user_holds_seat_answers_per_person(
     tenant: TestClient, db_session: Session
 ) -> None:

@@ -58,8 +58,9 @@ export default function MembersPage() {
       const result = await api.members.invite(address);
       setEmail("");
       setNotice(
-        `Invite sent to ${result.member.email}. Their seat — and the $10 a ` +
-          `month — starts when they accept. The link expires in 7 days.`
+        `Invite sent to ${result.member.email}. Their seat starts when they ` +
+          `accept — counted at $10 a month for when billing starts, and ` +
+          `charged nothing during the beta. The link expires in 7 days.`
       );
       await mutate();
     } catch (err) {
@@ -114,7 +115,7 @@ export default function MembersPage() {
         </p>
         <p className="text-slate-500 text-sm mt-2">
           A colleague gets a seat — which is what lets them answer — when they
-          accept their invitation, at $10 per seat per month counted from the
+          accept their invitation, counted at $10 per seat per month from the
           day they join rather than the day you invite them. Removing them gives
           the seat back. Nothing is charged while Chat9 is in beta; see{" "}
           <a href="/settings/seats" className="text-violet-600 hover:underline">

@@ -32,23 +32,19 @@ from backend.tenants.schemas import (
     TenantApiKeyResponse,
     TenantLlmAlertResponse,
     TenantMeResponse,
-    TenantPlanResponse,
     TenantResponse,
     UpdatePrivacyConfigRequest,
     UpdateSupportSettingsRequest,
-    UpdateTenantPlanRequest,
     UpdateTenantRequest,
 )
 from backend.tenants.service import (
     create_tenant,
     delete_tenant,
-    get_plan_for_user,
     get_primary_api_key_hint,
     get_redaction_config_for_user,
     get_support_settings_for_user,
     get_tenant_by_id,
     get_tenant_by_user,
-    set_plan_for_user,
     update_redaction_config_for_user,
     update_support_settings_for_user,
     update_tenant,
@@ -284,51 +280,6 @@ def put_support_settings_route(
     config: dict[str, str | None] = {k: getattr(body, k) for k in body.model_fields_set}
     data = update_support_settings_for_user(current_user.id, config, db)
     return SupportSettingsResponse(**data)
-
-
-@tenants_router.get("/me/plan", response_model=TenantPlanResponse)
-def get_plan_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantPlanResponse:
-    """Read the tenant's subscription tier.
-
-    Any member of the tenant may read it; only an owner may change it.
-    Nothing in the product behaves differently based on the value yet.
-    """
-    return TenantPlanResponse(plan=get_plan_for_user(current_user.id, db))
-
-
-@tenants_router.put("/me/plan", response_model=TenantPlanResponse)
-def put_plan_route(
-    body: UpdateTenantPlanRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantPlanResponse:
-    """Switch the tenant's subscription tier, in either direction.
-
-    Owner-only, and free of charge: there is no payment provider behind this
-    endpoint and no charge is made or recorded. It writes one column.
-    """
-    previous, plan = set_plan_for_user(current_user.id, body.plan, db)
-    # Only a real transition is a change. A PUT of the tier the tenant is
-    # already on still succeeds, but reporting it would assert a switch that
-    # never happened and inflate every count built on this event.
-    if previous != plan:
-        try:
-            tenant = get_tenant_by_user(current_user.id, db)
-            if tenant is not None:
-                tenant_id = str(tenant.public_id)
-                capture_event(
-                    "tenant.plan.changed",
-                    distinct_id=tenant_id,
-                    tenant_id=tenant_id,
-                    groups={"tenant": tenant_id},
-                    properties={"plan": plan, "previous_plan": previous},
-                )
-        except Exception:
-            pass
-    return TenantPlanResponse(plan=plan)
 
 
 @tenants_router.patch("/me", response_model=TenantResponse)

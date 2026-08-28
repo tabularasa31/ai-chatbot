@@ -41,12 +41,19 @@ class TenantMemberResponse(BaseModel):
     role: TenantRole
     status: TenantMemberStatus
     created_at: datetime
+    #: When this person's operator seat was granted; ``null`` for no seat.
+    #: Invited members are seated by the invite itself, so in practice only a
+    #: workspace's founding owner is ever ``null`` here.
+    seat_granted_at: datetime | None = None
 
 
 class TenantMemberListResponse(BaseModel):
-    """All members of the current workspace."""
+    """All members of the current workspace, and what they are priced at."""
 
     items: list[TenantMemberResponse]
+    #: How many of them hold a seat. Sent rather than left to the client to
+    #: count, so the figure the seats screen prices is the server's.
+    seats: int = 0
 
 
 class InviteMemberRequest(BaseModel):
@@ -166,12 +173,6 @@ class TenantListResponse(BaseModel):
 
 RedactionEntityLiteral = Literal["ID_DOC", "IP", "URL_TOKEN"]
 
-# Mirrors backend.models.enums.TenantPlan. Spelled out as a Literal so the
-# OpenAPI schema names the tiers and FastAPI rejects an unknown one with a
-# 422 before any service code runs.
-TenantPlanLiteral = Literal["free", "pro"]
-
-
 class PrivacyConfigResponse(BaseModel):
     """Tenant-wide regex redaction settings."""
 
@@ -190,27 +191,6 @@ class SupportSettingsResponse(BaseModel):
     l2_email: str | None = None
     escalation_language: str | None = None
     fallback_email: str | None = None
-
-
-class TenantPlanResponse(BaseModel):
-    """The tenant's current subscription tier.
-
-    ``plan`` is a ``TenantPlan`` value. Nothing in the product behaves
-    differently based on it yet — the live-operator e-mail lane is the first
-    consumer.
-    """
-
-    plan: TenantPlanLiteral
-
-
-class UpdateTenantPlanRequest(BaseModel):
-    """PUT body for /tenants/me/plan.
-
-    Owner-only. Switching is free in both directions: no payment is taken and
-    no billing system exists behind this endpoint.
-    """
-
-    plan: TenantPlanLiteral
 
 
 class TenantLlmAlertResponse(BaseModel):

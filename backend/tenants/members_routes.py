@@ -1,8 +1,16 @@
 """Team member management — owner-only.
 
-Four routes: invite, list, change role, remove. All of them mounted before
+Six routes: invite, list, change role, remove, and the two that take and give
+back the caller's own operator seat. All of them mounted before
 ``tenants_router`` so ``/tenants/members`` is never swallowed by that router's
 ``/{tenant_id}`` catch-all.
+
+**There is no per-member seat control here, deliberately.** Inviting somebody
+grants their seat and removing them releases it, so an invited member is
+always seated and no route exists that could leave one stranded as a member
+who cannot answer. The only account that can hold a workspace membership with
+no seat is that workspace's founding owner, who was never invited into it —
+which is why the two seat routes below address the caller and nobody else.
 
 Every handler resolves the workspace from the caller, never from the request
 body or path, so there is no tenant id to tamper with. Member lookups are
@@ -20,6 +28,7 @@ from backend.auth.middleware import require_owner
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import User
+from backend.seats.service import count_seats, grant_seat, release_seat
 from backend.tenants.members_service import (
     change_member_role,
     invite_member,
@@ -49,6 +58,7 @@ def _member_to_response(member: User) -> TenantMemberResponse:
         # Unverified + already in a workspace = invite not accepted yet.
         status="active" if member.is_verified else "pending",
         created_at=member.created_at,
+        seat_granted_at=member.seat_granted_at,
     )
 
 
@@ -62,10 +72,12 @@ def list_members_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantMemberListResponse:
-    """Everyone in the workspace, with their role and invite status."""
-    members = list_members(_tenant_id(current_user), db)
+    """Everyone in the workspace, with their role, invite status and seat."""
+    tenant_id = _tenant_id(current_user)
+    members = list_members(tenant_id, db)
     return TenantMemberListResponse(
-        items=[_member_to_response(m) for m in members]
+        items=[_member_to_response(m) for m in members],
+        seats=count_seats(tenant_id=tenant_id, db=db),
     )
 
 
@@ -99,6 +111,49 @@ def invite_member_route(
         token=token,
     )
     return InviteMemberResponse(member=_member_to_response(member))
+
+
+@members_router.put("/me/seat", response_model=TenantMemberResponse)
+def take_own_seat_route(
+    current_user: Annotated[User, Depends(require_owner)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TenantMemberResponse:
+    """Take a seat for yourself.
+
+    An owner runs the workspace without a seat and without charge. This is the
+    one thing a seat adds for them: answering conversations themselves, from
+    the console, with the reply landing in the visitor's transcript. Being the
+    owner is not a seat, so nothing grants this automatically.
+
+    Addresses the caller, never a member id: a seat for somebody else comes
+    with their invitation. Idempotent — taking a seat you already hold keeps
+    the date you took it.
+    """
+    grant_seat(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return _member_to_response(current_user)
+
+
+@members_router.delete("/me/seat", response_model=TenantMemberResponse)
+def give_up_own_seat_route(
+    current_user: Annotated[User, Depends(require_owner)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TenantMemberResponse:
+    """Give your own seat back.
+
+    The counterpart of the route above, and the reason it can exist at all: an
+    owner is allowed to hold a workspace membership with no seat, so taking one
+    must be undoable. Nobody else's seat is reachable from here — for an
+    invited member, giving the seat back is removing them.
+
+    Idempotent, and it never strands the workspace: an owner without a seat
+    still administers everything, and only stops answering from the console.
+    """
+    release_seat(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return _member_to_response(current_user)
 
 
 @members_router.patch("/{member_id}", response_model=TenantMemberResponse)

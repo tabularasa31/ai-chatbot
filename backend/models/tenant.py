@@ -8,7 +8,6 @@ from sqlalchemy.orm import relationship
 
 from backend.core.utils import generate_public_id
 from backend.models.base import Base, _utcnow
-from backend.models.enums import TenantPlan
 
 
 class Tenant(Base):
@@ -30,17 +29,6 @@ class Tenant(Base):
     openai_api_key = Column(String(500), nullable=True, default=None)
     settings = Column(JSON, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=True)
-    # Subscription tier — a ``TenantPlan`` value stored as a plain string, no
-    # DB enum, so a third tier is a code change rather than an ALTER TYPE.
-    # Nothing in the product reads it yet; the live-operator e-mail lane is
-    # the first consumer, and it decides only what Reply-To an escalation
-    # notification carries.
-    plan = Column(
-        String(16),
-        nullable=False,
-        default=TenantPlan.free.value,
-        server_default=TenantPlan.free.value,
-    )
     # LLM-provider alert state. Set when the chat pipeline hits an actionable
     # OpenAI failure (quota_exhausted, invalid_api_key); cleared on next
     # successful turn. Drives the dashboard banner and throttles the

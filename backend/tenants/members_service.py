@@ -25,6 +25,14 @@ So no column was added. The one thing an invite does differently is live
 longer: a colleague may not read their mail within the hour a password reset
 allows.
 
+**Inviting grants a seat.** A colleague is invited in order to answer
+customers, and a member who cannot answer is not what anyone is asking for —
+so the seat comes with the invitation rather than as a second step, and the
+removal below releases it. Between those two there is nothing: an invited
+member is always seated. The one account that can sit in a workspace without
+a seat is its founding owner, who administers without one and takes a seat
+only if they also want to answer from the console. See ``backend/seats``.
+
 **Removal deletes the account.** There is deliberately no such thing as a
 verified user with no workspace: membership and account have the same
 lifetime. That is what keeps the invite path honest — every invitee is a new
@@ -86,6 +94,7 @@ from backend.models import (
 )
 from backend.models.base import _utcnow
 from backend.operator.sessions import emit_operator_session_ended
+from backend.seats.service import grant_seat
 
 #: How long an invite link stays usable. Longer than the one hour a password
 #: reset gets: a reset is answered by someone already at their keyboard, an
@@ -270,6 +279,9 @@ def invite_member(
 
     Re-inviting someone whose invite is still outstanding re-issues the token
     and applies the new role, so a lost e-mail is fixed by sending it again.
+
+    Either way the member ends up seated: the invitation and the seat are one
+    action, and the way a seat is released is the removal below.
     """
     existing = db.query(User).filter(User.email == email).first()
 
@@ -280,6 +292,9 @@ def invite_member(
             )
         # Invite outstanding — re-issue it rather than refusing.
         existing.role = role
+        # Idempotent, and it repairs a row that somehow lost its seat: a
+        # pending invitee is on their way in to answer conversations.
+        grant_seat(existing)
         token = _issue_invite_token(existing)
         db.commit()
         db.refresh(existing)
@@ -310,6 +325,9 @@ def invite_member(
         role=role,
         is_verified=False,
     )
+    # The seat is part of the invitation, not a second decision: one action
+    # adds the colleague and gives them what they were added to do.
+    grant_seat(member)
     token = _issue_invite_token(member)
     db.add(member)
     try:
@@ -444,6 +462,10 @@ def remove_member(
     The account is gone the moment this commits: any JWT still in the
     departing member's browser stops resolving to a user, so
     ``get_current_user`` answers 401 on their very next request.
+
+    This is also how a seat is released. The seat lives on the row being
+    deleted, so it goes with it — there is no separate revoke to remember, and
+    no way to leave a workspace paying for a seat nobody holds.
     """
     _lock_workspace(tenant_id, db)
     member = get_member(tenant_id, member_id, db)

@@ -6,11 +6,14 @@ bot. Every one of them is tenant-scoped through
 another tenant returns 404 rather than 403 — unreachable, not merely
 forbidden.
 
-Authorization is ``require_member`` — a verified user holding ``owner`` or
-``operator`` in this workspace (phase 0.5) — plus tenant ownership of the
-chat. Working the inbox is what an operator is for, so both roles pass; the
-refusal this adds over phase 0 is for a principal who belongs to no workspace
-at all, or holds a role that is not one of the two.
+Authorization is ``require_seated_member`` — a verified member of this
+workspace, holding either role, who also holds a seat — plus tenant ownership
+of the chat. Both roles pass because working the inbox is what an operator is
+for and an owner may do it too; the seat is the other axis, and it is what
+these routes are sold for. Answering here writes a human reply straight into
+the visitor's transcript, which is precisely the thing a seat buys, so a
+workspace with no seat must not reach them. An owner without a seat keeps
+every administrative surface and loses only this one.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.auth.middleware import require_member
+from backend.auth.middleware import require_seated_member
 from backend.core.db import get_async_db, run_sync
 from backend.models import Chat, User
 from backend.operator.schemas import (
@@ -73,7 +76,7 @@ def _require_chat(db, *, chat_id: uuid.UUID, user: User) -> tuple[Chat, uuid.UUI
 )
 async def take_chat(
     chat_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    current_user: Annotated[User, Depends(require_seated_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorChatStateResponse:
     """Claim a conversation and mute the bot in it.
@@ -106,7 +109,7 @@ async def take_chat(
 async def send_operator_message(
     chat_id: uuid.UUID,
     body: OperatorMessageRequest,
-    current_user: Annotated[User, Depends(require_member)],
+    current_user: Annotated[User, Depends(require_seated_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorMessageResponse:
     """Answer the visitor directly.
@@ -144,7 +147,7 @@ async def send_operator_message(
 )
 async def release_chat_route(
     chat_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    current_user: Annotated[User, Depends(require_seated_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorChatStateResponse:
     """Hand the conversation back to the bot.

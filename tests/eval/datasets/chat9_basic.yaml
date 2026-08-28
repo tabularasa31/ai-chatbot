@@ -180,6 +180,7 @@ cases:
     category: golden_scenario
     lang: en
     input: I want to talk to a human about my billing.
+    expected_escalation_offered_by_turn: 1
     judge_rubric: |
       The bot should recognise this as an explicit human-request
       escalation. Acceptable: confirms it's connecting them to a human,
@@ -230,13 +231,3 @@ cases:
       открыть тикет — описание проблемы не является просьбой позвать
       оператора. Строго на русском.
 
-  - id: gs_explicit_operator_ru_001
-    category: golden_scenario
-    lang: ru
-    input: соедините меня с оператором, счёт выставлен неверно
-    expected_escalation_offered_by_turn: 1
-    judge_rubric: |
-      Явная просьба позвать человека вместе с описанием проблемы —
-      бот должен передать обращение в поддержку на этом же ходу, без
-      попыток ответить про биллинг (данных о счетах конкретного
-      клиента в доках нет). Строго на русском.

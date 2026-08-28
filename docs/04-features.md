@@ -784,12 +784,19 @@ concrete problem support could act on, and whether the handoff was asked for
 
 - Outright ask ("connect me to an operator") → escalates immediately, no
   pre-confirm step; the request is itself the confirmation.
-- Inferred ask over a stated problem ("I can't change the settings") → not
-  escalated. The escalation FSM stands down and the RAG pipeline answers from
-  the knowledge base; if retrieval finds nothing, the ordinary low-similarity /
-  no-documents path escalates with its pre-confirm question.
-- Inferred ask with nothing to forward ("can someone help me?") → the bot asks
-  the user to describe their question instead of minting an empty ticket.
+- Outright ask with nothing to forward yet ("connect me to a human") → the bot
+  asks the user to describe their question instead of minting an empty ticket,
+  then escalates once the detail arrives.
+- Inferred ask ("I can't change the settings", "please help me") → not
+  escalated at all. The escalation FSM stands down and the RAG pipeline answers
+  from the knowledge base; if retrieval finds nothing, the ordinary
+  low-similarity / no-documents path offers the handoff and asks for consent
+  through the pre-confirm question.
+
+Inferred asks are kept out of the FSM entirely so the elicitation state above
+is only ever opened by an outright ask — the reply that fills it in escalates
+on content alone, so a state opened by an inferred plea would escalate a
+handoff nobody asked for.
 
 ### What happens on escalation
 

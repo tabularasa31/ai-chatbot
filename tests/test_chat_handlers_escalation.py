@@ -277,14 +277,16 @@ def test_implied_request_with_content_falls_through_to_rag(
     assert not chat.escalation_pre_confirm_pending
 
 
-def test_implied_request_without_content_still_elicits_question(
+def test_implied_request_without_content_also_falls_through(
     db_session: Session,
 ) -> None:
-    """A bare plea for help keeps the elicitation branch.
+    """An inferred plea never engages the FSM, with or without content.
 
-    "Can someone help me?" is an inferred request with nothing to forward — the
-    fall-through above must not swallow it, or the user would get a knowledge
-    base answer to a question they never asked.
+    The elicitation state is reserved for outright asks: it promises the user
+    a handoff, and the reply that fills it in escalates on content alone. If an
+    inferred plea could open it, the reported bug would simply move one turn
+    downstream — "помогите" then "не могу поменять почту" would mint the very
+    ticket this change exists to prevent.
     """
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
@@ -298,6 +300,36 @@ def test_implied_request_without_content_still_elicits_question(
         message_has_request_content=False,
     )
 
+    def _fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("An inferred request must not open the elicitation state")
+
+    with patch.object(EscalationStateMachine, "_emit_awaiting_request_message", _fail):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is None
+    assert not chat.escalation_awaiting_request
+
+
+def test_outright_request_without_content_still_elicits_question(
+    db_session: Session,
+) -> None:
+    """A bare "connect me to a human" keeps the elicitation branch.
+
+    There is nothing to forward yet, so the bot asks for the question instead
+    of minting an empty ticket — unchanged by the inferred-request gate.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="connect me to a human",
+        explicit_human_request=True,
+        human_request_explicit=True,
+        message_has_request_content=False,
+    )
+
     with patch.object(
         EscalationStateMachine, "_emit_awaiting_request_message", lambda _s, _c, **_k: "elicited"
     ):
@@ -307,14 +339,15 @@ def test_implied_request_without_content_still_elicits_question(
     assert chat.escalation_awaiting_request is True
 
 
-def test_implied_request_after_prior_content_still_escalates(
+def test_implied_request_after_prior_content_falls_through(
     db_session: Session,
 ) -> None:
-    """Sticky chat content does not turn a bare plea into a new question.
+    """Sticky chat content does not resurrect the escalation branch either.
 
-    The user described a problem earlier (``has_substantive_content``) and now
-    asks for help with no content of their own. There is something to forward,
-    so this still escalates — the fall-through keys off THIS message's content.
+    The user described a problem earlier and now says "please help me" with no
+    content of their own. RagHandler takes the turn; if it cannot answer, the
+    ordinary low_similarity path offers the handoff and asks for consent —
+    which is what the user gets instead of an unrequested ticket.
     """
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
@@ -329,24 +362,13 @@ def test_implied_request_after_prior_content_still_escalates(
         message_has_request_content=False,
     )
 
-    sentinel = object()
-    captured: dict[str, Any] = {}
+    def _fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("An inferred request must not mint a ticket")
 
-    def _fake_handoff(
-        _self: Any,
-        _ctx: HandlerContext,
-        *,
-        escalation_reason: str,
-        **_kwargs: Any,
-    ) -> Any:
-        captured["escalation_reason"] = escalation_reason
-        return sentinel
-
-    with patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff):
+    with patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fail):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
 
-    assert outcome is sentinel
-    assert captured["escalation_reason"] == "explicit_human_request"
+    assert outcome is None
 
 
 def _make_pre_confirm_chat(db: Session, tenant: Tenant, *, clarify: bool = False) -> Chat:

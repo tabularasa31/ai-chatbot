@@ -314,12 +314,14 @@ async def detect_human_request(
         "   true: the message names the thing it wants — a human, an agent, "
         "an operator, live support, a manager — or asks to escalate / be "
         "transferred. Examples: \"connect me to an operator\", \"I want to "
-        "talk to a human\", \"please escalate this\", \"is support "
-        "online?\".\n"
+        "talk to a human\", \"please escalate this\", \"transfer me to an "
+        "agent\".\n"
         "   false: the wish for help is there but no person was named — a "
-        "bare \"help me\", \"can someone help?\", or a problem statement "
-        "you read as a plea for help. Return false whenever human_request is "
-        "false.\n"
+        "bare \"help me\" or \"can someone help?\". If you marked "
+        "human_request true for a message that only states a problem, mark "
+        "this axis false: rule 1 says such a message is not a request for a "
+        "person, and this axis is the backstop when it reads as one anyway. "
+        "Return false whenever human_request is false.\n"
         "\n"
         "Axes 1 and 2 are independent: a bare \"can someone help me?\" is "
         "human_request=true, message_has_request_content=false; a plain "
@@ -354,14 +356,17 @@ async def detect_human_request(
         )
         raw = response.choices[0].message.content or "{}"
         parsed = json.loads(raw)
+        # A missing key *and* an explicit ``null`` both mean "the model did not
+        # answer this axis" — default to outright, matching the two-axis
+        # contract this classifier shipped with. ``bool(None)`` would instead
+        # read as inferred and silently downgrade a real handoff request.
+        explicit = parsed.get("human_request_explicit")
         return HumanRequestResult(
             human_request=bool(parsed.get("human_request", False)),
             message_has_request_content=bool(
                 parsed.get("message_has_request_content", False)
             ),
-            # Missing axis → treat the request as outright, matching the
-            # two-axis contract this classifier shipped with.
-            human_request_explicit=bool(parsed.get("human_request_explicit", True)),
+            human_request_explicit=True if explicit is None else bool(explicit),
         )
 
     try:

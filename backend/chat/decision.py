@@ -298,8 +298,7 @@ def requires_blocking_clarify(
 # Question marks across the scripts the bot answers in. Used to check whether a
 # reply the engine wanted to be a clarifying question actually asks something,
 # so the per-session clarification budget is spent on real questions only.
-# ruff: noqa: RUF001 — the full-width and Arabic marks are the point here.
-_QUESTION_MARKS = "?？؟՞;"
+_QUESTION_MARKS = "?？؟՞;"  # noqa: RUF001 — non-ASCII marks are the point
 
 
 def reply_is_clarifying_question(text: str | None) -> bool:

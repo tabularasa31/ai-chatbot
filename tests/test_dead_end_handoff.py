@@ -34,7 +34,12 @@ from backend.chat.decision import (
     requires_blocking_clarify,
 )
 from backend.chat.prompts import _user_context_prompt_line, build_rag_prompt
-from backend.chat.streaming import _strip_and_detect_markers
+from backend.chat.streaming import (
+    MarkerStreamFilter,
+    _scrub_marker_literals,
+    _strip_and_detect_markers,
+    _strip_trailing_partial_marker,
+)
 from tests._async_utils import as_async as _as_async
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -185,6 +190,55 @@ def test_handoff_marker_is_detected_and_stripped() -> None:
         True,
     )
     assert _strip_and_detect_markers("Готово.") == ("Готово.", False, False)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "<needs_human/><offered_ticket/>",
+        "<offered_ticket/><needs_human/>",
+        "<needs_human/> <offered_ticket/>.",
+    ],
+)
+def test_both_markers_in_one_reply_are_peeled_in_any_order(tail: str) -> None:
+    """The pair decides whether the handler appends an offer or only arms the
+    gate, so neither marker may mask the other."""
+    assert _strip_and_detect_markers(f"Ответ. {tail}") == ("Ответ.", True, True)
+
+
+def test_handoff_marker_never_leaks_into_the_stream() -> None:
+    out: list[str] = []
+    stream = MarkerStreamFilter(out.append)
+    for chunk in ["Напишите ", "в поддержку.<needs", "_human/>"]:
+        stream.feed(chunk)
+    stream.flush_end()
+
+    assert "".join(out) == "Напишите в поддержку."
+
+
+def test_truncated_marker_is_dropped_rather_than_shown() -> None:
+    out: list[str] = []
+    stream = MarkerStreamFilter(out.append)
+    stream.feed("Ответ.<needs_hum")
+    stream.flush_end()
+
+    assert "".join(out) == "Ответ."
+
+
+def test_truncated_marker_does_not_survive_into_the_persisted_reply() -> None:
+    """What the stream withheld must not reappear in history or in `done.text`."""
+    assert _strip_trailing_partial_marker("Ответ.<needs_hum") == "Ответ."
+    assert _strip_trailing_partial_marker("Ответ.<offered_tic") == "Ответ."
+    assert _strip_trailing_partial_marker("сравните if a < b") == "сравните if a < b"
+    assert _strip_trailing_partial_marker("Ответ.") == "Ответ."
+
+
+def test_mid_text_handoff_literal_does_not_arm_anything() -> None:
+    """Detection is terminal-only: a misplaced literal must not arm the gate."""
+    text, offered, needs_human = _strip_and_detect_markers("Ответ <needs_human/> и ещё текст")
+
+    assert (offered, needs_human) == (False, False)
+    assert _scrub_marker_literals(text) == "Ответ  и ещё текст"
 
 
 # ---------------------------------------------------------------------------
@@ -370,3 +424,87 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
     db_session.expire_all()
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert chat.clarification_count == expected_count
+
+
+def test_clarifying_question_does_not_get_a_second_question_appended(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A required clarification plus the handoff marker must stay one question.
+
+    The prompt can legitimately produce both at once: the turn is a blocking
+    clarify and the documentation's last step is "write to support". Appending
+    the offer anyway would ask twice — and the user's "yes" (meant for the
+    clarification) would be read by the pre-confirm gate as consent to open a
+    ticket.
+    """
+    from backend.models import Chat
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    _patch_retrieval(monkeypatch, score=0.36)
+    _patch_generation(
+        monkeypatch,
+        answer="Какой именно код вы ждёте — при входе или при регистрации?",
+        needs_human=True,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.render_pre_confirm_text",
+        _as_async(lambda **_kw: Mock(message_to_user=OFFER_TEXT, tokens_used=0)),
+    )
+
+    api_key = _tenant_api_key(
+        tenant, db_session, "deadend-clarify@example.com", "Clarify Not Offered Tenant"
+    )
+    session_id = uuid.uuid4()
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(session_id), "question": "Почему не приходит код ?"},
+    )
+
+    assert response.status_code == 200
+    assert OFFER_TEXT not in response.json()["text"]
+
+    db_session.expire_all()
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.clarification_count == 1
+
+
+def test_offer_render_failure_still_arms_the_gate(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken renderer degrades to the canonical text — it never drops the rescue."""
+    from backend.escalation.openai_escalation import PRE_CONFIRM_SUPPORT_CONTACT_EN
+    from backend.models import Chat
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    _patch_retrieval(monkeypatch, score=0.5)
+    _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
+
+    async def _boom(**_kw):
+        raise RuntimeError("localization backend is down")
+
+    monkeypatch.setattr("backend.chat.service.render_pre_confirm_text", _boom)
+
+    api_key = _tenant_api_key(
+        tenant, db_session, "deadend-render-fail@example.com", "Render Failure Tenant"
+    )
+    session_id = uuid.uuid4()
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(session_id), "question": "Почему не приходит код ?"},
+    )
+
+    assert response.status_code == 200
+    assert PRE_CONFIRM_SUPPORT_CONTACT_EN in response.json()["text"]
+
+    db_session.expire_all()
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat.escalation_pre_confirm_pending is True

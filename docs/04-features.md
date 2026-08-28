@@ -957,7 +957,7 @@ By default the widget is **anonymous** — no information about the end user is 
 3. The widget calls `POST /widget/session/init` with `{ bot_id, user_hints }`.
 4. Backend `sanitize_user_hints` (see `backend/widget/service.py`) whitelists allowed keys, caps lengths, and validates `email`/`locale`. The result is patched into `chats.user_context` via `apply_identity_context_patch`.
 5. If hints carry `user_id` or `email`, a `ContactSession` row is created (synthesized `user_id="hint:<email>"` when only email is supplied) so cross-session history works.
-6. In the RAG prompt only safe fields (`plan_tier`, `locale`, `audience_tag`) are included — no raw PII.
+6. In the RAG prompt only safe fields (`plan_tier`, `locale`, `audience_tag`) are included — no raw PII — plus two booleans derived from the identity: `identified=yes` when hints carried a `user_id` or `email`, and `contact_email_on_file=yes` when an email is on file. The values themselves never reach the prompt; the flags stop the bot from telling an already-signed-in user to sign in and write to support, or from asking for contact details support already has.
 7. Escalation email metadata pulls `email`, `name`, `locale`, `user_id` from the same `Chat.user_context`.
 
 ### Session modes

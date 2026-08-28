@@ -36,6 +36,7 @@ from backend.chat.streaming import (
     _strip_and_detect_markers,
     _strip_inline_citations,
     _strip_thought_tags,
+    _strip_trailing_partial_marker,
     _thought_truncated,
 )
 from backend.chat.types import ChatPipelineResult, PipelineRun
@@ -480,7 +481,7 @@ async def _async_generate_answer_native(
         # contract) so a literal never reaches the UI even when detection
         # itself stayed False.
         answer_text, offered_ticket, needs_human = _strip_and_detect_markers(answer_text)
-        answer_text = _scrub_marker_literals(answer_text)
+        answer_text = _strip_trailing_partial_marker(_scrub_marker_literals(answer_text))
         log_llm_tokens(
             operation="generate",
             target_language=response_language,

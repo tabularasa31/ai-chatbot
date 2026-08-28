@@ -174,6 +174,27 @@ def _strip_and_detect_markers(text: str) -> tuple[str, bool, bool]:
             return cleaned, offered, needs_human
 
 
+def _strip_trailing_partial_marker(text: str) -> str:
+    """Drop a truncated sentinel left at the very end of ``text``.
+
+    A stream cut mid-marker (max_completion_tokens, client disconnect, a 5xx)
+    leaves something like ``<needs_hum``: the SSE filter already withholds it
+    from the user, but the assembled text is built from the raw chunks, so
+    without this the persisted reply — and the ``done`` payload the widget
+    renders over the stream — would show the fragment the viewer never saw.
+    """
+    if not text:
+        return text
+    stripped = text.rstrip()
+    idx = stripped.rfind("<")
+    if idx < 0:
+        return text
+    tail = stripped[idx:]
+    if any(marker.startswith(tail) and marker != tail for marker in ALL_MARKERS):
+        return stripped[:idx].rstrip()
+    return text
+
+
 def _scrub_marker_literals(text: str) -> str:
     """Belt-and-suspenders strip of any remaining sentinel occurrence.
 

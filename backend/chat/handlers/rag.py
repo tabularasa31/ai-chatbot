@@ -713,15 +713,25 @@ class RagHandler(PipelineHandler):
         # chat), it is a closed loop. So the offer is composed here rather than
         # by the model: it lands in the user's language from the canonical
         # template, and the pre-confirm gate is armed so their "yes" creates
-        # the ticket. When the model already wrote its own offer
-        # (llm_offered_ticket) the net below just arms the gate — appending a
-        # second question would ask twice in one reply.
+        # the ticket.
+        #
+        # Gated on the pending flag rather than on ``escalate``: the escalate
+        # branch above arms the gate itself, but when its renderer failed it
+        # disarmed the gate and left the raw RAG answer standing — exactly the
+        # dead end this block exists to close.
+        #
+        # A reply that already ends in a question is left alone, as is one the
+        # model marked as its own offer. Appending "shall I forward this?"
+        # after either asks twice in one reply — and after this turn's required
+        # clarification it is worse than noise, because the user's "yes"
+        # answers the clarification while the gate reads it as consent to open
+        # a ticket.
         _handoff_offer_appended = False
         if (
-            not escalate
-            and not chat.escalation_pre_confirm_pending
+            not chat.escalation_pre_confirm_pending
             and result.llm_needs_human
             and not result.llm_offered_ticket
+            and not reply_is_clarifying_question(answer)
         ):
             _handoff_start = perf_counter()
             try:

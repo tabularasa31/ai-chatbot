@@ -691,6 +691,16 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         best_rank_score=retrieval.best_rank_score,
     )
 
+    # ``low_context`` keys off ``reliability.score``, which is derived from the
+    # rank score alone, while ``should_escalate`` takes the max of rank score
+    # and vector similarity. A paraphrased question against a differently-worded
+    # KB clears the escalation floor on vector similarity while its rank score
+    # stays below it, so both flags would otherwise fire and put contradictory
+    # instructions in consecutive lines of the same prompt ("relevant match,
+    # do not offer a ticket" next to "low relevance, say it is not documented").
+    # Low reliability wins — it is the more conservative of the two.
+    _low_context = not state.reranker_rescued and retrieval.reliability.score == "low"
+
     _generate_kwargs: dict[str, Any] = dict(
         api_key=run.api_key,
         user_context_line=run.user_context_line,
@@ -700,8 +710,8 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         faq_context_items=state.faq_context_items,
         quick_answer_items=state.quick_answer_items,
         agent_instructions=run.agent_instructions,
-        low_context=not state.reranker_rescued and retrieval.reliability.score == "low",
-        strong_context=not escalate,
+        low_context=_low_context,
+        strong_context=not escalate and not _low_context,
         allow_clarification=run.allow_clarification,
         require_clarification=_require_clarification,
         trace=trace,

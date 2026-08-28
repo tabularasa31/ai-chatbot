@@ -187,7 +187,7 @@ def build_rag_prompt(
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
         "- When the documentation does not cover the question, say so honestly and offer to open a support ticket so the team can follow up by email — for example: \"I don't have that in the documentation. Want me to open a support ticket so the team can email you back?\". Wait for the user to confirm; the backend detects their agreement and routes the escalation. Never deflect with vague phrasing such as \"reach out to the support team\" without offering this explicit ticket. Phrase the offer in the user's language.\n"
-        "- Only make that ticket offer when you genuinely cannot resolve the question yourself from the provided context. When you HAVE fully answered the question from the documentation, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one. A definitive negative answer counts as resolved: when the context shows that a capability, integration, or option is unsupported, out of scope, or listed as a current limitation, state that plainly as the answer and stop — the absence of a dedicated documentation section on the topic is not by itself a reason to offer a ticket. The same holds when the context answers what the user actually asked even though it does not use their wording.\n"
+        "- Only make that ticket offer when you genuinely cannot resolve the question yourself from the provided context. When you HAVE fully answered the question from the documentation, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one. A definitive negative answer counts as resolved: when the context shows that a capability, integration, or option is unsupported, out of scope, or listed as a current limitation, state that plainly as the answer and stop — the absence of a dedicated documentation section on the topic is not by itself a reason to offer a ticket. Stopping there does not exempt you from the `<needs_human/>` rule below: if the only way forward your reply can offer is still reaching a human, append the marker. The same holds when the context answers what the user actually asked even though it does not use their wording.\n"
         "- Reaching people is not a resolution you can deliver in text. Whenever the only way forward your reply can offer is contacting a human — the documentation's last step is \"write to support\", the fix needs an operator, or the answer you found IS a support channel (a panel/dashboard chat, a ticket form, a phone number, a support email) — the turn is NOT resolved: append the literal marker `<needs_human/>` as the very last token of your reply. Keep the documentation's contact details in your text when they are useful to the user, but do NOT write the handoff offer yourself and do NOT ask the user to confirm anything — the backend appends its own offer, in the user's language, and wires their answer to the support handoff. The marker is stripped before the reply is shown.\n"
         "- Keep answers concise and focused on the user's intent: typically 2-4 short paragraphs (around 200 words). Use bullet lists for multi-step instructions. Expand only when the user explicitly asks for more depth.\n"
         # NOTE: the marker bullet must stay the LAST bullet in Rules:. Inserting
@@ -309,12 +309,12 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
         per_request_parts.append(clarification_rules)
     if strong_context:
         per_request_parts.append(
-            "CONTEXT MATCH (this turn): retrieval returned a relevant match for this "
-            "question, by the same confidence bar the backend uses to decide whether a "
-            "handoff is needed. Answer from the context below and do NOT offer to open a "
-            "support ticket, unless the context genuinely does not contain what the user "
-            "asked for. This does not silence the `<needs_human/>` marker: if the only way "
-            "forward your reply can offer is reaching a human, still append it."
+            "CONTEXT MATCH (this turn): the retrieved context cleared the confidence bar "
+            "the backend uses to decide whether a handoff is needed. Answer from that "
+            "context and do NOT offer to open a support ticket, unless it genuinely does "
+            "not contain what the user asked for. This does not silence the "
+            "`<needs_human/>` marker: if the only way forward your reply can offer is "
+            "reaching a human, still append it."
         )
     if low_context:
         per_request_parts.append(

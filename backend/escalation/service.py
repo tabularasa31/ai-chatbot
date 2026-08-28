@@ -1530,6 +1530,60 @@ def notify_support_of_repeat_escalation(
     )
 
 
+def notify_support_of_visitor_turn(
+    chat_id: uuid.UUID,
+    db: Session,
+    *,
+    when: datetime | None = None,
+) -> bool:
+    """Deliver the visitor's message to support while a human holds the chat.
+
+    Without this the e-mail lane is one-way. An operator answering from their
+    mailbox has no console to watch: the visitor's reply lands in the chat
+    thread, the bot is muted and says nothing, and the operator sits waiting
+    for an answer that already arrived somewhere they cannot see. The threaded
+    update e-mail is the only surface they have, so a live handoff has to send
+    one on every visitor turn.
+
+    Threaded under the original notification's ``Message-ID`` by
+    :func:`_notify_tenant_ticket_update`, so it lands in the same conversation
+    in the support inbox and its ``Reply-To`` is the same reply address — the
+    operator answers it exactly as they answered the first one.
+
+    **The debounce is bypassed on purpose.** Its job on the ordinary path is
+    to keep a visitor typing three quick lines from filling the inbox, and it
+    is safe there because the delta stays eligible and the next turn carries
+    it. Here there may be no next turn: the visitor has said their piece and is
+    waiting. A message held back by the window would simply never be delivered,
+    and the operator would answer a question they never saw the end of.
+
+    Best-effort and never raises — the visitor's message is already persisted
+    and committed by the time this runs, and a mail failure must not cost them
+    their turn. Returns whether an e-mail went out.
+    """
+    try:
+        ticket = get_open_escalation_ticket_for_chat(chat_id, db)
+        if ticket is None:
+            return False
+        sent = _notify_tenant_ticket_update(ticket, db, force=True)
+        if sent:
+            # The notify helper flushes its marker advance; commit it, or the
+            # same turn is re-delivered on the next one.
+            db.commit()
+        return sent
+    except Exception:
+        logger.warning(
+            "operator_handoff_visitor_turn_notify_failed chat_id=%s",
+            chat_id,
+            exc_info=True,
+        )
+        try:
+            db.rollback()
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return False
+
+
 def raise_ticket_priority_if_higher(
     ticket: EscalationTicket,
     trigger: EscalationTrigger,

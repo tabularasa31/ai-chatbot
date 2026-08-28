@@ -200,6 +200,7 @@ class OperatorHandler(PipelineHandler):
         # Lazy import: service.py imports the router at module load, so
         # importing the persistence helpers at module top would cycle.
         from backend.chat.service import _persist_user_only_turn
+        from backend.escalation.service import notify_support_of_visitor_turn
         from backend.operator.sessions import emit_operator_session_ended
 
         ctx.db = sync_db
@@ -240,6 +241,13 @@ class OperatorHandler(PipelineHandler):
                 optional_entity_types=ctx.optional_entity_types,
             )
             _monitor_injection(ctx, chat)
+            # The other half of the e-mail lane. An operator answering from
+            # their mailbox has no console to watch, so the visitor's reply
+            # has to be pushed to them; without it the handoff is one-way and
+            # the operator waits for an answer that arrived somewhere they
+            # cannot see. Runs after the persist (which commits), so a mail
+            # failure cannot cost the visitor their message.
+            notify_support_of_visitor_turn(chat.id, sync_db)
 
         if ctx.trace is not None:
             ctx.trace.update(

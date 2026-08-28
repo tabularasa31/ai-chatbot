@@ -171,6 +171,16 @@ def test_normalizer_falls_back_on_values_the_database_cannot_hold() -> None:
         assert _normalized_plan(stub) == "free", value
 
 
+# The tier list is spelled out in four places that no compiler relates to
+# each other: the enum, the API Literal, the TypeScript union, and the cards
+# on the settings screen. The tests below are what fails when they diverge.
+ROOT = Path(__file__).resolve().parents[1]
+API_TS = ROOT / "frontend" / "lib" / "api.ts"
+PLAN_PAGE_TSX = ROOT / "frontend" / "app" / "(app)" / "settings" / "plan" / "page.tsx"
+
+PLAN_VALUES = {p.value for p in TenantPlan}
+
+
 def test_plan_literal_matches_the_enum() -> None:
     """The API Literal and the model enum must not drift apart.
 
@@ -181,7 +191,53 @@ def test_plan_literal_matches_the_enum() -> None:
 
     from backend.tenants.schemas import TenantPlanLiteral
 
-    assert set(get_args(TenantPlanLiteral)) == {p.value for p in TenantPlan}
+    assert set(get_args(TenantPlanLiteral)) == PLAN_VALUES
+
+
+def test_typescript_union_matches_the_enum() -> None:
+    """The dashboard's own copy of the tier list must not drift either.
+
+    Nothing in either language relates these two, so adding a tier on the
+    Python side alone leaves the screen matching no card: no "Current plan"
+    badge, and both buttons live — one of them a silent downgrade. Read from
+    source rather than generated, so this test is the only thing standing
+    between those two files.
+    """
+    source = API_TS.read_text()
+    match = re.search(r"export type TenantPlan =([^;]+);", source)
+    assert match, f"TenantPlan union not found in {API_TS}"
+    union = set(re.findall(r'"([^"]+)"', match.group(1)))
+
+    assert union == PLAN_VALUES, (
+        f"{API_TS.name} lists {sorted(union)}, the TenantPlan enum has "
+        f"{sorted(PLAN_VALUES)}"
+    )
+
+
+def test_every_tier_has_a_card_on_the_settings_screen() -> None:
+    """Each tier needs a card, or it cannot be seen or switched to."""
+    source = PLAN_PAGE_TSX.read_text()
+    cards = set(re.findall(r'value:\s*"([^"]+)"', source))
+
+    assert cards == PLAN_VALUES, (
+        f"{PLAN_PAGE_TSX.name} has cards for {sorted(cards)}, the TenantPlan "
+        f"enum has {sorted(PLAN_VALUES)}"
+    )
+
+
+def test_every_tier_fits_the_column() -> None:
+    """A tier longer than the column is a write that fails in production.
+
+    Postgres truncates nothing here — it raises. The column is narrow on
+    purpose, so the check belongs next to the values rather than in a
+    reviewer's head.
+    """
+    from backend.models import Tenant
+
+    width = Tenant.__table__.columns["plan"].type.length
+    too_long = {v for v in PLAN_VALUES if len(v) > width}
+
+    assert not too_long, f"{sorted(too_long)} exceed tenants.plan VARCHAR({width})"
 
 
 def test_switching_the_plan_changes_nothing_else(

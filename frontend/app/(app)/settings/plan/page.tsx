@@ -48,6 +48,10 @@ export default function PlanSettingsPage() {
   const [notice, setNotice] = useState("");
 
   const current = data?.plan ?? null;
+  // A tier this build has no card for — the server is ahead of the frontend.
+  // Every card would read as "not your plan", so both switches would be live
+  // and one of them a downgrade the tenant never asked for. Freeze instead.
+  const unknownTier = current !== null && !TIERS.some((t) => t.value === current);
 
   async function switchTo(plan: TenantPlan) {
     setError("");
@@ -81,6 +85,13 @@ export default function PlanSettingsPage() {
         <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
           {error ||
             (loadError instanceof Error ? loadError.message : "Failed to load your plan")}
+        </div>
+      )}
+
+      {unknownTier && (
+        <div className="rounded-lg bg-amber-50 text-amber-900 text-sm px-3 py-2 border border-amber-200">
+          Your workspace is on a plan this page does not know about
+          ({current}). Reload, and get in touch if it stays this way.
         </div>
       )}
 
@@ -134,7 +145,7 @@ export default function PlanSettingsPage() {
                 <button
                   type="button"
                   onClick={() => switchTo(tier.value)}
-                  disabled={saving || isCurrent || current === null}
+                  disabled={saving || isCurrent || current === null || unknownTier}
                   className={`px-4 py-2 text-sm font-medium rounded-lg disabled:opacity-40 transition-colors ${
                     tier.value === "pro"
                       ? "bg-violet-600 hover:bg-violet-700 text-white"

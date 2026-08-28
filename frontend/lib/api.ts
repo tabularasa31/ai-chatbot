@@ -81,6 +81,18 @@ export type TenantMember = {
   /** "pending" until the invitee sets a password from their invite link. */
   status: "active" | "pending";
   created_at: string;
+  /**
+   * When this person's operator seat was granted, or null for no seat.
+   * An invite grants one, so in practice only a workspace's founding owner
+   * is ever null here.
+   */
+  seat_granted_at: string | null;
+};
+
+export type TenantMemberList = {
+  items: TenantMember[];
+  /** How many members hold a seat — the figure the seats screen prices. */
+  seats: number;
 };
 
 export type InviteMemberResponse = {
@@ -112,12 +124,6 @@ export type DisclosureLevel = "detailed" | "standard" | "corporate";
 
 export type DisclosureConfigResponse = {
   level: DisclosureLevel;
-};
-
-export type TenantPlan = "free" | "pro";
-
-export type TenantPlanResponse = {
-  plan: TenantPlan;
 };
 
 export type SupportSettingsResponse = {
@@ -666,31 +672,23 @@ export const api = {
     },
   },
   members: {
-    async list(): Promise<TenantMember[]> {
+    async list(): Promise<TenantMemberList> {
       const res = await apiFetch(`${BASE_URL}/tenants/members`);
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load team members"));
-      return ((data as { items?: TenantMember[] }).items ?? []) as TenantMember[];
+      const body = data as Partial<TenantMemberList>;
+      return { items: body.items ?? [], seats: body.seats ?? 0 };
     },
-    async invite(email: string, role: TenantRole): Promise<InviteMemberResponse> {
+    /** Always invites an operator: the workspace's one owner created it. */
+    async invite(email: string): Promise<InviteMemberResponse> {
       const res = await apiFetch(`${BASE_URL}/tenants/members/invite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role }),
+        body: JSON.stringify({ email }),
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send the invite"));
       return data as InviteMemberResponse;
-    },
-    async setRole(memberId: string, role: TenantRole): Promise<TenantMember> {
-      const res = await apiFetch(`${BASE_URL}/tenants/members/${memberId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role }),
-      });
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to change the role"));
-      return data as TenantMember;
     },
     async remove(memberId: string): Promise<void> {
       const res = await apiFetch(`${BASE_URL}/tenants/members/${memberId}`, {
@@ -700,23 +698,26 @@ export const api = {
         throw new Error(getErrorMessage(await parseJsonSafe(res), "Failed to remove the member"));
       }
     },
-  },
-  plan: {
-    async get(): Promise<TenantPlanResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/plan`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load your plan"));
-      return data as TenantPlanResponse;
-    },
-    async update(plan: TenantPlan): Promise<TenantPlanResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/plan`, {
+    /**
+     * Take a seat for yourself. Owner-only, and about the caller alone —
+     * everybody else is seated by their invitation.
+     */
+    async takeOwnSeat(): Promise<TenantMember> {
+      const res = await apiFetch(`${BASE_URL}/tenants/members/me/seat`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to change your plan"));
-      return data as TenantPlanResponse;
+      const data = await parseJsonSafe(res);
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to take a seat"));
+      return data as TenantMember;
+    },
+    /** Give your own seat back. */
+    async giveUpOwnSeat(): Promise<TenantMember> {
+      const res = await apiFetch(`${BASE_URL}/tenants/members/me/seat`, {
+        method: "DELETE",
+      });
+      const data = await parseJsonSafe(res);
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to give up your seat"));
+      return data as TenantMember;
     },
   },
   support: {

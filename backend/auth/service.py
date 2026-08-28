@@ -12,6 +12,7 @@ from backend.core.config import settings
 from backend.core.security import ALGORITHM, create_access_token, hash_password, verify_password
 from backend.models import User
 from backend.models.base import _utcnow
+from backend.seats.service import grant_seat
 
 ACCESS_TOKEN_EXPIRE_SECONDS = 24 * 60 * 60  # 24 hours
 
@@ -116,6 +117,19 @@ def reset_password(token: str, new_password: str, db: Session) -> bool:
     Validate reset token and update password.
 
     Returns True if successful, False if token invalid/expired.
+
+    **This is also where an invitation is accepted**, because an invite and a
+    reset are the same token (see ``tenants.members_service``). So it is where
+    an invited colleague's operator seat is granted: joining is accepting, not
+    being invited, and a pending invitee — a placeholder for a person who may
+    never exist — holds no seat and costs nothing until they turn up.
+
+    The grant is conditioned on the row having been a *pending invitee*
+    (in a workspace, not yet verified) as it was read, not on this being a
+    reset at all. Two cases would otherwise be wrong: a self-registered owner
+    mid-signup has no workspace yet, so there is nothing to seat them in; and
+    an owner who deliberately gave their seat back would have it silently
+    handed to them again by their next forgotten password.
     """
     now = _utcnow()
     user = (
@@ -129,6 +143,10 @@ def reset_password(token: str, new_password: str, db: Session) -> bool:
     if not user:
         return False
 
+    # Read before the write below flips it: after that, an invitee accepting
+    # and a member resetting are indistinguishable.
+    accepting_an_invite = user.tenant_id is not None and not user.is_verified
+
     user.password_hash = hash_password(new_password)
     user.reset_password_token = None
     user.reset_password_expires_at = None
@@ -136,5 +154,7 @@ def reset_password(token: str, new_password: str, db: Session) -> bool:
     user.is_verified = True
     user.verification_token = None
     user.verification_expires_at = None
+    if accepting_an_invite:
+        grant_seat(user)
     db.commit()
     return True

@@ -39,7 +39,17 @@ Full reset flow:
 
 ### Roles and team members
 
-A workspace has two roles, stored as a plain string in `users.role`:
+A workspace has **exactly one owner: the person who created it.** Everybody
+else is an operator. The role is stored as a plain string in `users.role`,
+written once when the account is created — by `create_tenant` for a founder,
+as `operator` by `invite_member` for everybody else — and never changed after
+that. There is no promotion, no demotion, no route that edits a role, and no
+role field on an invitation: an invite that could name a role would be an
+invite that could mint a second owner.
+
+So this is not a permission model with transitions to reason about. It is one
+fact about how an account came into being, and two sets of privileges that
+follow from it:
 
 | | `owner` | `operator` |
 |---|---|---|
@@ -55,9 +65,11 @@ Publishing is owner-only because an FAQ publish changes the bot's answers for ev
 
 Routes enforce this with `require_owner` / `require_member` from `backend/auth/middleware.py`, built by `require_role(*roles)`. A member holding the wrong role gets **403**; a principal belonging to no workspace at all (`users.tenant_id` is nullable) gets **404**, the same answer every tenant-scoped route already gives them. Cross-tenant resources still answer **404**, because the role check only inspects the caller — the tenant-scoped lookup after it is what refuses the row.
 
-Four owner-only routes manage the team: `POST /tenants/members/invite`, `GET /tenants/members`, `PATCH /tenants/members/{id}`, `DELETE /tenants/members/{id}`.
+Five owner-only routes manage the team: `POST /tenants/members/invite`, `GET /tenants/members`, `DELETE /tenants/members/{id}`, and `PUT` / `DELETE /tenants/members/me/seat` for the owner's own seat.
 
-**Nobody can lock a workspace out of itself.** Nobody may remove *or demote* themselves — dropping your own last privilege is the one mistake with no undo, since the surface that would restore it is the one you just left, so handing over is always a two-party act (promote a successor, they demote you). The last owner cannot be removed or demoted by anyone either. Crucially, `count_owners` counts **verified** owners: a pending invitee is a row with a role and no person behind it, and counting them used to let an owner invite `typo@exmaple.com` as owner, see the count read 2, and demote themselves into a workspace whose only "owner" was a dead link. Both guards take a `FOR UPDATE` lock on the workspace row first, because two owners removing each other write to *different* rows — row-level conditional UPDATEs (the `claim_chat` pattern) do not serialise that; a shared lock does.
+**Nobody can lock a workspace out of itself.** Nobody may remove themselves — an owner who did would have no way back in — and the owner cannot be removed by anyone. With one owner per workspace those two rules are the same rule seen twice: only an owner may remove, so a target who is an owner is always the caller, and the self-removal check refuses first. The owner check is kept anyway, as one comparison on the row already in hand: it states the invariant where a reader will look for it, and it is what would hold if a second owner ever appeared through a data repair. It replaced a count of verified owners across rows, and the `FOR UPDATE` lock on the workspace that such a count needed went with it — the predicate is now about the single row being deleted, so two concurrent removals cannot conspire.
+
+**The owner's only exit is deleting the workspace.** There is nobody to hand it to and no way to remove yourself, so `DELETE /tenants/{id}` (owner-only, and it deletes the members too) is the whole of leaving. Nothing in the dashboard offers a departure that cannot happen.
 
 **Removing a member hands back the chats they were holding.** A `live` chat with no operator is a visitor typing into nothing: `OperatorHandler` swallows every turn while the chat is live, so without this nobody answers until the sweeper's idle release fires up to an hour later. Removal runs the same `release_to_bot` the release button does, which also closes the dangling `operator_sessions` stretch.
 
@@ -67,13 +79,23 @@ Four owner-only routes manage the team: `POST /tenants/members/invite`, `GET /te
 
 Deleting would erase attribution, because five of the six FKs into `users` are `ON DELETE SET NULL` — every operator message and every `operator_sessions` row would lose its author silently. So the account goes and the signature stays: `messages.operator_label`, `operator_sessions.operator_label`, `gap_dismissals.dismissed_by_label` and `tenant_api_keys.created_by_label` are written with the departing member's e-mail in the same transaction as the delete. They are NULL while the account exists — read the author through the FK, fall back to the label once it is gone. `chats.assigned_operator_id` is live state rather than history and is not stamped; `pii_events.actor_user_id` is never written by anything, so it has nothing to preserve.
 
-**An unaccepted invitation expires and the row goes with it.** An invite creates a real (unverified, unusable) `users` row, so an expired token alone would leave the address occupied forever: the invited person cannot register on their own, and only the inviting owner could free it. `backend/jobs/expired_invitations_purge.py` deletes member rows that are unverified with an expired invite token, hourly. Because `count_owners` ignores unverified rows, purging an owner invitation can never strand a workspace.
+**An unaccepted invitation expires and the row goes with it.** An invite creates a real (unverified, unusable) `users` row, so an expired token alone would leave the address occupied forever: the invited person cannot register on their own, and only the inviting owner could free it. `backend/jobs/expired_invitations_purge.py` deletes member rows that are unverified with an expired invite token, hourly. It can never strand a workspace, and now by construction rather than by a filter: every invitee is an operator, so the set it sweeps contains no owners at all. It also has no seat to release — a pending invitee holds none.
 
 **The invite token is the password-reset token** (`reset_password_token` + its expiry, redeemed by `POST /auth/reset-password`) with a 7-day TTL instead of the reset's hour. An invite and a reset are the same act — prove the address, set a password — and nothing needs to distinguish them at rest: the two links differ by path (`/accept-invite` vs `/reset-password`), and "invited but not accepted" is derivable as a member who is not yet verified.
 
 Because they share a column, `POST /auth/forgot-password` re-sends the **invitation** for a pending invitee rather than issuing a reset. A pending invitee cannot log in, so "Forgot password" is precisely what they press — and a reset there would overwrite the invite token and cut its life to an hour, after which the invite link reports "invalid or expired" and the owner starts re-inviting in a loop. The other direction needs no handling: `invite_member` answers 409 for a verified member, so a re-invite can never void a live reset.
 
-**Roles are strict on write, tolerant on read.** Request bodies use a closed `Literal` (`TenantRoleRequest`), so the API cannot be talked into storing a role this build does not implement. Responses report `users.role` as a plain string, because a closed response type turns the first row holding an unknown role into a 500 on `GET /tenants/me` — which the app shell and the sidebar call on mount — taking out the whole dashboard for that user. That is reachable with no bug at all: deploy a build that adds a third role, let it write one row, roll back. Every consumer tests for `owner` explicitly, so an unrecognised role loses privilege rather than gaining it. Adding a third role means editing `backend/auth/roles.py` and `TenantRoleRequest`, and nothing else.
+**No request body carries a role, and responses report one tolerantly.** Nothing a client can send names a role, so the API cannot be talked into storing one at all. Responses report `users.role` as a plain string, because a closed response type turns the first row holding an unknown role into a 500 on `GET /tenants/me` — which the app shell and the sidebar call on mount — taking out the whole dashboard for that user. That is reachable with no bug at all: deploy a build that adds a third role, let it write one row, roll back. Every consumer tests for `owner` explicitly, so an unrecognised role loses privilege rather than gaining it.
+
+### Operator seats
+
+A seat is the per-person entitlement to **operate**, where the role governs what a person may **administer**. The two are different questions and neither implies the other. Stored as `users.seat_granted_at` (NULL means no seat, a timestamp means when one was granted), on the person because that is what is sold — and because removal deletes the row, so a departing member can never leave a seat behind.
+
+**Seats follow joining.** A colleague is seated when they *accept* their invitation (in `auth.service.reset_password`, which is also the accept-invite endpoint) and unseated when they are removed. Nothing sits in between, so somebody who has joined always holds a seat. A *pending* invitee holds none and costs nothing: they are a placeholder for a person who may never turn up, and an invitation to a typo'd address should not cost a week of a seat. The one account that can be verified, in a workspace, and hold no seat is the owner — who administers without one and takes a seat from the seats screen only if they also mean to answer from the console. Since roles never move, nobody can be put into that state by anybody else.
+
+**What a seat gates today:** `require_seated_member` on the three `/operator/*` routes — take a chat, answer in it, release it. A seatless caller gets **403** whatever their role. `backend/seats/` also carries two read helpers cut as seams for the inbound e-mail lane, `tenant_has_any_seat(tenant_id=…)` and `user_holds_seat(user_id=…)`; **neither has a caller yet**, and every escalation notification still passes `reply_to=ticket.user_email` unconditionally.
+
+**Nothing is charged.** The seats screen prices the workspace at $10 per seat per month and takes no payment: there is no billing system, no card on file, and no invoice. It replaced a `tenants.plan` tier field that modelled the same entitlement per workspace; `operator_seats_v1` dropped that column, seated every member who had already joined, and reduced any workspace holding more than one owner to its founder.
 
 ### Admin flag
 

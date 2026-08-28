@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from backend.core.crypto import encrypt_value
 from backend.core.rls import set_tenant_context
-from backend.models import Bot, Tenant, TenantPlan, TenantProfile, User
+from backend.models import Bot, Tenant, TenantProfile, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
+from backend.seats.service import release_seat
 from backend.support_config import public_support_config_dict, with_support_config
 from backend.tenants.api_keys_service import (
     create_initial_api_key,
@@ -50,6 +51,24 @@ def create_tenant(
         user = db.query(User).filter(User.id == user_id).first()
         if user:
             user.tenant_id = tenant.id
+            # Imported here rather than at module scope: ``backend.auth``
+            # eagerly imports its routes, which import this module, so a
+            # top-level import of the roles constant closes a cycle.
+            from backend.auth.roles import ROLE_OWNER
+
+            # Creating a workspace is what makes somebody its owner, so say
+            # so rather than relying on the column default. ``users.role``
+            # defaults to ``owner`` for a row created by registration, but a
+            # row that outlived an earlier workspace as an operator keeps
+            # that value — and this build has no route that could repair it,
+            # so the workspace would have a creator who can administer
+            # nothing, cannot seat themselves and cannot even delete it.
+            user.role = ROLE_OWNER
+            # And a founding owner starts seatless, whatever the row arrived
+            # holding. Same nullable ``tenant_id``, same stale row: carrying
+            # a seat here would be console access and a phantom $10 on the
+            # new workspace's screen, for a seat nobody ever took.
+            release_seat(user)
         db.add(Bot(tenant_id=tenant.id, name=name))
         # Eager-create the knowledge profile so GET /knowledge/profile
         # stays a pure read (no lazy-create side effects on GET).
@@ -206,74 +225,6 @@ def update_support_settings_for_user(
     db.refresh(tenant)
     invalidate_tenant(tenant.id)
     return get_support_settings_for_user(user_id, db)
-
-
-def get_plan_for_user(user_id: uuid.UUID, db: Session) -> str:
-    """Return the tenant's current tier. Readable by any member.
-
-    Any value the enum does not recognise — ``NULL``, an empty string, a
-    tier some later version wrote and this one has never heard of — reads as
-    ``free``, the tier that is exactly today's behaviour. The entitlement
-    therefore fails closed: a value we cannot interpret can never hand out
-    access nobody asked for.
-
-    This is not a guard against the column being *absent*. ``plan`` is a
-    mapped column, so the ORM names it in every ``SELECT`` against
-    ``tenants`` and a database that predates the migration raises
-    ``UndefinedColumn`` before any instance exists to normalise.
-    """
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    return _normalized_plan(tenant)
-
-
-def set_plan_for_user(
-    user_id: uuid.UUID, plan: str, db: Session
-) -> tuple[str, str]:
-    """Switch the tenant's tier. Owner-only.
-
-    Returns ``(previous_plan, new_plan)``. The two are equal when the request
-    asked for the tier the tenant was already on: the endpoint still succeeds
-    (a PUT is idempotent), but the caller can tell a real switch from a no-op
-    and avoid reporting a change that did not happen.
-
-    Nothing is charged and nothing is recorded as charged: this flips one
-    column. The role model that would let this narrow to a dedicated
-    permission is landing separately, so the guard here is the existing owner
-    check.
-    """
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user or getattr(user, "role", None) != "owner":
-        raise HTTPException(status_code=403, detail="Owner role required")
-    try:
-        target = TenantPlan(plan)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Unknown plan") from exc
-    previous = _normalized_plan(tenant)
-    tenant.plan = target.value
-    db.commit()
-    db.refresh(tenant)
-    invalidate_tenant(tenant.id)
-    return previous, _normalized_plan(tenant)
-
-
-def _normalized_plan(tenant: Tenant) -> str:
-    """Coerce a stored tier to a known one, falling back to ``free``.
-
-    See ``get_plan_for_user`` for why the fallback is ``free`` and what it
-    does not cover.
-    """
-    try:
-        return TenantPlan(tenant.plan).value
-    except (ValueError, TypeError):
-        # TypeError as well as ValueError: enum lookup hashes the value, so a
-        # non-hashable one raises the other exception. Either way the tier is
-        # uninterpretable and must fall back.
-        return TenantPlan.free.value
 
 
 def update_tenant(

@@ -6,7 +6,9 @@ Base auth: Depends(get_current_user) — valid JWT only.
 Dashboard / tenant APIs should use Depends(require_verified_user) unless a route
 must work with a not-yet-verified principal (rare; login/register stay public).
 Routes that only one role may reach add Depends(require_owner) (or
-Depends(require_member)) on top — see ``require_role`` below.
+Depends(require_member)) on top — see ``require_role`` below. Routes that a
+seat pays for add Depends(require_seated_member), which is the same
+dependency with the seat axis switched on.
 """
 import uuid
 from collections.abc import Awaitable, Callable
@@ -20,6 +22,7 @@ from backend.core.db import get_db
 from backend.core.rls import clear_tenant_context, set_tenant_context
 from backend.core.security import decode_access_token
 from backend.models import User
+from backend.seats.service import holds_seat
 
 security = HTTPBearer(auto_error=False)
 
@@ -85,11 +88,20 @@ async def require_verified_user(
     return current_user
 
 
-def require_role(*roles: str) -> Callable[..., Awaitable[User]]:
+def require_role(*roles: str, seat: bool = False) -> Callable[..., Awaitable[User]]:
     """Build a dependency admitting only members holding one of ``roles``.
 
     Layers on top of :func:`require_verified_user`, so the chain is
-    "valid JWT → verified e-mail → member of a workspace → right role".
+    "valid JWT → verified e-mail → member of a workspace → right role
+    → (optionally) a seat".
+
+    ``seat=True`` adds the second axis. A seat is not a role — it says whether
+    the caller may *operate*, where a role says what they may *administer* —
+    but it is checked here, in the same factory, rather than as a dependency
+    of its own that a route could be written without. A route declares one
+    dependency and gets both questions asked; there is no way to spell "seated
+    but role unchecked", and no second ``Depends`` to forget. The check costs
+    nothing: ``get_current_user`` already loaded the row the seat lives on.
 
     Status codes, deliberately:
 
@@ -105,6 +117,10 @@ def require_role(*roles: str) -> Callable[..., Awaitable[User]]:
     * **403** when the principal is a member but holds the wrong role. Not
       404: the caller is known to belong to this workspace, so refusing them
       hides nothing they could not see from their own dashboard.
+    * **403** when a seat is required and the member holds none, for the same
+      reason: a colleague of theirs may well hold one, so there is nothing to
+      hide. The message names the seat, because "insufficient role" would send
+      an owner to the members screen to fix something that is not a role.
 
     Cross-tenant reads keep returning **404** because this dependency never
     looks at the target resource — it only inspects the caller. A member of
@@ -130,6 +146,11 @@ def require_role(*roles: str) -> Callable[..., Awaitable[User]]:
                 if allowed == {ROLE_OWNER}
                 else "Insufficient role for this operation",
             )
+        if seat and not holds_seat(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This action needs an operator seat",
+            )
         return current_user
 
     return _dependency
@@ -141,6 +162,13 @@ require_owner = require_role(ROLE_OWNER)
 
 #: Any member of the workspace: the inbox, logs, knowledge-base read views.
 require_member = require_role(ROLE_OWNER, ROLE_OPERATOR)
+
+#: What a seat is sold for: taking a conversation, answering in it, handing it
+#: back. Either role passes — working conversations is what an operator is for
+#: and an owner may do it too — but only with a seat. An owner without one
+#: still administers everything; their replies simply take the ordinary e-mail
+#: path like anyone else's.
+require_seated_member = require_role(ROLE_OWNER, ROLE_OPERATOR, seat=True)
 
 
 async def require_admin_user(

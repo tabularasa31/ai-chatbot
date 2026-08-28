@@ -34,6 +34,7 @@ from backend.models import (
     OperatorState,
     User,
 )
+from backend.auth.roles import ROLE_OPERATOR
 from backend.models.base import _utcnow
 from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -62,7 +63,15 @@ def _make_workspace(
     *,
     email: str,
     name: str,
+    seated: bool = True,
 ) -> _Workspace:
+    """A verified owner with a tenant, holding a seat unless told otherwise.
+
+    A founding owner is not seated by signing up — they take a seat only if
+    they mean to answer conversations themselves. Every test below is about
+    what happens once somebody does, so the default here is seated; the seat
+    gate itself is exercised with ``seated=False``.
+    """
     token = register_and_verify_user(client, db, email=email)
     resp = client.post(
         "/tenants",
@@ -71,6 +80,11 @@ def _make_workspace(
     )
     assert resp.status_code in (200, 201), resp.text
     set_client_openai_key(client, token)
+    if seated:
+        seat = client.put(
+            "/tenants/members/me/seat", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert seat.status_code == 200, seat.text
     body = resp.json()
     return _Workspace(token, uuid.UUID(body["id"]), body["api_key"])
 
@@ -131,17 +145,23 @@ def _make_chat(
 
 
 def _second_user_in_tenant(db: Session, tenant_id: uuid.UUID, *, email: str) -> User:
-    """A colleague on the same tenant.
+    """A colleague on the same tenant: an operator, and seated.
 
-    Created directly: invites arrive in phase 0.5, but the assignment race is
-    a phase-0 guarantee and needs two operators to exercise.
+    Exactly what an invitation produces. A workspace has one owner — the
+    person who created it — and everybody invited into it is an operator who
+    holds a seat from the moment they accept.
+
+    Built directly rather than through the invite flow because these tests
+    are about the handoff rather than about joining, and the assignment race
+    needs two people who can both answer.
     """
     user = User(
         email=email,
         password_hash="x",
-        role="owner",
+        role=ROLE_OPERATOR,
         is_verified=True,
         tenant_id=tenant_id,
+        seat_granted_at=_utcnow(),
     )
     db.add(user)
     db.commit()

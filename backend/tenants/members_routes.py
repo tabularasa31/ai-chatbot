@@ -1,8 +1,22 @@
 """Team member management — owner-only.
 
-Four routes: invite, list, change role, remove. All of them mounted before
-``tenants_router`` so ``/tenants/members`` is never swallowed by that router's
-``/{tenant_id}`` catch-all.
+Five routes: invite, list, remove, and the two that take and give back the
+caller's own operator seat. All of them mounted before ``tenants_router`` so
+``/tenants/members`` is never swallowed by that router's ``/{tenant_id}``
+catch-all.
+
+**There is no role route, deliberately.** A workspace has exactly one owner —
+the person who created it — and that never moves. Everyone else is an
+operator. So there is nothing to promote to, nothing to demote from, and no
+request that could mint a second owner; the invite below does not take a role
+either.
+
+**There is no per-member seat control here either.** Inviting somebody grants
+their seat when they accept and removing them releases it, so a member is
+always seated and no route exists that could leave one stranded as somebody
+who cannot answer. The only account that can hold a workspace membership with
+no seat is the owner, who was never invited into it — which is why the two
+seat routes below address the caller and nobody else.
 
 Every handler resolves the workspace from the caller, never from the request
 body or path, so there is no tenant id to tamper with. Member lookups are
@@ -20,10 +34,12 @@ from backend.auth.middleware import require_owner
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import User
+from backend.operator.sessions import emit_operator_session_ended
+from backend.seats.service import count_seats, grant_seat, release_seat
 from backend.tenants.members_service import (
-    change_member_role,
     invite_member,
     list_members,
+    release_chats_held_by,
     remove_member,
     send_invite_email,
     workspace_name,
@@ -33,7 +49,6 @@ from backend.tenants.schemas import (
     InviteMemberResponse,
     TenantMemberListResponse,
     TenantMemberResponse,
-    UpdateMemberRoleRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +64,7 @@ def _member_to_response(member: User) -> TenantMemberResponse:
         # Unverified + already in a workspace = invite not accepted yet.
         status="active" if member.is_verified else "pending",
         created_at=member.created_at,
+        seat_granted_at=member.seat_granted_at,
     )
 
 
@@ -62,10 +78,12 @@ def list_members_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantMemberListResponse:
-    """Everyone in the workspace, with their role and invite status."""
-    members = list_members(_tenant_id(current_user), db)
+    """Everyone in the workspace, with their role, invite status and seat."""
+    tenant_id = _tenant_id(current_user)
+    members = list_members(tenant_id, db)
     return TenantMemberListResponse(
-        items=[_member_to_response(m) for m in members]
+        items=[_member_to_response(m) for m in members],
+        seats=count_seats(tenant_id=tenant_id, db=db),
     )
 
 
@@ -77,19 +95,20 @@ def invite_member_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> InviteMemberResponse:
-    """Invite someone by e-mail.
+    """Invite someone by e-mail, as an operator.
 
     Creates an account that cannot yet be logged into and mails a
-    set-password link — following it is the invitee's own act of joining.
-    409 when the address already belongs to a member of this workspace or to
-    another workspace. Re-inviting someone whose invite is still outstanding
-    succeeds and re-issues the link.
+    set-password link — following it is the invitee's own act of joining, and
+    what grants their seat. 409 when the address already belongs to a member
+    of this workspace or to another workspace. Re-inviting someone whose
+    invite is still outstanding succeeds and re-issues the link.
+
+    There is no role to choose: the workspace already has its one owner.
     """
     tenant_id = _tenant_id(current_user)
     member, token = invite_member(
         tenant_id=tenant_id,
         email=str(body.email),
-        role=body.role,
         db=db,
     )
     send_invite_email(
@@ -101,25 +120,71 @@ def invite_member_route(
     return InviteMemberResponse(member=_member_to_response(member))
 
 
-@members_router.patch("/{member_id}", response_model=TenantMemberResponse)
-def update_member_role_route(
-    member_id: uuid.UUID,
-    body: UpdateMemberRoleRequest,
+@members_router.put("/me/seat", response_model=TenantMemberResponse)
+def take_own_seat_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantMemberResponse:
-    """Change a member's role.
+    """Take a seat for yourself.
 
-    The last owner cannot be demoted, and nobody can demote themselves.
+    An owner runs the workspace without a seat and without charge. This is the
+    one thing a seat adds for them: answering conversations themselves, from
+    the console, with the reply landing in the visitor's transcript. Being the
+    owner is not a seat, so nothing grants this automatically.
+
+    Addresses the caller, never a member id: a seat for somebody else comes
+    with their invitation. Idempotent — taking a seat you already hold keeps
+    the date you took it.
     """
-    member = change_member_role(
-        tenant_id=_tenant_id(current_user),
-        actor_id=current_user.id,
-        member_id=member_id,
-        role=body.role,
-        db=db,
-    )
-    return _member_to_response(member)
+    grant_seat(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return _member_to_response(current_user)
+
+
+@members_router.delete("/me/seat", response_model=TenantMemberResponse)
+def give_up_own_seat_route(
+    current_user: Annotated[User, Depends(require_owner)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TenantMemberResponse:
+    """Give your own seat back.
+
+    The counterpart of the route above, and the reason it can exist at all: an
+    owner is allowed to hold a workspace membership with no seat, so taking one
+    must be undoable. Nobody else's seat is reachable from here — for an
+    invited member, giving the seat back is removing them.
+
+    Every conversation you were holding **when this request read them** is
+    handed back to the bot, in the same transaction as the release. Without
+    that the seat you just gave up is the seat you need to release them: the
+    chat stays ``live`` with you assigned, the bot stays muted, and
+    ``/operator/chats/{id}/release`` answers 403 because it is behind the
+    seat. The visitor would type into nothing until the sweeper's idle release
+    fired, up to an hour later, and in a one-owner workspace nobody else could
+    free it.
+
+    "When this request read them" is the honest limit, and there is a race
+    behind it: a take that passed the seat check just before this commit can
+    claim a chat just after it, leaving exactly the pinned conversation this
+    hand-back exists to prevent. It needs the same person acting from two
+    places at once — the seat being given up is the caller's own, so nobody
+    else can be taking chats with it — and the sweeper still frees the chat on
+    its idle pass. Left open rather than closed with a lock across the seat
+    and the operator tables, which would be a large mechanism for a
+    single-user timing accident.
+
+    Idempotent. It costs you nothing administratively — an owner without a seat
+    still runs the whole workspace, and only stops answering from the console.
+    """
+    closed = release_chats_held_by(current_user, db)
+    release_seat(current_user)
+    db.commit()
+    db.refresh(current_user)
+    # After the commit, as in ``remove_member``: the seat is given up either
+    # way, and a telemetry failure must not turn that into a 500.
+    for stretch in closed:
+        emit_operator_session_ended(stretch)  # type: ignore[arg-type]
+    return _member_to_response(current_user)
 
 
 @members_router.delete("/{member_id}", status_code=204, response_model=None)
@@ -128,7 +193,7 @@ def remove_member_route(
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    """Delete a member's account. Not yourself, and not the last owner.
+    """Delete a member's account. Not yourself, and not the owner.
 
     Their history keeps their signature — see
     ``members_service._stamp_attribution``.

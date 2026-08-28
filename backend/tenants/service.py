@@ -292,18 +292,19 @@ def delete_tenant(
     # unreadable once the rows are gone. Skipping this would leave the
     # workspace's seats permanently outstanding in analytics — a whole tenant
     # churning while its seat count never returns to zero.
-    # Interleaved rather than described in one pass first: the seat count each
-    # event reports is the count once that release lands, so the deletes have
-    # to accumulate between them. Otherwise every member of a five-person
-    # workspace would report four remaining seats and the count would never
-    # reach zero.
+    # Interleaved, and flushed each time round, rather than described in one
+    # pass first: the seat count each event reports is the count once that
+    # release lands, so the deletes have to accumulate between them — and the
+    # session runs with ``autoflush=False``, so nothing accumulates unasked.
+    # Otherwise every member of a five-person workspace would report four
+    # remaining seats and the count would never reach zero.
     released = []
     for member in members:
         released.append(
             capture_seat_released(db, user=member, reason=RELEASE_WORKSPACE_DELETED)
         )
         db.delete(member)
-    db.flush()
+        db.flush()
     db.delete(tenant)
     db.commit()
     invalidate_tenant(tenant_id)

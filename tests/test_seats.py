@@ -11,6 +11,7 @@ and the two helpers answering correctly when a seated member leaves.
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -280,8 +281,15 @@ def test_a_founding_owner_starts_with_no_seat(
     assert body["items"][0]["seat_granted_at"] is None
 
 
-def test_inviting_someone_seats_them(tenant: TestClient, db_session: Session) -> None:
-    """One action: the colleague is added and can answer."""
+def test_a_pending_invitee_holds_no_seat_and_is_not_counted(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The seat starts at acceptance, not at the invitation.
+
+    A pending invitee is a placeholder for a person who may never turn up, so
+    nothing is counted for them and a typo'd address costs nothing at all.
+    Fails if ``grant_seat`` is ever put back into the invite path.
+    """
     ws = _make_workspace(tenant, db_session, email="inviter@example.com")
 
     with patch("backend.tenants.members_service.send_email"):
@@ -292,11 +300,97 @@ def test_inviting_someone_seats_them(tenant: TestClient, db_session: Session) ->
         )
 
     assert resp.status_code == 201, resp.text
-    assert resp.json()["member"]["seat_granted_at"] is not None
-    # Counted from the moment of the invitation, before it is accepted: that
-    # is what the screen prices.
+    assert resp.json()["member"]["status"] == "pending"
+    assert resp.json()["member"]["seat_granted_at"] is None
+    invitee = db_session.query(User).filter(User.email == "invited@example.com").one()
+    assert invitee.seat_granted_at is None
+
     listing = tenant.get("/tenants/members", headers=ws.auth).json()
-    assert listing["seats"] == 1
+    assert listing["seats"] == 0
+    assert count_seats(tenant_id=ws.tenant_id, db=db_session) == 0
+    # The only member row in this workspace is a pending one, so the
+    # workspace-level helper must say no as well.
+    assert tenant_has_any_seat(tenant_id=ws.tenant_id, db=db_session) is False
+
+
+def test_accepting_the_invitation_grants_the_seat(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Joining is what is paid for, and accepting is what joining means."""
+    ws = _make_workspace(tenant, db_session, email="accept-owner@example.com")
+    with patch("backend.tenants.members_service.send_email"):
+        invited = tenant.post(
+            "/tenants/members/invite",
+            headers=ws.auth,
+            json={"email": "accepts@example.com", "role": "operator"},
+        )
+    assert invited.status_code == 201, invited.text
+    member = db_session.query(User).filter(User.email == "accepts@example.com").one()
+
+    accepted = tenant.post(
+        "/auth/reset-password",
+        json={"token": member.reset_password_token, "new_password": OTHER_PASSWORD},
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    db_session.refresh(member)
+    assert member.seat_granted_at is not None
+    assert user_holds_seat(user_id=member.id, db=db_session) is True
+    assert tenant.get("/tenants/members", headers=ws.auth).json()["seats"] == 1
+
+
+def test_an_invitation_that_expires_unaccepted_leaves_the_count_untouched(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The purge has nothing to release, because nothing was ever granted."""
+    from backend.jobs.expired_invitations_purge import purge_expired_invitations
+
+    ws = _make_workspace(tenant, db_session, email="expiry-owner@example.com")
+    with patch("backend.tenants.members_service.send_email"):
+        tenant.post(
+            "/tenants/members/invite",
+            headers=ws.auth,
+            json={"email": "never-arrives@example.com", "role": "operator"},
+        )
+    stale = db_session.query(User).filter(User.email == "never-arrives@example.com").one()
+    stale.reset_password_expires_at = _utcnow() - timedelta(days=1)
+    db_session.commit()
+    assert count_seats(tenant_id=ws.tenant_id, db=db_session) == 0
+
+    assert purge_expired_invitations(db_session) == 1
+
+    db_session.expire_all()
+    assert count_seats(tenant_id=ws.tenant_id, db=db_session) == 0
+    assert tenant_has_any_seat(tenant_id=ws.tenant_id, db=db_session) is False
+    assert tenant.get("/tenants/members", headers=ws.auth).json()["seats"] == 0
+
+
+def test_a_password_reset_never_hands_back_a_seat_the_owner_gave_up(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Accepting and resetting share a token; only one of them seats anybody.
+
+    An owner who deliberately gave their seat back must not have it returned by
+    their next forgotten password — which is why the grant is conditioned on
+    the row having been a pending invitee rather than on the endpoint.
+    """
+    ws = _make_workspace(tenant, db_session, email="resetter@example.com")
+    assert tenant.put("/tenants/members/me/seat", headers=ws.auth).status_code == 200
+    assert tenant.delete("/tenants/members/me/seat", headers=ws.auth).status_code == 200
+
+    from backend.auth.service import create_reset_token
+
+    token = create_reset_token("resetter@example.com", db_session)
+    reset = tenant.post(
+        "/auth/reset-password",
+        json={"token": token, "new_password": OTHER_PASSWORD},
+    )
+
+    assert reset.status_code == 200, reset.text
+    owner = db_session.query(User).filter(User.id == ws.owner_id).one()
+    db_session.refresh(owner)
+    assert owner.seat_granted_at is None
+    assert count_seats(tenant_id=ws.tenant_id, db=db_session) == 0
 
 
 def test_removing_a_member_releases_their_seat(

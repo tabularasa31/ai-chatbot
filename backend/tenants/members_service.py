@@ -25,13 +25,22 @@ So no column was added. The one thing an invite does differently is live
 longer: a colleague may not read their mail within the hour a password reset
 allows.
 
-**Inviting grants a seat.** A colleague is invited in order to answer
-customers, and a member who cannot answer is not what anyone is asking for —
-so the seat comes with the invitation rather than as a second step, and the
-removal below releases it. Between those two there is nothing: an invited
-member is always seated. The one account that can sit in a workspace without
-a seat is its founding owner, who administers without one and takes a seat
-only if they also want to answer from the console. See ``backend/seats``.
+**Joining grants a seat, and joining is accepting — not being invited.** A
+colleague is invited in order to answer customers, and a member who cannot
+answer is not what anyone is asking for, so nobody has to hand out a seat as a
+second step: it arrives with the acceptance, in ``auth.service.reset_password``
+where the invitee sets their password and becomes verified. The removal below
+releases it, and between those two there is nothing — somebody who has joined
+is always seated.
+
+A *pending* invitee holds no seat and costs nothing. They have not joined; they
+are a placeholder for a person who may never exist, and a typo'd address that
+nobody ever claims should not be billed for the week its invitation lives.
+Which also leaves the expiry purge with nothing to release when it deletes one.
+
+The one account that can hold a membership with no seat is a workspace's
+founding owner, who administers without one and takes a seat only if they also
+want to answer from the console. See ``backend/seats``.
 
 **Removal deletes the account.** There is deliberately no such thing as a
 verified user with no workspace: membership and account have the same
@@ -94,7 +103,6 @@ from backend.models import (
 )
 from backend.models.base import _utcnow
 from backend.operator.sessions import emit_operator_session_ended
-from backend.seats.service import grant_seat
 
 #: How long an invite link stays usable. Longer than the one hour a password
 #: reset gets: a reset is answered by someone already at their keyboard, an
@@ -280,8 +288,9 @@ def invite_member(
     Re-inviting someone whose invite is still outstanding re-issues the token
     and applies the new role, so a lost e-mail is fixed by sending it again.
 
-    Either way the member ends up seated: the invitation and the seat are one
-    action, and the way a seat is released is the removal below.
+    No seat is granted here. The invitee is seated when they accept, so an
+    invitation that is never claimed costs nothing at all — see the module
+    docstring, and ``auth.service.reset_password`` for where the seat arrives.
     """
     existing = db.query(User).filter(User.email == email).first()
 
@@ -292,9 +301,6 @@ def invite_member(
             )
         # Invite outstanding — re-issue it rather than refusing.
         existing.role = role
-        # Idempotent, and it repairs a row that somehow lost its seat: a
-        # pending invitee is on their way in to answer conversations.
-        grant_seat(existing)
         token = _issue_invite_token(existing)
         db.commit()
         db.refresh(existing)
@@ -325,9 +331,6 @@ def invite_member(
         role=role,
         is_verified=False,
     )
-    # The seat is part of the invitation, not a second decision: one action
-    # adds the colleague and gives them what they were added to do.
-    grant_seat(member)
     token = _issue_invite_token(member)
     db.add(member)
     try:
@@ -465,7 +468,8 @@ def remove_member(
 
     This is also how a seat is released. The seat lives on the row being
     deleted, so it goes with it — there is no separate revoke to remember, and
-    no way to leave a workspace paying for a seat nobody holds.
+    no way to leave a workspace paying for a seat nobody holds. A member
+    removed before they ever accepted had no seat to release.
     """
     _lock_workspace(tenant_id, db)
     member = get_member(tenant_id, member_id, db)

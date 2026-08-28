@@ -186,8 +186,10 @@ export default function SeatsPage() {
       <div className="bg-white rounded-xl border border-slate-200 p-6">
         <h2 className="text-base font-semibold text-slate-800">Who holds a seat</h2>
         <p className="text-slate-500 text-sm mt-1 mb-4">
-          Inviting a colleague gives them a seat, so they can answer from the
-          moment they join. Removing them gives it back. Both are on the{" "}
+          A colleague gets their seat when they accept the invitation and set a
+          password, so they can answer from the moment they join — an invitation
+          nobody claims costs nothing. Removing them gives the seat back. Both
+          are on the{" "}
           <a href="/settings/members" className="text-violet-600 hover:underline">
             Team
           </a>{" "}
@@ -212,7 +214,11 @@ export default function SeatsPage() {
                 <span className="ml-auto text-xs text-slate-500">
                   {member.seat_granted_at
                     ? `Seat since ${seatDate(member.seat_granted_at)}`
-                    : "No seat"}
+                    : member.status === "pending"
+                      ? // A state they pass through, not one they sit in — and
+                        // nothing is counted for them until they arrive.
+                        "Seat on acceptance"
+                      : "No seat"}
                 </span>
               </div>
             ))}

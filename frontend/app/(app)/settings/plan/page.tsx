@@ -57,9 +57,7 @@ export default function PlanSettingsPage() {
       const response = await api.plan.update(plan);
       await mutate(response, false);
       setNotice(
-        plan === "pro"
-          ? "You're on Pro. Nothing was charged."
-          : "You're back on Free."
+        plan === "pro" ? "You're on Pro." : "You're back on Free."
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to change your plan");

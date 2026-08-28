@@ -641,6 +641,27 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load LLM alert"));
       return data as TenantLlmAlertResponse;
     },
+    /**
+     * Delete the workspace. Owner only, irreversible, and it takes the
+     * caller's own account with it — so every later request 401s, including
+     * whatever this page would try to refetch. Callers must go straight to
+     * /login rather than let that 401 be discovered by a background request.
+     *
+     * `skipAuthRedirect` is set for that reason: the generic 401 handler
+     * bounces to `/login?error=session_expired`, which would tell an owner who
+     * just deleted their workspace on purpose that their session expired.
+     */
+    async delete(tenantId: string): Promise<void> {
+      const res = await apiFetch(`${BASE_URL}/tenants/${tenantId}`, {
+        method: "DELETE",
+        skipAuthRedirect: true,
+      });
+      if (!res.ok) {
+        throw new Error(
+          getErrorMessage(await parseJsonSafe(res), "Failed to delete the workspace")
+        );
+      }
+    },
   },
   apiKeys: {
     async list(): Promise<{ items: TenantApiKeyResponse[] }> {

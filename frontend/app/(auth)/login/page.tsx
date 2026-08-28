@@ -18,6 +18,10 @@ function LoginForm() {
 
   const notVerified = searchParams.get("error") === "email_not_verified";
   const sessionExpired = searchParams.get("error") === "session_expired";
+  // Set by the owner's own workspace deletion, which takes their account with
+  // it. Without this the sign-in screen is unexplained, and the sign-in they
+  // are about to attempt cannot work.
+  const workspaceDeleted = searchParams.get("deleted") === "workspace";
 
   const onAuthTransitionComplete = useCallback(() => {
     router.replace("/dashboard");
@@ -49,6 +53,12 @@ function LoginForm() {
     <AuthCard>
       {transitioning && <AuthTransition onComplete={onAuthTransitionComplete} />}
       <h1 className={authStyles.heading}>Sign in</h1>
+      {workspaceDeleted && (
+        <div className="bg-slate-500/10 border border-slate-500/30 text-slate-200 text-sm rounded-lg px-4 py-3 mb-2">
+          Your workspace was deleted, and your account with it. There is nothing
+          left to sign in to — register again to start a new workspace.
+        </div>
+      )}
       {sessionExpired && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-200 text-sm rounded-lg px-4 py-3 mb-2">
           Your session expired. Please sign in again.

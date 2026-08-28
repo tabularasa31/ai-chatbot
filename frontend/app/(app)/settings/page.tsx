@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type DisclosureLevel } from "@/lib/api";
 import { useClientMe, useBots, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
+import DeleteWorkspaceCard from "./DeleteWorkspaceCard";
 
 const DISCLOSURE_OPTIONS: {
   value: DisclosureLevel;
@@ -516,6 +517,12 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Danger zone. Owner-gated here as well as in the sidebar, because a
+          direct URL does not go through the sidebar. */}
+      {client?.role === "owner" && client.name && (
+        <DeleteWorkspaceCard workspaceName={client.name} workspaceId={client.id} />
+      )}
     </div>
   );
 }

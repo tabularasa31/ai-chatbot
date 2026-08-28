@@ -28,6 +28,7 @@ _JOB_MODULES: tuple[str, ...] = (
     "backend.jobs._smoke",
     "backend.jobs.crawl_url",
     "backend.jobs.knowledge_extraction",
+    "backend.jobs.workspace_purge",
 )
 
 

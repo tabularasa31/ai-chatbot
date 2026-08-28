@@ -22,6 +22,12 @@ os.environ.setdefault("ENCRYPTION_KEY", "7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcr
 for _lf_var in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
     os.environ.pop(_lf_var, None)
 
+# Same reasoning for Brevo: a shell-level key makes the suite believe there is
+# a live mail account to purge contacts from, and workspace deletion then
+# refuses (503) because it cannot schedule the cleanup job against a Redis that
+# tests do not run.
+os.environ.pop("BREVO_API_KEY", None)
+
 # Patch create_engine for SQLite (pool_size/max_overflow not supported)
 import sqlalchemy as _sa
 _original_create_engine = _sa.create_engine

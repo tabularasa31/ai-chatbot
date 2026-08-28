@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.crypto import encrypt_value
 from backend.core.rls import set_tenant_context
-from backend.models import Bot, Tenant, TenantProfile, User
+from backend.models import Bot, EscalationTicket, Tenant, TenantProfile, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.seats.service import release_seat
 from backend.support_config import public_support_config_dict, with_support_config
@@ -258,6 +258,58 @@ def update_tenant(
 
 
 
+def collect_external_addresses(tenant_id: uuid.UUID, db: Session) -> list[str]:
+    """Every address this workspace put into Brevo, deduplicated.
+
+    Three sources, which together are the whole of what a workspace's existence
+    hands to our mail provider:
+
+    * its members' addresses — the owner's and every operator's, each written
+      to on verification, invitation, password reset and LLM alerts;
+    * the support inbox its escalations are routed to, when one is configured
+      (when none is, the fallback is the owner's address, already covered);
+    * the visitors' addresses on its escalation tickets, which ride out on
+      every notification as ``Reply-To``.
+
+    Read *before* the delete, because afterwards not one of these rows exists.
+    """
+    addresses: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str | None) -> None:
+        if not value:
+            return
+        normalized = value.strip()
+        if not normalized or normalized.lower() in seen:
+            return
+        seen.add(normalized.lower())
+        addresses.append(normalized)
+
+    for (email,) in db.query(User.email).filter(User.tenant_id == tenant_id).all():
+        add(email)
+
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if tenant is not None:
+        support = public_support_config_dict(
+            tenant.settings if isinstance(tenant.settings, dict) else None
+        )
+        add(support.get("l2_email"))
+
+    ticket_emails = (
+        db.query(EscalationTicket.user_email)
+        .filter(
+            EscalationTicket.tenant_id == tenant_id,
+            EscalationTicket.user_email.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+    for (email,) in ticket_emails:
+        add(email)
+
+    return addresses
+
+
 def delete_tenant(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
@@ -267,8 +319,38 @@ def delete_tenant(
     Delete tenant and its members. Verifies ownership before delete.
     CASCADE deletes all related documents/chats (already in DB schema).
     Raises 404 if not found or not owner.
+
+    Data outside our database — Langfuse traces, Brevo contacts — is erased by
+    a durable ARQ job scheduled *before* the rows go, so a vendor call that
+    fails has somewhere to be retried from once the workspace no longer exists.
+    See ``backend/jobs/workspace_purge.py`` for why that ordering, and why the
+    deletion is refused outright when the job cannot be scheduled: a workspace
+    deleted with no cleanup queued leaves conversations in Langfuse with
+    nothing left in our database naming them.
     """
     tenant = get_tenant_by_id(tenant_id, user_id, db, require_owner=True)
+
+    # Imported here rather than at module scope: the jobs package imports the
+    # queue, which imports the models and config, and a top-level import from
+    # a service this deep in the tenant graph closes a cycle.
+    from backend.jobs.workspace_purge import (
+        enqueue_workspace_purge_sync,
+        external_purge_needed,
+    )
+
+    if external_purge_needed():
+        addresses = collect_external_addresses(tenant_id, db)
+        job_id = enqueue_workspace_purge_sync(tenant_id=tenant_id, emails=addresses)
+        if job_id is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Cannot delete the workspace right now: the cleanup job "
+                    "that erases your data from our other systems could not be "
+                    "scheduled. Nothing was deleted. Please try again shortly."
+                ),
+            )
+
     # Members go with the workspace. ``users.tenant_id`` is ON DELETE SET NULL,
     # so without this every member survives as an account belonging to nothing
     # — the exact orphan that removing a member was changed to avoid, and worse

@@ -8,9 +8,9 @@ different axes and neither implies the other:
 * a seat governs whether you may **operate** — the console, replies that land
   in the chat thread, and answers that feed the knowledge loop.
 
-Without a seat, a person's replies take the ordinary e-mail path: out of
-their own mailbox, into the visitor's, never through Chat9 and never into the
-transcript.
+Without a seat, a person's reply still reaches the customer — it is mailed on
+to them — but it never enters the transcript, so the chat thread does not learn
+the question was answered and the knowledge loop gets nothing from it.
 
 **Where a seat lives.** ``users.seat_granted_at`` — nullable, NULL for no
 seat, a timestamp for the moment one was granted. The seat is an attribute of
@@ -30,8 +30,8 @@ themselves; that case is the whole reason the seat stays its own attribute
 rather than being derived from membership.
 
 **The two questions, asked at two different moments.** They are separate
-functions rather than one with a flag because they will be asked by different
-code at different times and a wrong answer means a different failure:
+functions rather than one with a flag because they are asked by different code
+at different times and a wrong answer means a different failure:
 
 * :func:`tenant_has_any_seat` — for the moment an escalation notification is
   composed: whether ``Reply-To`` carries our inbound token address or the
@@ -39,13 +39,21 @@ code at different times and a wrong answer means a different failure:
 * :func:`user_holds_seat` — for the moment a reply arrives: whether it enters
   the chat thread.
 
-**Nothing calls either of them yet.** They are seams cut for phase 1b, the
-inbound e-mail lane, which does not exist: every escalation notification today
-passes ``reply_to=ticket.user_email`` unconditionally, and there is no branch
-on a seat anywhere in the mail path. Whoever builds that lane has to add the
-calls — reading this module is not evidence that the gate is already there.
-The one place a seat is enforced today is ``require_seated_member``, which
-gates ``/operator/*``: the console, where the reply does reach the transcript.
+**Both are called by the inbound e-mail lane** (``backend/email/``), which is
+what they were cut for. ``tenant_has_any_seat`` decides which ``Reply-To`` an
+escalation notification carries — our token address when somebody in the
+workspace holds a seat, the visitor's own when nobody does. ``user_holds_seat``
+decides what happens to a reply that arrives on it: a seat holder's enters the
+chat thread, anybody else's is forwarded to the visitor by e-mail. Neither
+question decides whether the customer is answered — only how.
+
+The other place a seat is enforced is ``require_seated_member``, which gates
+``/operator/*``: the console, where the reply also reaches the transcript.
+
+**Known and accepted:** a shared support mailbox defeats per-seat accounting.
+Five people answering from ``support@example.com`` all attribute to whoever
+owns that address, and one seat covers them all. It cannot be fixed while
+attribution is by sender address.
 
 Both take keyword-only arguments named after the entity they are about, so
 handing one the other's id does not silently type-check into a plausible
@@ -81,11 +89,12 @@ def holds_seat(user: User | None) -> bool:
 def tenant_has_any_seat(*, tenant_id: uuid.UUID, db: Session) -> bool:
     """Does this **workspace** have at least one seated person?
 
-    No caller yet — see the module docstring. Written for the moment an
-    escalation notification is composed: with a seat somewhere in the
-    workspace the reply can come back through us, so ``Reply-To`` would carry
-    our token address; with none it must carry the visitor's own, or the
-    answer lands nowhere.
+    Asked when an escalation notification is composed
+    (``backend.email.reply_lane.escalation_reply_to``): with a seat somewhere
+    in the workspace the reply can come back through us, so ``Reply-To``
+    carries our token address; with none it carries the visitor's own, or the
+    answer lands nowhere. A workspace with no seat therefore sees no change at
+    all from the lane existing.
 
     Counts only people still attached to this workspace, so a member removed
     (row deleted) or detached (``tenant_id`` nulled) stops counting the
@@ -105,11 +114,12 @@ def tenant_has_any_seat(*, tenant_id: uuid.UUID, db: Session) -> bool:
 def user_holds_seat(*, user_id: uuid.UUID, db: Session) -> bool:
     """Does this **person** hold a seat?
 
-    No caller yet — see the module docstring. Written for the moment a reply
-    arrives and has been attributed to an account: a seated author's answer
-    would enter the chat thread, an unseated one's would not. A user id that
-    no longer exists answers ``False`` rather than raising — a deleted account
-    is exactly a person who no longer holds a seat.
+    Asked when a reply arrives on the inbound lane and its ``From`` has been
+    matched to an account (``backend.email.inbound.handle_inbound_reply``): a
+    seated author's answer enters the chat thread, an unseated one's is
+    forwarded to the visitor by e-mail instead. Never a refusal either way. A
+    user id that no longer exists answers ``False`` rather than raising — a
+    deleted account is exactly a person who no longer holds a seat.
     """
     return holds_seat(db.query(User).filter(User.id == user_id).first())
 

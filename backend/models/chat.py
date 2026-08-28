@@ -307,6 +307,16 @@ class EscalationTicket(Base):
     last_notified_at = Column(DateTime, nullable=True)
     last_notified_message_id = Column(PG_UUID(as_uuid=True), nullable=True)
 
+    # The inbound e-mail lane's per-ticket credential: the notification's
+    # ``Reply-To`` is ``reply+<reply_token>@<inbound domain>``, and an inbound
+    # reply is resolved back to this ticket by it. Minted only when the
+    # workspace holds a seat (a seatless one keeps the visitor's own address as
+    # ``Reply-To``, unchanged), and cleared when the ticket reaches a terminal
+    # status — which is what "revocable" means here: NULL is a token that
+    # matches nothing. Unique, so the lookup is an index scan and a collision
+    # is a write error rather than an ambiguous read.
+    reply_token = Column(String(64), nullable=True, unique=True, index=True)
+
     # When the sweeper bounced an abandoned claim back to ``open`` (an operator
     # took the chat and never wrote a word). Doubles as the once-per-ticket cap
     # on the re-notification: it is an outbound e-mail, so a second claim that

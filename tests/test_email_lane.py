@@ -270,6 +270,28 @@ def test_the_raw_text_is_the_fallback_when_brevo_did_not_split() -> None:
     assert reply.text == "Plain body"
 
 
+def test_the_delivered_to_list_is_read_as_well_as_the_to_header() -> None:
+    """Brevo's ``Recipients`` carries our plus-address when ``To`` does not.
+
+    An operator whose client put the reply address somewhere ``To`` never
+    shows it — a Bcc, a list expansion — would otherwise look like a reply
+    addressed to nothing.
+    """
+    [reply] = parse_brevo_payload(
+        {
+            "items": [
+                {
+                    "From": {"Address": "ann@agency.example"},
+                    "To": [{"Address": "team@example.com"}],
+                    "Recipients": [f"reply+hidden@{_DOMAIN}"],
+                    "ExtractedMarkdownMessage": "Done.",
+                }
+            ]
+        }
+    )
+    assert reply.token == "hidden"
+
+
 def test_a_nonsense_payload_yields_nothing_rather_than_raising() -> None:
     assert parse_brevo_payload("not a payload") == []
     assert parse_brevo_payload({"items": ["not an item"]}) == []

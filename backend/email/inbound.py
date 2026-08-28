@@ -164,7 +164,14 @@ def parse_brevo_payload(payload: Any) -> list[InboundReply]:
     for item in raw_items:
         if not isinstance(item, dict):
             continue
-        recipients = _address_list(item.get("To")) + _address_list(item.get("Cc"))
+        # ``Recipients`` first: it is Brevo's flattened delivered-to list, and
+        # it carries our plus-address even when the operator's client put it
+        # somewhere ``To`` does not show it (a Bcc, a list expansion).
+        recipients = (
+            _address_list(item.get("Recipients"))
+            + _address_list(item.get("To"))
+            + _address_list(item.get("Cc"))
+        )
         from_email, from_name = _first_address(item.get("From"))
         headers = item.get("Headers")
         # Brevo hands the reply body already separated from the quoted

@@ -6,12 +6,15 @@ whose MX points at them.
 **Authentication is layered, because none of the layers is strong alone.**
 
 1. *The path secret.* A shared secret in the URL, compared in constant time.
-   Brevo publishes no signature over inbound webhook bodies and offers no
-   place to configure one — the panel's inbound settings take a URL and
-   nothing else — so there is no HMAC to verify here. If that changes, the
-   check belongs in this function, next to the secret comparison. Without the
-   secret configured the endpoint answers 404 to everybody, which is also
-   what makes an unwired deployment behave as if the lane did not exist.
+   Brevo's inbound-parsing documentation describes the payload and no
+   authentication at all: no signature header, no HMAC, and — unlike their
+   *event* webhooks, which take custom headers on create — nothing to
+   configure on the inbound side beyond the URL itself. A secret in the path
+   is therefore the whole transport-level check. Whoever wires the panel
+   should look again for a signing option and add its verification here, next
+   to this comparison, if one has appeared. Without the secret configured the
+   endpoint answers 404 to everybody, which is also what makes an unwired
+   deployment behave as if the lane did not exist.
 2. *The per-ticket token* in the recipient address. Knowing the URL is not
    enough to write into a conversation; you need an address only somebody
    holding the notification has seen.

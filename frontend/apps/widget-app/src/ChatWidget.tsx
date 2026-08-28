@@ -285,6 +285,19 @@ export function ChatWidget({
   const [loading, setLoading] = useState(false);
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
+  // Who is answering, as the server sees it: "bot" (nobody has escalated),
+  // "waiting" (an open request nobody has picked up) or "live" (a human is in
+  // the conversation). Drives the poll cadence and nothing else — the third
+  // state is derived server-side, never stored.
+  const [handoffState, setHandoffState] = useState<"bot" | "waiting" | "live">("bot");
+  // Byline above a human's reply, localized server-side into the language the
+  // conversation is being held in. English until the server says otherwise.
+  const [operatorLabel, setOperatorLabel] = useState("Support");
+  // Cursor for /widget/messages: the id of the last message this widget knows
+  // about. A ref rather than state — polling reads it and writes it, and a
+  // re-render per poll would be pure churn.
+  const cursorRef = useRef<string | null>(null);
+  const pollInFlightRef = useRef(false);
   const [streamingText, setStreamingText] = useState<string>("");
   const [statusStage, setStatusStage] = useState<string | null>(null);
   const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
@@ -357,6 +370,8 @@ export function ChatWidget({
     setHistoryLoaded(false);
     setChatClosed(false);
     setActiveTicket(null);
+    setHandoffState("bot");
+    cursorRef.current = null;
 
     // Purge the legacy shared-key session (pre-user-scoped namespacing) so stale
     // cross-tenant data left in existing browsers is never shown again.
@@ -624,25 +639,37 @@ export function ChatWidget({
           return null;
         }
         return r.json() as Promise<{
-          messages: { role: string; content: string }[];
+          messages: { id: string; role: string; content: string }[];
           chat_ended: boolean;
           ticket_number?: string | null;
           boundary_indices?: number[];
           conversation_rotated?: boolean;
+          handoff_state?: "bot" | "waiting" | "live";
+          operator_label?: string;
         }>;
       })
       .then((data) => {
         if (cancelled || !data) return;
+        if (data.handoff_state) setHandoffState(data.handoff_state);
+        if (data.operator_label) setOperatorLabel(data.operator_label);
         if (data.messages.length > 0) {
           const boundaries = new Set(data.boundary_indices ?? []);
           const hydrated: ChatWidgetMessage[] = [];
           data.messages.forEach((m, index) => {
-            if (m.role !== "user" && m.role !== "assistant") return;
+            // Operator rows belong here as much as assistant ones do: a human
+            // answering by e-mail or from the console writes into the same
+            // transcript, and dropping them here is what used to make the
+            // whole handoff invisible.
+            if (m.role !== "user" && m.role !== "assistant" && m.role !== "operator") return;
             if (boundaries.has(index)) {
               hydrated.push(createSystemMessage("new_conversation"));
             }
             hydrated.push(createTextMessage(m.role, m.content));
           });
+          // Where the cursor poll picks up. Taken from the raw list rather
+          // than the hydrated one so a role the widget skips still advances it.
+          const lastServerMessage = data.messages[data.messages.length - 1];
+          cursorRef.current = lastServerMessage?.id ?? null;
           setMessages(hydrated);
           if (data.ticket_number) setActiveTicket(data.ticket_number);
           if (data.chat_ended) {
@@ -705,11 +732,125 @@ export function ChatWidget({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatClosed, fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
 
+  // How often to ask whether a human has written. The ladder is the whole
+  // point: a conversation the bot is handling is not polled at all, one
+  // waiting in a queue is polled lazily, and one a human is actively typing
+  // into is polled briskly enough that their reply lands while the visitor is
+  // still looking at the window.
+  const POLL_INTERVAL_LIVE_MS = 2500;
+  const POLL_INTERVAL_WAITING_MS = 20000;
+
+  const pollForOperatorMessages = useCallback(async () => {
+    if (!sessionId || pollInFlightRef.current) return;
+    pollInFlightRef.current = true;
+    try {
+      const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
+      if (cursorRef.current) params.set("after_message_id", cursorRef.current);
+      const res = await fetch(`${apiBase}/widget/messages?${params}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        messages?: { id: string; role: string; content: string }[];
+        handoff_state?: "bot" | "waiting" | "live";
+        operator_label?: string;
+        chat_ended?: boolean;
+        cursor_stale?: boolean;
+      };
+      if (data.cursor_stale) {
+        // The conversation rotated underneath us. Splicing this tail onto what
+        // is on screen would duplicate it, so re-run the bootstrap instead.
+        cursorRef.current = null;
+        setHistoryLoaded(false);
+        return;
+      }
+      if (data.handoff_state) setHandoffState(data.handoff_state);
+      if (data.operator_label) setOperatorLabel(data.operator_label);
+      const incoming = data.messages ?? [];
+      if (incoming.length > 0) {
+        cursorRef.current = incoming[incoming.length - 1].id;
+        // Only human replies are appended. The visitor's own turns and the
+        // bot's are already on screen from the send that produced them, and
+        // adding the server's copy would show each of them twice.
+        const operatorMessages = incoming.filter((m) => m.role === "operator");
+        if (operatorMessages.length > 0) {
+          setMessages((prev) => [
+            ...prev,
+            ...operatorMessages.map((m) => createTextMessage("operator", m.content)),
+          ]);
+        }
+      }
+      if (data.chat_ended === true) setChatClosed(true);
+    } catch {
+      // Transient: the next tick tries again, and the cursor has not moved.
+    } finally {
+      pollInFlightRef.current = false;
+    }
+  }, [apiBase, botId, sessionId]);
+
+  useEffect(() => {
+    // An open request is enough to start polling even before the server has
+    // reported a state: the escalation that just happened is exactly when a
+    // human might appear.
+    const shouldPoll =
+      sessionHydrated &&
+      Boolean(sessionId) &&
+      historyLoaded &&
+      !chatClosed &&
+      (handoffState !== "bot" || activeTicket !== null);
+    if (!shouldPoll) return;
+
+    const period =
+      handoffState === "live" ? POLL_INTERVAL_LIVE_MS : POLL_INTERVAL_WAITING_MS;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    const stop = () => {
+      if (timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+    const start = () => {
+      stop();
+      timer = setInterval(() => {
+        void pollForOperatorMessages();
+      }, period);
+    };
+    // A hidden tab polls nothing: the visitor is not reading, and a widget
+    // left open in a background tab for a day would otherwise poll all day.
+    // Coming back into view polls immediately rather than waiting out a tick.
+    const resync = () => {
+      if (document.hidden) {
+        stop();
+        return;
+      }
+      void pollForOperatorMessages();
+      start();
+    };
+
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", resync);
+    window.addEventListener("focus", resync);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", resync);
+      window.removeEventListener("focus", resync);
+    };
+  }, [
+    activeTicket,
+    chatClosed,
+    handoffState,
+    historyLoaded,
+    pollForOperatorMessages,
+    sessionHydrated,
+    sessionId,
+  ]);
+
   const handleStartNewChat = useCallback(() => {
     setInput("");
     setSessionId(null);
     setChatClosed(false);
     setActiveTicket(null);
+    setHandoffState("bot");
+    cursorRef.current = null;
     appendSystemMessage("new_conversation");
     clearStoredSession(botId, userIdRef.current);
     inputRef.current?.focus();
@@ -1003,6 +1144,31 @@ export function ChatWidget({
                     <div key={msg.id} className="flex justify-end">
                       <div className="max-w-[85%] rounded-2xl px-4 py-2 bg-[#f3e8ff] text-gray-800">
                         <p className="whitespace-pre-wrap">{msg.text}</p>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (msg.type === "operator") {
+                  // Visually distinct from the bot on purpose: the visitor
+                  // has to be able to tell that a person is answering them.
+                  // The byline is the server's, already in the language the
+                  // conversation is being held in.
+                  return (
+                    <div key={msg.id} className="flex items-end gap-3">
+                      <div className="max-w-[85%] rounded-2xl border border-violet-200 bg-violet-50 px-4 py-2 text-gray-800">
+                        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-violet-600">
+                          {operatorLabel}
+                        </p>
+                        <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            rehypePlugins={[rehypeHighlightSubset]}
+                            components={markdownComponents}
+                          >
+                            {msg.text}
+                          </ReactMarkdown>
+                        </div>
                       </div>
                     </div>
                   );

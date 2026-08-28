@@ -16,8 +16,13 @@ export type LlmFailureState = {
 
 export type ChatWidgetMessage =
   | {
+      // "operator" is a human answering the visitor — through the dashboard
+      // console or by replying to the escalation notification. Deliberately
+      // its own type rather than an "assistant" with a flag: it renders
+      // differently, carries a byline, and must never be counted as a bot
+      // reply by anything reading this list.
       id: string;
-      type: "assistant" | "user" | "error";
+      type: "assistant" | "user" | "error" | "operator";
       text: string;
       sources?: WidgetSource[];
     }
@@ -44,7 +49,7 @@ function createMessageId(): string {
 }
 
 export function createTextMessage(
-  type: "assistant" | "user" | "error",
+  type: "assistant" | "user" | "error" | "operator",
   text: string,
   sources?: WidgetSource[],
 ): ChatWidgetMessage {

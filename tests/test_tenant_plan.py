@@ -8,7 +8,12 @@ is allowed to make them.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from backend.models import Tenant, TenantPlan, User
@@ -29,6 +34,23 @@ def _create_tenant(client: TestClient, db: Session, email: str) -> str:
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _force_stored_plan(db: Session, tenant_id, stored: str | None) -> None:
+    """Put a value in ``tenants.plan`` that no application path would write.
+
+    Goes around the ORM instance but through the mapped column, so the
+    primary key is bound with the right type — SQLite stores these UUIDs
+    undashed, and a hand-rolled ``WHERE id = :id`` with ``str(uuid)`` matches
+    nothing and leaves the row on ``free``, which is the value the caller is
+    asserting. The rowcount check is what stops this test passing vacuously.
+    """
+    result = db.execute(
+        update(Tenant).where(Tenant.id == tenant_id).values(plan=stored)
+    )
+    assert result.rowcount == 1, "the tenant row was not updated"
+    db.commit()
+    db.expire_all()
 
 
 def test_plan_defaults_to_free(tenant: TestClient, db_session: Session) -> None:
@@ -108,6 +130,45 @@ def test_plan_requires_authentication(tenant: TestClient) -> None:
     """Neither endpoint is reachable without a token."""
     assert tenant.get("/tenants/me/plan").status_code in (401, 403)
     assert tenant.put("/tenants/me/plan", json={"plan": "pro"}).status_code in (401, 403)
+
+
+def test_unrecognised_stored_plan_reads_as_free(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """An uninterpretable stored tier fails closed.
+
+    The one security-relevant behaviour on this branch: whatever ends up in
+    the column — a tier written by a later version, a hand-edited row, a
+    partial migration — must never read as an entitlement. Written through
+    raw SQL because every path in the app refuses to store it.
+    """
+    token = _create_tenant(tenant, db_session, "plan-garbage@example.com")
+    user = db_session.query(User).filter(User.email == "plan-garbage@example.com").first()
+
+    for stored in ("enterprise", "PRO", "", "  pro  "):
+        _force_stored_plan(db_session, user.tenant_id, stored)
+
+        response = tenant.get("/tenants/me/plan", headers=_auth(token))
+
+        assert response.status_code == 200, (stored, response.text)
+        assert response.json() == {"plan": "free"}, stored
+
+
+def test_normalizer_falls_back_on_values_the_database_cannot_hold() -> None:
+    """The fallback also covers values no row can carry.
+
+    ``plan`` is NOT NULL, so a NULL tier cannot be written through the
+    database at all — the constraint rejects it, which is a stronger
+    guarantee than the fallback. These cases are therefore checked directly
+    on the normaliser rather than through a row: they are the defensive half
+    of the guard, and the point is that it degrades to ``free`` rather than
+    raising on a value it was not built for.
+    """
+    from backend.tenants.service import _normalized_plan
+
+    for value in (None, 0, object(), ["pro"]):
+        stub = SimpleNamespace(plan=value)
+        assert _normalized_plan(stub) == "free", value
 
 
 def test_plan_literal_matches_the_enum() -> None:

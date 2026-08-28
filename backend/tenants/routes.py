@@ -300,18 +300,24 @@ def put_plan_route(
     Owner-only, and free of charge: there is no payment provider behind this
     endpoint and no charge is made or recorded. It writes one column.
     """
-    plan = set_plan_for_user(current_user.id, body.plan, db)
-    try:
-        tenant = get_tenant_by_user(current_user.id, db)
-        if tenant is not None:
-            capture_event(
-                "tenant.plan.changed",
-                distinct_id=str(tenant.public_id),
-                tenant_id=str(tenant.public_id),
-                properties={"plan": plan},
-            )
-    except Exception:
-        pass
+    previous, plan = set_plan_for_user(current_user.id, body.plan, db)
+    # Only a real transition is a change. A PUT of the tier the tenant is
+    # already on still succeeds, but reporting it would assert a switch that
+    # never happened and inflate every count built on this event.
+    if previous != plan:
+        try:
+            tenant = get_tenant_by_user(current_user.id, db)
+            if tenant is not None:
+                tenant_id = str(tenant.public_id)
+                capture_event(
+                    "tenant.plan.changed",
+                    distinct_id=tenant_id,
+                    tenant_id=tenant_id,
+                    groups={"tenant": tenant_id},
+                    properties={"plan": plan, "previous_plan": previous},
+                )
+        except Exception:
+            pass
     return TenantPlanResponse(plan=plan)
 
 

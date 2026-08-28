@@ -142,6 +142,18 @@ class Chat(Base):
         default=False,
         server_default="false",
     )
+    # True iff the immediately preceding assistant reply was answered from weak
+    # retrieval (the low_similarity escalation band). Read on the next turn so
+    # the handoff offer waits for a *second* consecutive weak turn — evidence
+    # the user is actually stuck — instead of firing on a single miss whose
+    # generated answer may well have been useful. Reset to False on any reply
+    # that did not come from weak retrieval.
+    last_reply_was_low_confidence = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     # --- Live operator handoff ---
     # ``live`` mutes the bot for this chat: the visitor's turns are persisted
     # and no reply is generated. Never means "waiting" — that is derived from

@@ -549,6 +549,36 @@ class RagHandler(PipelineHandler):
         )
         _decision: Decision = decide(_turn_ctx)
 
+        # Second-attempt rule for the weak-retrieval band. ``low_similarity``
+        # means retrieval found something but scored it below the handoff
+        # floor — the answer the pipeline just generated may still be useful,
+        # and the user may only need to rephrase. Offering the handoff on that
+        # first miss throws the answer away (the pre-confirm reply replaces it)
+        # and puts a one-word "yes" in front of a user who never asked for a
+        # person. So the first weak turn keeps its answer and only arms the
+        # tracker; a second consecutive weak turn is evidence the user is
+        # actually stuck, and escalates as before.
+        #
+        # ``no_documents`` is untouched: retrieval found nothing at all, so
+        # there is no answer to preserve, and that path already asks the user
+        # to rephrase once before it escalates (see steps/retrieval.py).
+        #
+        # The session-window guard mirrors the zero-hits tracker: once the
+        # inactivity sweeper has reported the session ended, a user resuming
+        # days later starts from a clean first attempt.
+        _defer_low_similarity = (
+            escalate
+            and esc_trigger == EscalationTrigger.low_similarity
+            and bool(chunk_texts)
+            and not (
+                chat.last_reply_was_low_confidence
+                and chat.session_ended_event_at is None
+            )
+        )
+        if _defer_low_similarity:
+            escalate = False
+            esc_trigger = None
+
         # Enforce policy decision: clarify_loop_limit and loop_detected escalations
         # must become real escalations even when the RAG pipeline did not
         # independently recommend it. Both route through the same pre-confirm
@@ -590,6 +620,7 @@ class RagHandler(PipelineHandler):
                     "escalate": escalate,
                     "trigger": esc_trigger.value if esc_trigger else None,
                     "reliability_score": reliability_score,
+                    "low_similarity_deferred": _defer_low_similarity,
                 }
             )
             if reliability_score == "low" or escalate:
@@ -832,6 +863,7 @@ class RagHandler(PipelineHandler):
             user_content=ctx.question,
             assistant_content=answer,
             set_rephrase_flag=_escalation_render_failed_on_zero_hits,
+            set_low_confidence_flag=_defer_low_similarity,
             document_ids=document_ids,
             extra_tokens=tokens_used,
             optional_entity_types=ctx.optional_entity_types,

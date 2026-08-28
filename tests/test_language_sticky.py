@@ -622,6 +622,18 @@ def test_rag_escalation_engages_pre_confirm_fsm(
     """
     tenant_id, api_key = _chat_test_setup(tenant, db_session, "rag-escalate@example.com")
     session_id = uuid.uuid4()
+    # A low_similarity escalation waits for a second consecutive weak turn, so
+    # start the chat already carrying the tracker — this test is about what the
+    # pre_confirm reply looks like once it does fire, not about when it fires
+    # (see tests/test_low_confidence_second_attempt.py for that).
+    db_session.add(
+        Chat(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            last_reply_was_low_confidence=True,
+        )
+    )
+    db_session.flush()
     _patch_process_chat_dependencies(
         monkeypatch,
         {"what is your support email?": _detection("en")},

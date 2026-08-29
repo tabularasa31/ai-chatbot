@@ -111,6 +111,11 @@ from backend.models import (
 )
 from backend.models.base import _utcnow
 from backend.operator.sessions import emit_operator_session_ended
+from backend.seats.events import (
+    RELEASE_MEMBER_REMOVED,
+    capture_seat_released,
+    emit_seat_change,
+)
 
 #: How long an invite link stays usable. Longer than the one hour a password
 #: reset gets: a reset is answered by someone already at their keyboard, an
@@ -411,6 +416,11 @@ def remove_member(
     deleted, so it goes with it — there is no separate revoke to remember, and
     no way to leave a workspace paying for a seat nobody holds. A member
     removed before they ever accepted had no seat to release.
+
+    And it is the common way a seat comes back, so it reports one:
+    ``seat_released`` fires from here exactly as it does from the give-up
+    button. Catching only the button would produce analytics in which seats
+    are taken and almost never returned.
     """
     member = get_member(tenant_id, member_id, db)
     if member.id == actor_id:
@@ -422,6 +432,11 @@ def remove_member(
             status_code=400, detail="The owner cannot be removed"
         )
     closed = release_chats_held_by(member, db)
+    # Read before the delete, and it has to be: ``users.seat_granted_at`` goes
+    # with the row, and ``messages.operator_user_id`` is SET NULL, so after the
+    # commit every removed member would report a seat that never answered
+    # anybody — the exact churn signal the event exists to carry.
+    released = capture_seat_released(db, user=member, reason=RELEASE_MEMBER_REMOVED)
     _stamp_attribution(member, db)
     db.delete(member)
     db.commit()
@@ -429,3 +444,4 @@ def remove_member(
     # telemetry failure must not turn it into a 500 for the owner.
     for stretch in closed:
         emit_operator_session_ended(stretch)  # type: ignore[arg-type]
+    emit_seat_change(released)

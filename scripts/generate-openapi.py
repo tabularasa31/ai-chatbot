@@ -17,6 +17,7 @@ it as the frontend's prebuild step.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import pathlib
@@ -72,10 +73,33 @@ def build_public_spec() -> dict:
     return spec
 
 
+def write_atomically(path: pathlib.Path, payload: str) -> None:
+    # write_text truncates first, so a run killed mid-write would leave a
+    # half-written file behind -- and the build's fallback path accepts any
+    # file that exists. Rename instead: the reader sees the old file or the
+    # new one, never a torn one.
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(payload)
+    os.replace(tmp, path)
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--raw",
+        type=pathlib.Path,
+        help="also write the unfiltered spec here, for the filter parity check",
+    )
+    args = parser.parse_args()
+
     for key, value in PLACEHOLDER_ENV.items():
         os.environ.setdefault(key, value)
     sys.path.insert(0, str(REPO_ROOT))
+
+    if args.raw:
+        from backend.main import app
+
+        write_atomically(args.raw, json.dumps(app.openapi(), indent=2) + "\n")
 
     spec = build_public_spec()
     if not spec["paths"]:
@@ -87,7 +111,7 @@ def main() -> int:
         )
         return 1
 
-    OUTPUT.write_text(json.dumps(spec, indent=2) + "\n")
+    write_atomically(OUTPUT, json.dumps(spec, indent=2) + "\n")
     print(f"[openapi] wrote {OUTPUT.relative_to(REPO_ROOT)} ({len(spec['paths'])} paths)")
     return 0
 

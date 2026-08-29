@@ -119,6 +119,26 @@ Every bot has its own `public_id` which is what customers paste into the embedda
 
 Each client provides their own OpenAI key. It is **encrypted at rest** (AES-GCM via `backend/core/crypto.py`). The platform never uses a shared OpenAI key — no markup, no shared quota. The key is decrypted in memory only when making an OpenAI API call.
 
+### Deleting a workspace
+
+A workspace has one owner, fixed at creation, and ownership cannot be handed over. Deleting the workspace is therefore the owner's only way out, and `DELETE /tenants/{tenant_id}` is a documented route rather than a hidden one — hiding it made the exit harder to find without making it any harder to perform. The dashboard surfaces it at `/settings`, behind a confirmation that requires typing the workspace's name.
+
+**No grace period.** Confirmation, then immediate deletion. No soft delete, no restore window, no support-side recovery. This was decided deliberately rather than inherited: a soft delete is much cheaper to add now than to retrofit onto a schema full of cascades, and the decision to skip it should be revisited if it ever stops being true that an accidental deletion costs a customer nothing they can't rebuild.
+
+**What it destroys.** Every account belonging to the workspace, the owner's included — nobody survives as an account belonging to nothing. Cascades take conversations, messages, documents, embeddings, escalation tickets and API keys. The widget stops answering on the customer's site immediately.
+
+**Data outside Postgres**, decided per system rather than as one policy:
+
+| System | On deletion | Why |
+|---|---|---|
+| PostHog | **kept** | Behavioural metadata only — identifiers, durations, outcomes. No conversation text, no personal data. Product metrics stay comparable across time rather than being rewritten whenever a workspace leaves. |
+| Langfuse | **deleted** | Traces hold question previews and answers — the conversations themselves. Self-hosting makes it our infrastructure, not a third party; it does not make the data ours. No retention window is configured (`07-observability-rollout.md` still lists it under Remaining Gaps), so nothing expires on its own. |
+| Brevo | **deleted** | Addresses: members', and the support inbox escalations are routed to. Visitor addresses are in scope too, though today they only ride out as `replyTo`, which Brevo does not turn into a contact. |
+
+Both external purges run in one durable ARQ job (`backend/jobs/workspace_purge.py`) **enqueued before the local delete**, carrying everything it needs in `background_jobs.payload` so it depends on no row the delete is about to destroy. If the job cannot be scheduled, the deletion is refused with `503` and nothing is deleted. Read that module's docstring before changing any of this — the ordering, the `tenant_id=None` on the status row, and the use of `arq.Retry` each exist for a reason that is not obvious from the code alone.
+
+**What it cannot reach.** Copies already taken out of those systems — an exported eval dataset, a downloaded CSV, a screenshot in a ticket. Customer-facing copy therefore says "everything we hold for this workspace" and never "nowhere does it remain", which is a promise nobody can keep.
+
 ---
 
 ## 3. Document Upload & Processing

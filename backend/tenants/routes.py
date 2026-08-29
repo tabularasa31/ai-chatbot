@@ -333,15 +333,46 @@ def get_tenant_by_id_route(
     return _tenant_to_response(tenant, db)
 
 
-@tenants_router.delete("/{tenant_id}", status_code=204, response_model=None, include_in_schema=False)
+@tenants_router.delete(
+    "/{tenant_id}",
+    status_code=204,
+    response_model=None,
+    summary="Delete your workspace",
+)
+# The most destructive route in the file, and now a documented one. The
+# neighbouring key routes are limited at 10-20/hour; this needs far less, since
+# an owner has exactly one workspace and succeeding once leaves them with no
+# credentials to try again.
+@limiter.limit("5/hour", key_func=owner_jwt_rate_limit_key)
 def delete_tenant_route(
+    request: Request,
     tenant_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    """
-    Delete tenant (protected JWT).
+    """Permanently delete your workspace. Owner only, and irreversible.
 
-    Returns 204 No Content. Error 404 if not found or not owner.
+    A workspace has one owner, fixed at creation and impossible to hand over,
+    so this is the only exit — which is why it is documented rather than
+    hidden. Hiding it made the exit harder to *find* without making it any
+    harder to perform.
+
+    Deletes everything we hold for the workspace: conversations, escalation
+    tickets, documents and their embeddings, API keys, and every account
+    belonging to it — the owner's included, so the caller's own credentials
+    stop working the moment this returns. Data in the systems we send to
+    (Langfuse traces, Brevo contacts) is erased by a background job scheduled
+    before the rows are removed. Copies already taken out of those systems by
+    somebody — an export, a screenshot — are beyond our reach.
+
+    There is no grace period and no recovery: no undo, no support-side restore.
+    The widget stops answering on the tenant's site immediately.
+
+    The path id is the confirmation: it must be the caller's own workspace.
+    The dashboard additionally makes the owner type the workspace name.
+
+    Returns 204 No Content. 404 if the workspace is not the caller's, 403 if
+    the caller is not its owner, 503 if the external cleanup could not be
+    scheduled — in which case nothing was deleted and the call can be retried.
     """
     delete_tenant(tenant_id, current_user.id, db)

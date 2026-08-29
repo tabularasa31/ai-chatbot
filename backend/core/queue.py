@@ -110,8 +110,20 @@ def register_job(
 
     The wrapper updates the ``background_jobs`` status row at start, success,
     and failure. ``max_attempts`` mirrors ARQ's ``max_tries`` for the function.
-    Failures are re-raised so ARQ schedules the retry; the final failure flips
-    the row to ``dead_letter``.
+
+    **Retrying is opt-in, and a plain ``raise`` is not it.** ARQ re-queues a job
+    only for ``arq.Retry``, ``arq.RetryJob`` and ``CancelledError``; every other
+    exception is a *permanent* failure (``arq/worker.py`` — the ``else:`` branch
+    sets ``finish = True``), and ``max_tries`` is never consulted because the
+    job is never re-queued. A job that wants the retries its ``max_attempts``
+    advertises must ``raise arq.Retry(defer=...)`` itself — see
+    ``backend/jobs/workspace_purge.py``.
+
+    Consequences for the status row: a job that raises normally lands on
+    ``failed`` after one attempt and never reaches ``dead_letter``, because
+    ``dead_letter`` is written when the attempt count reaches ``max_attempts``
+    and the count never advances. Alerting keyed on ``dead_letter`` must not be
+    the only thing watching a job that raises plainly.
     """
 
     def decorator(fn: JobFunc) -> JobFunc:

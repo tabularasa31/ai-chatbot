@@ -35,6 +35,12 @@ from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import User
 from backend.operator.sessions import emit_operator_session_ended
+from backend.seats.events import (
+    RELEASE_GIVEN_UP,
+    capture_seat_granted,
+    capture_seat_released,
+    emit_seat_change,
+)
 from backend.seats.service import count_seats, grant_seat, release_seat
 from backend.tenants.members_service import (
     invite_member,
@@ -136,9 +142,14 @@ def take_own_seat_route(
     with their invitation. Idempotent — taking a seat you already hold keeps
     the date you took it.
     """
+    # Described before the grant, reported after the commit: taking a seat you
+    # already hold is idempotent, and only the pre-grant state can tell that
+    # from a first seat. See ``backend.seats.events``.
+    granted = capture_seat_granted(db, user=current_user)
     grant_seat(current_user)
     db.commit()
     db.refresh(current_user)
+    emit_seat_change(granted)
     return _member_to_response(current_user)
 
 
@@ -177,6 +188,10 @@ def give_up_own_seat_route(
     still runs the whole workspace, and only stops answering from the console.
     """
     closed = release_chats_held_by(current_user, db)
+    # Described before the release, which is the write that destroys the two
+    # facts the event carries — how long the seat was held, and whether its
+    # holder ever answered anything since taking it.
+    released = capture_seat_released(db, user=current_user, reason=RELEASE_GIVEN_UP)
     release_seat(current_user)
     db.commit()
     db.refresh(current_user)
@@ -184,6 +199,7 @@ def give_up_own_seat_route(
     # way, and a telemetry failure must not turn that into a 500.
     for stretch in closed:
         emit_operator_session_ended(stretch)  # type: ignore[arg-type]
+    emit_seat_change(released)
     return _member_to_response(current_user)
 
 

@@ -4,13 +4,13 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "predev": "node scripts/fetch-openapi.mjs && node scripts/generate-docs.mjs",
+    "predev": "node scripts/generate-openapi.mjs && node scripts/generate-docs.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/fetch-openapi.mjs && node scripts/generate-docs.mjs",
+    "prebuild": "node scripts/generate-openapi.mjs && node scripts/generate-docs.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "docs:openapi": "node scripts/fetch-openapi.mjs && node scripts/generate-docs.mjs",
+    "docs:openapi": "node scripts/generate-openapi.mjs && node scripts/generate-docs.mjs",
     "postinstall": "fumadocs-mdx"
   },
   "dependencies": {

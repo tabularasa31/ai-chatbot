@@ -40,18 +40,25 @@ function publicPathCount() {
 }
 
 const notes = [];
+const transcripts = [];
 
 // 1. From the code in this tree. The only path that is guaranteed to describe
 //    the commit being built.
 const interpreters = [process.env.PYTHON, 'python3', 'python'].filter(Boolean);
 for (const bin of interpreters) {
-  const run = spawnSync(bin, [generator], { cwd: repoRoot, stdio: 'inherit' });
+  // Captured rather than inherited. On Vercel this attempt always fails --
+  // that build image has Node but not the backend's dependencies -- and
+  // letting its traceback through printed two stack traces into every
+  // successful production build, which is how people learn to stop reading
+  // build logs. The output is kept and printed only if every route fails.
+  const run = spawnSync(bin, [generator], { cwd: repoRoot, encoding: 'utf8' });
   if (run.error) {
     notes.push(`${bin}: ${run.error.message}`);
     continue;
   }
   if (run.status !== 0) {
     notes.push(`${bin}: exited ${run.status}`);
+    transcripts.push(`--- ${bin} ---\n${(run.stderr || run.stdout || '').trimEnd()}`);
     continue;
   }
   // Trusting the exit code alone would accept an interpreter that succeeded
@@ -60,6 +67,7 @@ for (const bin of interpreters) {
     notes.push(`${bin}: exited 0 but wrote no usable schema`);
     continue;
   }
+  process.stdout.write(run.stdout ?? '');
   process.exit(0);
 }
 
@@ -98,7 +106,8 @@ if (existing !== null) {
 }
 
 console.error(
-  `[openapi] could not obtain openapi.public.json by any route:\n` +
+  (transcripts.length ? `${transcripts.join('\n')}\n\n` : '') +
+    `[openapi] could not obtain openapi.public.json by any route:\n` +
     notes.map((n) => `  ${n}`).join('\n') +
     `\n\nThe generator imports the backend, so it needs the backend's ` +
     `dependencies:\n  pip install -r requirements.txt\n` +

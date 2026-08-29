@@ -115,6 +115,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Before the tests, because it is instant and because the failures it
+      # catches do not show up in a diff or in a test run -- they show up in
+      # Railway's release step, in production, mid-deploy. Twice in the week of
+      # 2026-08-24: two heads, then a revision id wider than its column.
+      - name: Migration graph will deploy
+        run: python scripts/check_migrations.py
+
       - name: Lint with ruff
         run: ruff check backend
 

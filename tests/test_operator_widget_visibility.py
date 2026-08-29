@@ -421,3 +421,51 @@ def test_the_poll_and_the_bootstrap_agree_on_whether_the_chat_ended(
     ).json()
 
     assert poll["chat_ended"] == history["chat_ended"]
+
+
+def test_the_byline_is_translated_once_and_then_remembered(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """One word, one language: paying a provider for it twice is waste.
+
+    ``/history`` is public and unauthenticated, and every mount of a
+    conversation that ever reached a human hit this. The population that lands
+    here is exactly the conversations this feature is about, so the "nearly all
+    conversations pay nothing" argument does not cover it.
+    """
+    from backend.widget.routes import _OPERATOR_LABEL_CACHE
+
+    _OPERATOR_LABEL_CACHE.clear()
+
+    _token, bot_id, tenant_id = _bot_and_tenant(
+        tenant, db_session, email="cache@example.com", name="Cache Co"
+    )
+    chat = _conversation(db_session, tenant_id)
+    chat.last_response_language = "de"
+    db_session.add(chat)
+    db_session.commit()
+    _say(db_session, chat, MessageRole.operator, "Erledigt.")
+
+    calls = 0
+
+    async def _fake_localize(**kwargs):
+        nonlocal calls
+        calls += 1
+        return Mock(text="Kundendienst")
+
+    url = f"/widget/history?bot_id={bot_id}&session_id={chat.session_id}"
+    with patch(
+        "backend.widget.routes.async_localize_text_to_language_result", _fake_localize
+    ):
+        first = tenant.get(url).json()
+        second = tenant.get(url).json()
+        third = tenant.get(
+            f"/widget/messages?bot_id={bot_id}&session_id={chat.session_id}"
+        ).json()
+
+    assert first["operator_label"] == "Kundendienst"
+    assert second["operator_label"] == "Kundendienst"
+    assert third["operator_label"] == "Kundendienst"
+    assert calls == 1
+
+    _OPERATOR_LABEL_CACHE.clear()

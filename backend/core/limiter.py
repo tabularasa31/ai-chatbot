@@ -59,10 +59,12 @@ def widget_poll_rate_limit_key(request: Request) -> str:
     handful of visitors on the same address share that budget and start being
     refused — and a refused poll is an operator's reply the visitor never sees.
 
-    Keying on the session gives each conversation its own allowance, and costs
-    nothing in protection: minting sessions is itself limited (see
-    ``widget_init_rate_limit_key``), so this cannot be inflated by asking for
-    more of them.
+    Keying on the session gives each conversation its own allowance. It is not
+    a limit on its own, though: the value is a query parameter and nothing here
+    checks that the session was ever minted, so a caller who rotates it has no
+    limit at all. The route stacks a loose address-keyed limit underneath for
+    that reason -- this one shares the budget out fairly, that one is the
+    ceiling.
     """
     bot_id = (
         request.query_params.get("bot_id")

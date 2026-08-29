@@ -101,6 +101,13 @@ def mint_reply_token(ticket: EscalationTicket, db: Session) -> str:
     """
     if not ticket.reply_token:
         ticket.reply_token = secrets.token_urlsafe(_TOKEN_BYTES)
+    if ticket.reply_token_revoked_at is not None:
+        # The ticket has been reopened. Minting is what puts this address into
+        # a notification going out right now, so leaving yesterday's revocation
+        # stamped would advertise an address that answers 404 — the operator
+        # replies to today's mail and their answer disappears, which is the
+        # exact failure the stamp was introduced to prevent.
+        ticket.reply_token_revoked_at = None
         db.add(ticket)
         db.flush()
     return ticket.reply_token

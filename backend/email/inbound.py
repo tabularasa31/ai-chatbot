@@ -36,6 +36,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
+from email.utils import parseaddr
 from html import unescape
 from typing import Any
 
@@ -128,14 +129,76 @@ def _address_list(raw: Any) -> list[str]:
     return []
 
 
-_BLOCK_BREAK_RE = re.compile(
-    r"(?i)</\s*(p|div|tr|li|h[1-6]|blockquote)\s*>|<\s*br\s*/?>"
-)
+#: Bodies larger than this are truncated before any pattern touches them. The
+#: endpoint is reachable by anyone who mails the address printed in every
+#: notification, and an unbounded body would be CPU spent on the event loop
+#: before a token has even been looked at. No real reply is anywhere near it.
+_MAX_HTML_BODY = 256_000
+
+_BLOCK_BREAK_RE = re.compile(r"(?i)</\s*(p|div|tr|li|h[1-6])\s*>|<\s*br\s*/?>")
+#: Written so an unbalanced opener cannot make it backtrack. The lazy form was
+#: quadratic: 512 KB of unclosed ``<style>`` took 35 seconds, on the event loop.
 _DROP_ELEMENT_RE = re.compile(
-    r"(?is)<\s*(script|style|head)[^>]*>.*?</\s*\1\s*>"
+    r"(?is)<\s*(script|style|head)[^>]*>[^<]*(?:<(?!/\s*\1\s*>)[^<]*)*</\s*\1\s*>"
 )
 _TAG_RE = re.compile(r"(?s)<[^>]+>")
 _BLANK_RUN_RE = re.compile(r"\n{3,}")
+
+#: Where a reply stops and the history it was written above begins. Every mail
+#: client marks this, and each marks it differently.
+_QUOTE_START_RE = re.compile(
+    r"""(?isx)
+    <\s*blockquote
+  | class\s*=\s*["'][^"']*\bgmail_(?:quote|attr)\b
+  | id\s*=\s*["']divRplyFwdMsg["']
+  | class\s*=\s*["'][^"']*\bmoz-cite-prefix\b
+  | class\s*=\s*["'][^"']*\byahoo_quoted\b
+    """
+)
+#: Outlook's conditional comments carry markup nobody is meant to read.
+#: ``_TAG_RE`` strips ``<!--[if mso]>`` as a tag and leaves its body visible.
+_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
+
+
+def _strip_quoted_history(html: str) -> str:
+    """Cut the quoted original off the end of a reply.
+
+    The plain-text path never needed this: Brevo hands us the reply already
+    separated from what it was replying to. The HTML fallback has no such help,
+    and without it the fallback carried our own notification back into the chat
+    bubble the visitor reads -- the ticket number, their own question, their
+    contact details, and any note a colleague had added -- and mailed it to
+    them as well.
+
+    Replying above the quote is what mail clients do by default, so cutting at
+    the first marker is right for almost everybody. The caller keeps the
+    untrimmed text when trimming would leave nothing, which covers the person
+    who typed underneath: a reply with history attached beats no reply.
+    """
+    match = _QUOTE_START_RE.search(html)
+    if match is None:
+        return html
+    head = html[: match.start()]
+    # The marker is often an attribute (``class="gmail_quote"``), so the cut
+    # lands inside the opening tag and leaves ``<div `` dangling — with no
+    # closing bracket, the tag stripper cannot see it and it surfaces as text.
+    # Drop anything after the last completed tag.
+    unclosed = head.rfind("<")
+    if unclosed > head.rfind(">"):
+        head = head[:unclosed]
+    return head
+
+
+def _render_html_text(html: str) -> str:
+    """Tags out, entities decoded, block ends turned into newlines."""
+    text = _COMMENT_RE.sub(" ", html)
+    text = _DROP_ELEMENT_RE.sub(" ", text)
+    text = _BLOCK_BREAK_RE.sub("\n", text)
+    text = _TAG_RE.sub("", text)
+    text = unescape(text)
+    text = text.replace("\xa0", " ")
+    lines = [line.strip() for line in text.split("\n")]
+    return _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
 
 
 def _text_from_html(html: str) -> str:
@@ -143,19 +206,13 @@ def _text_from_html(html: str) -> str:
 
     Not a parser and not trying to be: this runs only when Brevo produced no
     markdown and the message carried no plain-text part, and its whole job is
-    to keep a real answer from vanishing. Block ends become newlines so the
-    paragraphs of a normal reply survive, entities are decoded so the visitor
-    is not shown ``&amp;nbsp;``, and everything else is dropped.
+    to keep a real answer from vanishing.
     """
     if not html.strip():
         return ""
-    text = _DROP_ELEMENT_RE.sub(" ", html)
-    text = _BLOCK_BREAK_RE.sub("\n", text)
-    text = _TAG_RE.sub("", text)
-    text = unescape(text)
-    text = text.replace("\xa0", " ")
-    lines = [line.strip() for line in text.split("\n")]
-    return _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
+    html = html[:_MAX_HTML_BODY]
+    trimmed = _render_html_text(_strip_quoted_history(html))
+    return trimmed or _render_html_text(html)
 
 
 def _first_address(raw: Any) -> tuple[str, str]:
@@ -166,7 +223,15 @@ def _first_address(raw: Any) -> tuple[str, str]:
             str(raw.get("Name") or raw.get("name") or "").strip(),
         )
     addrs = _address_list(raw)
-    return (addrs[0].strip() if addrs else "", "")
+    if not addrs:
+        return ("", "")
+    # ``parseaddr`` because a string ``From`` is a full header value, display
+    # name and all. Returning ``Ann Smith <ann@agency.example>`` verbatim makes
+    # every address lookup miss: the seat holder becomes a stranger, the ingest
+    # half degrades to a mail relay, and the visitor's own address stops being
+    # recognised by the loopback guard.
+    name, address = parseaddr(addrs[0])
+    return (address.strip(), name.strip())
 
 
 def _header(headers: Any, name: str) -> str:
@@ -279,25 +344,41 @@ class UnknownReplyTokenError(Exception):
     """The address carried a token that matches no ticket."""
 
 
-def _is_loopback(reply: InboundReply, ticket: EscalationTicket) -> bool:
+def _is_loopback(
+    reply: InboundReply, ticket: EscalationTicket, *, sender_is_seated: bool = False
+) -> bool:
     """Would acting on this message mail somebody their own words back?
 
-    Three senders qualify: the visitor whose conversation this is, our own
-    ``EMAIL_FROM``, and anything on the inbound domain itself. Forwarding any
-    of them creates a ping-pong that neither side can stop — the visitor
-    replies to the forward, the forward comes back here, and it is forwarded
-    again. This is the one place the lane deliberately drops a message, and it
-    drops nothing an operator wrote.
+    Forwarding a message back to the person who wrote it creates a ping-pong
+    that neither side can stop: the visitor replies to the forward, the forward
+    comes back here, and it is forwarded again. This is the one place the lane
+    deliberately drops a message.
+
+    Our own ``EMAIL_FROM`` and the inbound domain are ours, so no operator can
+    send from them and dropping those is free.
+
+    The visitor's own address is the interesting one, and it is qualified by
+    whether the sender holds a seat. The address on a ticket is whatever the
+    visitor typed, and a colleague answering from a shared company mailbox may
+    be sending from exactly it — most commonly a tenant testing their own
+    widget with their own support address, where an unqualified drop makes the
+    feature look broken on first contact. A seat holder is a member of this
+    workspace, which a visitor bouncing a forward is not, so the two cases do
+    separate cleanly. The ping-pong stays impossible: a forward carries the
+    tenant's support inbox in ``Reply-To``, never this address, so a real
+    visitor's reply does not arrive here at all.
     """
     sender = (reply.from_email or "").strip().lower()
     if not sender:
         return True
-    if ticket.user_email and sender == ticket.user_email.strip().lower():
-        return True
     if settings.EMAIL_FROM and sender == settings.EMAIL_FROM.strip().lower():
         return True
     domain = (settings.inbound_email_domain or "").strip().lower()
-    return bool(domain) and sender.endswith(f"@{domain}")
+    if domain and sender.endswith(f"@{domain}"):
+        return True
+    if ticket.user_email and sender == ticket.user_email.strip().lower():
+        return not sender_is_seated
+    return False
 
 
 def _threading_matches(reply: InboundReply, ticket: EscalationTicket) -> bool | None:
@@ -437,16 +518,19 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
             InboundOutcome.ignored_empty, ticket.ticket_number, ticket.id
         )
 
-    if _is_loopback(reply, ticket):
+    # Resolved before the loopback guard, which needs to know whether the
+    # sender is a member of this workspace to tell an operator answering from
+    # the address the visitor happened to give from the visitor themselves.
+    user = user_by_email(reply.from_email, tenant_id=ticket.tenant_id, db=db)
+    seated = user is not None and user_holds_seat(user_id=user.id, db=db)
+
+    if _is_loopback(reply, ticket, sender_is_seated=seated):
         logger.info("email_lane_loopback_dropped ticket=%s", ticket.ticket_number)
         return InboundResult(
             InboundOutcome.ignored_loopback, ticket.ticket_number, ticket.id
         )
 
     thread_match = _threading_matches(reply, ticket)
-
-    user = user_by_email(reply.from_email, tenant_id=ticket.tenant_id, db=db)
-    seated = user is not None and user_holds_seat(user_id=user.id, db=db)
     chat: Chat | None = (
         db.query(Chat).filter(Chat.id == ticket.chat_id).first()
         if ticket.chat_id

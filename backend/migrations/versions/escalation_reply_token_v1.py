@@ -35,7 +35,7 @@ merge, not when the branch was opened: that is the same check this branch
 failed twice.
 
 Revision ID: escalation_reply_token_v1
-Revises: low_confidence_second_attempt_v1, operator_seats_v1
+Revises: merge_seats_low_confidence_v1
 """
 
 from __future__ import annotations

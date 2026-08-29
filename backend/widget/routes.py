@@ -830,6 +830,15 @@ def _conversation_language(chat: Chat) -> str | None:
     )
 
 
+#: ``(tenant_id, language) -> byline``. Process-local and never invalidated,
+#: because the value it holds is a translation of one fixed English word: it
+#: cannot go stale. Cleared wholesale at the cap rather than evicted one by
+#: one -- there are only ever as many entries as workspaces times languages,
+#: and the cost of a rare cold start is one call.
+_OPERATOR_LABEL_CACHE: dict[tuple[str, str], str] = {}
+_OPERATOR_LABEL_CACHE_MAX = 2048
+
+
 async def _resolve_operator_label(
     messages: list[WidgetHistoryMessage],
     conversation_language: str | None,
@@ -861,6 +870,18 @@ async def _resolve_operator_label(
     target_language = sanitize_locale(conversation_language)
     if not target_language:
         return OPERATOR_LABEL
+
+    # One word, one language, one workspace: the answer does not change, and
+    # without a cache every mount of a conversation that ever reached a human
+    # bought a live provider round trip for it -- on a public endpoint, in
+    # front of the visitor, against the tenant's own key. The docstring's cost
+    # argument holds for conversations that never reach a human, which is not
+    # the population that lands here.
+    cache_key = (tenant_id, target_language)
+    cached = _OPERATOR_LABEL_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         result = await async_localize_text_to_language_result(
             canonical_text=OPERATOR_LABEL,
@@ -873,8 +894,14 @@ async def _resolve_operator_label(
         )
     except Exception:
         logger.debug("operator label localization failed", exc_info=True)
+        # Deliberately not cached: a provider hiccup must not pin this
+        # conversation to the English byline for the life of the process.
         return OPERATOR_LABEL
-    return result.text.strip() or OPERATOR_LABEL
+    label = result.text.strip() or OPERATOR_LABEL
+    if len(_OPERATOR_LABEL_CACHE) >= _OPERATOR_LABEL_CACHE_MAX:
+        _OPERATOR_LABEL_CACHE.clear()
+    _OPERATOR_LABEL_CACHE[cache_key] = label
+    return label
 
 
 class WidgetHistoryResponse(BaseModel):
@@ -1019,6 +1046,13 @@ class WidgetMessagesResponse(BaseModel):
 
 
 @widget_router.get("/messages", response_model=WidgetMessagesResponse)
+# Two limits, and neither replaces the other. The session key shares the budget
+# out per conversation, so visitors behind one office NAT stop starving each
+# other -- but it is a client-supplied string, so on its own it is no limit at
+# all. The address key is the ceiling: loose enough for a busy shared address
+# (a live poll is ~24/min per visitor), tight enough to bound one caller
+# rotating session ids against an endpoint that does two queries per call.
+@limiter.limit("600/minute", key_func=widget_public_rate_limit_key)
 @limiter.limit("120/minute", key_func=widget_poll_rate_limit_key)
 async def widget_messages(
     request: Request,

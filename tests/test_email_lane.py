@@ -881,3 +881,225 @@ def test_a_failed_send_asks_for_the_batch_again_without_losing_it(
         .all()
     )
     assert len(rows) == 1
+
+
+def test_the_quoted_original_does_not_follow_the_reply_into_the_chat(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The HTML fallback must not carry our own notification back to the visitor.
+
+    The plain-text path never had to think about this — Brevo separates the
+    reply from what it was replying to. The fallback has no such help, and
+    without trimming it put the ticket number, the visitor's own question and
+    their contact details into the bubble they read, and mailed the same thing
+    back to them.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-quote@example.com", name="Quote", seated=True
+    )
+    _colleague(db_session, tenant_id, email="ann-quote@agency.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9104")
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    payload = _brevo_item(
+        to=address, sender="ann-quote@agency.example", extracted=None, raw_text=""
+    )
+    payload["items"][0]["RawHtmlBody"] = (
+        '<div dir="ltr">Refunds take 14 days.</div><br>'
+        '<div class="gmail_quote"><div class="gmail_attr">On Mon, Chat9 wrote:</div>'
+        "<blockquote><p>New escalation ESC-9104</p>"
+        "<p>Visitor asked: my card is 4111 1111 1111 1111</p></blockquote></div>"
+    )
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>") as send:
+        resp = _post_inbound(tenant, payload)
+
+    assert resp.status_code == 200, resp.text
+    db_session.expire_all()
+    written = (
+        db_session.query(Message)
+        .filter(Message.chat_id == chat.id, Message.role == MessageRole.operator)
+        .one()
+    )
+    assert written.content == "Refunds take 14 days."
+    assert "4111" not in written.content
+    assert "ESC-9104" not in written.content
+    # The same trimming has to hold on the copy mailed to the visitor.
+    forwarded_body = send.call_args.args[2]
+    assert "4111" not in forwarded_body
+
+
+def test_a_reply_written_below_the_quote_is_still_delivered(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Trimming must never turn an answer into an empty message.
+
+    Cutting at the first quote marker suits the overwhelming majority, who type
+    above it. For the person who types underneath, a reply with the history
+    attached beats ``ignored_empty``.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-below@example.com", name="Below", seated=True
+    )
+    _colleague(db_session, tenant_id, email="ann-below@agency.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9105")
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    payload = _brevo_item(
+        to=address, sender="ann-below@agency.example", extracted=None, raw_text=""
+    )
+    payload["items"][0]["RawHtmlBody"] = (
+        "<blockquote><p>New escalation ESC-9105</p></blockquote>"
+        "<div>Answering below: refunds take 14 days.</div>"
+    )
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        resp = _post_inbound(tenant, payload)
+
+    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
+    db_session.expire_all()
+    written = (
+        db_session.query(Message)
+        .filter(Message.chat_id == chat.id, Message.role == MessageRole.operator)
+        .one()
+    )
+    assert "refunds take 14 days" in written.content
+
+
+def test_a_reopened_ticket_advertises_an_address_that_works(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Re-minting has to lift the revocation it is handing out an address past.
+
+    A ticket closes, is reopened, and a fresh notification goes out carrying
+    the same reply address. With yesterday's revocation still stamped, the
+    operator answers today's mail and gets a 404 — the very silence the stamp
+    was introduced to end.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-reopen@example.com", name="Reopen", seated=True
+    )
+    _colleague(db_session, tenant_id, email="ann-reopen@agency.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9106")
+    escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    resolve_ticket(ticket.id, tenant_id, "done", db_session)
+    ticket = db_session.get(EscalationTicket, ticket.id)
+    assert ticket.reply_token_revoked_at is not None
+
+    # Reopened, and a new notification minted for it.
+    ticket.status = EscalationStatus.open
+    ticket.resolved_at = None
+    db_session.commit()
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    db_session.expire_all()
+    ticket = db_session.get(EscalationTicket, ticket.id)
+    assert ticket.reply_token_revoked_at is None
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        resp = _post_inbound(
+            tenant, _brevo_item(to=address, sender="ann-reopen@agency.example")
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
+
+
+def test_a_from_header_sent_as_a_string_still_identifies_the_operator(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """``From`` arriving as a full header value must not turn a seat holder into
+    a stranger.
+
+    ``token_from_recipients`` parses addresses properly; ``_first_address`` did
+    not, for the one shape it went out of its way to handle. Every lookup would
+    have missed, and the ingest half of the lane would have quietly become a
+    mail relay.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-str@example.com", name="Str", seated=True
+    )
+    _colleague(db_session, tenant_id, email="ann-str@agency.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9107")
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    payload = _brevo_item(to=address, sender="unused@example.com")
+    payload["items"][0]["From"] = "Ann Smith <ann-str@agency.example>"
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        resp = _post_inbound(tenant, payload)
+
+    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value], resp.text
+
+
+def test_an_operator_answering_from_the_address_the_visitor_gave_is_not_dropped(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The commonest false positive in the loopback guard, and the worst-placed.
+
+    The address on a ticket is whatever the visitor typed. A tenant trying
+    their own widget types their own support address, then answers from it —
+    and an unqualified drop makes the feature look broken on the first contact
+    anyone has with it. Holding a seat is what separates a member of this
+    workspace from a visitor bouncing a forward.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-self@example.com", name="Self", seated=True
+    )
+    _colleague(db_session, tenant_id, email="support@theircompany.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(
+        db_session,
+        tenant_id,
+        chat_id=chat.id,
+        number="ESC-9108",
+        user_email="support@theircompany.example",
+    )
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        resp = _post_inbound(
+            tenant,
+            _brevo_item(to=address, sender="support@theircompany.example"),
+        )
+
+    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value], resp.text
+
+
+def test_the_visitor_replying_to_a_forward_is_still_dropped(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The property the guard exists for has to survive the narrowing.
+
+    A visitor holds no seat, so their own words coming back still stop here
+    rather than being mailed to them again.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-ping@example.com", name="Ping", seated=True
+    )
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(
+        db_session,
+        tenant_id,
+        chat_id=chat.id,
+        number="ESC-9109",
+        user_email="visitor@example.com",
+    )
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    resp = _post_inbound(
+        tenant, _brevo_item(to=address, sender="visitor@example.com")
+    )
+    assert resp.json()["outcomes"] == [InboundOutcome.ignored_loopback.value]

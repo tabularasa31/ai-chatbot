@@ -298,6 +298,11 @@ export function ChatWidget({
   // re-render per poll would be pure churn.
   const cursorRef = useRef<string | null>(null);
   const pollInFlightRef = useRef(false);
+  // Mirrors of the two values that decide whether a conversation is still
+  // waiting on a human. Callbacks read them without taking them as
+  // dependencies, which would rebuild those callbacks on every poll.
+  const handoffStateRef = useRef<"bot" | "waiting" | "live">("bot");
+  const activeTicketRef = useRef<string | null>(null);
   const [streamingText, setStreamingText] = useState<string>("");
   const [statusStage, setStatusStage] = useState<string | null>(null);
   const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
@@ -437,11 +442,30 @@ export function ChatWidget({
     });
   }, []);
 
+  useEffect(() => {
+    handoffStateRef.current = handoffState;
+  }, [handoffState]);
+  useEffect(() => {
+    activeTicketRef.current = activeTicket;
+  }, [activeTicket]);
+
   const handleChatEnded = useCallback(() => {
     setChatClosed(true);
-    setSessionId(null);
     appendSystemMessage("conversation_ended");
-    clearStoredSession(botId, userIdRef.current);
+    // The visitor saying "no, that is all" closes the conversation, but it
+    // does not close the request they raised — an operator reading this
+    // morning's notification may still be writing. Dropping the session here
+    // was what actually stopped the poll (`shouldPoll` requires it), and
+    // clearing it from storage meant even a reload could not recover it: the
+    // operator's reply reached the thread and the visitor never saw it.
+    //
+    // So the session is kept for as long as somebody might still answer. The
+    // server rotates a closed conversation on the visitor's next message
+    // anyway, so nothing here depends on forgetting it.
+    if (activeTicketRef.current === null && handoffStateRef.current === "bot") {
+      setSessionId(null);
+      clearStoredSession(botId, userIdRef.current);
+    }
   }, [appendSystemMessage, botId]);
 
   const applyAssistantMessage = useCallback((
@@ -743,6 +767,7 @@ export function ChatWidget({
   const pollForOperatorMessages = useCallback(async () => {
     if (!sessionId || pollInFlightRef.current) return;
     pollInFlightRef.current = true;
+    const ticketAtDispatch = activeTicketRef.current;
     try {
       const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
       if (cursorRef.current) params.set("after_message_id", cursorRef.current);
@@ -769,7 +794,14 @@ export function ChatWidget({
         // stop: `activeTicket` is otherwise set once and never unset, so
         // without this the widget would keep asking every twenty seconds for
         // as long as the tab stayed open.
-        if (data.handoff_state === "bot") setActiveTicket(null);
+        //
+        // Only when the ticket has not changed under us. A poll dispatched
+        // before a fresh escalation can land after it, and clearing then
+        // would silence the widget on a request that had only just been
+        // raised.
+        if (data.handoff_state === "bot" && activeTicketRef.current === ticketAtDispatch) {
+          setActiveTicket(null);
+        }
       }
       if (data.operator_label) setOperatorLabel(data.operator_label);
       const incoming = data.messages ?? [];
@@ -786,7 +818,15 @@ export function ChatWidget({
           ]);
         }
       }
-      if (data.chat_ended === true) setChatClosed(true);
+      if (data.chat_ended === true) {
+        setChatClosed(true);
+      } else if (data.handoff_state === "live") {
+        // A human has picked the conversation back up, and taking it over
+        // clears `ended_at` server-side. Without this the flag was one-way:
+        // the visitor watched the operator's answer arrive with the composer
+        // still disabled and no way to respond to it.
+        setChatClosed(false);
+      }
     } catch {
       // Transient: the next tick tries again, and the cursor has not moved.
     } finally {

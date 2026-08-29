@@ -33,10 +33,11 @@ from backend.core.limiter import (
     limiter,
     widget_bot_rate_limit_key,
     widget_init_rate_limit_key,
+    widget_poll_rate_limit_key,
     widget_public_rate_limit_key,
 )
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
-from backend.escalation.service import perform_manual_escalation
+from backend.escalation.service import ACTIVE_TICKET_STATUSES, perform_manual_escalation
 from backend.models import (
     Chat,
     Document,
@@ -44,6 +45,7 @@ from backend.models import (
     EscalationTrigger,
     Message,
     MessageRole,
+    OperatorState,
 )
 from backend.observability.metrics import capture_event
 from backend.tenants.llm_alerts import (
@@ -93,6 +95,12 @@ class WidgetLinkSafetyLabels(BaseModel):
     body: str
     continue_label: str
     cancel_label: str
+
+
+#: What the widget writes above a human's reply. Canonical English, localized
+#: at runtime like every other visitor-facing string — never a per-language
+#: table in the widget bundle.
+OPERATOR_LABEL = "Support"
 
 
 class WidgetConfigResponse(BaseModel):
@@ -762,9 +770,138 @@ def _widget_chat_stream(
     )
 
 
+#: Roles the visitor is allowed to see. ``operator`` belongs here as much as
+#: ``assistant`` does: a human answering through the console or the inbound
+#: e-mail lane writes into the same thread, and filtering it out is what made
+#: the whole handoff invisible in the widget. An allowlist rather than a
+#: dropped filter so a future internal role does not leak by default.
+_VISITOR_VISIBLE_ROLES = (MessageRole.user, MessageRole.assistant, MessageRole.operator)
+
+#: Ceiling on one cursor poll. A conversation that outran the client's cursor
+#: by more than this is pathological; the tail is what matters.
+_POLL_MESSAGE_LIMIT = 100
+
+
 class WidgetHistoryMessage(BaseModel):
+    #: Server-side message id — the widget's polling cursor starts here.
+    id: uuid.UUID
     role: str
     content: str
+
+
+def _handoff_state(s, chat: Chat) -> str:
+    """``live`` / ``waiting`` / ``bot`` for the conversation, derived not stored.
+
+    There are deliberately only two stored states (``chats.operator_state``);
+    "waiting for a human" is read off the data — an active ticket nobody has
+    answered — rather than kept as a third value that would have to be held in
+    step with the escalation automaton. The widget uses this to decide how
+    often to poll: not at all under ``bot``, slowly while waiting, briskly
+    while a human is actually typing.
+    """
+    if chat.operator_state is OperatorState.live:
+        return "live"
+    has_open_ticket = (
+        s.query(EscalationTicket.id)
+        .filter(
+            EscalationTicket.chat_id == chat.id,
+            EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
+        )
+        .first()
+        is not None
+    )
+    return "waiting" if has_open_ticket else "bot"
+
+
+def _conversation_language(chat: Chat) -> str | None:
+    """The language this conversation is being held in, as best we know it.
+
+    ``last_response_language`` first — what the bot has actually been replying
+    in — then the last reliable detection, then the locale the widget was
+    mounted with. Read inside the sync session so nothing is touched on a
+    detached row afterwards.
+    """
+    user_ctx = chat.user_context if isinstance(chat.user_context, dict) else {}
+    return (
+        chat.last_response_language
+        or chat.last_detected_language
+        or user_ctx.get("locale")
+        or user_ctx.get("browser_locale")
+    )
+
+
+#: ``(tenant_id, language) -> byline``. Process-local and never invalidated,
+#: because the value it holds is a translation of one fixed English word: it
+#: cannot go stale. Cleared wholesale at the cap rather than evicted one by
+#: one -- there are only ever as many entries as workspaces times languages,
+#: and the cost of a rare cold start is one call.
+_OPERATOR_LABEL_CACHE: dict[tuple[str, str], str] = {}
+_OPERATOR_LABEL_CACHE_MAX = 2048
+
+
+async def _resolve_operator_label(
+    messages: list[WidgetHistoryMessage],
+    conversation_language: str | None,
+    *,
+    encrypted_api_key: str | None,
+    tenant_id: str,
+    bot_id: str,
+) -> str:
+    """``Support`` in the visitor's language — computed only when it is needed.
+
+    Localized here, on the responses that actually carry a human's reply,
+    rather than once on ``/widget/config``. Two reasons, and the second is the
+    one that decided it:
+
+    * a conversation that never reaches a human — nearly all of them — pays
+      nothing, whereas a label on the config response would buy an LLM round
+      trip on every widget mount for every non-English tenant;
+    * the target is the language the conversation is actually being held in
+      (``chats.last_response_language``), not the browser's locale, so a
+      visitor writing in Portuguese to a bot mounted with ``en-US`` still gets
+      a Portuguese byline.
+
+    English short-circuits inside the localizer with no provider call, and any
+    failure falls back to the canonical English: a byline in the wrong language
+    is a blemish, a missing one is a broken message.
+    """
+    if not any(m.role == MessageRole.operator.value for m in messages):
+        return OPERATOR_LABEL
+    target_language = sanitize_locale(conversation_language)
+    if not target_language:
+        return OPERATOR_LABEL
+
+    # One word, one language, one workspace: the answer does not change, and
+    # without a cache every mount of a conversation that ever reached a human
+    # bought a live provider round trip for it -- on a public endpoint, in
+    # front of the visitor, against the tenant's own key. The docstring's cost
+    # argument holds for conversations that never reach a human, which is not
+    # the population that lands here.
+    cache_key = (tenant_id, target_language)
+    cached = _OPERATOR_LABEL_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        result = await async_localize_text_to_language_result(
+            canonical_text=OPERATOR_LABEL,
+            target_language=target_language,
+            api_key=encrypted_api_key,
+            fallback_locale=target_language,
+            operation="widget_operator_label_localize",
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+        )
+    except Exception:
+        logger.debug("operator label localization failed", exc_info=True)
+        # Deliberately not cached: a provider hiccup must not pin this
+        # conversation to the English byline for the life of the process.
+        return OPERATOR_LABEL
+    label = result.text.strip() or OPERATOR_LABEL
+    if len(_OPERATOR_LABEL_CACHE) >= _OPERATOR_LABEL_CACHE_MAX:
+        _OPERATOR_LABEL_CACHE.clear()
+    _OPERATOR_LABEL_CACHE[cache_key] = label
+    return label
 
 
 class WidgetHistoryResponse(BaseModel):
@@ -772,6 +909,12 @@ class WidgetHistoryResponse(BaseModel):
     messages: list[WidgetHistoryMessage]
     chat_ended: bool
     ticket_number: str | None = None
+    #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
+    handoff_state: str = "bot"
+    #: Byline the widget writes above an operator-authored message, in the
+    #: visitor's language. Canonical English until a human has actually
+    #: written — see :func:`_resolve_operator_label`.
+    operator_label: str = OPERATOR_LABEL
     # Message indices where a newer conversation begins — the widget renders
     # a "new conversation" separator before each of them.
     boundary_indices: list[int] = []
@@ -804,7 +947,7 @@ async def widget_history(
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail="Invalid session_id") from None
 
-    def _load_history(s) -> WidgetHistoryResponse | None:
+    def _load_history(s) -> tuple[WidgetHistoryResponse, str | None] | None:
         # Latest two conversations: the current one plus the previous one as
         # read-only context after rotation (oldest first after the slice).
         chats = (
@@ -827,7 +970,7 @@ async def widget_history(
             s.query(Message)
             .filter(
                 Message.chat_id.in_([c.id for c in chats]),
-                Message.role.in_([MessageRole.user, MessageRole.assistant]),
+                Message.role.in_(_VISITOR_VISIBLE_ROLES),
             )
             .order_by(Message.created_at.asc(), Message.id.asc())
             .all()
@@ -856,24 +999,199 @@ async def widget_history(
             if ticket is not None:
                 ticket_number = ticket.ticket_number
 
-        return WidgetHistoryResponse(
+        # A rotated-away closed chat must not lock the widget input — the
+        # visitor is about to start a fresh conversation.
+        response = WidgetHistoryResponse(
             session_id=sid,
             messages=[
-                WidgetHistoryMessage(role=m.role.value, content=m.content)
+                WidgetHistoryMessage(id=m.id, role=m.role.value, content=m.content)
                 for m in messages
             ],
-            # A rotated-away closed chat must not lock the widget input — the
-            # visitor is about to start a fresh conversation.
             chat_ended=latest.ended_at is not None and not conversation_rotated,
             ticket_number=ticket_number,
             boundary_indices=boundary_indices,
             conversation_rotated=conversation_rotated,
+            handoff_state=_handoff_state(s, latest),
+        )
+        return response, _conversation_language(latest)
+
+    loaded = await run_sync(db, _load_history)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    history, conversation_language = loaded
+    history.operator_label = await _resolve_operator_label(
+        history.messages,
+        conversation_language,
+        encrypted_api_key=tenant.openai_api_key,
+        tenant_id=str(tenant.id),
+        bot_id=_bot.public_id,
+    )
+    return history
+
+
+class WidgetMessagesResponse(BaseModel):
+    session_id: uuid.UUID
+    #: Everything written after the cursor, oldest first.
+    messages: list[WidgetHistoryMessage]
+    #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
+    handoff_state: str = "bot"
+    chat_ended: bool = False
+    #: Byline for operator-authored messages, in the visitor's language.
+    operator_label: str = OPERATOR_LABEL
+    #: The cursor named a message this conversation does not contain (the
+    #: conversation rotated, or the widget is holding an id from a session that
+    #: has since been replaced). The client re-fetches ``/history`` instead of
+    #: trying to splice an unrelated tail onto what it is showing.
+    cursor_stale: bool = False
+
+
+@widget_router.get("/messages", response_model=WidgetMessagesResponse)
+# Two limits, and neither replaces the other. The session key shares the budget
+# out per conversation, so visitors behind one office NAT stop starving each
+# other -- but it is a client-supplied string, so on its own it is no limit at
+# all. The address key is the ceiling: loose enough for a busy shared address
+# (a live poll is ~24/min per visitor), tight enough to bound one caller
+# rotating session ids against an endpoint that does two queries per call.
+@limiter.limit("600/minute", key_func=widget_public_rate_limit_key)
+@limiter.limit("120/minute", key_func=widget_poll_rate_limit_key)
+async def widget_messages(
+    request: Request,
+    bot_id: Annotated[str, Query(description="Bot public ID")],
+    session_id: Annotated[str, Query(description="Chat session UUID")],
+    after_message_id: Annotated[
+        str | None, Query(description="Return messages written after this one")
+    ] = None,
+    db: AsyncSession = Depends(get_async_db),
+) -> WidgetMessagesResponse:
+    """Incremental tail of the current conversation (public, no auth).
+
+    Separate from ``/history`` rather than a mode of it, because they answer
+    different questions and pay different prices. ``/history`` bootstraps: two
+    conversations, rotation, separators, the ticket number — everything the
+    widget needs once, on mount. This is the one the widget calls every few
+    seconds while a human is answering, so it reads one conversation and
+    returns only what the caller has not seen.
+
+    The cursor is an opaque message id rather than a timestamp or an offset.
+    That is what lets this become a long-poll or an SSE stream later without
+    the client's logic changing: "everything after X" is the same request
+    whether the answer comes back immediately, in thirty seconds, or as a
+    stream of pushes. A timestamp cursor would have had to grow tie-breaking
+    rules the moment two messages shared a second, and an offset would have
+    broken the first time anything was inserted.
+
+    Resolved by position rather than by comparing timestamps: the cursor is
+    located in the conversation's own ordering and everything after it is
+    returned. Two messages written in the same second cannot make it skip one.
+    """
+    try:
+        _bot, tenant = await run_sync(
+            db, lambda s: get_bot_and_tenant_for_widget_chat(s, bot_id)
+        )
+    except WidgetChatTenantGateError as e:
+        if e.reason == WidgetChatTenantGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Bot not found") from e
+        raise HTTPException(status_code=400, detail="Bot not available") from e
+
+    try:
+        sid = uuid.UUID(session_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Invalid session_id") from None
+
+    cursor: uuid.UUID | None = None
+    if after_message_id:
+        try:
+            cursor = uuid.UUID(after_message_id)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=422, detail="Invalid after_message_id"
+            ) from None
+
+    def _load_tail(s) -> tuple[WidgetMessagesResponse, str | None] | None:
+        chat = (
+            s.query(Chat)
+            .filter(
+                Chat.tenant_id == tenant.id,
+                Chat.session_id == sid,
+                or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+            )
+            .order_by(Chat.created_at.desc())
+            .first()
+        )
+        if chat is None:
+            return None
+
+        rows = (
+            s.query(Message)
+            .filter(
+                Message.chat_id == chat.id,
+                Message.role.in_(_VISITOR_VISIBLE_ROLES),
+            )
+            .order_by(Message.created_at.asc(), Message.id.asc())
+            .all()
         )
 
-    history = await run_sync(db, _load_history)
-    if history is None:
+        # Captured before the cursor slice: ``/history`` decides "ended" from
+        # the whole conversation, and reading it off a tail would answer
+        # differently on every poll.
+        has_user_turn = any(m.role == MessageRole.user for m in rows)
+
+        cursor_stale = False
+        if cursor is not None:
+            index = next(
+                (i for i, m in enumerate(rows) if m.id == cursor),
+                None,
+            )
+            if index is None:
+                # The cursor belongs to an older conversation (rotation) or to
+                # a session this browser no longer holds. Returning this
+                # conversation's whole tail would duplicate everything the
+                # widget already shows, so say so and let it re-bootstrap.
+                cursor_stale = True
+                rows = []
+            else:
+                rows = rows[index + 1 :]
+
+        # The *oldest* unseen messages, not the newest. Truncating from the
+        # front would hand back the tail and leave the client's cursor past
+        # everything it skipped, losing those messages for good. Taking the
+        # front means a backlog is drained over consecutive polls instead.
+        page = rows[:_POLL_MESSAGE_LIMIT]
+
+        response = WidgetMessagesResponse(
+            session_id=sid,
+            messages=[
+                WidgetHistoryMessage(id=m.id, role=m.role.value, content=m.content)
+                for m in page
+            ],
+            handoff_state=_handoff_state(s, chat),
+            # Same expression as ``/history``, deliberately. A closed chat that
+            # has gone idle past the rotation threshold is about to be replaced
+            # by a fresh one, so neither endpoint calls it ended -- and the two
+            # disagreeing would flip the widget between locked and unlocked as
+            # the bootstrap and the poll took turns answering.
+            chat_ended=(
+                chat.ended_at is not None
+                and not (should_rotate(chat) and has_user_turn)
+            ),
+            cursor_stale=cursor_stale,
+        )
+        return response, _conversation_language(chat)
+
+    loaded = await run_sync(db, _load_tail)
+    if loaded is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return history
+    tail, conversation_language = loaded
+    # Only a poll that actually carries a human's reply pays for the byline;
+    # the many that return nothing cost nothing.
+    tail.operator_label = await _resolve_operator_label(
+        tail.messages,
+        conversation_language,
+        encrypted_api_key=tenant.openai_api_key,
+        tenant_id=str(tenant.id),
+        bot_id=_bot.public_id,
+    )
+    return tail
 
 
 @widget_router.post("/escalate", response_model=ManualEscalateResponse)

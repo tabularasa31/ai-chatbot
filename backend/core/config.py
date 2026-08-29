@@ -330,6 +330,18 @@ class Settings(BaseSettings):
     )
     BREVO_API_KEY: str | None = Field(None, alias="BREVO_API_KEY")
 
+    # --- Inbound e-mail lane (operator replies arriving by mail) ---
+    inbound_email_secret: str | None = Field(
+        None,
+        alias="INBOUND_EMAIL_SECRET",
+        description="Shared secret in the Brevo Inbound Parsing webhook path (POST /email/inbound/<secret>). Unset means the lane is not wired: notifications keep carrying the visitor's own address as Reply-To and the endpoint answers 404 to everyone. That is credential presence, the same shape as BREVO_API_KEY — not an on/off switch for a built feature. Brevo publishes no webhook signature, so this path segment plus the per-ticket reply token are the whole authentication story; treat it like an API key and rotate it by changing the URL configured in the Brevo panel.",
+    )
+    inbound_email_domain: str = Field(
+        "reply.getchat9.live",
+        alias="INBOUND_EMAIL_DOMAIN",
+        description="Domain whose MX points at Brevo Inbound Parsing. Reply addresses are minted as reply+<token>@<this domain>; an inbound recipient on any other domain is ignored.",
+    )
+
     # Read timeout for OpenAI HTTP calls (waiting for response headers / first streaming chunk).
     # Connect/write/pool timeouts are fixed at 10 s in openai_client.py.
     openai_request_timeout_seconds: float = Field(

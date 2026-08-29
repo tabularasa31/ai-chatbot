@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
 from backend.core.config import settings
+from backend.email.reply_lane import revoke_reply_token
 from backend.escalation.service import (
     ACTIVE_TICKET_STATUSES,
     notify_support_of_abandoned_claim,
@@ -464,6 +465,9 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
             # Naive UTC — the column is ``DateTime`` with no timezone; writing
             # an aware value crashes asyncpg. See ``models/base._utcnow``.
             ticket.resolved_at = _utcnow()
+            # Closing the request revokes its inbound reply address too — the
+            # conversation this token could write into is over.
+            revoke_reply_token(ticket)
             db.add(ticket)
             db.commit()
         except Exception:

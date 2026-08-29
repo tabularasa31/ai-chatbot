@@ -27,6 +27,7 @@ from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
+from backend.email.reply_lane import escalation_reply_to, revoke_reply_token
 from backend.email.service import send_email
 from backend.models import (
     Chat,
@@ -993,7 +994,11 @@ def _notify_tenant_new_ticket(
             recipient,
             subject,
             body,
-            reply_to=ticket.user_email,
+            # The seat branch. A workspace holding a seat gets our inbound
+            # token address, so the reply comes back through us and into the
+            # visitor's widget; one holding none keeps the visitor's own
+            # address and today's straight-to-them path, unchanged.
+            reply_to=escalation_reply_to(ticket, db),
             extra_headers=headers,
         )
     except Exception as e:
@@ -1237,7 +1242,7 @@ def _notify_tenant_ticket_update(
             recipient,
             subject,
             body,
-            reply_to=ticket.user_email,
+            reply_to=escalation_reply_to(ticket, db),
             extra_headers=headers,
         )
     except Exception as e:
@@ -1462,6 +1467,11 @@ def resolve_ticket(
 
     ticket.status = EscalationStatus.resolved
     ticket.resolution_text = resolution_text
+    # The reply address dies with the request it belongs to: a resolved
+    # conversation is not somewhere a stranger holding an old notification
+    # should be able to write, and a token that outlives its ticket is a
+    # credential nobody is watching any more.
+    revoke_reply_token(ticket)
     # Naive UTC: ``resolved_at`` is ``DateTime`` (no ``timezone=True``); see
     # the note in ``_notify_tenant_new_ticket`` for the asyncpg rationale.
     ticket.resolved_at = _utcnow()
@@ -1518,6 +1528,60 @@ def notify_support_of_repeat_escalation(
         extra_user_turn=(latest_user_text, when or _utcnow()),
         force=True,
     )
+
+
+def notify_support_of_visitor_turn(
+    chat_id: uuid.UUID,
+    db: Session,
+    *,
+    when: datetime | None = None,
+) -> bool:
+    """Deliver the visitor's message to support while a human holds the chat.
+
+    Without this the e-mail lane is one-way. An operator answering from their
+    mailbox has no console to watch: the visitor's reply lands in the chat
+    thread, the bot is muted and says nothing, and the operator sits waiting
+    for an answer that already arrived somewhere they cannot see. The threaded
+    update e-mail is the only surface they have, so a live handoff has to send
+    one on every visitor turn.
+
+    Threaded under the original notification's ``Message-ID`` by
+    :func:`_notify_tenant_ticket_update`, so it lands in the same conversation
+    in the support inbox and its ``Reply-To`` is the same reply address — the
+    operator answers it exactly as they answered the first one.
+
+    **The debounce is bypassed on purpose.** Its job on the ordinary path is
+    to keep a visitor typing three quick lines from filling the inbox, and it
+    is safe there because the delta stays eligible and the next turn carries
+    it. Here there may be no next turn: the visitor has said their piece and is
+    waiting. A message held back by the window would simply never be delivered,
+    and the operator would answer a question they never saw the end of.
+
+    Best-effort and never raises — the visitor's message is already persisted
+    and committed by the time this runs, and a mail failure must not cost them
+    their turn. Returns whether an e-mail went out.
+    """
+    try:
+        ticket = get_open_escalation_ticket_for_chat(chat_id, db)
+        if ticket is None:
+            return False
+        sent = _notify_tenant_ticket_update(ticket, db, force=True)
+        if sent:
+            # The notify helper flushes its marker advance; commit it, or the
+            # same turn is re-delivered on the next one.
+            db.commit()
+        return sent
+    except Exception:
+        logger.warning(
+            "operator_handoff_visitor_turn_notify_failed chat_id=%s",
+            chat_id,
+            exc_info=True,
+        )
+        try:
+            db.rollback()
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return False
 
 
 def raise_ticket_priority_if_higher(
@@ -1640,7 +1704,7 @@ def notify_support_of_abandoned_claim(ticket: EscalationTicket, db: Session) -> 
             recipient,
             subject,
             body,
-            reply_to=ticket.user_email,
+            reply_to=escalation_reply_to(ticket, db),
             extra_headers=headers,
         )
     except Exception as e:

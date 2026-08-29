@@ -311,11 +311,18 @@ class EscalationTicket(Base):
     # ``Reply-To`` is ``reply+<reply_token>@<inbound domain>``, and an inbound
     # reply is resolved back to this ticket by it. Minted only when the
     # workspace holds a seat (a seatless one keeps the visitor's own address as
-    # ``Reply-To``, unchanged), and cleared when the ticket reaches a terminal
-    # status — which is what "revocable" means here: NULL is a token that
-    # matches nothing. Unique, so the lookup is an index scan and a collision
-    # is a write error rather than an ambiguous read.
+    # ``Reply-To``, unchanged). Unique, so the lookup is an index scan and a
+    # collision is a write error rather than an ambiguous read.
     reply_token = Column(String(64), nullable=True, unique=True, index=True)
+
+    # When the ticket reached a terminal status and the token stopped being a
+    # way into the conversation. Stamped rather than nulled: a ticket closes on
+    # its own while an operator is still composing a reply to this morning's
+    # notification, and erasing the token made that reply unattributable to any
+    # ticket — so there was no visitor to forward it to and it was dropped in
+    # silence. Within ``REVOKED_TOKEN_GRACE`` the token still names a ticket
+    # (forward only, never ingest); past it, it matches nothing.
+    reply_token_revoked_at = Column(DateTime, nullable=True)
 
     # When the sweeper bounced an abandoned claim back to ``open`` (an operator
     # took the chat and never wrote a word). Doubles as the once-per-ticket cap
@@ -400,3 +407,28 @@ class Message(Base):
     )
 
     chat = relationship("Chat", back_populates="messages")
+
+
+class InboundEmailReceipt(Base):
+    """One inbound e-mail we have already acted on.
+
+    Brevo re-delivers the whole webhook body on any non-2xx, and a batch can
+    carry replies to several tickets. Without a record of what was handled, a
+    batch where one message was written into a chat and another failed to send
+    had only bad options: answer 200 and lose the failed one, or answer 503 and
+    write the first one into the conversation a second time on redelivery.
+
+    Written after the message has been dealt with, never before. A crash
+    between the two leaves it unrecorded and it is handled again — a duplicate,
+    which is recoverable, rather than a silently dropped answer, which is not.
+    """
+
+    __tablename__ = "inbound_email_receipts"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    #: Brevo's own id for the message. Unique: the conflict *is* the check.
+    provider_message_id = Column(String(998), nullable=False, unique=True, index=True)
+    #: Kept for support ("did his reply arrive?"), not used in any decision.
+    ticket_id = Column(PG_UUID(as_uuid=True), nullable=True)
+    outcome = Column(String(32), nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)

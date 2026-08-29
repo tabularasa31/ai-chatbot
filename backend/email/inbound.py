@@ -33,8 +33,10 @@ from __future__ import annotations
 
 import enum
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
+from html import unescape
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -85,12 +87,19 @@ class InboundReply:
     in_reply_to: str = ""
     references: str = ""
     attachment_names: list[str] = field(default_factory=list)
+    #: Brevo's own id for this message, the key redelivery is deduplicated on.
+    #: Empty when the payload carried none, in which case the message is
+    #: processed without a receipt — the duplicate we might write is a smaller
+    #: harm than the answer we would drop by refusing it.
+    provider_message_id: str = ""
 
 
 @dataclass(frozen=True)
 class InboundResult:
     outcome: InboundOutcome
     ticket_number: str | None = None
+    #: The ticket this reply belonged to, for the delivery receipt.
+    ticket_id: uuid.UUID | None = None
     #: Whether the reply's ``In-Reply-To`` / ``References`` pointed at the
     #: notification we sent. Recorded, never enforced — see
     #: :func:`_threading_matches`.
@@ -117,6 +126,36 @@ def _address_list(raw: Any) -> list[str]:
             out.extend(_address_list(entry))
         return out
     return []
+
+
+_BLOCK_BREAK_RE = re.compile(
+    r"(?i)</\s*(p|div|tr|li|h[1-6]|blockquote)\s*>|<\s*br\s*/?>"
+)
+_DROP_ELEMENT_RE = re.compile(
+    r"(?is)<\s*(script|style|head)[^>]*>.*?</\s*\1\s*>"
+)
+_TAG_RE = re.compile(r"(?s)<[^>]+>")
+_BLANK_RUN_RE = re.compile(r"\n{3,}")
+
+
+def _text_from_html(html: str) -> str:
+    """Readable text out of an HTML-only mail body.
+
+    Not a parser and not trying to be: this runs only when Brevo produced no
+    markdown and the message carried no plain-text part, and its whole job is
+    to keep a real answer from vanishing. Block ends become newlines so the
+    paragraphs of a normal reply survive, entities are decoded so the visitor
+    is not shown ``&amp;nbsp;``, and everything else is dropped.
+    """
+    if not html.strip():
+        return ""
+    text = _DROP_ELEMENT_RE.sub(" ", html)
+    text = _BLOCK_BREAK_RE.sub("\n", text)
+    text = _TAG_RE.sub("", text)
+    text = unescape(text)
+    text = text.replace("\xa0", " ")
+    lines = [line.strip() for line in text.split("\n")]
+    return _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
 
 
 def _first_address(raw: Any) -> tuple[str, str]:
@@ -180,6 +219,13 @@ def parse_brevo_payload(payload: Any) -> list[InboundReply]:
         text = str(item.get("ExtractedMarkdownMessage") or "").strip()
         if not text:
             text = str(item.get("RawTextBody") or "").strip()
+        if not text:
+            # A client that sent HTML and no plain-text alternative, from which
+            # Brevo produced no markdown either. Rare, but the failure was
+            # silent: an empty body is ``ignored_empty``, so a real answer
+            # disappeared with nothing said to the person who wrote it. A
+            # crude de-tag beats losing it.
+            text = _text_from_html(str(item.get("RawHtmlBody") or ""))
         attachments = item.get("Attachments")
         names: list[str] = []
         if isinstance(attachments, list):
@@ -201,9 +247,27 @@ def parse_brevo_payload(payload: Any) -> list[InboundReply]:
                 ).strip(),
                 references=_header(headers, "References").strip(),
                 attachment_names=names,
+                provider_message_id=_provider_message_id(item),
             )
         )
     return replies
+
+
+
+def _provider_message_id(item: dict) -> str:
+    """Brevo's id for one inbound message, under whichever key it arrived.
+
+    ``Uuid`` is a list in their payloads; ``MessageId`` is the RFC 5322 header
+    and is the fallback because a sender controls it and two different messages
+    could in principle carry the same one. Either is stable across a
+    redelivery, which is all this has to be.
+    """
+    raw = item.get("Uuid")
+    if isinstance(raw, list) and raw:
+        return str(raw[0]).strip()
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return str(item.get("MessageId") or "").strip()
 
 
 # --------------------------------------------------------------------------
@@ -369,11 +433,15 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
         raise UnknownReplyTokenError()
 
     if not reply.text.strip():
-        return InboundResult(InboundOutcome.ignored_empty, ticket.ticket_number)
+        return InboundResult(
+            InboundOutcome.ignored_empty, ticket.ticket_number, ticket.id
+        )
 
     if _is_loopback(reply, ticket):
         logger.info("email_lane_loopback_dropped ticket=%s", ticket.ticket_number)
-        return InboundResult(InboundOutcome.ignored_loopback, ticket.ticket_number)
+        return InboundResult(
+            InboundOutcome.ignored_loopback, ticket.ticket_number, ticket.id
+        )
 
     thread_match = _threading_matches(reply, ticket)
 
@@ -411,7 +479,9 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
             ticket,
             properties={"thread_match": thread_match},
         )
-        return InboundResult(InboundOutcome.ingested, ticket.ticket_number, thread_match)
+        return InboundResult(
+            InboundOutcome.ingested, ticket.ticket_number, ticket.id, thread_match
+        )
 
     if not _forward_to_visitor(reply, ticket, db):
         # Nothing has landed anywhere, so a retry cannot duplicate anything.
@@ -422,17 +492,39 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
             properties={"ingested": False, "thread_match": thread_match},
         )
         return InboundResult(
-            InboundOutcome.forward_failed, ticket.ticket_number, thread_match
+            InboundOutcome.forward_failed, ticket.ticket_number, ticket.id, thread_match
         )
     _capture(
         "email_lane.reply_forwarded",
         ticket,
         properties={
-            "reason": "no_seat" if chat is not None and live_request else "not_live",
+            # The actual reason, not the first plausible one. The earlier
+            # expression reported "not_live" for a seated operator whose chat
+            # had been deleted, which is a different failure with a different
+            # fix and was invisible behind that label.
+            "reason": _forward_reason(seated=seated, chat=chat, live=live_request),
             "thread_match": thread_match,
         },
     )
-    return InboundResult(InboundOutcome.forwarded, ticket.ticket_number, thread_match)
+    return InboundResult(
+        InboundOutcome.forwarded, ticket.ticket_number, ticket.id, thread_match
+    )
+
+
+def _forward_reason(*, seated: bool, chat: Chat | None, live: bool) -> str:
+    """Why this reply took the forward path rather than entering the thread.
+
+    Ordered by what somebody reading the metric would act on first: no seat is
+    a billing conversation, a closed request is normal, and a missing chat is a
+    bug worth knowing about separately from either.
+    """
+    if not seated:
+        return "no_seat"
+    if not live:
+        return "not_live"
+    if chat is None:
+        return "no_chat"
+    return "unknown"
 
 
 def _capture(event: str, ticket: EscalationTicket, *, properties: dict) -> None:

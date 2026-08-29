@@ -762,7 +762,15 @@ export function ChatWidget({
         setHistoryLoaded(false);
         return;
       }
-      if (data.handoff_state) setHandoffState(data.handoff_state);
+      if (data.handoff_state) {
+        setHandoffState(data.handoff_state);
+        // `bot` is the server saying there is no open request and nobody
+        // holding the chat. Clearing the ticket here is what lets the poll
+        // stop: `activeTicket` is otherwise set once and never unset, so
+        // without this the widget would keep asking every twenty seconds for
+        // as long as the tab stayed open.
+        if (data.handoff_state === "bot") setActiveTicket(null);
+      }
       if (data.operator_label) setOperatorLabel(data.operator_label);
       const incoming = data.messages ?? [];
       if (incoming.length > 0) {
@@ -790,11 +798,18 @@ export function ChatWidget({
     // An open request is enough to start polling even before the server has
     // reported a state: the escalation that just happened is exactly when a
     // human might appear.
+    // Deliberately not gated on `chatClosed`. The visitor answering "no, that
+    // is all" ends the conversation and locks the composer, but it does not
+    // end the request they raised — an operator reading this morning's
+    // notification may still be writing. Stopping the poll there meant their
+    // reply landed in the thread and the visitor, sitting in front of the
+    // widget, never saw it. What bounds the polling is the handoff itself:
+    // once the ticket is resolved the server reports `bot` and this goes
+    // quiet on its own.
     const shouldPoll =
       sessionHydrated &&
       Boolean(sessionId) &&
       historyLoaded &&
-      !chatClosed &&
       (handoffState !== "bot" || activeTicket !== null);
     if (!shouldPoll) return;
 

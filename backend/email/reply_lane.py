@@ -38,6 +38,7 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
+from datetime import timedelta
 from email.utils import parseaddr
 
 from sqlalchemy import func
@@ -45,6 +46,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.models import EscalationTicket, User
+from backend.models.base import _utcnow
 from backend.seats.service import tenant_has_any_seat
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,15 @@ def reply_address(token: str) -> str:
     return f"{REPLY_LOCAL_PART}+{token}@{settings.inbound_email_domain}"
 
 
+#: How long a closed ticket's reply address still resolves. It buys nothing
+#: inside the conversation — a closed ticket always takes the forward path —
+#: only the ability to put a late answer in front of the visitor instead of
+#: discarding it. Long enough for an operator who read the notification
+#: yesterday, short enough that a leaked notification is not a permanent way to
+#: mail somebody.
+REVOKED_TOKEN_GRACE = timedelta(days=7)
+
+
 def mint_reply_token(ticket: EscalationTicket, db: Session) -> str:
     """Return this ticket's token, minting and flushing one if it has none.
 
@@ -96,13 +107,26 @@ def mint_reply_token(ticket: EscalationTicket, db: Session) -> str:
 
 
 def revoke_reply_token(ticket: EscalationTicket) -> None:
-    """Kill this ticket's reply address. Staged only; the caller commits.
+    """Close this ticket's reply address. Staged only; the caller commits.
 
     Called on every terminal ticket transition. A closed conversation is not a
     place a stranger holding an old notification should be able to write into,
     and "revocable" has to mean something an operational human can actually do.
+
+    Stamped rather than erased, and the difference matters. Erasing the token
+    made a late reply unattributable to anything: the ticket could no longer be
+    found, so there was no visitor address to forward to and the operator's
+    answer was dropped with nothing said to them. Tickets close on their own —
+    the sweeper resolves stale ones — so "late" here is an operator answering a
+    notification from this morning, which is ordinary rather than exotic.
+
+    A stamped token stops being a way *into the conversation* immediately: the
+    ticket is no longer active, so :func:`~backend.email.inbound.handle_inbound_reply`
+    takes the forward path and mails the answer to the visitor. It stops
+    working altogether once :data:`REVOKED_TOKEN_GRACE` has passed.
     """
-    ticket.reply_token = None
+    if ticket.reply_token and ticket.reply_token_revoked_at is None:
+        ticket.reply_token_revoked_at = _utcnow()
 
 
 def escalation_reply_to(ticket: EscalationTicket, db: Session) -> str | None:
@@ -165,17 +189,28 @@ def ticket_for_token(token: str, db: Session) -> EscalationTicket | None:
     """The ticket this token addresses, or ``None`` if it addresses nothing.
 
     ``None`` covers every refusal case at once — a token we never minted, one
-    that has been revoked, and one belonging to a ticket that has since been
-    deleted — because none of them is distinguishable to the sender and none
-    of them should be.
+    revoked longer ago than :data:`REVOKED_TOKEN_GRACE`, and one belonging to a
+    ticket that has since been deleted — because none of them is
+    distinguishable to the sender and none of them should be.
+
+    A token revoked *within* the grace window still resolves. It cannot write
+    into the conversation — the ticket is closed, so the caller forwards — but
+    it still names a visitor to deliver the answer to, which is the whole point
+    of resolving it at all.
     """
     if not token:
         return None
-    return (
+    ticket = (
         db.query(EscalationTicket)
         .filter(EscalationTicket.reply_token == token)
         .first()
     )
+    if ticket is None:
+        return None
+    revoked_at = ticket.reply_token_revoked_at
+    if revoked_at is not None and _utcnow() - revoked_at > REVOKED_TOKEN_GRACE:
+        return None
+    return ticket
 
 
 def user_by_email(email: str, *, tenant_id: uuid.UUID, db: Session) -> User | None:

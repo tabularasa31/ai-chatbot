@@ -13,6 +13,8 @@ The behaviours worth protecting, in the order they matter:
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
+from unittest import mock
 from unittest.mock import patch
 
 import pytest
@@ -27,6 +29,7 @@ from backend.email.inbound import (
     parse_brevo_payload,
 )
 from backend.email.reply_lane import (
+    REVOKED_TOKEN_GRACE,
     escalation_reply_to,
     reply_address,
     token_from_recipients,
@@ -329,8 +332,17 @@ def test_a_token_matching_no_ticket_is_refused(tenant: TestClient) -> None:
     assert resp.status_code == 404
 
 
-def test_a_revoked_token_is_refused(tenant: TestClient, db_session: Session) -> None:
-    """Resolving the request kills its reply address — that is the revocation."""
+def test_a_reply_to_a_just_resolved_request_still_reaches_the_visitor(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Revocation closes the conversation, not the answer.
+
+    Tickets resolve on their own — the sweeper closes stale ones — so an
+    operator answering a notification they read this morning routinely writes
+    into a request that has since closed. Erasing the token made that reply
+    unattributable to any ticket, which left no visitor to forward it to, and
+    it was dropped without a word to the person who wrote it.
+    """
     _token, tenant_id = _workspace(
         tenant, db_session, email="revoke@example.com", name="Revoke", seated=True
     )
@@ -341,6 +353,41 @@ def test_a_revoked_token_is_refused(tenant: TestClient, db_session: Session) -> 
     assert token and token in address
 
     resolve_ticket(ticket.id, tenant_id, "done", db_session)
+
+    with mock.patch(
+        "backend.escalation.service._send_email_off_loop", return_value="mid"
+    ) as send:
+        resp = _post_inbound(
+            tenant, _brevo_item(to=address, sender="ann@agency.example")
+        )
+
+    assert resp.status_code == 200
+    # Forwarded, never ingested: the request is closed, so the reply must not
+    # be written into the conversation as if a human had picked it back up.
+    assert resp.json()["outcomes"] == ["forwarded"]
+    assert send.call_count == 1
+
+
+def test_a_token_revoked_long_ago_addresses_nothing(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The grace window ends, and with it the token.
+
+    A notification that leaked must not stay a way to mail the visitor for
+    ever, so the address stops resolving once the window has passed — and the
+    refusal looks like every other refusal.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="stale@example.com", name="Stale", seated=True
+    )
+    ticket = _ticket(db_session, tenant_id)
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    resolve_ticket(ticket.id, tenant_id, "done", db_session)
+    ticket = db_session.get(EscalationTicket, ticket.id)
+    ticket.reply_token_revoked_at = _utcnow() - REVOKED_TOKEN_GRACE - timedelta(hours=1)
+    db_session.commit()
 
     resp = _post_inbound(
         tenant, _brevo_item(to=address, sender="ann@agency.example")
@@ -693,3 +740,144 @@ def test_handle_inbound_reply_reads_the_seat_not_the_role(
         unseated_result = handle_inbound_reply(reply, db_session)
     assert unseated_result.outcome is InboundOutcome.forwarded
     assert token  # the workspace token is unused here; kept for readability
+
+
+def test_an_html_only_reply_is_not_lost(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A client that sent HTML and nothing else still gets its answer through.
+
+    Brevo usually hands us extracted markdown, and a plain-text alternative
+    usually sits behind it. When neither does, the body used to come out
+    empty — ``ignored_empty``, a real answer discarded in silence.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-html@example.com", name="Html", seated=True
+    )
+    _colleague(db_session, tenant_id, email="ann-html@agency.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9100")
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    payload = _brevo_item(
+        to=address, sender="ann-html@agency.example", extracted=None, raw_text=""
+    )
+    payload["items"][0]["RawHtmlBody"] = (
+        "<html><body><p>Within 14 days.</p>"
+        "<p>Ask billing if it is late &amp; unpaid.</p></body></html>"
+    )
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        resp = _post_inbound(tenant, payload)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
+
+    db_session.expire_all()
+    written = (
+        db_session.query(Message)
+        .filter(Message.chat_id == chat.id, Message.role == MessageRole.operator)
+        .one()
+    )
+    assert "Within 14 days." in written.content
+    # Entities decoded, tags gone, the two paragraphs still apart.
+    assert "&amp;" not in written.content
+    assert "<p>" not in written.content
+    assert "Ask billing if it is late & unpaid." in written.content
+
+
+def test_a_redelivered_message_is_not_written_twice(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Brevo re-sends the whole body, and the receipt is what makes that safe.
+
+    Without one, a batch retried because one message failed to send would put
+    its already-delivered neighbours through again — a second copy of a human's
+    reply in the visitor's conversation.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-dup@example.com", name="Dup", seated=True
+    )
+    _colleague(db_session, tenant_id, email="ann-dup@agency.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9101")
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    payload = _brevo_item(to=address, sender="ann-dup@agency.example")
+    payload["items"][0]["Uuid"] = ["brevo-msg-1"]
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        first = _post_inbound(tenant, payload)
+        second = _post_inbound(tenant, payload)
+
+    assert first.json()["outcomes"] == [InboundOutcome.ingested.value]
+    assert second.status_code == 200, second.text
+    assert second.json()["outcomes"] == ["already_handled"]
+
+    db_session.expire_all()
+    rows = (
+        db_session.query(Message)
+        .filter(Message.chat_id == chat.id, Message.role == MessageRole.operator)
+        .all()
+    )
+    assert len(rows) == 1
+
+
+def test_a_failed_send_asks_for_the_batch_again_without_losing_it(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A message that could not be delivered must come back, and only it.
+
+    The old rule suppressed the retry whenever anything in the batch had been
+    ingested, so a batch mixing a written reply with a failed send answered 200
+    and dropped the failure on the floor.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-mixed@example.com", name="Mixed", seated=True
+    )
+    _colleague(db_session, tenant_id, email="ann-mixed@agency.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    good_ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9102")
+    bad_ticket = _ticket(
+        db_session,
+        tenant_id,
+        number="ESC-9103",
+        user_email="other-visitor@example.com",
+    )
+    good_address = escalation_reply_to(good_ticket, db_session)
+    bad_address = escalation_reply_to(bad_ticket, db_session)
+    db_session.commit()
+
+    good = _brevo_item(to=good_address, sender="ann-mixed@agency.example")["items"][0]
+    good["Uuid"] = ["brevo-good"]
+    # No chat on this ticket, so this one can only ever be forwarded.
+    bad = _brevo_item(to=bad_address, sender="ann-mixed@agency.example")["items"][0]
+    bad["Uuid"] = ["brevo-bad"]
+
+    def _send(to, *args, **kwargs):
+        return None if to == "other-visitor@example.com" else "<fwd@brevo>"
+
+    with patch("backend.escalation.service.send_email", side_effect=_send):
+        resp = _post_inbound(tenant, {"items": [good, bad]})
+
+    assert resp.status_code == 503, resp.text
+
+    # The redelivery skips what landed and re-attempts only what did not.
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        retry = _post_inbound(tenant, {"items": [good, bad]})
+
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["outcomes"] == [
+        "already_handled",
+        InboundOutcome.forwarded.value,
+    ]
+
+    db_session.expire_all()
+    rows = (
+        db_session.query(Message)
+        .filter(Message.chat_id == chat.id, Message.role == MessageRole.operator)
+        .all()
+    )
+    assert len(rows) == 1

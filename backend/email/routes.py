@@ -47,6 +47,7 @@ from backend.email.inbound import (
     handle_inbound_reply,
     parse_brevo_payload,
 )
+from backend.email.receipts import already_handled, record_handled
 from backend.email.schemas import InboundEmailResponse
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,9 @@ email_router = APIRouter(prefix="/email", tags=["email"])
 
 #: Refusals all look alike on purpose.
 _REFUSED = "Not found"
+
+#: Reported for a message a previous delivery already dealt with.
+_ALREADY_HANDLED = "already_handled"
 
 
 def _check_path_secret(secret: str) -> None:
@@ -77,10 +81,10 @@ async def inbound_email(
 
     A batch is processed message by message and each message's outcome is
     independent: one unknown token does not discard the batch, and one failed
-    onward send asks for a retry of the whole batch only when nothing in it
-    landed. Brevo re-delivers on a non-2xx, so a 503 here must never be
-    returned after something was written to a chat thread — that would write
-    it twice.
+    onward send asks for the batch again without disturbing its neighbours.
+    Brevo re-delivers the whole body on a non-2xx, and what makes that safe is
+    the receipt written for every message that was dealt with — a redelivery
+    skips those and re-attempts only what actually failed.
     """
     _check_path_secret(secret)
 
@@ -91,9 +95,22 @@ async def inbound_email(
     def _work(sync_db) -> list[str]:
         outcomes: list[str] = []
         for reply in replies:
+            if already_handled(reply.provider_message_id, sync_db):
+                # A redelivery of something this lane already acted on. Brevo
+                # re-sends the whole body, so a batch retried for one failed
+                # message carries its successful neighbours along with it.
+                outcomes.append(_ALREADY_HANDLED)
+                continue
             try:
                 result = handle_inbound_reply(reply, sync_db)
                 outcomes.append(result.outcome.value)
+                if result.outcome is not InboundOutcome.forward_failed:
+                    record_handled(
+                        reply.provider_message_id,
+                        ticket_id=result.ticket_id,
+                        outcome=result.outcome.value,
+                        db=sync_db,
+                    )
             except UnknownReplyTokenError:
                 # Logged without the sender's address: an inbound body is
                 # untrusted content and its From is somebody's personal data.
@@ -107,11 +124,13 @@ async def inbound_email(
         # Every message in the batch addressed nothing. Refused, and refused
         # the same way as a bad secret.
         raise HTTPException(status_code=404, detail=_REFUSED)
-    if any(o == InboundOutcome.forward_failed.value for o in outcomes) and not any(
-        o == InboundOutcome.ingested.value for o in outcomes
-    ):
-        # Nothing was written anywhere and an answer is still undelivered.
-        # Asking Brevo to re-deliver cannot duplicate anything.
+    if any(o == InboundOutcome.forward_failed.value for o in outcomes):
+        # An answer is still undelivered. Asking for the batch again is safe:
+        # everything that succeeded left a receipt and will be skipped, so the
+        # redelivery re-attempts only what failed. Before receipts this branch
+        # had to also require that nothing was ingested, which meant a batch
+        # mixing a written reply with a failed send returned 200 and dropped
+        # the failure on the floor.
         raise HTTPException(status_code=503, detail="Delivery failed, retry")
 
     return InboundEmailResponse(processed=len(outcomes), outcomes=outcomes)

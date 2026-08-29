@@ -33,6 +33,7 @@ from backend.core.limiter import (
     limiter,
     widget_bot_rate_limit_key,
     widget_init_rate_limit_key,
+    widget_poll_rate_limit_key,
     widget_public_rate_limit_key,
 )
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
@@ -1018,7 +1019,7 @@ class WidgetMessagesResponse(BaseModel):
 
 
 @widget_router.get("/messages", response_model=WidgetMessagesResponse)
-@limiter.limit("120/minute", key_func=widget_public_rate_limit_key)
+@limiter.limit("120/minute", key_func=widget_poll_rate_limit_key)
 async def widget_messages(
     request: Request,
     bot_id: Annotated[str, Query(description="Bot public ID")],
@@ -1096,6 +1097,11 @@ async def widget_messages(
             .all()
         )
 
+        # Captured before the cursor slice: ``/history`` decides "ended" from
+        # the whole conversation, and reading it off a tail would answer
+        # differently on every poll.
+        has_user_turn = any(m.role == MessageRole.user for m in rows)
+
         cursor_stale = False
         if cursor is not None:
             index = next(
@@ -1112,14 +1118,28 @@ async def widget_messages(
             else:
                 rows = rows[index + 1 :]
 
+        # The *oldest* unseen messages, not the newest. Truncating from the
+        # front would hand back the tail and leave the client's cursor past
+        # everything it skipped, losing those messages for good. Taking the
+        # front means a backlog is drained over consecutive polls instead.
+        page = rows[:_POLL_MESSAGE_LIMIT]
+
         response = WidgetMessagesResponse(
             session_id=sid,
             messages=[
                 WidgetHistoryMessage(id=m.id, role=m.role.value, content=m.content)
-                for m in rows[-_POLL_MESSAGE_LIMIT:]
+                for m in page
             ],
             handoff_state=_handoff_state(s, chat),
-            chat_ended=chat.ended_at is not None,
+            # Same expression as ``/history``, deliberately. A closed chat that
+            # has gone idle past the rotation threshold is about to be replaced
+            # by a fresh one, so neither endpoint calls it ended -- and the two
+            # disagreeing would flip the widget between locked and unlocked as
+            # the bootstrap and the poll took turns answering.
+            chat_ended=(
+                chat.ended_at is not None
+                and not (should_rotate(chat) and has_user_turn)
+            ),
             cursor_stale=cursor_stale,
         )
         return response, _conversation_language(chat)

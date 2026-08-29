@@ -15,6 +15,7 @@ answering into silence.
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
@@ -347,3 +348,76 @@ def test_a_live_chat_with_no_ticket_sends_nothing(
     assert (
         db_session.query(Message).filter(Message.chat_id == chat.id).count() == 1
     )
+
+
+def test_a_backlog_is_drained_from_the_front_not_the_back(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    """More unseen messages than one page fit: the oldest come first.
+
+    Handing back the newest page instead would leave the client's cursor past
+    everything it skipped, and those messages would never be asked for again —
+    a hole in the middle of the conversation that nothing repairs.
+    """
+    from backend.widget import routes as widget_routes
+
+    monkeypatch.setattr(widget_routes, "_POLL_MESSAGE_LIMIT", 2)
+
+    _token, bot_id, tenant_id = _bot_and_tenant(
+        tenant, db_session, email="backlog@example.com", name="Backlog Co"
+    )
+    chat = _conversation(db_session, tenant_id)
+    anchor = _say(db_session, chat, MessageRole.user, "Where is my refund?")
+    for n in range(1, 6):
+        _say(db_session, chat, MessageRole.operator, f"part {n}")
+
+    seen: list[str] = []
+    cursor = str(anchor.id)
+    for _ in range(4):
+        page = tenant.get(
+            f"/widget/messages?bot_id={bot_id}&session_id={chat.session_id}"
+            f"&after_message_id={cursor}"
+        ).json()
+        if not page["messages"]:
+            break
+        seen.extend(m["content"] for m in page["messages"])
+        cursor = page["messages"][-1]["id"]
+
+    assert seen == ["part 1", "part 2", "part 3", "part 4", "part 5"]
+
+
+def test_the_poll_and_the_bootstrap_agree_on_whether_the_chat_ended(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Both endpoints answer "is this over?" the same way.
+
+    ``/history`` calls a closed conversation that has gone idle past the
+    rotation threshold *not* ended, so the visitor's next message starts a
+    fresh one rather than meeting a locked box. The poll used to disagree, and
+    the widget flipped between locked and unlocked as the two took turns.
+    """
+    from backend.models.base import _utcnow
+
+    _token, bot_id, tenant_id = _bot_and_tenant(
+        tenant, db_session, email="ended@example.com", name="Ended Co"
+    )
+    # Not held by an operator: a live chat never rotates, so the divergence
+    # this guards against cannot arise there.
+    chat = _conversation(db_session, tenant_id, operator_state=OperatorState.bot)
+    _say(db_session, chat, MessageRole.user, "Thanks, that is all.")
+
+    stale = _utcnow() - timedelta(days=2)
+    chat.ended_at = stale
+    # The sweeper's own declaration that the session is over, which is what
+    # makes ``should_rotate`` true regardless of the idle clock.
+    chat.session_ended_event_at = stale
+    db_session.commit()
+
+    history = tenant.get(
+        f"/widget/history?bot_id={bot_id}&session_id={chat.session_id}"
+    ).json()
+    poll = tenant.get(
+        f"/widget/messages?bot_id={bot_id}&session_id={chat.session_id}"
+    ).json()
+
+    assert poll["chat_ended"] == history["chat_ended"]

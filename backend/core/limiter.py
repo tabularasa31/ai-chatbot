@@ -49,6 +49,34 @@ def widget_public_rate_limit_key(request: Request) -> str:
     return f"{bot_id[:32]}|{ip}"
 
 
+def widget_poll_rate_limit_key(request: Request) -> str:
+    """Rate-limit identity for the widget's cursor poll: one bucket per session.
+
+    The public key is ``bot_id|ip``, which is right for the endpoints a visitor
+    hits by acting — a burst from one address is one person being noisy. The
+    poll is different: it fires on a timer, several times a minute, for as long
+    as a human is answering. Behind one office NAT or a carrier's CGNAT, a
+    handful of visitors on the same address share that budget and start being
+    refused — and a refused poll is an operator's reply the visitor never sees.
+
+    Keying on the session gives each conversation its own allowance, and costs
+    nothing in protection: minting sessions is itself limited (see
+    ``widget_init_rate_limit_key``), so this cannot be inflated by asking for
+    more of them.
+    """
+    bot_id = (
+        request.query_params.get("bot_id")
+        or request.headers.get("x-widget-bot-id")
+        or "unknown"
+    )
+    session_id = request.query_params.get("session_id") or "unknown"
+    if session_id == "unknown":
+        # No session to scope by: fall back to the address, so a caller cannot
+        # escape the limit by omitting the parameter.
+        return f"{bot_id[:32]}|{_widget_rate_limit_ip(request)}"
+    return f"{bot_id[:32]}|s:{session_id[:64]}"
+
+
 def widget_bot_rate_limit_key(request: Request) -> str:
     """Global widget rate-limit identity per bot_id."""
     bot_id = (

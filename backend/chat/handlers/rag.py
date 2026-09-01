@@ -44,7 +44,6 @@ from backend.chat.decision import (
     KbConfidence,  # noqa: F401  (re-export)
     classify_kb_confidence,
     floor_kb_confidence,
-    reply_is_clarifying_question,
 )
 
 # --- Pipeline surface (moved out of this module; re-exported for callers) ---
@@ -599,7 +598,7 @@ class RagHandler(PipelineHandler):
         # ran out on questions nobody had been asked, and the next genuinely
         # ambiguous turn escalated on clarify_loop_limit instead of asking.
         _clarification_count_before = chat.clarification_count
-        _clarify_asked = reply_is_clarifying_question(answer)
+        _clarify_asked = result.llm_clarifying
         _clarification_charged = _decision.is_blocking_clarify() and _clarify_asked
         if _clarification_charged:
             chat.clarification_count += 1
@@ -758,8 +757,8 @@ class RagHandler(PipelineHandler):
         # disarmed the gate and left the raw RAG answer standing — exactly the
         # dead end this block exists to close.
         #
-        # A reply that already ends in a question is left alone, as is one the
-        # model marked as its own offer. Appending "shall I forward this?"
+        # A reply the model marked as a clarifying question is left alone, as
+        # is one it marked as its own offer. Appending "shall I forward this?"
         # after either asks twice in one reply — and after this turn's required
         # clarification it is worse than noise, because the user's "yes"
         # answers the clarification while the gate reads it as consent to open
@@ -769,7 +768,7 @@ class RagHandler(PipelineHandler):
             not chat.escalation_pre_confirm_pending
             and result.llm_needs_human
             and not result.llm_offered_ticket
-            and not reply_is_clarifying_question(answer)
+            and not result.llm_clarifying
         ):
             _handoff_start = perf_counter()
             # "You can reach our support team right here" only informs a user
@@ -995,4 +994,5 @@ class RagHandler(PipelineHandler):
             chat_ended=bool(chat.ended_at),
             ticket_number=created_ticket_number,
             chat_id=str(chat.id) if chat is not None else None,
+            escalation_offered=bool(chat.escalation_pre_confirm_pending),
         )

@@ -6,7 +6,6 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
-from backend.escalation.offer_detector import looks_like_escalation_offer
 from backend.evals.client import ChatClient
 from backend.evals.dataset import Dataset, GoldenCase
 from backend.evals.judge import AnthropicJudge
@@ -91,7 +90,7 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
             )
         last_response = chat_response
         total_latency_ms += chat_response.latency_ms
-        offered = looks_like_escalation_offer(chat_response.text)
+        offered = chat_response.escalation_offered
         turns_trace.append(
             TurnTrace(
                 turn=turn_idx,

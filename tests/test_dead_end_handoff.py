@@ -30,7 +30,6 @@ from sqlalchemy.orm import Session
 from backend.chat.decision import (
     Decision,
     DecisionKind,
-    reply_is_clarifying_question,
     requires_blocking_clarify,
 )
 from backend.chat.prompts import _user_context_prompt_line, build_rag_prompt
@@ -175,20 +174,25 @@ def test_no_clarify_requirement_without_budget_or_confidence() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "text,expected",
-    [
-        ("Какой именно код вы имеете в виду?", True),
-        ("Which code do you mean — the sign-up one or the login one?", True),
-        ("«Точно?»", True),
-        ("那是哪个验证码？", True),
-        ("Возможные причины: подождите 2 минуты.", False),
-        ("", False),
-        (None, False),
-    ],
-)
-def test_reply_is_clarifying_question(text: str | None, expected: bool) -> None:
-    assert reply_is_clarifying_question(text) is expected
+def test_clarify_marker_is_detected_and_stripped() -> None:
+    """The sentinel replaces the old last-character question-mark heuristic.
+
+    That heuristic enumerated question marks by script, so it judged a Chinese
+    question closing on 。 to be a plain answer — a language dependency in the
+    two decisions that hang off it.
+    """
+    assert _strip_and_detect_markers("您指的是哪个验证码。 <clarifying/>") == (
+        "您指的是哪个验证码。",
+        False,
+        False,
+        True,
+    )
+    assert _strip_and_detect_markers("Какой именно код?") == (
+        "Какой именно код?",
+        False,
+        False,
+        False,
+    )
 
 
 def test_trace_reports_an_uncharged_clarification_honestly() -> None:
@@ -212,8 +216,9 @@ def test_handoff_marker_is_detected_and_stripped() -> None:
         "Напишите в чат поддержки.",
         False,
         True,
+        False,
     )
-    assert _strip_and_detect_markers("Готово.") == ("Готово.", False, False)
+    assert _strip_and_detect_markers("Готово.") == ("Готово.", False, False, False)
 
 
 @pytest.mark.parametrize(
@@ -227,7 +232,7 @@ def test_handoff_marker_is_detected_and_stripped() -> None:
 def test_both_markers_in_one_reply_are_peeled_in_any_order(tail: str) -> None:
     """The pair decides whether the handler appends an offer or only arms the
     gate, so neither marker may mask the other."""
-    assert _strip_and_detect_markers(f"Ответ. {tail}") == ("Ответ.", True, True)
+    assert _strip_and_detect_markers(f"Ответ. {tail}") == ("Ответ.", True, True, False)
 
 
 def test_handoff_marker_never_leaks_into_the_stream() -> None:
@@ -259,9 +264,11 @@ def test_truncated_marker_does_not_survive_into_the_persisted_reply() -> None:
 
 def test_mid_text_handoff_literal_does_not_arm_anything() -> None:
     """Detection is terminal-only: a misplaced literal must not arm the gate."""
-    text, offered, needs_human = _strip_and_detect_markers("Ответ <needs_human/> и ещё текст")
+    text, offered, needs_human, clarifying = _strip_and_detect_markers(
+        "Ответ <needs_human/> и ещё текст"
+    )
 
-    assert (offered, needs_human) == (False, False)
+    assert (offered, needs_human, clarifying) == (False, False, False)
     assert _scrub_marker_literals(text) == "Ответ  и ещё текст"
 
 
@@ -311,10 +318,14 @@ def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
 
 
 def _patch_generation(
-    monkeypatch: pytest.MonkeyPatch, *, answer: str, needs_human: bool
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    answer: str,
+    needs_human: bool,
+    clarifying: bool = False,
 ) -> None:
     async def _fake_generate(*_args, **_kwargs):
-        return (answer, 50, 20, 30, False, needs_human)
+        return (answer, 50, 20, 30, False, needs_human, clarifying)
 
     monkeypatch.setattr(
         "backend.chat.handlers.rag.async_generate_answer", _fake_generate
@@ -404,10 +415,13 @@ def test_plain_answer_is_left_alone(
 
 
 @pytest.mark.parametrize(
-    "answer,expected_count",
+    "answer,clarifying,expected_count",
     [
-        ("Возможные причины: SMS, письмо, спам-папка.", 0),
-        ("Какой именно код вы имеете в виду?", 1),
+        ("Возможные причины: SMS, письмо, спам-папка.", False, 0),
+        ("Какой именно код вы имеете в виду?", True, 1),
+        # A question in a script that does not close on one of the punctuation
+        # marks the old heuristic knew. The sentinel carries it regardless.
+        ("您指的是哪个验证码。", True, 1),
     ],
 )
 def test_clarification_budget_follows_the_reply_not_the_verdict(
@@ -416,6 +430,7 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     answer: str,
+    clarifying: bool,
     expected_count: int,
 ) -> None:
     """A blocking clarify the model answered instead of asking costs nothing.
@@ -429,12 +444,14 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
     # Below KB_LOW_CONFIDENCE_THRESHOLD with chunks present → blocking clarify.
     _patch_retrieval(monkeypatch, score=0.36)
-    _patch_generation(monkeypatch, answer=answer, needs_human=False)
+    _patch_generation(
+        monkeypatch, answer=answer, needs_human=False, clarifying=clarifying
+    )
 
     api_key = _tenant_api_key(
         tenant,
         db_session,
-        f"deadend-budget-{expected_count}@example.com",
+        f"deadend-budget-{abs(hash(answer)) % 10**8}@example.com",
         f"Budget Tenant {expected_count}",
     )
     session_id = uuid.uuid4()
@@ -472,6 +489,7 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
         monkeypatch,
         answer="Какой именно код вы ждёте — при входе или при регистрации?",
         needs_human=True,
+        clarifying=True,
     )
     monkeypatch.setattr(
         "backend.chat.service.render_pre_confirm_text",

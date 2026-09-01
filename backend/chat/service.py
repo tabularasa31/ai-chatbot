@@ -229,6 +229,7 @@ def _escalation_turn_response(
         tokens_used=out.tokens_used,
         chat_ended=chat_ended,
         ticket_number=ticket_number,
+        escalation_offered=bool(chat.escalation_pre_confirm_pending),
     )
 
 

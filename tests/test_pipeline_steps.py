@@ -549,7 +549,7 @@ def _capture_generation_kwargs(
 
     async def _fake_generate(question, chunks, **kwargs):
         calls.update(kwargs)
-        return ("generated answer", 11, 5, 6, False, False)
+        return ("generated answer", 11, 5, 6, False, False, False)
 
     monkeypatch.setattr(
         "backend.chat.handlers.rag.async_generate_answer", _fake_generate
@@ -630,7 +630,7 @@ def test_run_generation_resolves_seam_via_rag_module(
         calls["question"] = question
         calls["chunks"] = chunks
         calls["response_language"] = kwargs.get("response_language")
-        return ("generated answer", 11, 5, 6, False, False)
+        return ("generated answer", 11, 5, 6, False, False, False)
 
     def _fake_should_escalate(*args, **kwargs):
         return (False, None)

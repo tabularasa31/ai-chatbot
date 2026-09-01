@@ -41,6 +41,12 @@ class ChatTurnOutcome:
     # ttft_ms to the PostHog chat_first_token_ms event so it can be joined
     # with chat.turn / chat_completed (which use chat_id as a property too).
     chat_id: str | None = None
+    # True when this reply put a support-handoff offer in front of the user and
+    # is waiting for their yes/no — i.e. the pre-confirm gate is armed, whichever
+    # path armed it. Surfaced so callers outside the pipeline (the widget `done`
+    # payload, the eval driver) can read the machine truth instead of matching
+    # the reply text against per-language phrasings.
+    escalation_offered: bool = False
 
 
 @dataclass

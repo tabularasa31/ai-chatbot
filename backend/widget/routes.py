@@ -749,6 +749,9 @@ def _widget_chat_stream(
             outcome="llm_unavailable" if is_llm_unavailable else None,
             failure_state=outcome.failure_state if is_llm_unavailable else None,
             delivered_to_operator=delivered_to_operator,
+            escalation_offered=(
+                bool(outcome.escalation_offered) if outcome is not None else False
+            ),
         )
         done_payload: dict[str, Any] = {
             "type": "done",

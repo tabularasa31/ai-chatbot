@@ -118,6 +118,10 @@ class WidgetChatTurnResponse(BaseModel):
     outcome: Literal["llm_unavailable"] | None = None
     failure_state: LlmFailureState | None = None
     delivered_to_operator: bool = False
+    #: True when this reply offered to hand the conversation to support and is
+    #: waiting for the visitor's yes/no. Read off the pre-confirm gate, so it is
+    #: the same truth on every path and in every language — no phrase matching.
+    escalation_offered: bool = False
 
 
 class MessageResponse(BaseModel):

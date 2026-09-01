@@ -245,8 +245,8 @@ class Embedding(Base):
         Vector(1536),
         nullable=True,
     )
-    # имя атрибута не может быть `metadata` (зарезервировано в SQLAlchemy),
-    # поэтому оставляем имя столбца "metadata", но меняем имя Python-атрибута
+    # The attribute cannot be named `metadata` (reserved by SQLAlchemy), so the
+    # column keeps the name "metadata" while the Python attribute is renamed.
     metadata_json = Column("metadata", JSON, nullable=False, default=dict)
     # Named entities extracted from chunk_text by backend.knowledge.entity_extractor
     # (HippoRAG-style NER). Step 5 of the entity-aware retrieval epic uses this

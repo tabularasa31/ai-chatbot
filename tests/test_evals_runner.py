@@ -32,15 +32,61 @@ from backend.evals.runner import RunnerConfig, run
 class _FakeChat:
     """Stand-in for ChatClient that returns canned responses keyed by input."""
 
-    def __init__(self, replies: dict[str, str], bot_public_id: str = "ch_fake") -> None:
+    def __init__(
+        self,
+        replies: dict[str, str],
+        bot_public_id: str = "ch_fake",
+        offers: set[str] | None = None,
+    ) -> None:
         self._replies = replies
         self.bot_public_id = bot_public_id
         self.calls: list[str] = []
+        #: Questions whose reply carried the backend's escalation_offered flag.
+        self._offers = offers or set()
 
     def ask(self, question: str, *, session_id: str | None = None) -> ChatResponse:
         self.calls.append(question)
         text = self._replies.get(question, "")
-        return ChatResponse(text=text, sources=[], chat_ended=False, latency_ms=42)
+        return ChatResponse(
+            text=text,
+            sources=[],
+            chat_ended=False,
+            latency_ms=42,
+            escalation_offered=question in self._offers,
+        )
+
+
+def test_escalation_offer_is_scored_from_the_backend_flag() -> None:
+    """Offer scoring reads the `done` event, not the wording of the reply.
+
+    It used to run RU/EN regexes over the answer text, so an offer in any other
+    language scored as no offer at all. The backend already knows — the
+    pre-confirm gate is armed — and now says so in the SSE payload.
+    """
+    from backend.evals.dataset import Dataset, GoldenCase
+
+    case = GoldenCase(
+        id="esc",
+        category="rag",
+        input="ドメインを追加できません",
+        expected_escalation_offered_by_turn=1,
+    )
+    chat = _FakeChat(
+        {"ドメインを追加できません": "サポートに転送しましょうか。"},
+        offers={"ドメインを追加できません"},
+    )
+    report = run(
+        RunnerConfig(
+            dataset=Dataset(name="esc", cases=[case]),
+            tag="test",
+            chat=chat,
+            judge=None,
+        )
+    )
+
+    result = report.cases[0]
+    assert result.turns_trace[0].escalation_offered is True
+    assert all(m.passed for m in result.metrics if m.name == "escalation_offered")
 
 
 # ─── dataset ────────────────────────────────────────────────────────────────

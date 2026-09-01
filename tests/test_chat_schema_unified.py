@@ -76,6 +76,10 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
     # chat, so the visitor's message was recorded and handed on and `text` is
     # empty by design. Old widgets that ignore it render nothing, which is the
     # correct behaviour anyway.
+    # escalation_offered says the reply put a handoff offer on the table and is
+    # waiting for a yes/no. It is the backend's own record (the pre-confirm
+    # gate), which is what lets any consumer — the widget, the eval driver —
+    # score an offer without matching the reply text per language.
     assert set(widget_properties.keys()) == {
         "text",
         "session_id",
@@ -84,6 +88,7 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
         "outcome",
         "failure_state",
         "delivered_to_operator",
+        "escalation_offered",
     }
     assert "source_documents" not in widget_properties
     assert "tokens_used" not in widget_properties

@@ -110,13 +110,6 @@ Set the **response detail level** (Detailed / Standard / Corporate) from **Dashb
 - Server-side token example (Python) with copy-to-clipboard on the snippet block.
 - See [Embedding the Widget → Identified sessions](/docs/embedding-the-widget#identified-sessions-optional) for the full integration guide and SDK reference.
 
-## Privacy (`/settings/privacy`)
-
-- View a log of all PII redaction events — every time a message contained detected personal information (email, phone, etc.) that was masked before leaving the platform: on requests to OpenAI, on escalation tickets, and on notification emails.
-- Download the log as a CSV for audit or compliance purposes.
-- Choose which optional entity types (identity documents, IP addresses, tokenised URLs) are masked at those boundaries. Email addresses, phone numbers, API keys, passwords, and payment cards are always masked.
-- Your conversations are stored as they were written, so chat logs and escalations in the dashboard show the original wording — masking applies to what leaves the platform, not to what you read back.
-
 ## Escalations (`/escalations`)
 
 L2 ticket inbox. A ticket is created automatically whenever a conversation is escalated.

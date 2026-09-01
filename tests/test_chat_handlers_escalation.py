@@ -78,7 +78,6 @@ def _make_handler_context(
         question_text=question_text,
         language_context=_make_language_context(),
         api_key="sk-test",
-        optional_entity_types=None,
         is_new_session=False,
         trace=None,
         db=db,

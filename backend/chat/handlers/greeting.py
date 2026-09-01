@@ -171,7 +171,6 @@ class GreetingHandler(PipelineHandler):
                 resolution_reason=ctx.language_context.response_language_resolution_reason,
                 assistant_content=greeting.text,
                 extra_tokens=greeting.tokens_used,
-                optional_entity_types=ctx.optional_entity_types,
                 language_context=ctx.language_context,
             )
         else:
@@ -186,7 +185,6 @@ class GreetingHandler(PipelineHandler):
                 assistant_content=greeting.text,
                 document_ids=[],
                 extra_tokens=greeting.tokens_used,
-                optional_entity_types=ctx.optional_entity_types,
                 language_context=ctx.language_context,
                 trace=ctx.trace,
             )

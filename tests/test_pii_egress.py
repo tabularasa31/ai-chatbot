@@ -5,7 +5,7 @@ These tests pin the contract the storage/egress split rests on:
 * messages and escalation tickets keep the ORIGINAL wording;
 * nothing raw reaches OpenAI — not the question, not the prompt history,
   not the escalation transcript, not the background log-analysis job;
-* the support email keeps its EMAIL/IP exception and nothing else;
+* the support email renders the stored original — it is a human surface;
 * the migration that flips storage back to originals never blanks a row.
 
 If the egress redaction is ever removed, the OpenAI assertions here fail.

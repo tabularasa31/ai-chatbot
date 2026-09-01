@@ -592,7 +592,7 @@ Configuration (high level): global env (`CONTRADICTION_ADJUDICATION_*`), per-cli
 ```
 User message
   ↓
-PII redaction (regex)
+PII redaction
   ↓
 Bootstrap greeting early exit  (empty turn on a brand-new session → default greeting, return)
   (No small-talk shortcut: every non-empty turn — including one-word greetings — continues
@@ -679,7 +679,7 @@ dialog context) classifies the repeat as `support_complaint` and offers the hand
 
 ### PII redaction (FI-043)
 
-Before any text is sent to OpenAI, the user's message is passed through a regex redactor (`backend/chat/pii.py`). Detected patterns are replaced with neutral placeholders:
+Before any text is sent to OpenAI, the user's message is passed through the redactor (`backend/chat/pii.py`). Detected entities are replaced with neutral placeholders:
 
 | Pattern | Placeholder |
 |---------|-------------|
@@ -687,17 +687,16 @@ Before any text is sent to OpenAI, the user's message is passed through a regex 
 | Phone numbers | `[PHONE]` |
 | API keys (common formats) | `[API_KEY]` |
 | Payment card numbers | `[CARD]` |
-| Password-like secrets | `[PASSWORD]` |
-| Identity documents | `[ID_DOC]` |
 | IPv4 addresses | `[IP]` |
 | URLs with token-like params | `[URL_TOKEN]` |
 
-Redaction is an **egress** concern, not a storage one. Storage keeps a single column with the original wording — `messages.content` and `escalation_tickets.primary_question` — and every boundary that sends text out of the platform masks it on the way:
+Redaction guards exactly one boundary: the model. Storage keeps a single column with the original wording — `messages.content` and `escalation_tickets.primary_question` — and every path that hands text to OpenAI masks it on the way (`redact_for_egress`): the question, the chat history in the prompt, escalation transcripts, and background jobs. It is not per-tenant configurable.
 
-- the user question, chat history, and background-job text handed to OpenAI (`redact_for_egress` in `backend/chat/pii.py`);
-- the escalation notification email, which additionally keeps `EMAIL` and `IP` visible in user-authored turns so support can actually reply (`_support_email_text`).
+Correspondence masks nothing. The dashboard, the operator inbox and the escalation notification email render the stored original in full — a support agent replying to the end user needs the conversation exactly as the visitor wrote it. Only e-mail subject lines are masked, since they surface in inbox lists and device notifications.
 
-Only redacted text crosses the OpenAI boundary. Tenant admins configure optional regex entity types in `Settings → Privacy`; the setting governs what is masked at those egress boundaries. `pii_events` records what was masked on the way out — there is no "view / delete originals" flow any more, because the tenant's own dashboard already shows their conversations as written.
+Detection is structural: every entity above has the same shape in every language, so no rule matches a word.
+
+`pii_events` records what was masked on the way to the model.
 
 ### Answer validation (FI-034)
 
@@ -1147,7 +1146,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 | Authentication | JWT (HS256), bcrypt passwords; user access tokens include `typ=chat9_user` |
 | Data isolation | All queries scoped by `tenant_id`; no cross-tenant access possible |
 | API key storage | AES-GCM encrypted at rest |
-| PII protection | Regex redaction before all OpenAI calls |
+| PII protection | Redaction before all OpenAI calls |
 | Rate limiting | `slowapi` with Redis-backed shared counters in production; route-level limits are listed in the "Rate limits (source of truth)" section above |
 | CORS | Production allowlist; widget served via iframe (same-origin for widget API calls) |
 

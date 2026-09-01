@@ -183,8 +183,6 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | POST | `/tenants` | Create tenant manually; the normal signup flow provisions it on `/auth/verify-email` |
 | GET | `/tenants/me` | Get current tenant info (JWT) |
 | PATCH | `/tenants/me` | Update tenant name / OpenAI key (JWT, verified) |
-| GET | `/tenants/me/privacy` | Tenant privacy / PII-redaction config (JWT) |
-| PUT | `/tenants/me/privacy` | Update privacy config (JWT, verified) |
 | GET | `/tenants/me/support-settings` | Support / escalation routing (JWT) |
 | PUT | `/tenants/me/support-settings` | Update support settings (JWT, verified) |
 | POST | `/tenants/me/kyc/secret` | Generate KYC signing secret (shown once) (JWT, verified) |

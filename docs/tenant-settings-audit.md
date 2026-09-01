@@ -18,7 +18,6 @@ rg -n "CONTRADICTION_ADJUDICATION|OPENAI|MODEL|RETRIEVAL|RERANK|BM25|VALIDATION|
 
 The only live `Tenant.settings` key families read by backend code are:
 
-- `redaction.optional_entity_types`
 - `support.l2_email`
 - `support.escalation_language`
 - `retrieval.contradiction_adjudication.enabled`
@@ -30,7 +29,6 @@ The only live `Tenant.settings` key families read by backend code are:
 
 | Key path | Read locations | Behavior | Global env duplicate | Per-tenant meaning | Category |
 |---|---|---|---|---|---|
-| `redaction.optional_entity_types` | `backend/privacy_config.py`, consumed through `backend/tenants/service.py`, `backend/escalation/service.py`, `backend/chat/history_service.py`, `backend/jobs/analyze_chat_logs.py` | Selects optional PII entity classes that the tenant wants masked at every egress boundary — the question and chat history sent to OpenAI, escalation tickets, notification emails, and the log-analysis job. Invalid entity names are filtered against `OPTIONAL_ENTITY_TYPES`. | No. Defaults are code constants in `backend/privacy_config.py:9` and `backend/chat/pii.py`, not env. | Yes. This is a tenant privacy policy / compliance knob. Different tenants can reasonably choose stricter or looser optional redaction. | `keep` now; consider `migrate` later if settings JSON is removed wholesale. |
 | `support.l2_email` | `backend/support_config.py:35`, `backend/support_config.py:39`, consumed through `backend/tenants/service.py:179`, `backend/escalation/service.py:472` | Tenant owner can configure the Level 2 support inbox used for escalation notification emails. If absent, the notification falls back to the tenant owner email. | No. `EMAIL_FROM` is sender-side infrastructure, not the recipient. | Yes. It is customer/business configuration and naturally differs per tenant. | `keep` as product setting; `migrate` to a typed support settings table/columns if we want to retire generic JSON. |
 | `support.escalation_language` | `backend/support_config.py:35`, `backend/support_config.py:40`, consumed through `backend/tenants/service.py:179`, `backend/chat/language_context.py:172`, `backend/escalation/service.py:806` | Tenant can choose the language for tenant-side escalation artifacts. Chat responses still follow the user's language; this value feeds escalation-side language context. | No global env duplicate. However, it overlaps with `TenantProfile.escalation_language` at `backend/models/tenant_profile.py:25`, and runtime falls back from settings to the profile field in `backend/chat/language_context.py:191` and `backend/escalation/service.py:814`. | Yes, but the current storage split is muddled: one logical setting has both a tenant-managed JSON location and an extracted/profile column fallback. | `migrate`. Pick one typed source of truth, preferably a support settings field/table, then remove the fallback ambiguity. |
 | `retrieval.contradiction_adjudication.enabled` | `backend/search/service.py:681`, `backend/search/service.py:684`, `backend/search/service.py:689`, used by `_build_contradiction_adjudication_evidence` at `backend/search/service.py:749` | Temporary per-tenant opt-out for contradiction adjudication. Missing/malformed settings default to enabled; only explicit `false` disables it. Tests at `tests/test_search.py:2356` through `tests/test_search.py:2384` document that default-on behavior. | Yes. The global `CONTRADICTION_ADJUDICATION_ENABLED` gate is defined at `backend/core/config.py:145`. Related global knobs for model, max facts, preview chars, max tokens, and filter cap are at `backend/core/config.py:149` through `backend/core/config.py:167`. | Weak. This is an operational rollout gate, not a customer-owned business setting. Keeping it in tenant JSON creates hidden state that overrides global rollout intent. | `remove`. Delete the tenant-level override after contradiction adjudication is stable/default-on. |
@@ -50,14 +48,12 @@ The only live `Tenant.settings` key families read by backend code are:
 
 ### Keep
 
-Keep `redaction.optional_entity_types` and `support.l2_email` behavior. They are
-real tenant-owned settings and do not duplicate env configuration.
+Keep `support.l2_email` behavior. It is a real tenant-owned setting and does not
+duplicate env configuration.
 
-If the goal is to reduce JSON usage, migrate them to typed storage instead of
+If the goal is to reduce JSON usage, migrate it to typed storage instead of
 removing the product behavior:
 
-- `redaction.optional_entity_types`: a typed JSON/list column or a small
-  `tenant_privacy_settings` table is enough.
 - `support.l2_email`: a nullable string column in a `tenant_support_settings`
   table, or a typed nullable column if we keep the model simple.
 
@@ -115,12 +111,13 @@ Recommended as a series of small PRs, not one large PR:
      the profile field if it remains useful as extracted metadata.
 3. Optionally migrate the remaining real tenant settings out of JSON.
    - Move `support.l2_email`.
-   - Move `redaction.optional_entity_types`.
    - Leave `Tenant.settings` empty only after migrations and API reads no longer
      depend on it.
 
 Do not combine all three steps unless the team explicitly wants a breaking
 settings-storage cleanup. The contradiction override removal is independent and
-low blast radius; escalation language needs product ownership clarity; privacy
-redaction should move last because it touches the egress boundaries, history display, and
-backfill behavior.
+low blast radius; escalation language needs product ownership clarity.
+
+`redaction.optional_entity_types` was removed outright: redaction now guards one
+boundary (the model) and masks everything sensitive there unconditionally, so
+there was nothing left for a tenant to configure.

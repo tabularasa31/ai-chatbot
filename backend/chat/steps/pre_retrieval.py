@@ -270,11 +270,7 @@ async def prepare_turn(run: PipelineRun) -> None:
     # step. ``chat.messages`` holds only prior turns here — the current user
     # message is persisted after the pipeline runs.
     state.guard_dialog_context = (
-        build_dialog_context(
-            run.chat.messages, optional_entity_types=run.optional_entity_types
-        )
-        if run.chat is not None
-        else None
+        build_dialog_context(run.chat.messages) if run.chat is not None else None
     )
 
     # Decide whether to skip the (LLM-backed) semantic query rewrite. Cross-

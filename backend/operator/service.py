@@ -202,7 +202,6 @@ def ingest_from_operator(
     tenant_id: uuid.UUID,
     text: str,
     actor: OperatorActor,
-    optional_entity_types: set[str] | None = None,
 ) -> OperatorIngestResult:
     """Record a human reply in the chat thread and put the chat in ``live``.
 
@@ -275,7 +274,6 @@ def ingest_from_operator(
         tenant_id=tenant_id,
         content=text,
         operator_user_id=actor.user_id,
-        optional_entity_types=optional_entity_types,
     )
     return OperatorIngestResult(
         message=message, chat_reopened=chat_reopened, claimed=claimed

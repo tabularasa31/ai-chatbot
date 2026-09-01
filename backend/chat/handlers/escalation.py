@@ -182,7 +182,7 @@ class EscalationStateMachine(PipelineHandler):
     def _handle_chat_closed(self, ctx: HandlerContext) -> ChatTurnOutcome:
         _svc = _svc_lookup()
         msgs = _svc.build_chat_messages_for_openai(
-            ctx.chat, ctx.redacted_question, ctx.optional_entity_types
+            ctx.chat, ctx.redacted_question
         )
         if ctx.trace is not None:
             ctx.trace.span(
@@ -206,7 +206,6 @@ class EscalationStateMachine(PipelineHandler):
             language_context=ctx.language_context,
             question=ctx.question,
             out=out,
-            optional_entity_types=ctx.optional_entity_types,
             trace=ctx.trace,
             trace_source="chat_closed",
             chat_ended=True,
@@ -249,7 +248,7 @@ class EscalationStateMachine(PipelineHandler):
                 ctx.db.refresh(chat)
                 ctx.db.expire(chat, ["messages"])
                 msgs = _svc.build_chat_messages_for_openai(
-                    chat, ctx.redacted_question, ctx.optional_entity_types
+                    chat, ctx.redacted_question
                 )
                 out = await_only(
                     _svc.complete_escalation_openai_turn(
@@ -272,7 +271,6 @@ class EscalationStateMachine(PipelineHandler):
                     language_context=ctx.language_context,
                     question=ctx.question,
                     out=out,
-                    optional_entity_types=ctx.optional_entity_types,
                     trace=ctx.trace,
                     trace_source="escalation_email_capture",
                     chat_ended=False,
@@ -296,7 +294,7 @@ class EscalationStateMachine(PipelineHandler):
                     ctx.db.rollback()
                 return outcome
             msgs = _svc.build_chat_messages_for_openai(
-                chat, ctx.redacted_question, ctx.optional_entity_types
+                chat, ctx.redacted_question
             )
             out = await_only(
                 _svc.complete_escalation_openai_turn(
@@ -319,7 +317,6 @@ class EscalationStateMachine(PipelineHandler):
                 language_context=ctx.language_context,
                 question=ctx.question,
                 out=out,
-                optional_entity_types=ctx.optional_entity_types,
                 trace=ctx.trace,
                 trace_source="escalation_email_retry",
                 chat_ended=False,
@@ -379,7 +376,7 @@ class EscalationStateMachine(PipelineHandler):
             return None
         ticket = get_latest_escalation_ticket_for_chat(chat.id, ctx.db)
         msgs = _svc.build_chat_messages_for_openai(
-            chat, ctx.redacted_question, ctx.optional_entity_types
+            chat, ctx.redacted_question
         )
         try:
             out = await_only(
@@ -412,7 +409,6 @@ class EscalationStateMachine(PipelineHandler):
                     language_context=ctx.language_context,
                     question=ctx.question,
                     out=out,
-                    optional_entity_types=ctx.optional_entity_types,
                     trace=ctx.trace,
                     trace_source="escalation_followup",
                     chat_ended=False,
@@ -437,7 +433,6 @@ class EscalationStateMachine(PipelineHandler):
                     language_context=ctx.language_context,
                     question=ctx.question,
                     out=out,
-                    optional_entity_types=ctx.optional_entity_types,
                     trace=ctx.trace,
                     trace_source="escalation_followup",
                     chat_ended=True,
@@ -468,7 +463,6 @@ class EscalationStateMachine(PipelineHandler):
                 language_context=ctx.language_context,
                 question=ctx.question,
                 out=out,
-                optional_entity_types=ctx.optional_entity_types,
                 trace=ctx.trace,
                 trace_source="escalation_followup",
                 chat_ended=False,
@@ -574,7 +568,6 @@ class EscalationStateMachine(PipelineHandler):
                 best_similarity_score=pre_confirm_ctx.get("best_similarity_score"),
                 retrieved_chunks=pre_confirm_ctx.get("retrieved_chunks"),
                 user_context=ctx.effective_user_ctx,
-                optional_entity_types=ctx.optional_entity_types,
                 latest_user_text=ctx.question,
             )
             notify_sent = True
@@ -585,7 +578,7 @@ class EscalationStateMachine(PipelineHandler):
             else EscalationPhase.handoff_email_known
         )
         msgs = _svc.build_chat_messages_for_openai(
-            chat, ctx.redacted_question, ctx.optional_entity_types
+            chat, ctx.redacted_question
         )
         out_handoff = await_only(
             _svc.complete_escalation_openai_turn(
@@ -638,7 +631,6 @@ class EscalationStateMachine(PipelineHandler):
             language_context=ctx.language_context,
             question=ctx.question,
             out=out_handoff,
-            optional_entity_types=ctx.optional_entity_types,
             trace=ctx.trace,
             trace_source=trace_source,
             chat_ended=False,
@@ -811,7 +803,6 @@ class EscalationStateMachine(PipelineHandler):
             assistant_content=localized.text,
             document_ids=[],
             extra_tokens=localized.tokens_used,
-            optional_entity_types=ctx.optional_entity_types,
             language_context=ctx.language_context,
         )
         if ctx.trace is not None:
@@ -916,7 +907,6 @@ class EscalationStateMachine(PipelineHandler):
                     language_context=ctx.language_context,
                     question=ctx.question,
                     out=out_declined,
-                    optional_entity_types=ctx.optional_entity_types,
                     trace=ctx.trace,
                     trace_source="escalation_pre_confirm_declined",
                     chat_ended=False,
@@ -974,7 +964,6 @@ class EscalationStateMachine(PipelineHandler):
                 language_context=ctx.language_context,
                 question=ctx.question,
                 out=out_clarify,
-                optional_entity_types=ctx.optional_entity_types,
                 trace=ctx.trace,
                 trace_source="escalation_pre_confirm_unclear",
                 chat_ended=False,

@@ -201,7 +201,6 @@ def _build_prior_messages_for_llm(
     *,
     max_messages: int,
     char_cap: int,
-    optional_entity_types: set[str] | None = None,
 ) -> list[dict[str, str]] | None:
     """Take the trailing N persisted turns of ``chat`` and format them for the
     OpenAI chat API. Returns None when there is nothing to add.
@@ -219,9 +218,7 @@ def _build_prior_messages_for_llm(
     persisted = sorted(chat.messages or [], key=lambda m: m.created_at or m.id)
     out: list[dict[str, str]] = []
     for m in persisted[-max_messages:]:
-        text = redact_for_egress(
-            m.content, optional_entity_types=optional_entity_types
-        ).strip()
+        text = redact_for_egress(m.content).strip()
         if not text:
             continue
         if len(text) > char_cap:
@@ -629,7 +626,6 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         run.chat,
         max_messages=settings.chat_history_turns,
         char_cap=settings.chat_history_message_char_cap,
-        optional_entity_types=run.optional_entity_types,
     )
 
     if run.status_callback is not None:

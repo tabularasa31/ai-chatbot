@@ -162,20 +162,6 @@ class TenantListResponse(BaseModel):
     clients: list[TenantResponse]
 
 
-RedactionEntityLiteral = Literal["ID_DOC", "IP", "URL_TOKEN"]
-
-class PrivacyConfigResponse(BaseModel):
-    """Tenant-wide regex redaction settings."""
-
-    optional_entity_types: list[RedactionEntityLiteral]
-
-
-class UpdatePrivacyConfigRequest(BaseModel):
-    """PUT body for /clients/me/privacy."""
-
-    optional_entity_types: list[RedactionEntityLiteral]
-
-
 class SupportSettingsResponse(BaseModel):
     """Tenant-wide support inbox settings."""
 

@@ -34,11 +34,9 @@ from backend.models import (
     MessageEmbedding,
     MessageFeedback,
     MessageRole,
-    Tenant,
     TenantFaq,
 )
 from backend.models.base import _utcnow
-from backend.privacy_config import optional_entity_types_from_settings
 from backend.utils.math import cosine_similarity as _cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -150,13 +148,6 @@ def _get_or_create_state(db: Session, tenant_id: uuid.UUID) -> LogAnalysisState:
     return state
 
 
-def _tenant_optional_entity_types(db: Session, tenant_id: uuid.UUID) -> set[str] | None:
-    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    if tenant is None or not isinstance(tenant.settings, dict):
-        return None
-    return optional_entity_types_from_settings(tenant.settings)
-
-
 def _load_messages(
     db: Session,
     tenant_id: uuid.UUID,
@@ -188,12 +179,11 @@ def _load_messages(
         .limit(batch_size)
         .all()
     )
-    optional_entity_types = _tenant_optional_entity_types(db, tenant_id)
     return [
         MessageRow(
             id=m.id,
             content=redact_for_egress(
-                m.content, optional_entity_types=optional_entity_types
+                m.content
             ),
             created_at=m.created_at,
             conversation_id=m.chat_id,
@@ -206,7 +196,6 @@ def _get_answer_for_message(
     db: Session,
     msg_id: uuid.UUID,
     conversation_id: uuid.UUID,
-    optional_entity_types: set[str] | None = None,
 ) -> tuple[str | None, MessageFeedback]:
     """Return (answer_text, assistant_feedback) for this message's own answer.
 
@@ -251,7 +240,7 @@ def _get_answer_for_message(
 
     return (
         redact_for_egress(
-            assistant_msg.content, optional_entity_types=optional_entity_types
+            assistant_msg.content
         ),
         assistant_msg.feedback,
     )
@@ -668,7 +657,6 @@ async def run_job(
 
         # ── Per-cluster: pick best answer, create FAQ, collect aliases ───────
         alias_inputs: list[list[str]] = []
-        egress_entity_types = _tenant_optional_entity_types(db, tenant_id)
 
         for cluster in clusters:
             if time.monotonic() - job_started_mono > settings.max_job_duration_sec:
@@ -681,7 +669,7 @@ async def run_job(
             members: list[ClusterMember] = []
             for msg in cluster:
                 answer_text, feedback = _get_answer_for_message(
-                    db, msg.id, msg.conversation_id, egress_entity_types
+                    db, msg.id, msg.conversation_id
                 )
                 if answer_text:
                     members.append(

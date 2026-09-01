@@ -238,7 +238,6 @@ class OperatorHandler(PipelineHandler):
                 chat=chat,
                 tenant_id=ctx.tenant_id,
                 user_content=ctx.question,
-                optional_entity_types=ctx.optional_entity_types,
             )
             _monitor_injection(ctx, chat)
             # The other half of the e-mail lane. An operator answering from

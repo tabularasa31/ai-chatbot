@@ -1,4 +1,8 @@
-"""Tests for PII regex redaction."""
+"""Tests for PII redaction at the model egress boundary."""
+
+from __future__ import annotations
+
+import pytest
 
 from backend.chat.pii import (
     DetectedEntitySummary,
@@ -34,17 +38,6 @@ def test_redact_api_keys():
     )
 
 
-def test_redact_password_id_doc_ip_and_url_token():
-    result = redact_text(
-        "password is Hunter22 passport 4510 123456 ip 192.168.1.10 "
-        "https://example.com/reset?token=abc123456"
-    )
-    assert "[PASSWORD]" in result
-    assert "[ID_DOC]" in result
-    assert "[IP]" in result
-    assert "[URL_TOKEN]" in result
-
-
 def test_redact_credit_cards_with_luhn():
     assert "[CARD]" in redact_text("card: 4111 1111 1111 1111")
     assert "[CARD]" in redact_text("4111111111111111")
@@ -52,27 +45,39 @@ def test_redact_credit_cards_with_luhn():
     assert redact_text("number 1234 5678 9012 3456") == "number 1234 5678 9012 3456"
 
 
-def test_optional_entity_types_can_be_disabled():
-    result = redact_text(
-        "паспорт 4510 123456 from 192.168.1.10",
-        optional_entity_types={"IP"},
-    )
-    assert "[IP]" in result
-    assert "[ID_DOC]" not in result
+@pytest.mark.parametrize(
+    "text",
+    [
+        "8(495)123-45-67 4111 1111 1111 1111",
+        "4111111111111111 8(495)123-45-67",
+        "192.168.1.100 4111111111111111",
+        "4111111111111111 192.168.1.100",
+        "10.0.0.254 4111 1111 1111 1111",
+        "+7 916 123-45-67 4111 1111 1111 1111",
+        "4111 1111 1111 1111 99",
+    ],
+)
+def test_card_next_to_another_number_is_still_masked(text):
+    """A neighbouring number must not swallow the card into a failing checksum.
+
+    A phone number or an IP written beside a card forms one digit run with it.
+    Testing that run as a whole fails Luhn, and dropping it left the full card
+    number in the text sent to the model.
+    """
+    result = redact_text(text)
+    assert "[CARD]" in result
+    assert "4111" not in result
 
 
-def test_disabled_entity_types_override_mandatory():
-    # EMAIL and IP are normally always masked (EMAIL is mandatory); the
-    # outbound support email disables both while keeping everything else.
-    result = redact_text(
-        "reach me at a@b.com from 192.168.1.10, phone +1 202 555 0143",
-        disabled_entity_types={"EMAIL", "IP"},
+def test_redact_url_token():
+    assert "[URL_TOKEN]" in redact_text(
+        "https://example.com/reset?token=abc123456"
     )
-    assert "a@b.com" in result
-    assert "192.168.1.10" in result
-    assert "[EMAIL]" not in result
-    assert "[IP]" not in result
-    assert "[PHONE]" in result
+
+
+def test_plain_url_is_left_alone():
+    text = "see https://example.com/docs for details"
+    assert redact_text(text) == text
 
 
 def test_ip_redaction_skips_invalid_octets():
@@ -80,9 +85,8 @@ def test_ip_redaction_skips_invalid_octets():
     assert redact_text(text) == text
 
 
-def test_no_false_positives_on_normal_text():
-    text = "how do I reset my password?"
-    assert redact_text(text) == text
+def test_redact_ip():
+    assert redact_text("connecting from 192.168.1.10") == "connecting from [IP]"
 
 
 def test_redaction_result_contains_entity_counts():
@@ -92,47 +96,44 @@ def test_redaction_result_contains_entity_counts():
 
 
 def test_was_redacted_flag():
-    result = redact("send to test@email.com")
-    assert result.was_redacted is True
-
-    result = redact("how do I reset my password?")
-    assert result.was_redacted is False
+    assert redact("send to test@email.com").was_redacted is True
+    assert redact("how do I reset my password?").was_redacted is False
 
 
 def test_multiple_entities():
-    result = redact_text(
-        "I'm John, email test@test.com, phone +79991234567"
-    )
+    result = redact_text("I'm John, email test@test.com, phone +79991234567")
     assert "[EMAIL]" in result
     assert "[PHONE]" in result
     assert "test@test.com" not in result
     assert "+79991234567" not in result
 
 
-def test_id_doc_us_ssn():
-    assert "[ID_DOC]" in redact_text("my SSN is 123-45-6789")
-    assert "[ID_DOC]" in redact_text("my SSN is 123456789")
-    assert "[ID_DOC]" in redact_text("social security: 123-45-6789")
-    assert "[ID_DOC]" in redact_text("SSN number:123-45-6789")
-    # invalid format (mixed separators) — must NOT match
-    assert "[ID_DOC]" not in redact_text("SSN 123-456789")
-    # no keyword — must NOT match to avoid 9-digit false positives
-    assert "[ID_DOC]" not in redact_text("order 123456789 placed")
-    assert "[ID_DOC]" not in redact_text("version 1.2-34-5678 released")
+def test_an_entity_inside_another_match_does_not_split_the_mask():
+    """A narrower match must not strand the rest of a value outside the mask."""
+    result = redact_text("reach me at 2024@home.net or +79161234567")
+    assert "2024" not in result
+    assert "79161234567" not in result
 
 
-def test_id_doc_icao_passport():
-    assert "[ID_DOC]" in redact_text("passport number AB1234567")
-    assert "[ID_DOC]" in redact_text("passport: AB1234567")
-    assert "[ID_DOC]" in redact_text("my passport is A12345678")
-    assert "[ID_DOC]" in redact_text("id AB1234567")
-    assert "[ID_DOC]" not in redact_text("serial AB1234567")
+def test_ordinary_support_text_is_untouched():
+    for text in [
+        "My order number is 100234567, when will it ship?",
+        "I get error code ERR5012 when saving",
+        "Ticket ESC-2024-0198 was closed",
+        "Rate limit: 100000 requests per day",
+        "Build 20240115 crashed on startup",
+        "SKU 987654321 out of stock",
+        "how do I reset my password?",
+    ]:
+        assert redact_text(text) == text
 
 
-def test_id_doc_uk_ni():
-    assert "[ID_DOC]" in redact_text("national insurance AB123456C")
-    assert "[ID_DOC]" in redact_text("NI: AB123456C")
-    assert "[ID_DOC]" in redact_text("NI number AB 12 34 56 C")
-    assert "[ID_DOC]" in redact_text("NI number:AB123456C")
-    # no keyword — must NOT match
-    assert "[ID_DOC]" not in redact_text("reference AB123456C submitted")
+def test_labelled_secrets_are_out_of_scope():
+    """Out of scope by design — catching these would need a language-specific label."""
+    for text in [
+        "my password is Hunter22",
+        "mein Passwort ist Hunter22",
+        "паспорт 4510 123456",
+        "инн 7707083893",
+    ]:
+        assert redact_text(text) == text

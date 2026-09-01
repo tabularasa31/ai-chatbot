@@ -34,7 +34,7 @@
   - `gpt-5-mini` for grounded chat answers
   - `gpt-4o-mini` defaults for lightweight classifiers: human-request guard (`HUMAN_REQUEST_MODEL`), relevance guard (`RELEVANCE_GUARD_MODEL`), and answer validation (`VALIDATION_MODEL`)
   - Optional second `gpt-4o-mini` call per chat turn for answer validation (FI-034): groundedness check; failures trigger a safe fallback instead of returning an unverified answer
-  - **PII redaction / privacy hardening (FI-043 + follow-up hardening):** before embedding search, chat completion, and validation completion, the user question — and the chat history assembled into the prompt — is passed through regex redaction (`backend/chat/pii.py`); placeholders such as `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CARD]`, `[PASSWORD]`, `[ID_DOC]`, `[IP]`, `[URL_TOKEN]` are what reaches OpenAI, while `messages.content` stores the original text
+  - **PII redaction / privacy hardening (FI-043 + follow-up hardening):** before embedding search, chat completion, and validation completion, the user question — and the chat history assembled into the prompt — is passed through redaction (`backend/chat/pii.py`); placeholders such as `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CARD]`, `[IP]`, `[URL_TOKEN]` are what reaches OpenAI, while `messages.content` stores the original text
   - text-embedding-3-small for vectors (1536-dim)
   - Each client brings their own key — no platform markup
   
@@ -140,7 +140,7 @@
 │  POST /widget/chat (public bot ID) or POST /chat (X-API-Key) │
 │    ↓                                                      │
 │    1. Resolve tenant → tenant_id + openai_api_key        │
-│    2. Redact PII in question (regex + tenant toggles)    │
+│    2. Redact PII in question (structural)                │
 │    3. Run shared chat pipeline (FAQ / retrieval /        │
 │       validation / existing reject & escalation guards)  │
 │    4. Embed redacted question when retrieval is needed   │
@@ -212,7 +212,7 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
    ↓
 3. Backend resolves the public bot ID (`bot_id` query param) → gets internal `tenant_id` + tenant's OpenAI key
    ↓
-4. Regex PII redaction on question (FI-043) → typed placeholders for external calls
+4. PII redaction on question (FI-043) → typed placeholders for external calls
    ↓
 5. OpenAI API: Embed redacted question → vector(1536)  [client's key]
    ↓
@@ -295,10 +295,10 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 - Chat9 never marks up or proxies OpenAI costs
 
 ### User message privacy (FI-043)
-- Regex redaction on the user question before any OpenAI call (embedding, chat, validation)
-- `messages.content` keeps the original wording; redaction is applied where text leaves the platform (OpenAI requests, support email), not when it is stored
+- Redaction on the user question before any OpenAI call (embedding, chat, validation)
+- `messages.content` keeps the original wording; redaction is applied where text is handed to the model, not when it is stored
 - Dashboard flows show the tenant their own conversations as written; `pii_events` audits what was masked on egress
-- Client admins can manage optional regex entity toggles in `Settings → Privacy`; privacy audit rows are retained via admin retention controls
+- Human-facing surfaces (dashboard, operator inbox, support email) render the original; privacy audit rows are retained via admin retention controls
 
 ### Multi-Tenant Isolation
 - Every query includes `WHERE tenant_id = $1`

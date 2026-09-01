@@ -138,12 +138,13 @@ class EscalationStatus(str, enum.Enum):
 
 
 class PiiEventDirection(str, enum.Enum):
-    """Outbound boundary a redaction was applied at.
+    """Boundary a redaction was applied at.
 
-    Storage holds the user's original wording; redaction happens where text
-    leaves the platform, so every direction names an egress: an OpenAI
-    request, the escalation ticket forwarded to support, or a notification
-    e-mail.
+    Storage holds the user's original wording; redaction guards the model, so
+    the written directions are the OpenAI request and the audit pass on a
+    forwarded escalation ticket. ``notification_email`` is retained for
+    historical rows — the support e-mail renders the stored original and masks
+    nothing.
     """
 
     llm_request = "llm_request"

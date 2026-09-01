@@ -44,7 +44,6 @@ from backend.chat.decision import (
     KbConfidence,  # noqa: F401  (re-export)
     classify_kb_confidence,
     floor_kb_confidence,
-    reply_is_clarifying_question,
 )
 
 # --- Pipeline surface (moved out of this module; re-exported for callers) ---
@@ -592,15 +591,23 @@ class RagHandler(PipelineHandler):
             escalate = True
             esc_trigger = EscalationTrigger.low_similarity
 
-        # Charge the per-session clarification budget only for turns that
-        # actually asked something. decide() classifies the turn, but the model
-        # writes it: a turn classified as a blocking clarify that came back as a
-        # plain answer used to consume a clarification anyway. The budget then
-        # ran out on questions nobody had been asked, and the next genuinely
-        # ambiguous turn escalated on clarify_loop_limit instead of asking.
+        # Charge the per-session clarification budget for every turn that
+        # actually asked something, whether or not decide() called for it. Two
+        # asymmetries motivated this: a turn classified as a blocking clarify
+        # that came back as a plain answer must NOT be charged (the budget used
+        # to run out on questions nobody was asked, and the next genuinely
+        # ambiguous turn escalated on clarify_loop_limit instead of asking), and
+        # a question the model asked on its own must be. The substance check in
+        # the prompt asks for a missing detail on high-confidence turns, where
+        # decide() returns answer_with_citations — gating on the verdict left
+        # those uncounted, so "ask at most once per conversation" had no
+        # enforcement at all and a user who kept answering vaguely could be
+        # asked forever. Spending budget here can push a later ambiguous turn
+        # into clarify_loop_limit, which escalates: the right terminal state for
+        # a conversation that has already asked its way to the ceiling.
         _clarification_count_before = chat.clarification_count
-        _clarify_asked = reply_is_clarifying_question(answer)
-        _clarification_charged = _decision.is_blocking_clarify() and _clarify_asked
+        _clarify_asked = result.llm_clarifying
+        _clarification_charged = _clarify_asked
         if _clarification_charged:
             chat.clarification_count += 1
             ctx.db.add(chat)
@@ -758,8 +765,8 @@ class RagHandler(PipelineHandler):
         # disarmed the gate and left the raw RAG answer standing — exactly the
         # dead end this block exists to close.
         #
-        # A reply that already ends in a question is left alone, as is one the
-        # model marked as its own offer. Appending "shall I forward this?"
+        # A reply the model marked as a clarifying question is left alone, as
+        # is one it marked as its own offer. Appending "shall I forward this?"
         # after either asks twice in one reply — and after this turn's required
         # clarification it is worse than noise, because the user's "yes"
         # answers the clarification while the gate reads it as consent to open
@@ -769,9 +776,17 @@ class RagHandler(PipelineHandler):
             not chat.escalation_pre_confirm_pending
             and result.llm_needs_human
             and not result.llm_offered_ticket
-            and not reply_is_clarifying_question(answer)
+            and not result.llm_clarifying
         ):
             _handoff_start = perf_counter()
+            # "You can reach our support team right here" only informs a user
+            # who asked how to reach support. Anywhere else it restates what
+            # the reply above just spent a paragraph on, and the offer reads as
+            # the second half of a doubled message. The neutral ``initial``
+            # variant is the bare question, which is all this rescue needs.
+            _rescue_variant = (
+                "support_contact" if ctx.support_contact_question else "initial"
+            )
             try:
                 # Templated path only (no chat_messages): the canonical text is
                 # localized once per language and cached, so rescuing a dead end
@@ -779,7 +794,7 @@ class RagHandler(PipelineHandler):
                 esc_offer = await_only(
                     asyncio.wait_for(
                         render_pre_confirm_text(
-                            variant="support_contact",
+                            variant=_rescue_variant,
                             response_language=ctx.language_context.response_language,
                             api_key=ctx.api_key,
                             tenant_id=str(ctx.tenant_id),
@@ -794,7 +809,7 @@ class RagHandler(PipelineHandler):
                 logger.warning(
                     "handoff offer render failed, using canonical template: %s", e
                 )
-                esc_offer = pre_confirm_fallback_result("support_contact")
+                esc_offer = pre_confirm_fallback_result(_rescue_variant)
             record_stage_ms(
                 ctx.trace,
                 "handoff_offer_render_ms",
@@ -987,4 +1002,5 @@ class RagHandler(PipelineHandler):
             chat_ended=bool(chat.ended_at),
             ticket_number=created_ticket_number,
             chat_id=str(chat.id) if chat is not None else None,
+            escalation_offered=bool(chat.escalation_pre_confirm_pending),
         )

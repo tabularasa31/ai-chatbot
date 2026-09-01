@@ -482,7 +482,9 @@ async def _async_generate_answer_native(
         # follow-up scrub removes any mid-text occurrence (against prompt
         # contract) so a literal never reaches the UI even when detection
         # itself stayed False.
-        answer_text, offered_ticket, needs_human = _strip_and_detect_markers(answer_text)
+        answer_text, offered_ticket, needs_human, clarifying = _strip_and_detect_markers(
+            answer_text
+        )
         answer_text = _strip_trailing_partial_marker(_scrub_marker_literals(answer_text))
         log_llm_tokens(
             operation="generate",
@@ -557,7 +559,15 @@ async def _async_generate_answer_native(
             _output_tokens += extra_tokens
         else:
             final_text = answer_text.strip()
-        return (final_text, total_tokens, _input_tokens, _output_tokens, offered_ticket, needs_human)
+        return (
+            final_text,
+            total_tokens,
+            _input_tokens,
+            _output_tokens,
+            offered_ticket,
+            needs_human,
+            clarifying,
+        )
     except LanguageMismatchStreamAbortError as abort_exc:
         # Not an error: the language gate aborted the stream early so the
         # caller can regenerate in the expected language. End the observation
@@ -729,6 +739,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     _output_toks = 0
     llm_offered_ticket = False
     llm_needs_human = False
+    llm_clarifying = False
     try:
         (
             raw_answer,
@@ -737,6 +748,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
             _output_toks,
             llm_offered_ticket,
             llm_needs_human,
+            llm_clarifying,
         ) = await _rag.async_generate_answer(
             run.question,
             retrieval.chunk_texts,
@@ -771,6 +783,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
             retry_out,
             retry_offered_ticket,
             retry_needs_human,
+            retry_clarifying,
         ) = await _rag.async_generate_answer(
             run.question,
             retrieval.chunk_texts,
@@ -787,8 +800,16 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         tokens_used += retry_tokens
         _input_toks += retry_in
         _output_toks += retry_out
-        llm_offered_ticket = llm_offered_ticket or retry_offered_ticket
-        llm_needs_human = llm_needs_human or retry_needs_human
+        # Assign, never accumulate: unlike the token counters above (both
+        # attempts were billed, so both count), these three describe the text
+        # that ``raw_answer = retry_answer`` just discarded. A short
+        # wrong-language first attempt DOES reach here with its flags set — the
+        # gate raises from flush_end(), after the tuple was unpacked — so an
+        # ``or`` would arm the pre-confirm gate under a retry reply that offered
+        # nothing, and read the user's next message as consent to open a ticket.
+        llm_offered_ticket = retry_offered_ticket
+        llm_needs_human = retry_needs_human
+        llm_clarifying = retry_clarifying
         _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
         record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)
         if lang_span is not None:
@@ -870,6 +891,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         escalation_trigger=esc_trigger,
         llm_offered_ticket=llm_offered_ticket,
         llm_needs_human=llm_needs_human,
+        llm_clarifying=llm_clarifying,
         clarify_required_reason=_require_clarification,
         retrieval_ms=int(retrieval.retrieval_duration_ms),
         llm_ms=llm_ms,

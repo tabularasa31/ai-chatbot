@@ -107,7 +107,16 @@ OFFER_MARKER = "<offered_ticket/>"
 # left users staring at a support channel they could not reach.
 HANDOFF_MARKER = "<needs_human/>"
 
-ALL_MARKERS: tuple[str, ...] = (OFFER_MARKER, HANDOFF_MARKER)
+# Sentinel the LLM appends when its reply ends in a question the user is meant
+# to answer. Two decisions hang off it — whether the per-session clarification
+# budget was actually spent, and whether the backend may append a handoff offer
+# underneath (it must not: that would ask twice in one reply). Both were
+# previously read off the reply's last character against a hand-listed set of
+# question marks, which silently misjudged every script that punctuates a
+# question differently (a Chinese 吗-question closing on 。, Ethiopic ፧).
+CLARIFY_MARKER = "<clarifying/>"
+
+ALL_MARKERS: tuple[str, ...] = (OFFER_MARKER, HANDOFF_MARKER, CLARIFY_MARKER)
 
 
 def _terminal_marker_re(marker: str) -> re.Pattern[str]:
@@ -155,23 +164,31 @@ def _strip_and_detect_handoff_marker(text: str) -> tuple[str, bool]:
     return _strip_and_detect_terminal_marker(text, HANDOFF_MARKER)
 
 
-def _strip_and_detect_markers(text: str) -> tuple[str, bool, bool]:
+def _strip_and_detect_clarify_marker(text: str) -> tuple[str, bool]:
+    """Terminal-only detection of :data:`CLARIFY_MARKER`."""
+    return _strip_and_detect_terminal_marker(text, CLARIFY_MARKER)
+
+
+def _strip_and_detect_markers(text: str) -> tuple[str, bool, bool, bool]:
     """Peel every terminal sentinel off ``text``.
 
-    Returns ``(cleaned_text, offered_ticket, needs_human)``. A reply may carry
-    both markers in either order, so peel until neither matches the tail
+    Returns ``(cleaned_text, offered_ticket, needs_human, clarifying)``. A reply
+    may carry several markers in any order, so peel until none matches the tail
     instead of assuming a single trailing sentinel.
     """
     offered = False
     needs_human = False
+    clarifying = False
     cleaned = text
     while True:
         cleaned, hit_offer = _strip_and_detect_offer_marker(cleaned)
         cleaned, hit_handoff = _strip_and_detect_handoff_marker(cleaned)
+        cleaned, hit_clarify = _strip_and_detect_clarify_marker(cleaned)
         offered = offered or hit_offer
         needs_human = needs_human or hit_handoff
-        if not (hit_offer or hit_handoff):
-            return cleaned, offered, needs_human
+        clarifying = clarifying or hit_clarify
+        if not (hit_offer or hit_handoff or hit_clarify):
+            return cleaned, offered, needs_human, clarifying
 
 
 def _strip_trailing_partial_marker(text: str) -> str:

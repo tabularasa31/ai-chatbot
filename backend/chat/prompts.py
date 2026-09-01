@@ -90,6 +90,8 @@ SUPPORT_CHANNEL_POLICY = (
     "handoff offer reaches them.\n"
     "- When the user turn reports that the user is identified or that their contact email is on file, support "
     "can already reply to them: never ask them to sign in, register, or hand over contact details first.\n"
+    "- Knowing an email is on file is not permission to talk about it: never quote it back, and never tell "
+    "the user what will be sent from it.\n"
 )
 
 DISCLOSURE_LEVEL_INSTRUCTIONS: dict[str, str] = {
@@ -190,13 +192,20 @@ def build_rag_prompt(
         "- A definitive negative answer is a resolved answer: when the context shows that a capability, integration, or option is unsupported, out of scope, or listed as a current limitation, state that plainly and stop. So is an answer that addresses what the user actually asked even though the documentation does not use their wording. Neither case, and no gap in the documentation, exempts you from the `<needs_human/>` rule below — that rule is the ONLY reason to put a handoff in front of the user.\n"
         "- Reaching people is not a resolution you can deliver in text. Whenever the only way forward your reply can offer is contacting a human — the documentation's last step is \"write to support\", the fix needs an operator, or the answer you found IS a support channel (a panel/dashboard chat, a ticket form, a phone number, a support email) — the turn is NOT resolved: append the literal marker `<needs_human/>` as the very last token of your reply. Keep the documentation's contact details in your text when they are useful to the user, but do NOT write the handoff offer yourself and do NOT ask the user to confirm anything — the backend appends its own offer, in the user's language, and wires their answer to the support handoff. The marker is stripped before the reply is shown.\n"
         "- Keep answers concise and focused on the user's intent: typically 2-4 short paragraphs (around 200 words). Use bullet lists for multi-step instructions. Expand only when the user explicitly asks for more depth.\n"
-        # NOTE: the marker bullet must stay the LAST bullet in Rules:. Inserting
-        # it earlier would invalidate the OpenAI prompt-cache prefix that
-        # covers every preceding original bullet. With it at the end, only
-        # the suffix (this bullet + appended client_guard / disclosure /
-        # COT blocks) cache-misses on the first turn after deploy until the
-        # new prefix re-warms.
+        # NOTE: the marker bullets below are append-only — add new rules after
+        # them, never between the original bullets above. Inserting earlier
+        # would invalidate the OpenAI prompt-cache prefix that covers every
+        # preceding bullet; appending at the tail cache-misses only the suffix
+        # (these bullets + client_guard / disclosure / COT blocks) on the first
+        # turn after deploy, until the new prefix re-warms.
         "- When (and ONLY when) your reply contains such a ticket offer, append the literal marker `<offered_ticket/>` as the very last token of your reply, after all natural-language text. The marker is machine-readable, language-agnostic, and stripped by the backend before the reply is shown to the user; without it, the user's next \"yes\" / confirmation will not be wired to the support handoff. Do NOT emit the marker on any reply that does not offer a ticket.\n"
+        # The two bullets below close the shapes seen in production: the model
+        # wrote its own "I am sending this to support" paragraph, the backend
+        # appended its offer underneath, and the resulting ticket carried no
+        # error text for support to act on.
+        "- Never narrate the handoff yourself: do not say you are forwarding, have forwarded, or are about to forward the request, do not draft the message that would be sent, and do not name the address it would be sent from. Those words belong to the backend, and writing your own version puts two conflicting offers in one reply.\n"
+        "- When (and ONLY when) your reply ends on a question about the user's own problem — a detail you need from them before you can answer — append the literal marker `<clarifying/>` as the very last token, after all natural-language text. It is machine-readable and stripped before the reply is shown; the backend reads it to know a question was asked, so a reply that asks something without it is treated as a plain answer. A question ABOUT the handoff (\"shall I open a ticket?\") is not one of these: it takes `<offered_ticket/>` instead. Never combine `<clarifying/>` with `<needs_human/>` or `<offered_ticket/>` on one reply — a turn either asks the user about their problem, or puts the handoff in front of them, never both.\n"
+        "- Before `<needs_human/>`, check the request has substance to forward: support reads only what the user wrote in this chat, so a report with no error text, no description of what happens instead, and no identifier is a ticket nobody can act on. In that case ask exactly one short question for the single most useful missing detail, end the reply there and mark it `<clarifying/>` instead — the handoff waits for the next turn. Ask this at most once per conversation, never re-ask what the user already answered or refused to answer, and skip it entirely when the turn's clarification instruction forbids asking: then emit the marker as usual.\n"
     )
 
     if agent_instructions and settings.enable_agent_instructions:

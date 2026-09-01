@@ -30,7 +30,6 @@ from sqlalchemy.orm import Session
 from backend.chat.decision import (
     Decision,
     DecisionKind,
-    reply_is_clarifying_question,
     requires_blocking_clarify,
 )
 from backend.chat.prompts import _user_context_prompt_line, build_rag_prompt
@@ -62,6 +61,30 @@ def test_prompt_asks_for_the_marker_not_for_a_composed_offer() -> None:
 
     assert "`<needs_human/>`" in prompt
     assert "do NOT write the handoff offer yourself" in prompt
+
+
+def test_prompt_forbids_narrating_the_handoff() -> None:
+    """The model must not write its own "I am sending this to support" paragraph.
+
+    A production reply drafted the ticket text, announced it was being sent and
+    named the address it would come from — and the backend then appended its own
+    offer underneath, so one message both claimed the handoff and asked for it.
+    """
+    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
+
+    assert "Never narrate the handoff yourself" in prompt
+    assert "do not draft the message that would be sent" in prompt
+    assert "do not name the address it would be sent from" in prompt
+    assert "never quote it back" in prompt
+
+
+def test_prompt_requires_a_forwardable_request_before_the_marker() -> None:
+    """A ticket with no error text is one support cannot act on."""
+    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
+
+    assert "check the request has substance to forward" in prompt
+    assert "ask exactly one short question" in prompt
+    assert "at most once per conversation" in prompt
 
 
 def test_required_clarification_becomes_a_turn_instruction() -> None:
@@ -151,20 +174,25 @@ def test_no_clarify_requirement_without_budget_or_confidence() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "text,expected",
-    [
-        ("Какой именно код вы имеете в виду?", True),
-        ("Which code do you mean — the sign-up one or the login one?", True),
-        ("«Точно?»", True),
-        ("那是哪个验证码？", True),
-        ("Возможные причины: подождите 2 минуты.", False),
-        ("", False),
-        (None, False),
-    ],
-)
-def test_reply_is_clarifying_question(text: str | None, expected: bool) -> None:
-    assert reply_is_clarifying_question(text) is expected
+def test_clarify_marker_is_detected_and_stripped() -> None:
+    """The sentinel replaces the old last-character question-mark heuristic.
+
+    That heuristic enumerated question marks by script, so it judged a Chinese
+    question closing on 。 to be a plain answer — a language dependency in the
+    two decisions that hang off it.
+    """
+    assert _strip_and_detect_markers("您指的是哪个验证码。 <clarifying/>") == (
+        "您指的是哪个验证码。",
+        False,
+        False,
+        True,
+    )
+    assert _strip_and_detect_markers("Какой именно код?") == (
+        "Какой именно код?",
+        False,
+        False,
+        False,
+    )
 
 
 def test_trace_reports_an_uncharged_clarification_honestly() -> None:
@@ -188,8 +216,9 @@ def test_handoff_marker_is_detected_and_stripped() -> None:
         "Напишите в чат поддержки.",
         False,
         True,
+        False,
     )
-    assert _strip_and_detect_markers("Готово.") == ("Готово.", False, False)
+    assert _strip_and_detect_markers("Готово.") == ("Готово.", False, False, False)
 
 
 @pytest.mark.parametrize(
@@ -203,7 +232,7 @@ def test_handoff_marker_is_detected_and_stripped() -> None:
 def test_both_markers_in_one_reply_are_peeled_in_any_order(tail: str) -> None:
     """The pair decides whether the handler appends an offer or only arms the
     gate, so neither marker may mask the other."""
-    assert _strip_and_detect_markers(f"Ответ. {tail}") == ("Ответ.", True, True)
+    assert _strip_and_detect_markers(f"Ответ. {tail}") == ("Ответ.", True, True, False)
 
 
 def test_handoff_marker_never_leaks_into_the_stream() -> None:
@@ -235,9 +264,11 @@ def test_truncated_marker_does_not_survive_into_the_persisted_reply() -> None:
 
 def test_mid_text_handoff_literal_does_not_arm_anything() -> None:
     """Detection is terminal-only: a misplaced literal must not arm the gate."""
-    text, offered, needs_human = _strip_and_detect_markers("Ответ <needs_human/> и ещё текст")
+    text, offered, needs_human, clarifying = _strip_and_detect_markers(
+        "Ответ <needs_human/> и ещё текст"
+    )
 
-    assert (offered, needs_human) == (False, False)
+    assert (offered, needs_human, clarifying) == (False, False, False)
     assert _scrub_marker_literals(text) == "Ответ  и ещё текст"
 
 
@@ -287,10 +318,14 @@ def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
 
 
 def _patch_generation(
-    monkeypatch: pytest.MonkeyPatch, *, answer: str, needs_human: bool
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    answer: str,
+    needs_human: bool,
+    clarifying: bool = False,
 ) -> None:
     async def _fake_generate(*_args, **_kwargs):
-        return (answer, 50, 20, 30, False, needs_human)
+        return (answer, 50, 20, 30, False, needs_human, clarifying)
 
     monkeypatch.setattr(
         "backend.chat.handlers.rag.async_generate_answer", _fake_generate
@@ -380,10 +415,13 @@ def test_plain_answer_is_left_alone(
 
 
 @pytest.mark.parametrize(
-    "answer,expected_count",
+    "answer,clarifying,expected_count,tenant_slug",
     [
-        ("Возможные причины: SMS, письмо, спам-папка.", 0),
-        ("Какой именно код вы имеете в виду?", 1),
+        ("Возможные причины: SMS, письмо, спам-папка.", False, 0, "plain"),
+        ("Какой именно код вы имеете в виду?", True, 1, "asked"),
+        # A question in a script that does not close on one of the punctuation
+        # marks the old heuristic knew. The sentinel carries it regardless.
+        ("您指的是哪个验证码。", True, 1, "asked-cjk"),
     ],
 )
 def test_clarification_budget_follows_the_reply_not_the_verdict(
@@ -392,7 +430,9 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     answer: str,
+    clarifying: bool,
     expected_count: int,
+    tenant_slug: str,
 ) -> None:
     """A blocking clarify the model answered instead of asking costs nothing.
 
@@ -405,13 +445,15 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
     # Below KB_LOW_CONFIDENCE_THRESHOLD with chunks present → blocking clarify.
     _patch_retrieval(monkeypatch, score=0.36)
-    _patch_generation(monkeypatch, answer=answer, needs_human=False)
+    _patch_generation(
+        monkeypatch, answer=answer, needs_human=False, clarifying=clarifying
+    )
 
     api_key = _tenant_api_key(
         tenant,
         db_session,
-        f"deadend-budget-{expected_count}@example.com",
-        f"Budget Tenant {expected_count}",
+        f"deadend-budget-{tenant_slug}@example.com",
+        f"Budget Tenant {tenant_slug}",
     )
     session_id = uuid.uuid4()
     response = tenant.post(
@@ -448,6 +490,7 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
         monkeypatch,
         answer="Какой именно код вы ждёте — при входе или при регистрации?",
         needs_human=True,
+        clarifying=True,
     )
     monkeypatch.setattr(
         "backend.chat.service.render_pre_confirm_text",
@@ -473,6 +516,78 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
     assert chat.clarification_count == 1
 
 
+def _capture_offer_variant(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the pre_confirm variant the rescue asks the renderer for."""
+    seen: list[str] = []
+
+    def _render(**kw):
+        seen.append(kw["variant"])
+        return Mock(message_to_user=OFFER_TEXT, tokens_used=0)
+
+    monkeypatch.setattr(
+        "backend.chat.service.render_pre_confirm_text", _as_async(_render)
+    )
+    return seen
+
+
+def test_rescue_offer_does_not_restate_the_support_channel(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ordinary dead end gets the bare question, not "you can reach us here".
+
+    The reply above already spent a paragraph on support; leading the offer with
+    the same fact is the doubled-message shape the production screenshot showed.
+    """
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    _patch_retrieval(monkeypatch, score=0.5)
+    _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
+    seen = _capture_offer_variant(monkeypatch)
+
+    api_key = _tenant_api_key(
+        tenant, db_session, "deadend-variant@example.com", "Neutral Offer Tenant"
+    )
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(uuid.uuid4()), "question": "Почему не приходит код ?"},
+    )
+
+    assert response.status_code == 200
+    assert seen == ["initial"]
+
+
+def test_rescue_keeps_the_support_contact_variant_when_asked_how_to_reach_support(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """"How do I contact support?" is the one turn that line actually answers."""
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    _patch_retrieval(monkeypatch, score=0.5)
+    _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
+    monkeypatch.setattr(
+        "backend.chat.service.detect_support_contact_question",
+        _as_async(lambda *_a, **_kw: True),
+    )
+    seen = _capture_offer_variant(monkeypatch)
+
+    api_key = _tenant_api_key(
+        tenant, db_session, "deadend-contact@example.com", "Contact Question Tenant"
+    )
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(uuid.uuid4()), "question": "Как связаться с поддержкой ?"},
+    )
+
+    assert response.status_code == 200
+    assert seen == ["support_contact"]
+
+
 def test_offer_render_failure_still_arms_the_gate(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -480,7 +595,7 @@ def test_offer_render_failure_still_arms_the_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A broken renderer degrades to the canonical text — it never drops the rescue."""
-    from backend.escalation.openai_escalation import PRE_CONFIRM_SUPPORT_CONTACT_EN
+    from backend.escalation.openai_escalation import PRE_CONFIRM_QUESTION_EN
     from backend.models import Chat
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
@@ -503,7 +618,12 @@ def test_offer_render_failure_still_arms_the_gate(
     )
 
     assert response.status_code == 200
-    assert PRE_CONFIRM_SUPPORT_CONTACT_EN in response.json()["text"]
+    text = response.json()["text"]
+    assert PRE_CONFIRM_QUESTION_EN in text
+    # The neutral canonical is a substring of the support_contact one, so the
+    # line above alone passes for either variant. This is what pins the fallback
+    # to the variant the rescue actually asked for.
+    assert "You can reach our support team right here" not in text
 
     db_session.expire_all()
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()

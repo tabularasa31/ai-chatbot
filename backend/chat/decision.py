@@ -295,29 +295,6 @@ def requires_blocking_clarify(
     )
 
 
-# Question marks across the scripts the bot answers in. Used to check whether a
-# reply the engine wanted to be a clarifying question actually asks something,
-# so the per-session clarification budget is spent on real questions only.
-_QUESTION_MARKS = "?？؟՞;"  # noqa: RUF001 — non-ASCII marks are the point
-
-
-def reply_is_clarifying_question(text: str | None) -> bool:
-    """True when ``text`` reads as a question the user is expected to answer.
-
-    Deliberately conservative and language-agnostic: it only looks at the last
-    non-whitespace character. A missed question just leaves the clarification
-    budget untouched (the user can still be asked later), whereas counting a
-    plain answer as a clarification burns a turn of a budget whose exhaustion
-    forces an escalation.
-    """
-    if not text:
-        return False
-    stripped = text.rstrip().rstrip('"\'»)]*_`')
-    if not stripped:
-        return False
-    return stripped[-1] in _QUESTION_MARKS
-
-
 def decide(turn: TurnContext) -> Decision:
     """Return the authoritative Decision for this chat turn.
 

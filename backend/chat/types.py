@@ -125,6 +125,12 @@ class ChatPipelineResult:
     # reaching a human. The handler — not the model — then appends the
     # localized handoff offer and arms the pre-confirm gate.
     llm_needs_human: bool = False
+    # Language-agnostic signal from the LLM: True when the answer ended with
+    # CLARIFY_MARKER, meaning the reply closes on a question the user is meant
+    # to answer. Two decisions read it — whether the clarification budget was
+    # actually spent, and whether a handoff offer may be appended underneath
+    # (it may not: that asks twice in one reply).
+    llm_clarifying: bool = False
     # Clarify reason the decision engine derived BEFORE generation, when the
     # prompt required this turn to end in a clarifying question. None when no
     # clarification was required. Read by the handler to charge the

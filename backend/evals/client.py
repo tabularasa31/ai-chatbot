@@ -26,6 +26,16 @@ class ChatResponse:
     sources: list[dict[str, str]]
     chat_ended: bool
     latency_ms: int
+    #: Straight from the `done` event: the backend's own record of whether this
+    #: reply offered the support handoff. Replaces the RU/EN phrase matching the
+    #: runner used to score escalation cases with.
+    escalation_offered: bool = False
+    #: Ticket minted on this turn, also from the `done` event. An explicit human
+    #: request skips the pre-confirm gate by design, so it reaches support with
+    #: no offer ever pending — the runner needs both signals to score
+    #: `expected_escalation_offered_by_turn`, which asks whether the
+    #: conversation reached support, not whether a question is outstanding.
+    ticket_number: str | None = None
     error: dict | None = None
     raw_events: list[dict] = field(default_factory=list)
 
@@ -139,6 +149,8 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
     final_text: str | None = None
     sources: list[dict[str, str]] = []
     chat_ended = False
+    escalation_offered = False
+    ticket_number: str | None = None
     error: dict | None = None
 
     for ev in events:
@@ -150,6 +162,8 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
         elif kind == "done":
             final_text = ev.get("text") or "".join(chunks)
             chat_ended = bool(ev.get("chat_ended"))
+            escalation_offered = bool(ev.get("escalation_offered"))
+            ticket_number = ev.get("ticket_number")
             sources = ev.get("sources") or []
         elif kind == "error":
             error = ev
@@ -160,6 +174,8 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
         sources=sources,
         chat_ended=chat_ended,
         latency_ms=latency_ms,
+        escalation_offered=escalation_offered,
+        ticket_number=ticket_number,
         error=error,
         raw_events=events,
     )

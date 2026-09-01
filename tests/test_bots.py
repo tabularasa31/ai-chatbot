@@ -201,3 +201,29 @@ def test_bot_public_id_is_unique(tenant: TestClient, db_session: Session) -> Non
         ids.add(bot["public_id"])
 
     assert len(ids) == 5
+
+
+def test_refresh_keeps_company_description_and_swaps_preset() -> None:
+    """Onboarding stores '<company description>\n\n<preset>'; only the preset is rewritten."""
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+    from scripts.refresh_bot_instructions import _refreshed_instructions
+
+    description = "Acme ships industrial widgets to 40 countries."
+    stored = f"{description}\n\nYou are a support assistant for {{product_name}}. Older preset text.\n"
+
+    refreshed = _refreshed_instructions(stored, force=False)
+
+    assert refreshed == f"{description}\n\n{PRESET_SUPPORT_AGENT}"
+
+
+def test_refresh_skips_cleared_and_owner_written_instructions() -> None:
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+    from scripts.refresh_bot_instructions import _refreshed_instructions
+
+    owner_text = "Always answer in haiku and never mention pricing."
+
+    assert _refreshed_instructions(None, force=False) is None
+    assert _refreshed_instructions("   ", force=False) is None
+    assert _refreshed_instructions(owner_text, force=False) is None
+    assert _refreshed_instructions(owner_text, force=True) == PRESET_SUPPORT_AGENT
+    assert _refreshed_instructions(PRESET_SUPPORT_AGENT, force=False) is None

@@ -52,7 +52,6 @@ from backend.chat.handlers.rag import (
 from backend.chat.history_service import (
     PREVIEW_MAX_LEN,  # noqa: F401  (re-export)
     SessionSummary,  # noqa: F401  (re-export for test imports)
-    _tenant_optional_entity_types,
     get_chat_history,  # noqa: F401  (re-export for test imports)
     get_session_logs,  # noqa: F401  (re-export for test imports)
     list_chat_sessions,  # noqa: F401  (re-export for test imports)
@@ -186,7 +185,6 @@ def _escalation_turn_response(
     language_context: ResolvedLanguageContext,
     question: str,
     out: EscalationLlmResult,
-    optional_entity_types: set[str] | None,
     trace: TraceHandle,
     trace_source: str,
     chat_ended: bool,
@@ -210,7 +208,6 @@ def _escalation_turn_response(
         assistant_content=out.message_to_user,
         document_ids=[],
         extra_tokens=out.tokens_used,
-        optional_entity_types=optional_entity_types,
         language_context=language_context,
         trace=trace,
     )
@@ -573,7 +570,6 @@ async def _build_handler_context_async(
     question_text: str,
     language_context: ResolvedLanguageContext,
     api_key: str,
-    optional_entity_types: set[str] | None,
     is_new_session: bool,
     trace: TraceHandle,
     session_id: uuid.UUID,
@@ -634,7 +630,6 @@ async def _build_handler_context_async(
         question_text=question_text,
         language_context=language_context,
         api_key=api_key,
-        optional_entity_types=optional_entity_types,
         is_new_session=is_new_session,
         trace=trace,
         session_id=session_id,
@@ -697,7 +692,6 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
                 allow_clarification=ctx.allow_clarification,
                 guard_profile=ctx.tenant_profile,
                 support_contact_question=ctx.support_contact_question,
-                optional_entity_types=ctx.optional_entity_types,
             )
             ctx.extras["_pipeline_result"] = pipeline_result
 
@@ -743,13 +737,12 @@ async def async_process_chat_message(
         tenant_row = tenant_result.scalar_one_or_none()
         if tenant_row is not None:
             set_cached_tenant(tenant_row)
-    optional_entity_types = _tenant_optional_entity_types(tenant_row)
-    redacted_question = redact(question, optional_entity_types=optional_entity_types).redacted_text
-
     # Release the pooled connection before the human-request classifier:
     # detect_human_request makes an OpenAI call (up to 3s) and there are
     # no DB operations until _ensure_chat_async below.
     await db.close()
+
+    redacted_question = redact(question).redacted_text
 
     # The human-request and support-contact classifiers are independent async
     # coroutines, so run them concurrently — the support-contact result is
@@ -904,7 +897,6 @@ async def async_process_chat_message(
         question_text=question_text,
         language_context=language_context,
         api_key=api_key,
-        optional_entity_types=optional_entity_types,
         is_new_session=is_new_session,
         trace=trace,
         session_id=session_id,

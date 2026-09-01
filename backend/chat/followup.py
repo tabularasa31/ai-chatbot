@@ -38,7 +38,6 @@ def build_dialog_context(
     *,
     max_turns: int = _DIALOG_CONTEXT_TURNS,
     char_cap: int = _DIALOG_CONTEXT_CHAR_CAP,
-    optional_entity_types: set[str] | None = None,
 ) -> str | None:
     """Render the last ``max_turns`` user/assistant exchanges as a plain block.
 
@@ -58,10 +57,8 @@ def build_dialog_context(
     turns_seen = 0
     for m in reversed(ordered):
         # Both consumers hand this block to an OpenAI call, so stored
-        # originals are masked here, at the egress boundary.
-        content = redact_for_egress(
-            m.content, optional_entity_types=optional_entity_types
-        ).strip()
+        # originals are masked here, at the model boundary.
+        content = redact_for_egress(m.content).strip()
         if not content:
             continue
         if m.role == MessageRole.user:

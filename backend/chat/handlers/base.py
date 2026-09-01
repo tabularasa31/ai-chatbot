@@ -68,7 +68,6 @@ class HandlerContext:
     question_text: str
     language_context: ResolvedLanguageContext
     api_key: str
-    optional_entity_types: set[str] | None
     is_new_session: bool
     trace: TraceHandle | None
 

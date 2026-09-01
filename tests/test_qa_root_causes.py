@@ -280,7 +280,6 @@ class TestTicketNumberNotSurfaced:
             language_context=language_context,
             question="rc3@example.com",
             out=fake_out,
-            optional_entity_types=None,
             trace=fake_trace,
             trace_source="escalation_email_capture",
             chat_ended=False,

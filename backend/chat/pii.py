@@ -1,9 +1,19 @@
-"""
-PII redaction helpers for outbound-safe text handling.
+"""PII redaction at the model egress boundary.
 
-Stage 1 keeps a deterministic regex-only implementation and returns a
-structured result so callers can mask text at an egress boundary and record
-audit metadata about what was masked.
+One rule governs this module: nothing sensitive reaches the model. Stored text
+keeps the visitor's original wording, and every path that hands text to OpenAI
+— the question, the chat history in the prompt, escalation transcripts,
+background jobs — masks it here first. Correspondence masks nothing: the
+dashboard, the operator inbox and the support e-mail body render the stored
+original in full.
+
+Detection is structural, and therefore language-independent by construction. An
+e-mail address, a phone number, a card number, an IP, a tokenised URL and an
+API key have the same shape in every language, so nothing here matches a word.
+
+Out of scope by design: values that only a label marks as sensitive, such as a
+credential or a document number. Matching those needs the label, the label is
+in the visitor's language, and no rule here may depend on a language.
 """
 
 from __future__ import annotations
@@ -11,24 +21,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-MANDATORY_ENTITY_TYPES = frozenset(
-    {
-        "EMAIL",
-        "PHONE",
-        "API_KEY",
-        "PASSWORD",
-        "CARD",
-    }
+# Every entity type this module masks, highest priority first. Overlapping
+# matches are merged and the merged span takes the label of its widest member;
+# this order breaks ties between members of equal width.
+_PRIORITY = (
+    "URL_TOKEN",
+    "API_KEY",
+    "EMAIL",
+    "PHONE",
+    "IP",
+    "CARD",
 )
-OPTIONAL_ENTITY_TYPES = frozenset(
-    {
-        "ID_DOC",
-        "IP",
-        "URL_TOKEN",
-    }
-)
-ALL_ENTITY_TYPES = MANDATORY_ENTITY_TYPES | OPTIONAL_ENTITY_TYPES
-DEFAULT_OPTIONAL_ENTITY_TYPES = frozenset(OPTIONAL_ENTITY_TYPES)
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,15 @@ class RedactionResult:
     redacted_text: str
     entities_found: list[DetectedEntitySummary]
     was_redacted: bool
+
+
+@dataclass(frozen=True)
+class EntitySpan:
+    start: int
+    end: int
+    entity_type: str
+    # Index into _PRIORITY, used to break ties when merging equal-width spans.
+    rank: int = 0
 
 
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
@@ -68,26 +80,12 @@ _API_KEY_PATTERNS = [
 ]
 _API_KEY_RE = re.compile("|".join(_API_KEY_PATTERNS), re.IGNORECASE)
 
-_PASSWORD_RE = re.compile(
-    r"(?:(?:password|passwd|pass|пароль)\s*(?:is|=|:)?\s+)([^\s,;]{4,})",
-    re.IGNORECASE,
-)
+# Digit groups joined by single spaces or hyphens — how a card is written,
+# either as one block or as 4-4-4-4.
+_SEPARATED_GROUPS_RE = re.compile(r"\d+(?:[ -]\d+)*")
 
-_CARD_RE = re.compile(r"\b(?:\d[ -]?){13,18}\d\b")
-
-_ID_DOC_PATTERNS = [
-    # Russia
-    r"(?:passport)\s*[№:]?\s*\d{2,4}[\s-]?\d{4,6}",
-    r"(?:паспорт)\s*[№:]?\s*\d{2,4}[\s-]?\d{4,6}",
-    r"(?:инн|снилс)\s*[№:]?\s*[\d\s-]{8,}",
-    # USA — Social Security Number: requires keyword prefix to avoid 9-digit false positives
-    r"\b(?:ssn|social security)\b\s*[:#№-]?\s*(?:\w{1,10}\s*[:#№-]?\s*)?(?:\d{3}-\d{2}-\d{4}|\d{9})\b",
-    # ICAO machine-readable passport number: keyword + optional punctuation/connector word
-    r"\b(?:passport|id)\b\s*[:#№-]?\s*(?:\w{1,10}\s*[:#№-]?\s*)?[A-Z]{1,2}\d{6,9}\b",
-    # UK National Insurance: keyword prefix + space-separated format support (QQ 12 34 56 A)
-    r"\b(?:ni|national insurance)\b\s*[:#№-]?\s*(?:\w{1,10}\s*[:#№-]?\s*)?[A-CEGHJ-PR-TW-Z]{2}(?:\s*\d){6}\s*[A-D]\b",
-]
-_ID_DOC_RE = re.compile("|".join(_ID_DOC_PATTERNS), re.IGNORECASE)
+_CARD_MIN_DIGITS = 13
+_CARD_MAX_DIGITS = 19
 
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
@@ -95,6 +93,12 @@ _URL_TOKEN_RE = re.compile(
     r"\bhttps?://[^\s]+?(?:token|api[_-]?key|access[_-]?token|auth|signature|sig)=([^\s&#]+)",
     re.IGNORECASE,
 )
+
+_Span = tuple[int, int]
+
+
+def _regex_spans(pattern: re.Pattern[str], text: str) -> list[_Span]:
+    return [(m.start(), m.end()) for m in pattern.finditer(text)]
 
 
 def _is_luhn_valid(raw: str) -> bool:
@@ -112,158 +116,148 @@ def _is_luhn_valid(raw: str) -> bool:
     return checksum % 10 == 0
 
 
-def _mask_cards(text: str) -> tuple[str, int]:
-    count = 0
+def _card_spans(text: str, blocked: list[EntitySpan]) -> list[_Span]:
+    """Cards, searched for in the digit groups no other detector has claimed.
 
-    def repl(match: re.Match[str]) -> str:
-        nonlocal count
-        candidate = match.group(0)
-        if not _is_luhn_valid(candidate):
-            return candidate
-        count += 1
-        return "[CARD]"
+    ``blocked`` carries the matches of every higher-priority detector. Their
+    digits are excluded before the search, because a phone number or an IP
+    written next to a card forms one digit run with it: searching the run whole
+    would test the wrong number, and a long enough run eventually yields a
+    checksum-valid slice that spans both.
+    """
+    groups = [
+        (m.start(), m.end())
+        for m in re.finditer(r"\d+", text)
+        if not any(taken.start < m.end() and m.start() < taken.end for taken in blocked)
+    ]
 
-    return _CARD_RE.sub(repl, text), count
+    spans: list[_Span] = []
+    first = 0
+    while first < len(groups):
+        match_end: int | None = None
+        for last in range(len(groups), first, -1):
+            digits = sum(b - a for a, b in groups[first:last])
+            if digits > _CARD_MAX_DIGITS:
+                continue
+            if digits < _CARD_MIN_DIGITS:
+                break
+            candidate = text[groups[first][0] : groups[last - 1][1]]
+            # Groups must be adjacent in the text to be one written number.
+            if _SEPARATED_GROUPS_RE.fullmatch(candidate) and _is_luhn_valid(candidate):
+                spans.append((groups[first][0], groups[last - 1][1]))
+                match_end = last
+                break
+        first = match_end if match_end is not None else first + 1
+    return spans
 
 
-def _mask_urls_with_tokens(text: str) -> tuple[str, int]:
-    count = 0
-
-    def repl(match: re.Match[str]) -> str:
-        nonlocal count
-        count += 1
-        return "[URL_TOKEN]"
-
-    return _URL_TOKEN_RE.sub(repl, text), count
-
-
-def _mask_with_pattern(text: str, pattern: re.Pattern[str], placeholder: str) -> tuple[str, int]:
-    matches = list(pattern.finditer(text))
-    if not matches:
-        return text, 0
-    return pattern.sub(placeholder, text), len(matches)
-
-
-def _mask_ips(text: str) -> tuple[str, int]:
-    count = 0
-
-    def repl(match: re.Match[str]) -> str:
-        nonlocal count
-        candidate = match.group(0)
-        parts = candidate.split(".")
+def _ip_spans(text: str) -> list[_Span]:
+    spans: list[_Span] = []
+    for match in _IP_RE.finditer(text):
+        parts = match.group(0).split(".")
+        # A dotted quad of single digits is a version number, not an address.
         if all(len(part) == 1 for part in parts):
-            return candidate
-        try:
-            octets = [int(part) for part in parts]
-        except ValueError:
-            return candidate
-        if len(octets) != 4 or any(octet < 0 or octet > 255 for octet in octets):
-            return candidate
-        count += 1
-        return "[IP]"
-
-    return _IP_RE.sub(repl, text), count
-
-
-def _enabled_entity_types(
-    optional_entity_types: set[str] | None,
-    disabled_entity_types: set[str] | None = None,
-) -> set[str]:
-    enabled = set(MANDATORY_ENTITY_TYPES)
-    if optional_entity_types is None:
-        enabled.update(DEFAULT_OPTIONAL_ENTITY_TYPES)
-    else:
-        enabled.update(entity for entity in optional_entity_types if entity in OPTIONAL_ENTITY_TYPES)
-    if disabled_entity_types:
-        enabled.difference_update(disabled_entity_types)
-    return enabled
-
-
-def redact(
-    text: str,
-    *,
-    optional_entity_types: set[str] | None = None,
-    disabled_entity_types: set[str] | None = None,
-) -> RedactionResult:
-    """
-    Redact PII from text and return structured metadata.
-
-    Mandatory entity types are always redacted. Optional entity types can be
-    narrowed by passing `optional_entity_types`. `disabled_entity_types` turns
-    off specific types entirely — including mandatory ones — for callers that
-    need a narrower policy than the storage default (e.g. the outbound support
-    email keeps EMAIL and IP visible). Applied to original text only:
-    placeholders cannot be reversed.
-    """
-    redacted_text = text
-    enabled = _enabled_entity_types(optional_entity_types, disabled_entity_types)
-    counts: dict[str, int] = {}
-
-    ordered_patterns: list[tuple[str, re.Pattern[str], str]] = [
-        ("URL_TOKEN", _URL_TOKEN_RE, "[URL_TOKEN]"),
-        ("API_KEY", _API_KEY_RE, "[API_KEY]"),
-        ("PASSWORD", _PASSWORD_RE, "[PASSWORD]"),
-        ("ID_DOC", _ID_DOC_RE, "[ID_DOC]"),
-        ("IP", _IP_RE, "[IP]"),
-        ("PHONE", _PHONE_RE, "[PHONE]"),
-        ("EMAIL", _EMAIL_RE, "[EMAIL]"),
-    ]
-
-    for entity_type, pattern, placeholder in ordered_patterns:
-        if entity_type not in enabled:
             continue
-        if entity_type == "URL_TOKEN":
-            redacted_text, count = _mask_urls_with_tokens(redacted_text)
-        elif entity_type == "IP":
-            redacted_text, count = _mask_ips(redacted_text)
-        else:
-            redacted_text, count = _mask_with_pattern(redacted_text, pattern, placeholder)
-        if count:
-            counts[entity_type] = counts.get(entity_type, 0) + count
+        octets = [int(part) for part in parts]
+        if any(octet > 255 for octet in octets):
+            continue
+        spans.append((match.start(), match.end()))
+    return spans
 
-    if "CARD" in enabled:
-        redacted_text, count = _mask_cards(redacted_text)
-        if count:
-            counts["CARD"] = counts.get("CARD", 0) + count
 
-    ordered_entities = [
-        DetectedEntitySummary(type=entity_type, count=count)
-        for entity_type, count in counts.items()
-    ]
+_DETECTORS = {
+    "URL_TOKEN": lambda text: _regex_spans(_URL_TOKEN_RE, text),
+    "API_KEY": lambda text: _regex_spans(_API_KEY_RE, text),
+    "EMAIL": lambda text: _regex_spans(_EMAIL_RE, text),
+    "PHONE": lambda text: _regex_spans(_PHONE_RE, text),
+    "IP": _ip_spans,
+}
+
+
+def detect(text: str) -> list[EntitySpan]:
+    """Every entity this text carries, ordered by position.
+
+    Detectors overlap — a card number contains digit runs, an API key pattern
+    can start inside another match. Overlapping matches merge into one span
+    rather than being resolved by dropping the loser: dropping it would leave
+    the characters it covered outside every placeholder and hand them to the
+    model. The merged span takes the label of its widest member.
+    """
+    found: list[EntitySpan] = []
+    for rank, entity_type in enumerate(_PRIORITY):
+        if entity_type == "CARD":
+            continue
+        for start, end in _DETECTORS[entity_type](text):
+            found.append(EntitySpan(start, end, entity_type, rank))
+    card_rank = _PRIORITY.index("CARD")
+    for start, end in _card_spans(text, found):
+        found.append(EntitySpan(start, end, "CARD", card_rank))
+    if not found:
+        return []
+
+    merged: list[EntitySpan] = []
+    group: list[EntitySpan] = []
+    for span in sorted(found, key=lambda s: (s.start, -s.end)):
+        if group and span.start < max(member.end for member in group):
+            group.append(span)
+            continue
+        if group:
+            merged.append(_merge(group))
+        group = [span]
+    merged.append(_merge(group))
+    return merged
+
+
+def _merge(group: list[EntitySpan]) -> EntitySpan:
+    """Collapse overlapping matches into the span that covers all of them."""
+    widest = min(group, key=lambda s: (-(s.end - s.start), s.rank))
+    return EntitySpan(
+        start=min(member.start for member in group),
+        end=max(member.end for member in group),
+        entity_type=widest.entity_type,
+        rank=widest.rank,
+    )
+
+
+def redact(text: str) -> RedactionResult:
+    """Mask everything sensitive in ``text`` and report what was masked.
+
+    Placeholders cannot be reversed, so this must always be given the original
+    text.
+    """
+    spans = detect(text)
+    chunks: list[str] = []
+    cursor = 0
+    counts: dict[str, int] = {}
+    for span in spans:
+        chunks.append(text[cursor : span.start])
+        chunks.append(f"[{span.entity_type}]")
+        counts[span.entity_type] = counts.get(span.entity_type, 0) + 1
+        cursor = span.end
+    chunks.append(text[cursor:])
+
     return RedactionResult(
-        redacted_text=redacted_text,
-        entities_found=ordered_entities,
+        redacted_text="".join(chunks),
+        entities_found=[
+            DetectedEntitySummary(type=entity_type, count=counts[entity_type])
+            for entity_type in _PRIORITY
+            if entity_type in counts
+        ],
         was_redacted=bool(counts),
     )
 
 
-def redact_text(
-    text: str,
-    *,
-    optional_entity_types: set[str] | None = None,
-    disabled_entity_types: set[str] | None = None,
-) -> str:
+def redact_text(text: str) -> str:
     """Convenience wrapper returning only the redacted text."""
-    return redact(
-        text,
-        optional_entity_types=optional_entity_types,
-        disabled_entity_types=disabled_entity_types,
-    ).redacted_text
+    return redact(text).redacted_text
 
 
-def redact_for_egress(
-    text: str | None,
-    *,
-    optional_entity_types: set[str] | None = None,
-) -> str:
-    """Mask PII in stored text on its way out of the platform.
+def redact_for_egress(text: str | None) -> str:
+    """Mask stored text on its way to the model.
 
-    Storage keeps the user's original wording; every outbound boundary — the
-    question and chat history sent to OpenAI, background jobs that embed or
-    summarise stored turns, outbound e-mail — passes the text through here
-    first. ``None``/empty input returns an empty string so callers can hand in
+    ``None``/empty input returns an empty string so callers can hand in
     nullable columns directly.
     """
     if not text:
         return ""
-    return redact_text(text, optional_entity_types=optional_entity_types)
+    return redact_text(text)

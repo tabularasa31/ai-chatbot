@@ -14,9 +14,7 @@ from backend.models import (
     Message,
     MessageFeedback,
     MessageRole,
-    Tenant,
 )
-from backend.privacy_config import public_redaction_config_dict
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +24,6 @@ PREVIEW_MAX_LEN = 120
 # operator's answer is the latest reply in that conversation as much as a bot's
 # is, and the inbox row should show whichever came last.
 _REPLY_ROLES = (MessageRole.assistant, MessageRole.operator)
-
-
-def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:
-    if not tenant:
-        return None
-    raw = tenant.settings if isinstance(tenant.settings, dict) else None
-    cfg = public_redaction_config_dict(raw)
-    return set(cfg["optional_entity_types"])
 
 
 @dataclass

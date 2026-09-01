@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
 from backend.chat.language import resolve_language_context
-from backend.chat.pii import redact, redact_for_egress, redact_text
+from backend.chat.pii import redact, redact_for_egress
 from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
@@ -46,7 +46,6 @@ from backend.models import (
 from backend.models.base import _utcnow
 from backend.observability.cache_metrics import record_hit, record_miss
 from backend.observability.metrics import capture_event
-from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict
 
 logger = logging.getLogger(__name__)
@@ -147,68 +146,34 @@ _human_request_cache = _LockedTTLCache(
 )
 
 
-def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:
-    if not tenant:
-        return None
-    raw = tenant.settings if isinstance(tenant.settings, dict) else None
-    cfg = public_redaction_config_dict(raw)
-    return set(cfg["optional_entity_types"])
+def _safe_message_content(message: Message) -> str:
+    """Stored message text, masked — for the model and for subject previews."""
+    return redact_for_egress(message.content)
 
 
-def _safe_message_content(
-    message: Message, optional_entity_types: set[str] | None = None
-) -> str:
-    """Stored message text, fully masked for anything leaving the platform."""
-    return redact_for_egress(message.content, optional_entity_types=optional_entity_types)
+def _safe_ticket_question(ticket: EscalationTicket) -> str:
+    """Stored ticket question, masked.
 
-
-def _safe_ticket_question(
-    ticket: EscalationTicket, optional_entity_types: set[str] | None = None
-) -> str:
-    """Stored ticket question, fully masked for anything leaving the platform."""
-    return redact_for_egress(
-        ticket.primary_question, optional_entity_types=optional_entity_types
-    )
-
-
-# Entity types left visible in the outbound support email. A support agent
-# replies to the end user and needs the email address and IP the user reported
-# to actually resolve the ticket, so the email body is rendered from the stored
-# original text with these two unmasked. Every other egress (OpenAI requests,
-# email subject lines, transcript fallbacks) masks them — this exemption is
-# scoped to the support email body.
-_SUPPORT_EMAIL_VISIBLE_ENTITY_TYPES = frozenset({"EMAIL", "IP"})
-
-
-def _support_email_text(text: str | None) -> str:
-    """Redact original text for the support email, keeping EMAIL and IP visible.
-
-    Must be given *original* (un-redacted) text — placeholders cannot be
-    reversed. Everything except EMAIL and IP stays masked (phones, cards,
-    passwords, API keys, identity documents, tokenised URLs).
+    Every caller is an e-mail *subject* preview. Subjects surface in inbox
+    lists and device notifications well outside the mail body, so they stay
+    masked even though the body they head is rendered from the original.
     """
-    if not text:
-        return text or ""
-    return redact_text(text, disabled_entity_types=_SUPPORT_EMAIL_VISIBLE_ENTITY_TYPES)
+    return redact_for_egress(ticket.primary_question)
+
+
+# The outbound support email body carries the stored original: redaction guards
+# the model, and a support agent replying to the end user needs the contact
+# details exactly as the visitor wrote them.
 
 
 def _email_ticket_question(ticket: EscalationTicket) -> str:
-    """Ticket question for the support email body, EMAIL/IP left visible."""
-    return _support_email_text(ticket.primary_question)
+    """Ticket question for the support email body, as the visitor wrote it."""
+    return ticket.primary_question or ""
 
 
 def _email_message_content(message: Message) -> str:
-    """Transcript message content for the support email body.
-
-    Only *user-authored* turns get the EMAIL/IP-visible treatment — support
-    needs the contact address and IP the user reported. Assistant turns are
-    fully redacted: the bot may have echoed a tenant/support address or
-    infrastructure IP from the knowledge base, and those must not be un-masked
-    into an email the support agent's client can quote back to the end user.
-    """
-    if message.role != MessageRole.user:
-        return _safe_message_content(message)
-    return _support_email_text(message.content)
+    """Transcript message content for the support email body, unmasked."""
+    return message.content or ""
 
 
 def should_escalate(
@@ -557,9 +522,9 @@ def _full_transcript_from_chat(
     when persistence ordering changes later).
 
     ``content_fn`` selects how each stored message is rendered — the default
-    fully redacts it; the support email passes ``_email_message_content`` to
-    keep EMAIL/IP visible. ``extra_user_turn`` text is passed through verbatim,
-    so callers must redact it before handing it in.
+    masks it for the model; the support email passes ``_email_message_content``
+    to render the stored original. ``extra_user_turn`` text is passed through
+    verbatim.
     """
     msgs = (
         db.query(Message)
@@ -635,12 +600,10 @@ def _build_escalation_email_body(
     :func:`_build_escalation_email_headers`. Mail clients quote bodies but
     do not quote headers.
 
-    PII policy: the question and transcript are rebuilt from the encrypted
-    originals with EMAIL and IP left visible — support needs the address and
-    IP the user reported to act, and both are the user's own data being quoted
-    back to them. All other PII (phones, cards, passwords, API keys, identity
-    documents) stays masked. Stored rows and analytics keep the fully-redacted
-    copies. See :func:`_support_email_text`.
+    PII policy: the question and transcript are rendered from the stored
+    originals, unmasked. Redaction guards the model, not this body — support
+    replies to the end user and needs the address, phone and IP exactly as the
+    visitor wrote them. See :func:`_email_message_content`.
 
     Layout (user-safe only):
       - One-line intro
@@ -698,10 +661,7 @@ def _build_escalation_email_body(
     extra_turn: tuple[str, datetime] | None = None
     if latest_user_text and latest_user_text.strip():
         when = latest_user_at or datetime.now(UTC)
-        # ``latest_user_text`` is the raw current turn; redact it here so the
-        # extra transcript row follows the same EMAIL/IP-visible policy as the
-        # persisted rows rendered by ``_email_message_content``.
-        extra_turn = (_support_email_text(latest_user_text), when)
+        extra_turn = (latest_user_text, when)
 
     transcript: list[tuple[str, str, datetime | None]] | None = None
     if ticket.chat_id:
@@ -728,10 +688,7 @@ def _build_escalation_email_body(
     elif ticket.conversation_summary:
         lines.append(sep)
         lines.append("CONVERSATION")
-        # The stored summary keeps the original wording of both roles, so it is
-        # fully redacted here rather than given the EMAIL/IP-visible treatment
-        # reserved for user-authored turns.
-        for raw_line in redact_for_egress(ticket.conversation_summary).splitlines():
+        for raw_line in (ticket.conversation_summary or "").splitlines():
             lines.append(f"  {raw_line}")
         lines.append("")
 
@@ -1103,9 +1060,8 @@ def _format_update_email_body(
     and their mail client quotes the body back to the end user, so only
     safe content goes here. Internal metadata stays in headers. Layout is
     intentionally minimal — just the new user turns since last notify. Turns
-    are rendered with the same EMAIL/IP-visible PII policy as the initial
-    notify (see :func:`_build_escalation_email_body`); the caller redacts each
-    turn via ``_email_message_content`` / ``_support_email_text``.
+    carry the visitor's original wording, as in the initial notify (see
+    :func:`_build_escalation_email_body`).
     """
     sep = "─" * 56
     lines: list[str] = [
@@ -1220,9 +1176,7 @@ def _notify_tenant_ticket_update(
     ]
     if extra_user_turn is not None:
         text, when = extra_user_turn
-        # Same EMAIL/IP-visible policy as the persisted delta rows above;
-        # ``extra_user_turn`` carries the raw current turn.
-        text = _support_email_text(text).strip()
+        text = text.strip()
         if text and not (turns and turns[-1][0].strip() == text):
             turns.append((text, when))
 
@@ -1285,7 +1239,6 @@ def create_escalation_ticket(
     conversation_turns: list[str] | None = None,
     user_context: dict | None = None,
     user_note: str | None = None,
-    optional_entity_types: set[str] | None = None,
     latest_user_text: str | None = None,
 ) -> EscalationTicket:
     from sqlalchemy.exc import IntegrityError
@@ -1293,8 +1246,6 @@ def create_escalation_ticket(
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not tenant:
         raise ValueError("tenant not found")
-    if optional_entity_types is None:
-        optional_entity_types = _tenant_optional_entity_types(tenant)
 
     summary: str | None = None
     if chat_id:
@@ -1309,9 +1260,8 @@ def create_escalation_ticket(
 
     priority = compute_priority(trigger, plan, user_context)
     # Audit-only pass: records which entity types get masked when this question
-    # is forwarded (support email, OpenAI). The stored column keeps the
-    # original wording.
-    redaction = redact(primary_question, optional_entity_types=optional_entity_types)
+    # is handed to the model. The stored column keeps the original wording.
+    redaction = redact(primary_question)
 
     ticket: EscalationTicket | None = None
     for attempt in range(3):
@@ -1671,7 +1621,7 @@ def notify_support_of_abandoned_claim(ticket: EscalationTicket, db: Session) -> 
         # initial notify instead: it carries the full transcript and restores
         # the anchor for anything later.
         return _notify_tenant_new_ticket(
-            tenant, ticket, db, latest_user_text=_safe_ticket_question(ticket)
+            tenant, ticket, db, latest_user_text=ticket.primary_question
         )
     recipient = _support_inbox_recipient(tenant, db)
     if not recipient:
@@ -1782,9 +1732,7 @@ def fact_from_ticket(
     }
 
 
-def transcript_messages_for_openai(
-    chat: Chat, optional_entity_types: set[str] | None = None
-) -> list[dict[str, str]]:
+def transcript_messages_for_openai(chat: Chat) -> list[dict[str, str]]:
     """Stored transcript as OpenAI ``messages`` — redacted at this boundary.
 
     Rows keep the original wording, so every turn is masked here before the
@@ -1798,7 +1746,7 @@ def transcript_messages_for_openai(
             continue
         role = "user" if m.role == MessageRole.user else "assistant"
         msgs.append(
-            {"role": role, "content": _safe_message_content(m, optional_entity_types)}
+            {"role": role, "content": _safe_message_content(m)}
         )
     return msgs
 
@@ -1806,14 +1754,13 @@ def transcript_messages_for_openai(
 def build_chat_messages_for_openai(
     chat: Chat,
     current_user_text: str,
-    optional_entity_types: set[str] | None = None,
 ) -> list[dict[str, str]]:
     """History + the current turn for an escalation LLM call.
 
     ``current_user_text`` must already be redacted by the caller (handlers pass
     ``ctx.redacted_question``); the stored history is redacted here.
     """
-    msgs = transcript_messages_for_openai(chat, optional_entity_types)
+    msgs = transcript_messages_for_openai(chat)
     msgs.append({"role": "user", "content": current_user_text})
     return msgs
 
@@ -1911,7 +1858,6 @@ def _perform_manual_escalation_impl(
         raise ValueError("session not found")
 
     effective = dict(chat.user_context) if chat.user_context else {}
-    optional_entity_types = _tenant_optional_entity_types(tenant)
 
     is_llm_unavailable = trigger == EscalationTrigger.llm_unavailable
     enriched_note = user_note
@@ -1961,7 +1907,6 @@ def _perform_manual_escalation_impl(
             session_id=session_id,
             user_context=effective,
             user_note=enriched_note,
-            optional_entity_types=optional_entity_types,
         )
     if is_llm_unavailable:
         # LLM provider is the failing dependency — every step here must be
@@ -1988,7 +1933,7 @@ def _perform_manual_escalation_impl(
             if not ticket.user_email
             else EscalationPhase.handoff_email_known
         )
-        msgs = transcript_messages_for_openai(chat, optional_entity_types)
+        msgs = transcript_messages_for_openai(chat)
         tenant_profile = (
             db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first()
         )

@@ -267,10 +267,6 @@ def test_operator_is_refused_settings_keys_privacy_and_member_management(
             headers=headers,
             json={"reason": "other", "revoke_old_immediately": False},
         ),
-        tenant.get("/tenants/me/privacy", headers=headers),
-        tenant.put(
-            "/tenants/me/privacy", headers=headers, json={"optional_entity_types": []}
-        ),
         tenant.put(
             "/tenants/me/support-settings",
             headers=headers,

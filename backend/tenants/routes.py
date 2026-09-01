@@ -24,7 +24,6 @@ from backend.tenants.api_keys_service import (
 from backend.tenants.schemas import (
     CreateTenantRequest,
     CreateTenantResponse,
-    PrivacyConfigResponse,
     RotateTenantApiKeyRequest,
     RotateTenantApiKeyResponse,
     SupportSettingsResponse,
@@ -33,7 +32,6 @@ from backend.tenants.schemas import (
     TenantLlmAlertResponse,
     TenantMeResponse,
     TenantResponse,
-    UpdatePrivacyConfigRequest,
     UpdateSupportSettingsRequest,
     UpdateTenantRequest,
 )
@@ -41,11 +39,9 @@ from backend.tenants.service import (
     create_tenant,
     delete_tenant,
     get_primary_api_key_hint,
-    get_redaction_config_for_user,
     get_support_settings_for_user,
     get_tenant_by_id,
     get_tenant_by_user,
-    update_redaction_config_for_user,
     update_support_settings_for_user,
     update_tenant,
 )
@@ -225,25 +221,6 @@ def get_llm_alert_route(
         type=tenant.llm_alert_type,
         since=tenant.llm_alert_first_at,
     )
-
-
-@tenants_router.get("/me/privacy", response_model=PrivacyConfigResponse)
-def get_privacy_route(
-    current_user: Annotated[User, Depends(require_owner)],
-    db: Annotated[Session, Depends(get_db)],
-) -> PrivacyConfigResponse:
-    data = get_redaction_config_for_user(current_user.id, db)
-    return PrivacyConfigResponse(**data)
-
-
-@tenants_router.put("/me/privacy", response_model=PrivacyConfigResponse)
-def put_privacy_route(
-    body: UpdatePrivacyConfigRequest,
-    current_user: Annotated[User, Depends(require_owner)],
-    db: Annotated[Session, Depends(get_db)],
-) -> PrivacyConfigResponse:
-    data = update_redaction_config_for_user(current_user.id, body.optional_entity_types, db)
-    return PrivacyConfigResponse(**data)
 
 
 @tenants_router.get(

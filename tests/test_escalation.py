@@ -947,13 +947,15 @@ def test_notify_email_body_contains_full_context_and_reply_to(
     assert kyc.get("metadata") == {"source": "widget"}
 
 
-def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
+def test_notify_email_body_carries_the_stored_original(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """Support needs the reported email/IP to act, so the outbound email body
-    un-masks EMAIL and IP (rebuilt from the encrypted originals) while every
-    other PII type stays redacted. Stored ticket/message rows are unaffected.
+    """The support email is a human surface, so it renders what was written.
+
+    Redaction guards one boundary — the model. A support agent replying to the
+    end user needs the address, phone and IP exactly as the visitor typed them,
+    and the transcript is quoted verbatim on both sides of the conversation.
     """
     cl = _make_tenant_for_email_test(
         tenant, db_session, owner_email="pii-owner@example.com"
@@ -968,11 +970,7 @@ def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
     db_session.commit()
     db_session.refresh(chat)
 
-    # A persisted transcript turn: stored as written (mirrors
-    # backend.chat.persistence._create_message).
     transcript_original = "I logged in from 203.0.113.7 with card 4111 1111 1111 1111"
-    # An assistant turn that echoed an infra IP. It is stored as written too,
-    # but must stay masked in the email.
     assistant_original = "Our status page is at 198.51.100.200, please retry."
     db_session.add_all([
         Message(
@@ -1010,20 +1008,14 @@ def test_notify_email_body_shows_real_ip_and_email_masks_other_pii(
     send_email_mock.assert_called_once()
     body = send_email_mock.call_args.args[2]
 
-    # EMAIL and IP are visible in the body — support can reply / debug.
     assert "real@user.com" in body
-    assert "198.51.100.9" in body  # IP from the question
-    assert "203.0.113.7" in body  # IP from the user transcript turn
-
-    # Assistant-authored PII stays masked: the bot may have echoed an infra IP
-    # from the knowledge base, which must not be un-masked into a quotable email.
-    assert "198.51.100.200" not in body  # IP from the assistant turn
-
-    # Every other PII type stays masked on the way out.
-    assert "+1 202 555 0143" not in body
-    assert "[PHONE]" in body
-    assert "4111 1111 1111 1111" not in body
-    assert "[CARD]" in body
+    assert "+1 202 555 0143" in body
+    assert "198.51.100.9" in body
+    assert "203.0.113.7" in body
+    assert "4111 1111 1111 1111" in body
+    assert "198.51.100.200" in body
+    assert "[PHONE]" not in body
+    assert "[CARD]" not in body
 
     # Storage is untouched — the row still holds what the user wrote.
     db_session.refresh(ticket)

@@ -407,7 +407,6 @@ class RagHandler(PipelineHandler):
                 assistant_content=result.final_answer,
                 document_ids=[],
                 extra_tokens=result.tokens_used,
-                optional_entity_types=ctx.optional_entity_types,
                 language_context=ctx.language_context,
                 trace=ctx.trace,
                 set_rephrase_flag=(result.reject_reason == "rephrase"),
@@ -707,7 +706,6 @@ class RagHandler(PipelineHandler):
                                 chat_messages=build_chat_messages_for_openai(
                                     chat,
                                     ctx.redacted_question,
-                                    ctx.optional_entity_types,
                                 ),
                             ),
                             timeout=settings.escalation_pre_confirm_render_timeout_seconds,
@@ -881,7 +879,6 @@ class RagHandler(PipelineHandler):
             set_low_confidence_flag=_defer_low_similarity,
             document_ids=document_ids,
             extra_tokens=tokens_used,
-            optional_entity_types=ctx.optional_entity_types,
             language_context=ctx.language_context,
             trace=ctx.trace,
         )

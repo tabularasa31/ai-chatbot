@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from backend.core.crypto import encrypt_value
 from backend.core.rls import set_tenant_context
 from backend.models import Bot, EscalationTicket, Tenant, TenantProfile, User
-from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.seats.events import (
     RELEASE_WORKSPACE_DELETED,
     capture_seat_released,
@@ -168,30 +167,6 @@ def get_primary_api_key_hint(tenant_id: uuid.UUID, db: Session) -> str | None:
     """Last 4 chars of the tenant's primary active key, for UI display."""
     row = get_primary_active_key(tenant_id, db)
     return row.key_hint if row else None
-
-
-def get_redaction_config_for_user(user_id: uuid.UUID, db: Session) -> dict[str, list[str]]:
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    raw = tenant.settings if isinstance(tenant.settings, dict) else None
-    return public_redaction_config_dict(raw)
-
-
-def update_redaction_config_for_user(
-    user_id: uuid.UUID,
-    optional_entity_types: list[str],
-    db: Session,
-) -> dict[str, list[str]]:
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    config = {"optional_entity_types": sorted(set(optional_entity_types))}
-    tenant.settings = with_redaction_config(tenant.settings if isinstance(tenant.settings, dict) else None, config)
-    db.commit()
-    db.refresh(tenant)
-    invalidate_tenant(tenant.id)
-    return public_redaction_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
 
 
 def get_support_settings_for_user(user_id: uuid.UUID, db: Session) -> dict[str, str | None]:

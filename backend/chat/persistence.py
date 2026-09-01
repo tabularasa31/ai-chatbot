@@ -30,7 +30,6 @@ def _create_message(
     role: MessageRole,
     content: str,
     source_documents: list[uuid.UUID] | None = None,
-    optional_entity_types: set[str] | None = None,
     operator_user_id: uuid.UUID | None = None,
 ) -> Message:
     """Persist one turn's message with its ORIGINAL text.
@@ -54,7 +53,7 @@ def _create_message(
         operator_user_id=operator_user_id,
     )
     db.add(message)
-    redaction = redact(content, optional_entity_types=optional_entity_types)
+    redaction = redact(content)
     if redaction.was_redacted:
         # SQLite enforces FK at row level and SQLAlchemy's UoW does not reorder
         # PiiEvent (FK-only, no relationship) ahead of its parent Message, so
@@ -145,7 +144,6 @@ def _persist_user_only_turn(
     chat: Chat,
     tenant_id: uuid.UUID,
     user_content: str,
-    optional_entity_types: set[str] | None = None,
 ) -> Message:
     """Persist a visitor turn that gets no bot reply.
 
@@ -163,7 +161,6 @@ def _persist_user_only_turn(
         tenant_id=tenant_id,
         role=MessageRole.user,
         content=user_content,
-        optional_entity_types=optional_entity_types,
     )
     _finalize_persisted_messages(
         db=db,
@@ -181,7 +178,6 @@ def _persist_operator_message(
     tenant_id: uuid.UUID,
     content: str,
     operator_user_id: uuid.UUID | None,
-    optional_entity_types: set[str] | None = None,
 ) -> Message:
     """Persist a human operator's reply into the chat thread.
 
@@ -196,7 +192,6 @@ def _persist_operator_message(
         tenant_id=tenant_id,
         role=MessageRole.operator,
         content=content,
-        optional_entity_types=optional_entity_types,
         operator_user_id=operator_user_id,
     )
     _finalize_persisted_messages(
@@ -221,7 +216,6 @@ def _persist_turn(
     assistant_content: str,
     document_ids: list[uuid.UUID],
     extra_tokens: int,
-    optional_entity_types: set[str] | None = None,
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
     set_low_confidence_flag: bool = False,
@@ -239,7 +233,6 @@ def _persist_turn(
         tenant_id=tenant_id,
         role=MessageRole.user,
         content=user_content,
-        optional_entity_types=optional_entity_types,
     )
     assistant_message = _create_message(
         db,
@@ -248,7 +241,6 @@ def _persist_turn(
         role=MessageRole.assistant,
         content=assistant_content,
         source_documents=_source_docs_for_db(db, document_ids),
-        optional_entity_types=optional_entity_types,
     )
     _finalize_persisted_messages(
         db=db,
@@ -277,7 +269,6 @@ def _persist_turn_with_response_language(
     assistant_content: str,
     document_ids: list[uuid.UUID],
     extra_tokens: int,
-    optional_entity_types: set[str] | None = None,
     language_context: ResolvedLanguageContext | None = None,
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
@@ -299,7 +290,6 @@ def _persist_turn_with_response_language(
         assistant_content,
         document_ids,
         extra_tokens,
-        optional_entity_types=optional_entity_types,
         trace=trace,
         set_rephrase_flag=set_rephrase_flag,
         set_low_confidence_flag=set_low_confidence_flag,
@@ -312,7 +302,6 @@ def _persist_assistant_message(
     tenant_id: uuid.UUID,
     assistant_content: str,
     extra_tokens: int,
-    optional_entity_types: set[str] | None = None,
 ) -> None:
     _create_message(
         db,
@@ -321,7 +310,6 @@ def _persist_assistant_message(
         role=MessageRole.assistant,
         content=assistant_content,
         source_documents=None,
-        optional_entity_types=optional_entity_types,
     )
     _finalize_persisted_messages(
         db=db,
@@ -340,7 +328,6 @@ def _persist_assistant_message_with_response_language(
     resolution_reason: str | None,
     assistant_content: str,
     extra_tokens: int,
-    optional_entity_types: set[str] | None = None,
     language_context: ResolvedLanguageContext | None = None,
 ) -> None:
     _set_last_response_language(
@@ -357,5 +344,4 @@ def _persist_assistant_message_with_response_language(
         tenant_id,
         assistant_content,
         extra_tokens,
-        optional_entity_types=optional_entity_types,
     )

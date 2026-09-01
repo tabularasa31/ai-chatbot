@@ -201,6 +201,8 @@ def test_bot_public_id_is_unique(tenant: TestClient, db_session: Session) -> Non
         ids.add(bot["public_id"])
 
     assert len(ids) == 5
+
+
 def _instructions_bot(session_local, instructions: str | None) -> uuid.UUID:
     from backend.models import Bot, Tenant
 
@@ -294,3 +296,17 @@ def test_run_refresh_writes_once_and_then_reports_current(engine) -> None:
     assert second.current == 1
     with session_local() as verify:
         assert verify.get(Bot, bot_id).agent_instructions == PRESET_SUPPORT_AGENT
+
+
+def test_dashboard_preset_matches_the_backend_preset() -> None:
+    """The settings page ships its own copy; a drifted copy writes the old text back."""
+    from pathlib import Path
+
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+
+    repo_root = Path(__file__).resolve().parents[1]
+    page = (repo_root / "frontend/app/(app)/settings/page.tsx").read_text(encoding="utf-8")
+    start = page.index("content: `") + len("content: `")
+    shipped = page[start : page.index("`,", start)]
+
+    assert shipped == PRESET_SUPPORT_AGENT.strip()

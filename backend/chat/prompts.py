@@ -90,6 +90,8 @@ SUPPORT_CHANNEL_POLICY = (
     "handoff offer reaches them.\n"
     "- When the user turn reports that the user is identified or that their contact email is on file, support "
     "can already reply to them: never ask them to sign in, register, or hand over contact details first.\n"
+    "- Knowing an email is on file is not permission to talk about it: never quote it back, and never tell "
+    "the user what will be sent from it.\n"
 )
 
 DISCLOSURE_LEVEL_INSTRUCTIONS: dict[str, str] = {
@@ -197,6 +199,12 @@ def build_rag_prompt(
         # COT blocks) cache-misses on the first turn after deploy until the
         # new prefix re-warms.
         "- When (and ONLY when) your reply contains such a ticket offer, append the literal marker `<offered_ticket/>` as the very last token of your reply, after all natural-language text. The marker is machine-readable, language-agnostic, and stripped by the backend before the reply is shown to the user; without it, the user's next \"yes\" / confirmation will not be wired to the support handoff. Do NOT emit the marker on any reply that does not offer a ticket.\n"
+        # The two bullets below close the shapes seen in production: the model
+        # wrote its own "I am sending this to support" paragraph, the backend
+        # appended its offer underneath, and the resulting ticket carried no
+        # error text for support to act on.
+        "- Never narrate the handoff yourself: do not say you are forwarding, have forwarded, or are about to forward the request, do not draft the message that would be sent, and do not name the address it would be sent from. Those words belong to the backend, and writing your own version puts two conflicting offers in one reply.\n"
+        "- Before `<needs_human/>`, check the request has substance to forward: support reads only what the user wrote in this chat, so a report with no error text, no description of what happens instead, and no identifier is a ticket nobody can act on. In that case ask exactly one short question for the single most useful missing detail, end the reply there and emit NO marker — the handoff waits for the next turn. Ask this at most once per conversation, never re-ask what the user already answered or refused to answer, and skip it entirely when the turn's clarification instruction forbids asking: then emit the marker as usual.\n"
     )
 
     if agent_instructions and settings.enable_agent_instructions:

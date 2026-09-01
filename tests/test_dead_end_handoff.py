@@ -64,6 +64,30 @@ def test_prompt_asks_for_the_marker_not_for_a_composed_offer() -> None:
     assert "do NOT write the handoff offer yourself" in prompt
 
 
+def test_prompt_forbids_narrating_the_handoff() -> None:
+    """The model must not write its own "I am sending this to support" paragraph.
+
+    A production reply drafted the ticket text, announced it was being sent and
+    named the address it would come from — and the backend then appended its own
+    offer underneath, so one message both claimed the handoff and asked for it.
+    """
+    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
+
+    assert "Never narrate the handoff yourself" in prompt
+    assert "do not draft the message that would be sent" in prompt
+    assert "do not name the address it would be sent from" in prompt
+    assert "never quote it back" in prompt
+
+
+def test_prompt_requires_a_forwardable_request_before_the_marker() -> None:
+    """A ticket with no error text is one support cannot act on."""
+    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
+
+    assert "check the request has substance to forward" in prompt
+    assert "ask exactly one short question" in prompt
+    assert "at most once per conversation" in prompt
+
+
 def test_required_clarification_becomes_a_turn_instruction() -> None:
     without = build_rag_prompt("Why is the code not arriving?", ["chunk"])
     with_requirement = build_rag_prompt(
@@ -473,6 +497,78 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
     assert chat.clarification_count == 1
 
 
+def _capture_offer_variant(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the pre_confirm variant the rescue asks the renderer for."""
+    seen: list[str] = []
+
+    def _render(**kw):
+        seen.append(kw["variant"])
+        return Mock(message_to_user=OFFER_TEXT, tokens_used=0)
+
+    monkeypatch.setattr(
+        "backend.chat.service.render_pre_confirm_text", _as_async(_render)
+    )
+    return seen
+
+
+def test_rescue_offer_does_not_restate_the_support_channel(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ordinary dead end gets the bare question, not "you can reach us here".
+
+    The reply above already spent a paragraph on support; leading the offer with
+    the same fact is the doubled-message shape the production screenshot showed.
+    """
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    _patch_retrieval(monkeypatch, score=0.5)
+    _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
+    seen = _capture_offer_variant(monkeypatch)
+
+    api_key = _tenant_api_key(
+        tenant, db_session, "deadend-variant@example.com", "Neutral Offer Tenant"
+    )
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(uuid.uuid4()), "question": "Почему не приходит код ?"},
+    )
+
+    assert response.status_code == 200
+    assert seen == ["initial"]
+
+
+def test_rescue_keeps_the_support_contact_variant_when_asked_how_to_reach_support(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """"How do I contact support?" is the one turn that line actually answers."""
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    _patch_retrieval(monkeypatch, score=0.5)
+    _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
+    monkeypatch.setattr(
+        "backend.chat.service.detect_support_contact_question",
+        _as_async(lambda *_a, **_kw: True),
+    )
+    seen = _capture_offer_variant(monkeypatch)
+
+    api_key = _tenant_api_key(
+        tenant, db_session, "deadend-contact@example.com", "Contact Question Tenant"
+    )
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(uuid.uuid4()), "question": "Как связаться с поддержкой ?"},
+    )
+
+    assert response.status_code == 200
+    assert seen == ["support_contact"]
+
+
 def test_offer_render_failure_still_arms_the_gate(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -480,7 +576,7 @@ def test_offer_render_failure_still_arms_the_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A broken renderer degrades to the canonical text — it never drops the rescue."""
-    from backend.escalation.openai_escalation import PRE_CONFIRM_SUPPORT_CONTACT_EN
+    from backend.escalation.openai_escalation import PRE_CONFIRM_QUESTION_EN
     from backend.models import Chat
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
@@ -503,7 +599,7 @@ def test_offer_render_failure_still_arms_the_gate(
     )
 
     assert response.status_code == 200
-    assert PRE_CONFIRM_SUPPORT_CONTACT_EN in response.json()["text"]
+    assert PRE_CONFIRM_QUESTION_EN in response.json()["text"]
 
     db_session.expire_all()
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()

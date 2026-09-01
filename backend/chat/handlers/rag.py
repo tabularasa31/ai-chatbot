@@ -772,6 +772,14 @@ class RagHandler(PipelineHandler):
             and not reply_is_clarifying_question(answer)
         ):
             _handoff_start = perf_counter()
+            # "You can reach our support team right here" only informs a user
+            # who asked how to reach support. Anywhere else it restates what
+            # the reply above just spent a paragraph on, and the offer reads as
+            # the second half of a doubled message. The neutral ``initial``
+            # variant is the bare question, which is all this rescue needs.
+            _rescue_variant = (
+                "support_contact" if ctx.support_contact_question else "initial"
+            )
             try:
                 # Templated path only (no chat_messages): the canonical text is
                 # localized once per language and cached, so rescuing a dead end
@@ -779,7 +787,7 @@ class RagHandler(PipelineHandler):
                 esc_offer = await_only(
                     asyncio.wait_for(
                         render_pre_confirm_text(
-                            variant="support_contact",
+                            variant=_rescue_variant,
                             response_language=ctx.language_context.response_language,
                             api_key=ctx.api_key,
                             tenant_id=str(ctx.tenant_id),
@@ -794,7 +802,7 @@ class RagHandler(PipelineHandler):
                 logger.warning(
                     "handoff offer render failed, using canonical template: %s", e
                 )
-                esc_offer = pre_confirm_fallback_result("support_contact")
+                esc_offer = pre_confirm_fallback_result(_rescue_variant)
             record_stage_ms(
                 ctx.trace,
                 "handoff_offer_render_ms",

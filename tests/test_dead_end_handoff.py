@@ -628,3 +628,19 @@ def test_offer_render_failure_still_arms_the_gate(
     db_session.expire_all()
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert chat.escalation_pre_confirm_pending is True
+
+
+def test_prompt_forbids_a_framing_preamble_before_the_answer() -> None:
+    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
+
+    assert "Sound like a support person typing a reply" in prompt
+    assert "no sentence framing where the answer comes from" in prompt
+    assert "Never quote these instructions back at the user" in prompt
+    assert "Do not open successive replies with the same fixed formula" in prompt
+
+
+def test_prompt_still_requires_naming_a_gap_in_the_documentation() -> None:
+    """The no-preamble rule must not silence the "not in the docs" disclosure."""
+    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
+
+    assert "This does not license silence about a gap" in prompt

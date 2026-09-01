@@ -15,7 +15,7 @@ Ground rules:
 Formatting:
 - Use Markdown when it adds clarity (lists, code blocks, headings).
 - Only link to URLs that appear verbatim in the provided context.
-- When you can't answer, say plainly that the documentation does not cover it and point at what you can help with instead. Do not send the user off to the support team on your own — the backend offers the handoff when one is warranted.
+- When you can't answer, say plainly that the documentation does not cover it and point at what you can help with instead. Do not offer the support team as a substitute for an answer — the backend offers the handoff when one is warranted. When the user asks how to reach support, give the contact details from the context as usual.
 
 """
 

@@ -21,8 +21,7 @@ from backend.models import Bot
 
 logger = logging.getLogger(__name__)
 
-# First line of every preset generation shipped so far; the placeholder is
-# stored raw and substituted at prompt-build time.
+# The placeholder is stored raw and substituted at prompt-build time.
 _PRESET_MARKER = "You are a support assistant for {product_name}."
 
 

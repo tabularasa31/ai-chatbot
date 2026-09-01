@@ -204,7 +204,6 @@ def test_bot_public_id_is_unique(tenant: TestClient, db_session: Session) -> Non
 
 
 def test_refresh_keeps_company_description_and_swaps_preset() -> None:
-    """Onboarding stores '<company description>\n\n<preset>'; only the preset is rewritten."""
     from backend.chat.presets import PRESET_SUPPORT_AGENT
     from scripts.refresh_bot_instructions import _refreshed_instructions
 

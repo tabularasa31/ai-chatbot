@@ -201,3 +201,112 @@ def test_bot_public_id_is_unique(tenant: TestClient, db_session: Session) -> Non
         ids.add(bot["public_id"])
 
     assert len(ids) == 5
+
+
+def _instructions_bot(session_local, instructions: str | None) -> uuid.UUID:
+    from backend.models import Bot, Tenant
+
+    with session_local() as db:
+        tenant = Tenant(name="Refresh Tenant")
+        db.add(tenant)
+        db.flush()
+        bot = Bot(tenant_id=tenant.id, name="Refresh Bot", agent_instructions=instructions)
+        db.add(bot)
+        db.commit()
+        return bot.id
+
+
+def test_refresh_keeps_text_written_around_the_preset_block() -> None:
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+    from scripts.refresh_bot_instructions import REFRESHED, _PRESET_GEN_2, plan_refresh
+
+    description = "Acme ships industrial widgets to 40 countries."
+    owner_rules = "Refund window is 14 days. Never mention competitors."
+    stored = f"{description}\n\n{_PRESET_GEN_2.strip()}\n\n{owner_rules}"
+
+    value, outcome = plan_refresh(stored, force=False)
+
+    assert outcome == REFRESHED
+    assert value == f"{description}\n\n{PRESET_SUPPORT_AGENT.strip()}\n\n{owner_rules}"
+
+
+def test_refresh_replaces_the_oldest_preset_generation_whole() -> None:
+    from scripts.refresh_bot_instructions import REFRESHED, _PRESET_GEN_1, plan_refresh
+
+    value, outcome = plan_refresh(_PRESET_GEN_1, force=False)
+
+    assert outcome == REFRESHED
+    assert "Follow the internal reasoning steps" not in value
+    assert "Keep it concise" not in value
+
+
+def test_refresh_leaves_cleared_and_customized_instructions_alone() -> None:
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+    from scripts.refresh_bot_instructions import CLEARED, CURRENT, CUSTOMIZED, plan_refresh
+
+    assert plan_refresh(None, force=False) == (None, CLEARED)
+    assert plan_refresh("   ", force=False) == (None, CLEARED)
+    assert plan_refresh("Always answer in haiku.", force=False) == (None, CUSTOMIZED)
+    assert plan_refresh(PRESET_SUPPORT_AGENT, force=False) == (None, CURRENT)
+
+
+def test_force_rewrites_an_edited_preset_but_keeps_the_description() -> None:
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+    from scripts.refresh_bot_instructions import OVERWRITTEN, plan_refresh
+
+    description = "Acme ships industrial widgets to 40 countries."
+    edited = f"{description}\n\nYou are a support assistant for {{product_name}}. Reworded by the owner."
+
+    value, outcome = plan_refresh(edited, force=True)
+
+    assert outcome == OVERWRITTEN
+    assert value == f"{description}\n\n{PRESET_SUPPORT_AGENT.strip()}"
+
+
+def test_run_refresh_dry_run_reports_without_writing(engine) -> None:
+    from sqlalchemy.orm import sessionmaker
+
+    from backend.models import Bot
+    from scripts.refresh_bot_instructions import _PRESET_GEN_2, run_refresh
+
+    session_local = sessionmaker(bind=engine, class_=Session, future=True)
+    bot_id = _instructions_bot(session_local, _PRESET_GEN_2)
+
+    stats = run_refresh(dry_run=True, session_factory=session_local)
+
+    assert stats.refreshed == 1
+    with session_local() as verify:
+        assert verify.get(Bot, bot_id).agent_instructions == _PRESET_GEN_2
+
+
+def test_run_refresh_writes_once_and_then_reports_current(engine) -> None:
+    from sqlalchemy.orm import sessionmaker
+
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+    from backend.models import Bot
+    from scripts.refresh_bot_instructions import _PRESET_GEN_2, run_refresh
+
+    session_local = sessionmaker(bind=engine, class_=Session, future=True)
+    bot_id = _instructions_bot(session_local, _PRESET_GEN_2)
+
+    first = run_refresh(dry_run=False, session_factory=session_local)
+    second = run_refresh(dry_run=False, session_factory=session_local)
+
+    assert (first.refreshed, second.refreshed) == (1, 0)
+    assert second.current == 1
+    with session_local() as verify:
+        assert verify.get(Bot, bot_id).agent_instructions == PRESET_SUPPORT_AGENT
+
+
+def test_dashboard_preset_matches_the_backend_preset() -> None:
+    """The settings page ships its own copy; a drifted copy writes the old text back."""
+    from pathlib import Path
+
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+
+    repo_root = Path(__file__).resolve().parents[1]
+    page = (repo_root / "frontend/app/(app)/settings/page.tsx").read_text(encoding="utf-8")
+    start = page.index("content: `") + len("content: `")
+    shipped = page[start : page.index("`,", start)]
+
+    assert shipped == PRESET_SUPPORT_AGENT.strip()

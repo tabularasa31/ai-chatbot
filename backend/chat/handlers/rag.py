@@ -591,15 +591,23 @@ class RagHandler(PipelineHandler):
             escalate = True
             esc_trigger = EscalationTrigger.low_similarity
 
-        # Charge the per-session clarification budget only for turns that
-        # actually asked something. decide() classifies the turn, but the model
-        # writes it: a turn classified as a blocking clarify that came back as a
-        # plain answer used to consume a clarification anyway. The budget then
-        # ran out on questions nobody had been asked, and the next genuinely
-        # ambiguous turn escalated on clarify_loop_limit instead of asking.
+        # Charge the per-session clarification budget for every turn that
+        # actually asked something, whether or not decide() called for it. Two
+        # asymmetries motivated this: a turn classified as a blocking clarify
+        # that came back as a plain answer must NOT be charged (the budget used
+        # to run out on questions nobody was asked, and the next genuinely
+        # ambiguous turn escalated on clarify_loop_limit instead of asking), and
+        # a question the model asked on its own must be. The substance check in
+        # the prompt asks for a missing detail on high-confidence turns, where
+        # decide() returns answer_with_citations — gating on the verdict left
+        # those uncounted, so "ask at most once per conversation" had no
+        # enforcement at all and a user who kept answering vaguely could be
+        # asked forever. Spending budget here can push a later ambiguous turn
+        # into clarify_loop_limit, which escalates: the right terminal state for
+        # a conversation that has already asked its way to the ceiling.
         _clarification_count_before = chat.clarification_count
         _clarify_asked = result.llm_clarifying
-        _clarification_charged = _decision.is_blocking_clarify() and _clarify_asked
+        _clarification_charged = _clarify_asked
         if _clarification_charged:
             chat.clarification_count += 1
             ctx.db.add(chat)

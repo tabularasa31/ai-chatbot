@@ -800,10 +800,15 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         tokens_used += retry_tokens
         _input_toks += retry_in
         _output_toks += retry_out
-        llm_offered_ticket = llm_offered_ticket or retry_offered_ticket
-        llm_needs_human = llm_needs_human or retry_needs_human
-        # The retry replaced the reply wholesale, so its shape — not the
-        # aborted attempt's — decides whether a question was asked.
+        # Assign, never accumulate: unlike the token counters above (both
+        # attempts were billed, so both count), these three describe the text
+        # that ``raw_answer = retry_answer`` just discarded. A short
+        # wrong-language first attempt DOES reach here with its flags set — the
+        # gate raises from flush_end(), after the tuple was unpacked — so an
+        # ``or`` would arm the pre-confirm gate under a retry reply that offered
+        # nothing, and read the user's next message as consent to open a ticket.
+        llm_offered_ticket = retry_offered_ticket
+        llm_needs_human = retry_needs_human
         llm_clarifying = retry_clarifying
         _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
         record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)

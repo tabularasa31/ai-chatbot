@@ -415,13 +415,13 @@ def test_plain_answer_is_left_alone(
 
 
 @pytest.mark.parametrize(
-    "answer,clarifying,expected_count",
+    "answer,clarifying,expected_count,tenant_slug",
     [
-        ("Возможные причины: SMS, письмо, спам-папка.", False, 0),
-        ("Какой именно код вы имеете в виду?", True, 1),
+        ("Возможные причины: SMS, письмо, спам-папка.", False, 0, "plain"),
+        ("Какой именно код вы имеете в виду?", True, 1, "asked"),
         # A question in a script that does not close on one of the punctuation
         # marks the old heuristic knew. The sentinel carries it regardless.
-        ("您指的是哪个验证码。", True, 1),
+        ("您指的是哪个验证码。", True, 1, "asked-cjk"),
     ],
 )
 def test_clarification_budget_follows_the_reply_not_the_verdict(
@@ -432,6 +432,7 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
     answer: str,
     clarifying: bool,
     expected_count: int,
+    tenant_slug: str,
 ) -> None:
     """A blocking clarify the model answered instead of asking costs nothing.
 
@@ -451,8 +452,8 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
     api_key = _tenant_api_key(
         tenant,
         db_session,
-        f"deadend-budget-{abs(hash(answer)) % 10**8}@example.com",
-        f"Budget Tenant {expected_count}",
+        f"deadend-budget-{tenant_slug}@example.com",
+        f"Budget Tenant {tenant_slug}",
     )
     session_id = uuid.uuid4()
     response = tenant.post(
@@ -617,7 +618,12 @@ def test_offer_render_failure_still_arms_the_gate(
     )
 
     assert response.status_code == 200
-    assert PRE_CONFIRM_QUESTION_EN in response.json()["text"]
+    text = response.json()["text"]
+    assert PRE_CONFIRM_QUESTION_EN in text
+    # The neutral canonical is a substring of the support_contact one, so the
+    # line above alone passes for either variant. This is what pins the fallback
+    # to the variant the rescue actually asked for.
+    assert "You can reach our support team right here" not in text
 
     db_session.expire_all()
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()

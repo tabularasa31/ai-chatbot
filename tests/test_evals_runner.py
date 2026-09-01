@@ -37,12 +37,15 @@ class _FakeChat:
         replies: dict[str, str],
         bot_public_id: str = "ch_fake",
         offers: set[str] | None = None,
+        tickets: dict[str, str] | None = None,
     ) -> None:
         self._replies = replies
         self.bot_public_id = bot_public_id
         self.calls: list[str] = []
         #: Questions whose reply carried the backend's escalation_offered flag.
         self._offers = offers or set()
+        #: Questions whose reply minted a ticket outright (no gate armed).
+        self._tickets = tickets or {}
 
     def ask(self, question: str, *, session_id: str | None = None) -> ChatResponse:
         self.calls.append(question)
@@ -53,6 +56,7 @@ class _FakeChat:
             chat_ended=False,
             latency_ms=42,
             escalation_offered=question in self._offers,
+            ticket_number=self._tickets.get(question),
         )
 
 
@@ -86,7 +90,42 @@ def test_escalation_offer_is_scored_from_the_backend_flag() -> None:
 
     result = report.cases[0]
     assert result.turns_trace[0].escalation_offered is True
-    assert all(m.passed for m in result.metrics if m.name == "escalation_offered")
+    offer_metrics = [m for m in result.metrics if m.name == "escalation_offer"]
+    assert offer_metrics and all(m.passed for m in offer_metrics)
+
+
+def test_a_minted_ticket_counts_as_reaching_support() -> None:
+    """An explicit human request escalates without ever arming the gate.
+
+    `escalation_offered` is False on that turn by design — the offer was never
+    pending a yes/no — but the conversation did reach support, which is what
+    `expected_escalation_offered_by_turn` asks about.
+    """
+    from backend.evals.dataset import Dataset, GoldenCase
+
+    case = GoldenCase(
+        id="esc-direct",
+        category="rag",
+        input="Соедините меня с человеком",
+        expected_escalation_offered_by_turn=1,
+    )
+    chat = _FakeChat(
+        {"Соедините меня с человеком": "Передал в поддержку, ответят на почту."},
+        tickets={"Соедините меня с человеком": "ESC-42"},
+    )
+    report = run(
+        RunnerConfig(
+            dataset=Dataset(name="esc-direct", cases=[case]),
+            tag="test",
+            chat=chat,
+            judge=None,
+        )
+    )
+
+    result = report.cases[0]
+    assert result.turns_trace[0].escalation_offered is True
+    offer_metrics = [m for m in result.metrics if m.name == "escalation_offer"]
+    assert offer_metrics and all(m.passed for m in offer_metrics)
 
 
 # ─── dataset ────────────────────────────────────────────────────────────────

@@ -90,7 +90,11 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
             )
         last_response = chat_response
         total_latency_ms += chat_response.latency_ms
-        offered = chat_response.escalation_offered
+        # Either the offer is pending the user's yes/no, or the handoff already
+        # happened this turn — an explicit human request mints the ticket without
+        # ever arming the gate. Scoring only the former reads that path as "never
+        # offered", which is the miss the deleted phrase-matcher used to cover.
+        offered = bool(chat_response.escalation_offered or chat_response.ticket_number)
         turns_trace.append(
             TurnTrace(
                 turn=turn_idx,

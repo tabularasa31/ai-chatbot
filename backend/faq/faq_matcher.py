@@ -206,8 +206,9 @@ def direct_applicability_guard(
     - Must not call retrieval (no DB queries, no pgvector).
     - Must return a binary decision for whether we can safely answer directly.
     - Any uncertainty should be treated as a failure (return False).
-    - Must treat every natural language alike: the decision may not depend on
-      which language the question is written in.
+    - Must not privilege any particular vocabulary: the decision depends only
+      on the token overlap between the two questions, never on which words
+      they are.
     """
     # Rule-based lexical/structural equivalence check.
     # This is intentionally conservative to avoid false positives.
@@ -229,8 +230,6 @@ def direct_applicability_guard(
     denom = max(len(q_tokens), 1)
     overlap_ratio = overlap / denom
 
-    # If both questions share most key tokens, allow direct answer.
-    # Otherwise we will fall back to faq_context + RAG.
     return overlap_ratio >= _DIRECT_OVERLAP_RATIO
 
 

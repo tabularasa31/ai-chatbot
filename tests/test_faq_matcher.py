@@ -385,18 +385,33 @@ def test_direct_guard_fails_on_empty_input() -> None:
     assert _guard("alpha beta", "!!!") is False
 
 
-def test_direct_guard_decision_is_independent_of_token_identity() -> None:
-    """The same token structure must decide the same way whatever the tokens are.
+# The third and fourth alphabets are the vocabulary a previous revision of the
+# guard privileged; they are listed here so the test fails if that special
+# casing ever returns.
+_ALPHABETS = [
+    ("alpha", "beta", "gamma", "delta", "epsilon", "zeta"),
+    ("t0", "t1", "t2", "t3", "t4", "t5"),
+    ("как", "где", "почему", "сколько", "срок", "ошибка"),
+    ("reset", "добавить", "удалить", "wie", "wo", "warum"),
+]
 
-    Guards against reintroducing a per-language keyword list: two questions
-    with identical overlap ratios may not diverge just because one uses a
-    privileged word.
+
+@pytest.mark.parametrize(
+    ("q_idx", "f_idx", "expected"),
+    [
+        ((0, 1, 2, 3, 4), (0, 1, 2, 5), True),
+        ((0, 1, 2, 3), (0, 1, 4, 5), False),
+    ],
+)
+def test_direct_guard_depends_only_on_overlap_not_on_which_tokens(
+    q_idx: tuple[int, ...], f_idx: tuple[int, ...], expected: bool
+) -> None:
+    """Two questions with the same overlap ratio must decide the same way.
+
+    The two rows sit at overlap 0.60 and 0.50, so they also pin the threshold
+    into (0.50, 0.60] and a silent move in either direction fails here.
     """
-    scripts = [
-        ("alpha beta gamma delta", "alpha beta epsilon zeta"),
-        ("како бета гама делта", "како бета епсилон зета"),
-        ("wie beta gamma delta", "wie beta epsilon zeta"),
-        ("reset beta gamma delta", "reset beta epsilon zeta"),
-    ]
-    decisions = {_guard(q, f) for q, f in scripts}
-    assert decisions == {False}
+    for alphabet in _ALPHABETS:
+        q = " ".join(alphabet[i] for i in q_idx)
+        f = " ".join(alphabet[i] for i in f_idx)
+        assert _guard(q, f) is expected, f"decision changed for {alphabet[0]!r} alphabet"

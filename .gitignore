@@ -37,6 +37,7 @@ frontend/.test-dist/
 # Pytest cache / coverage
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 
 # OS files

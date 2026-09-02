@@ -17,6 +17,10 @@ from backend.search.service import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
+# Share of the user question's tokens that must also appear in the FAQ question
+# before its answer may be served verbatim.
+_DIRECT_OVERLAP_RATIO = 0.55
+
 
 def _rag_only_result(decision_reason: str) -> FAQMatchResult:
     """Degraded match result that routes the turn through the RAG pipeline."""
@@ -202,6 +206,9 @@ def direct_applicability_guard(
     - Must not call retrieval (no DB queries, no pgvector).
     - Must return a binary decision for whether we can safely answer directly.
     - Any uncertainty should be treated as a failure (return False).
+    - Must not privilege any particular vocabulary: the decision depends only
+      on the token overlap between the two questions, never on which words
+      they are.
     """
     # Rule-based lexical/structural equivalence check.
     # This is intentionally conservative to avoid false positives.
@@ -223,22 +230,7 @@ def direct_applicability_guard(
     denom = max(len(q_tokens), 1)
     overlap_ratio = overlap / denom
 
-    # If both questions share most key tokens, allow direct answer.
-    # Otherwise we will fall back to faq_context + RAG.
-    if overlap_ratio >= 0.55:
-        return True
-
-    # Additional structural hint: common short "intent" keywords.
-    # If the intent differs strongly, deny direct.
-    intent_tokens = {"как", "где", "почему", "сколько", "срок", "ошибка", "reset", "добавить", "удалить"}
-    q_intent = bool(q_tokens & intent_tokens)
-    f_intent = bool(f_tokens & intent_tokens)
-    if q_intent and f_intent:
-        # For intent-matching cases, require at least moderate overlap.
-        return overlap_ratio >= 0.35
-
-    # Default conservative path.
-    return False
+    return overlap_ratio >= _DIRECT_OVERLAP_RATIO
 
 
 async def _async_fetch_top_faq_rows(

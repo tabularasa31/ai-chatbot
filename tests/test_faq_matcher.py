@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from backend.core.config import settings
-from backend.faq.faq_matcher import FAQRow, match_faq
+from backend.faq.faq_matcher import FAQRow, direct_applicability_guard, match_faq
 
 
 def _fake_rows(*rows: FAQRow) -> list[FAQRow]:
@@ -362,3 +362,56 @@ async def test_async_match_faq_within_timeout_classifies_normally(
 
     assert result.strategy == "faq_direct"
     assert result.faq_items == [row]
+
+
+def _guard(question: str, faq_question: str) -> bool:
+    return direct_applicability_guard(
+        question=question,
+        faq_question=faq_question,
+        faq_answer="irrelevant",
+    )
+
+
+def test_direct_guard_passes_on_high_token_overlap() -> None:
+    assert _guard("alpha beta gamma delta", "alpha beta gamma") is True
+
+
+def test_direct_guard_fails_on_low_token_overlap() -> None:
+    assert _guard("alpha beta gamma delta", "alpha epsilon") is False
+
+
+def test_direct_guard_fails_on_empty_input() -> None:
+    assert _guard("   ", "alpha beta") is False
+    assert _guard("alpha beta", "!!!") is False
+
+
+# The third and fourth alphabets are the vocabulary a previous revision of the
+# guard privileged; they are listed here so the test fails if that special
+# casing ever returns.
+_ALPHABETS = [
+    ("alpha", "beta", "gamma", "delta", "epsilon", "zeta"),
+    ("t0", "t1", "t2", "t3", "t4", "t5"),
+    ("как", "где", "почему", "сколько", "срок", "ошибка"),
+    ("reset", "добавить", "удалить", "wie", "wo", "warum"),
+]
+
+
+@pytest.mark.parametrize(
+    ("q_idx", "f_idx", "expected"),
+    [
+        ((0, 1, 2, 3, 4), (0, 1, 2, 5), True),
+        ((0, 1, 2, 3), (0, 1, 4, 5), False),
+    ],
+)
+def test_direct_guard_depends_only_on_overlap_not_on_which_tokens(
+    q_idx: tuple[int, ...], f_idx: tuple[int, ...], expected: bool
+) -> None:
+    """Two questions with the same overlap ratio must decide the same way.
+
+    The two rows sit at overlap 0.60 and 0.50, so they also pin the threshold
+    into (0.50, 0.60] and a silent move in either direction fails here.
+    """
+    for alphabet in _ALPHABETS:
+        q = " ".join(alphabet[i] for i in q_idx)
+        f = " ".join(alphabet[i] for i in f_idx)
+        assert _guard(q, f) is expected, f"decision changed for {alphabet[0]!r} alphabet"

@@ -29,15 +29,28 @@ _BACKFILL_TEXT_PREFIX = 4096
 
 
 def _backfill(bind) -> None:
+    """Fill ``script`` for pre-existing rows from a prefix of their text.
+
+    Paginates by id rather than re-running the same predicate: the rows just
+    written no longer match ``script IS NULL``, but without a keyset the scan
+    would still walk past them on every batch.
+    """
+    last_id = None
     while True:
         rows = bind.execute(
             sa.text(
                 "SELECT id, substr(parsed_text, 1, :prefix) AS sample "
                 "FROM documents "
                 "WHERE script IS NULL AND parsed_text IS NOT NULL "
+                "AND (CAST(:last_id AS TEXT) IS NULL OR CAST(id AS TEXT) > CAST(:last_id AS TEXT)) "
+                "ORDER BY id "
                 "LIMIT :batch"
             ),
-            {"prefix": _BACKFILL_TEXT_PREFIX, "batch": _BACKFILL_BATCH_SIZE},
+            {
+                "prefix": _BACKFILL_TEXT_PREFIX,
+                "batch": _BACKFILL_BATCH_SIZE,
+                "last_id": last_id,
+            },
         ).fetchall()
         if not rows:
             return
@@ -48,6 +61,7 @@ def _backfill(bind) -> None:
                 for row in rows
             ],
         )
+        last_id = str(rows[-1].id)
 
 
 def upgrade() -> None:

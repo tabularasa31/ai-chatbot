@@ -157,6 +157,36 @@ def test_upload_russian_markdown_persists_language(
     assert doc.language == "ru"
 
 
+def test_upload_persists_detected_script(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Document.script must be populated at parse time for KB script detection.
+
+    Uses a writing system the old two-bucket detector could not represent, so
+    the assertion cannot pass by accident.
+    """
+    token = register_and_verify_user(tenant, db_session, email="script@example.com")
+    tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Script Tenant"},
+    )
+    md_content = (
+        "# Οδηγός\n\n"
+        "Αυτό το έγγραφο εξηγεί πώς οι πελάτες μπορούν να επαναφέρουν τον κωδικό "
+        "πρόσβασης και να ενεργοποιήσουν την ταυτοποίηση δύο παραγόντων."
+    ).encode("utf-8")
+    response = tenant.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("odigos.md", md_content, "text/markdown")},
+    )
+    assert response.status_code == 201
+    doc = db_session.query(Document).filter(Document.filename == "odigos.md").first()
+    assert doc is not None
+    assert doc.script == "greek"
+
+
 def test_upload_swagger_success(tenant: TestClient, db_session: Session) -> None:
     """Upload valid OpenAPI JSON, status=ready."""
     token = register_and_verify_user(tenant, db_session, email="swagger@example.com")

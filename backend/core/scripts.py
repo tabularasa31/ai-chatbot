@@ -35,12 +35,17 @@ def _character_script(char: str) -> str | None:
 def detect_script_bucket(text: str | None) -> str:
     """Return the dominant writing system of ``text``.
 
-    Ties are broken alphabetically so the result is stable for a given input.
+    Ties resolve to the highest-sorting script name, so the result is stable
+    for a given input.
     """
     if not text:
         return NO_SCRIPT_BUCKET
+    # Compatibility normalization folds presentation forms (fullwidth,
+    # halfwidth, mathematical, superscript) onto the letters they stand for,
+    # so they bucket by writing system rather than by presentation.
+    sample = unicodedata.normalize("NFKC", text[:_SCRIPT_SAMPLE_CHARS])
     counts: Counter[str] = Counter()
-    for char in text[:_SCRIPT_SAMPLE_CHARS]:
+    for char in sample:
         script = _character_script(char)
         if script is not None:
             counts[script] += 1

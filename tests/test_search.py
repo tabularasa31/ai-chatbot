@@ -876,8 +876,16 @@ def test_detect_query_script_bucket_uses_other_only_without_letters() -> None:
     assert detect_query_script_bucket("") == "other"
 
 
-def test_detect_query_script_bucket_prefers_cyrillic_for_mixed_script_query() -> None:
+def test_detect_query_script_bucket_follows_the_dominant_script() -> None:
+    """A mixed-script query buckets by majority, not by first script seen."""
     assert detect_query_script_bucket("OpenAI для русского") == "cyrillic"
+    assert detect_query_script_bucket("reset password настройки") == "latin"
+
+
+def test_detect_query_script_bucket_folds_presentation_forms() -> None:
+    """Fullwidth/halfwidth/mathematical forms bucket by writing system."""
+    assert detect_query_script_bucket("ＡＰＩ") == "latin"
+    assert detect_query_script_bucket("ﾊﾛｰ") == "katakana"
 
 
 def test_apply_script_boost_prefers_matching_script_bucket() -> None:

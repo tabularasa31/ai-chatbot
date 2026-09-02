@@ -23,6 +23,7 @@ from sqlalchemy.util import await_only
 
 from backend.chat.language import resolve_language_context
 from backend.chat.pii import redact, redact_for_egress
+from backend.chat.types import QuestionIntentResult
 from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
@@ -350,63 +351,74 @@ async def detect_human_request(
     return result
 
 
-_support_contact_cache = _LockedTTLCache(
-    name="support_contact", ttl=_HUMAN_REQUEST_CACHE_TTL, maxsize=_HUMAN_REQUEST_CACHE_MAX
+_question_intent_cache = _LockedTTLCache(
+    name="question_intent", ttl=_HUMAN_REQUEST_CACHE_TTL, maxsize=_HUMAN_REQUEST_CACHE_MAX
 )
 
 
-async def detect_support_contact_question(
+async def classify_question_intent(
     message: str,
     api_key: str,
     tenant_id: UUID | str | None = None,
     *,
     langfuse_observation: Any | None = None,
-) -> bool:
-    """Return True if the user is asking *how* to reach support / contact the team.
+) -> QuestionIntentResult:
+    """Classify what a user message is asking about, in one call.
 
-    Distinct from :func:`detect_human_request` (which means "hand me off to a
-    human right now"). This catches informational questions like "how do I
-    contact support?", "what's your support email?", "where can I get help?".
+    ``support_contact`` is distinct from :func:`detect_human_request` (which
+    means "hand me off to a human right now"): it catches informational
+    questions like "how do I contact support?", "what's your support email?".
     When the knowledge base has no contact page, the bot is itself the support
     channel — so on a retrieval miss we answer about that capability instead of
     the generic "I couldn't find an answer" lead-in.
 
-    LLM-classified so it works across all languages. Fails safe to False on
-    timeout/error to keep the standard no-answer copy.
+    The remaining axes pick the tenant's stored quick answers (pricing page,
+    status page, documentation link, trial terms) relevant to this turn.
+
+    LLM-classified so it works across all languages. Fails safe to an
+    all-false verdict on timeout/error, which keeps the standard copy and
+    simply attaches no quick answers.
     """
-    # An empty message (widget-open bootstrap turn) cannot be a contact question.
+    # An empty message (widget-open bootstrap turn) has no intent to classify.
     if not message or not message.strip():
-        return False
+        return QuestionIntentResult()
 
     cache_key = hashlib.sha256(f"{tenant_id}:{message}".encode()).hexdigest()
-    cached = _support_contact_cache.get(cache_key)
+    cached = _question_intent_cache.get(cache_key)
     if cached is not None:
         return cached
 
     system_prompt = (
-        "Decide whether the user is asking HOW to contact / reach the support "
-        "team or where to get help — an informational question about support "
-        "and contact options.\n"
+        "Decide what the user's message is asking about. Several answers can "
+        "be true at once; when none applies, return all false.\n"
         "\n"
-        "Return true for questions like: \"how do I contact support?\", "
-        "\"how can I write to support?\", \"what's your support email?\", "
-        "\"where can I get help?\", \"is there a way to reach a person?\", "
-        "\"do you have a support team?\".\n"
+        "support_contact — asking HOW to contact / reach the support team or "
+        "where to get help: \"how do I contact support?\", \"what's your "
+        "support email?\", \"where can I get help?\". False for ordinary "
+        "product questions that merely happen to need support's answer, and "
+        "for an explicit \"connect me to a human right now\" hand-off "
+        "request (that is handled separately).\n"
         "\n"
-        "Return false for ordinary product/help questions that merely happen "
-        "to need support's answer, and for an explicit \"connect me to a human "
-        "right now\" hand-off request (that is handled separately).\n"
+        "pricing — asking about price, cost, plans, billing, subscription or "
+        "trial terms.\n"
         "\n"
-        "Look at intent, not exact wording. The same rule applies in any "
+        "service_status — asking whether the service is up or down, or about "
+        "an incident, outage or downtime.\n"
+        "\n"
+        "documentation — asking where the documentation, guides, manuals or "
+        "API reference can be found.\n"
+        "\n"
+        "Look at intent, not exact wording. The same rules apply in any "
         "language; treat the user's phrasing as a hint, not a template.\n"
         "\n"
-        'Answer ONLY with JSON: {"support_contact": true/false}'
+        'Answer ONLY with JSON: {"support_contact": true/false, "pricing": '
+        'true/false, "service_status": true/false, "documentation": true/false}'
     )
 
-    async def _call_llm() -> bool:
+    async def _call_llm() -> QuestionIntentResult:
         client = get_async_openai_client(api_key)
         response = await async_call_openai_with_retry(
-            "detect_support_contact_question",
+            "classify_question_intent",
             lambda: client.chat.completions.create(
                 model=settings.human_request_model,
                 messages=[
@@ -414,20 +426,25 @@ async def detect_support_contact_question(
                     {"role": "user", "content": message},
                 ],
                 temperature=0,
-                max_completion_tokens=20,
+                max_completion_tokens=60,
                 response_format={"type": "json_object"},
             ),
             langfuse_observation=langfuse_observation,
         )
-        raw = response.choices[0].message.content or "{}"
-        return bool(json.loads(raw).get("support_contact", False))
+        payload = json.loads(response.choices[0].message.content or "{}")
+        return QuestionIntentResult(
+            support_contact=bool(payload.get("support_contact", False)),
+            pricing=bool(payload.get("pricing", False)),
+            service_status=bool(payload.get("service_status", False)),
+            documentation=bool(payload.get("documentation", False)),
+        )
 
     try:
         result = await asyncio.wait_for(_call_llm(), timeout=_HUMAN_REQUEST_TIMEOUT)
     except Exception:
-        return False
+        return QuestionIntentResult()
 
-    _support_contact_cache.set(cache_key, result)
+    _question_intent_cache.set(cache_key, result)
     return result
 
 

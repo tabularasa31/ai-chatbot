@@ -150,15 +150,15 @@ async def test_detect_human_request_defaults_to_explicit_when_axis_missing() -> 
     assert result.human_request_explicit is True
 
 
-def _mock_llm_support_contact(result: bool):
-    """Patch the OpenAI call inside detect_support_contact_question."""
+def _mock_llm_question_intent(**flags: bool):
+    """Patch the OpenAI call inside classify_question_intent."""
     import json
     from contextlib import ExitStack
     from unittest.mock import AsyncMock, MagicMock, patch
 
     response = MagicMock()
     response.choices = [MagicMock()]
-    response.choices[0].message.content = json.dumps({"support_contact": result})
+    response.choices[0].message.content = json.dumps(flags)
 
     class _Stack:
         def __enter__(self):
@@ -184,37 +184,80 @@ def _mock_llm_support_contact(result: bool):
 
 
 @pytest.mark.asyncio
-async def test_detect_support_contact_question_true_for_contact_question() -> None:
+async def test_classify_question_intent_true_for_contact_question() -> None:
     from backend.escalation.service import (
-        _support_contact_cache,
-        detect_support_contact_question,
+        _question_intent_cache,
+        classify_question_intent,
     )
 
-    _support_contact_cache.clear()
-    with _mock_llm_support_contact(True):
-        assert (
-            await detect_support_contact_question(
-                "how can i write to the support?", "sk-test"
-            )
-            is True
+    _question_intent_cache.clear()
+    with _mock_llm_question_intent(support_contact=True):
+        result = await classify_question_intent(
+            "how can i write to the support?", "sk-test"
         )
+    assert result.support_contact is True
+    assert result.pricing is False
 
 
 @pytest.mark.asyncio
-async def test_detect_support_contact_question_false_for_ordinary_question() -> None:
+async def test_classify_question_intent_false_for_ordinary_question() -> None:
     from backend.escalation.service import (
-        _support_contact_cache,
-        detect_support_contact_question,
+        _question_intent_cache,
+        classify_question_intent,
     )
 
-    _support_contact_cache.clear()
-    with _mock_llm_support_contact(False):
-        assert (
-            await detect_support_contact_question(
-                "how do I configure DNS records?", "sk-test"
-            )
-            is False
+    _question_intent_cache.clear()
+    with _mock_llm_question_intent(support_contact=False):
+        result = await classify_question_intent(
+            "how do I configure DNS records?", "sk-test"
         )
+    assert result.support_contact is False
+    assert result.pricing is False
+    assert result.service_status is False
+    assert result.documentation is False
+
+
+@pytest.mark.asyncio
+async def test_classify_question_intent_reports_every_axis() -> None:
+    from backend.escalation.service import (
+        _question_intent_cache,
+        classify_question_intent,
+    )
+
+    _question_intent_cache.clear()
+    with _mock_llm_question_intent(
+        support_contact=False, pricing=True, service_status=True, documentation=True
+    ):
+        result = await classify_question_intent("...", "sk-test")
+    assert (result.pricing, result.service_status, result.documentation) == (
+        True,
+        True,
+        True,
+    )
+    assert result.support_contact is False
+
+
+@pytest.mark.asyncio
+async def test_classify_question_intent_fails_safe_to_all_false() -> None:
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from backend.escalation.service import (
+        _question_intent_cache,
+        classify_question_intent,
+    )
+
+    _question_intent_cache.clear()
+    with patch(
+        "backend.escalation.service.get_async_openai_client", return_value=MagicMock()
+    ), patch(
+        "backend.escalation.service.async_call_openai_with_retry",
+        new=AsyncMock(side_effect=RuntimeError("provider down")),
+    ):
+        result = await classify_question_intent("any question", "sk-test")
+    assert result.support_contact is False
+    assert result.pricing is False
+    assert result.service_status is False
+    assert result.documentation is False
 
 
 @pytest.mark.asyncio
@@ -2456,7 +2499,9 @@ async def test_detect_human_request_empty_message_skips_llm(
         result = await esc_service.detect_human_request(message, "sk-test")
         assert result.human_request is False
         assert result.message_has_request_content is False
-        assert await esc_service.detect_support_contact_question(message, "sk-test") is False
+        assert await esc_service.classify_question_intent(
+            message, "sk-test"
+        ) == esc_service.QuestionIntentResult()
 
 
 @pytest.mark.asyncio

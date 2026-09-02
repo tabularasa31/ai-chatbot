@@ -82,6 +82,7 @@ from backend.chat.persistence import (
 )
 from backend.chat.pii import redact
 from backend.chat.rotation import latest_chat_query, should_rotate
+from backend.chat.types import QuestionIntentResult
 from backend.contact_sessions.service import touch_user_session
 from backend.core import db as core_db
 from backend.core.config import (
@@ -104,9 +105,9 @@ from backend.escalation.openai_escalation import (
 from backend.escalation.service import (
     HumanRequestResult,
     build_chat_messages_for_openai,  # noqa: F401
+    classify_question_intent,
     create_escalation_ticket,  # noqa: F401
     detect_human_request,
-    detect_support_contact_question,
     fact_from_ticket,  # noqa: F401
     should_escalate,  # noqa: F401
 )
@@ -584,6 +585,7 @@ async def _build_handler_context_async(
     explicit_human_request: bool,
     human_request_explicit: bool = True,
     support_contact_question: bool = False,
+    question_intent: QuestionIntentResult | None = None,
     message_has_request_content: bool = False,
     turn_started_at: float,
 ) -> HandlerContext:
@@ -647,6 +649,7 @@ async def _build_handler_context_async(
         explicit_human_request=explicit_human_request,
         human_request_explicit=human_request_explicit,
         support_contact_question=support_contact_question,
+        question_intent=question_intent or QuestionIntentResult(),
         message_has_request_content=message_has_request_content,
         turn_started_at=turn_started_at,
     )
@@ -692,6 +695,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
                 allow_clarification=ctx.allow_clarification,
                 guard_profile=ctx.tenant_profile,
                 support_contact_question=ctx.support_contact_question,
+                question_intent=ctx.question_intent,
             )
             ctx.extras["_pipeline_result"] = pipeline_result
 
@@ -756,12 +760,13 @@ async def async_process_chat_message(
         human_request_result = HumanRequestResult(
             human_request=False, message_has_request_content=False
         )
-        support_contact_question = False
+        question_intent = QuestionIntentResult()
     else:
-        human_request_result, support_contact_question = await asyncio.gather(
+        human_request_result, question_intent = await asyncio.gather(
             detect_human_request(redacted_question, api_key, tenant_id),
-            detect_support_contact_question(redacted_question, api_key, tenant_id),
+            classify_question_intent(redacted_question, api_key, tenant_id),
         )
+    support_contact_question = question_intent.support_contact
     explicit_human_request = human_request_result.human_request
     _human_request_classifier_ms = round((perf_counter() - _hrc_start) * 1000, 2)
 
@@ -911,6 +916,7 @@ async def async_process_chat_message(
         explicit_human_request=explicit_human_request,
         human_request_explicit=human_request_result.human_request_explicit,
         support_contact_question=support_contact_question,
+        question_intent=question_intent,
         message_has_request_content=human_request_result.message_has_request_content,
         turn_started_at=_turn_started_at,
     )

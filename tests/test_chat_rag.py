@@ -20,6 +20,7 @@ from backend.chat.service import (
     build_rag_messages,
     build_rag_prompt,
 )
+from backend.chat.types import QuestionIntentResult
 from backend.core.config import settings
 from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource
 from tests.conftest import register_and_verify_user
@@ -137,36 +138,43 @@ def test_quick_answers_context_returns_structured_lines(
     )
     db_session.commit()
 
-    answer = _quick_answers_context(tenant_id, "Where is your documentation?", db_session)
+    answer = _quick_answers_context(
+        tenant_id, db_session, QuestionIntentResult(documentation=True)
+    )
 
     assert answer == ["Documentation: https://docs.example.com/"]
 
 
 def test_quick_answer_keys_for_question_filters_by_topic() -> None:
-    assert _quick_answer_keys_for_question("Where can I find pricing and trial details?") == [
+    # Key selection reads the classifier verdict only — the question text and
+    # the language it is written in never reach this function.
+    assert _quick_answer_keys_for_question(QuestionIntentResult(pricing=True)) == [
         "pricing_url",
         "trial_info",
     ]
-    # Support-contact intent is language-agnostic: it is driven by the LLM
-    # classifier flag, not by keywords in the question text. The phrasing /
-    # language of the question is irrelevant — only the flag matters.
-    assert _quick_answer_keys_for_question("How can I contact support?") == []
+    assert _quick_answer_keys_for_question(QuestionIntentResult()) == []
+    assert _quick_answer_keys_for_question(None) == []
+    # ``support_chat`` is intentionally never surfaced.
     assert _quick_answer_keys_for_question(
-        "How can I contact support?", support_contact_question=True
+        QuestionIntentResult(support_contact=True)
     ) == [
         "support_email",
         "status_page_url",
     ]
-    # A non-English support question still resolves, because the flag — not the
-    # words — selects the keys. ``support_chat`` is intentionally never surfaced.
-    assert _quick_answer_keys_for_question(
-        "как написать в поддержку?", support_contact_question=True
-    ) == [
-        "support_email",
-        "status_page_url",
-    ]
-    assert _quick_answer_keys_for_question("Show me the documentation") == [
+    assert _quick_answer_keys_for_question(QuestionIntentResult(documentation=True)) == [
         "documentation_url",
+    ]
+    assert _quick_answer_keys_for_question(QuestionIntentResult(service_status=True)) == [
+        "status_page_url",
+    ]
+    # Several axes at once de-duplicate while keeping first-seen order.
+    assert _quick_answer_keys_for_question(
+        QuestionIntentResult(pricing=True, service_status=True, support_contact=True)
+    ) == [
+        "pricing_url",
+        "trial_info",
+        "status_page_url",
+        "support_email",
     ]
 
 
@@ -229,7 +237,9 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
     )
     db_session.commit()
 
-    answer = _quick_answers_context(tenant_id, "Where is the documentation?", db_session)
+    answer = _quick_answers_context(
+        tenant_id, db_session, QuestionIntentResult(documentation=True)
+    )
 
     assert answer == ["Documentation: https://docs.example.com/guide"]
 

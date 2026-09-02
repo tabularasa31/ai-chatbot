@@ -1185,6 +1185,11 @@ _TENANT_KB_SCRIPT_CACHE: dict[str, tuple[str | None, float]] = {}
 _TENANT_KB_SCRIPTS_CACHE: dict[str, tuple[frozenset[str], float]] = {}
 _TENANT_KB_SCRIPT_CACHE_TTL = 300.0  # 5 minutes
 _KB_SCRIPT_SAMPLE_SIZE = 20
+# Each script in this set costs one cross-lingual rewrite call per chat
+# turn, so a script has to carry a real share of the corpus to earn one.
+# A stray document must not put the whole tenant on the hook; a genuine
+# minority-language section still clears the bar.
+_KB_SCRIPT_MIN_SHARE = 0.05
 
 
 def invalidate_tenant_kb_script_cache(tenant_id: uuid.UUID) -> None:
@@ -2549,7 +2554,11 @@ async def async_detect_tenant_kb_scripts(
 
     Mirrors :func:`async_detect_tenant_kb_script` but returns the full set so
     callers can issue cross-lingual rewrites for *each* KB language a query
-    does not natively cover (mixed EN+RU KBs in particular).
+    does not natively cover (mixed-script KBs in particular).
+
+    Scripts below :data:`_KB_SCRIPT_MIN_SHARE` of the corpus are dropped: the
+    caller spends one LLM call per returned script on every turn, and a single
+    stray document is not worth that.
     """
     key = str(tenant_id)
     now = time.monotonic()
@@ -2558,7 +2567,11 @@ async def async_detect_tenant_kb_scripts(
         return cached[0]
 
     counts = await _async_resolve_kb_bucket_counts(tenant_id, db)
-    result = frozenset(b for b in counts if b != NO_SCRIPT_BUCKET)
+    counted = {b: n for b, n in counts.items() if b != NO_SCRIPT_BUCKET}
+    total = sum(counted.values())
+    result = frozenset(
+        b for b, n in counted.items() if n >= total * _KB_SCRIPT_MIN_SHARE
+    )
     _TENANT_KB_SCRIPTS_CACHE[key] = (result, now)
     return result
 

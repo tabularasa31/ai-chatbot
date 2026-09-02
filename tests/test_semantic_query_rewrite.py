@@ -585,6 +585,34 @@ class TestDetectTenantKbScripts:
         )
 
     @pytest.mark.asyncio
+    async def test_drops_a_script_carried_by_a_stray_document(self):
+        """Each returned script costs an LLM call per turn; strays must not."""
+        import uuid
+        from backend.search.service import async_detect_tenant_kb_scripts
+
+        tenant_id = uuid.uuid4()
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(script_rows=[("latin", 400), ("arabic", 1)])
+
+        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
+            {"latin"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_keeps_a_genuine_minority_script_section(self):
+        """A real minority-language section still earns a cross-lingual rewrite."""
+        import uuid
+        from backend.search.service import async_detect_tenant_kb_scripts
+
+        tenant_id = uuid.uuid4()
+        _clear_kb_script_caches(tenant_id)
+        mock_db = _make_async_db(script_rows=[("latin", 400), ("cyrillic", 30)])
+
+        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
+            {"latin", "cyrillic"}
+        )
+
+    @pytest.mark.asyncio
     async def test_empty_kb_returns_empty_set(self):
         import uuid
         from backend.search.service import async_detect_tenant_kb_scripts

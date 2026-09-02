@@ -37,10 +37,6 @@ _HEALTH_WARNING_TYPES = frozenset(
 )
 _SEVERITY_PENALTY = {"high": 20, "medium": 10, "low": 5}
 _WORD_RE = re.compile(r"\b[\w-]+\b", flags=re.UNICODE)
-_PLACEHOLDER_RE = re.compile(
-    r"\b(?:todo|tbd|coming soon|to be added|fill me|placeholder|заполнить позже|будет добавлено)\b",
-    flags=re.IGNORECASE,
-)
 _MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s+", flags=re.MULTILINE)
 _PUNCTUATION_ENDINGS = (":", ",", ";", "(", "[", "{", "-", "—", "–", "/", "\\")  # noqa: RUF001
 _POOR_STRUCTURE_HIGH_SECTION_WORDS = 700
@@ -245,13 +241,6 @@ def _detect_incomplete_section(text: str) -> dict[str, str] | None:
             "incomplete_section",
             "medium",
             "A fenced code block is not properly closed, which suggests the document was cut off mid-section.",
-        )
-
-    if _PLACEHOLDER_RE.search(text):
-        return _make_warning(
-            "incomplete_section",
-            "medium",
-            "The document contains placeholder text such as TODO or coming soon, which suggests unfinished sections.",
         )
 
     tail = stripped[-160:]

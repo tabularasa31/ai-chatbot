@@ -27,6 +27,7 @@ from backend.chat.language import (
 )
 from backend.chat.pii import redact_for_egress
 from backend.chat.prompts import build_rag_messages
+from backend.chat.steps.answer_cache import build_store_candidate
 from backend.chat.streaming import (
     LanguageGateStreamFilter,
     LanguageMismatchStreamAbortError,
@@ -877,7 +878,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
 
     final_answer = raw_answer
 
-    return ChatPipelineResult(
+    result = ChatPipelineResult(
         raw_answer=raw_answer,
         final_answer=final_answer,
         tokens_used=int(tokens_used),
@@ -910,3 +911,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
             and bool(retrieval.chunk_texts)
         ),
     )
+    result.answer_cache_candidate = build_store_candidate(
+        run, result, strong_context=not escalate and not _low_context
+    )
+    return result

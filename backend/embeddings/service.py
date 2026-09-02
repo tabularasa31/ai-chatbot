@@ -320,7 +320,16 @@ def create_embeddings_for_document(
         run_document_health_check(document_id, db)
     except Exception:
         pass
+    _invalidate_answer_cache(doc.tenant_id)
     return embeddings
+
+
+def _invalidate_answer_cache(tenant_id: uuid.UUID | None) -> None:
+    # Re-embedding changes what retrieval returns without touching the
+    # document row the answer cache fingerprints, so the cache is told directly.
+    from backend.chat.answer_cache import invalidate_tenant_sync
+
+    invalidate_tenant_sync(tenant_id)
 
 
 def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
@@ -416,4 +425,5 @@ def delete_embeddings_for_document(
     result = db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
     invalidate_bm25_cache_for_tenant(tenant_id)
+    _invalidate_answer_cache(tenant_id)
     return result

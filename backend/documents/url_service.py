@@ -115,6 +115,12 @@ def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
 
+def _invalidate_answer_cache(tenant_id: uuid.UUID | None) -> None:
+    from backend.chat.answer_cache import invalidate_tenant_sync
+
+    invalidate_tenant_sync(tenant_id)
+
+
 def _count_tenant_documents(db: Session, tenant_id: uuid.UUID) -> int:
     return db.query(Document).filter(Document.tenant_id == tenant_id).count()
 
@@ -421,6 +427,7 @@ def _upsert_page_document(
     db.flush()
     db.commit()
     invalidate_bm25_cache_for_tenant(source.tenant_id)
+    _invalidate_answer_cache(source.tenant_id)
     _embedder_mod._run_tenant_knowledge_extraction_best_effort(
         document_id=doc.id,
         tenant_id=source.tenant_id,
@@ -542,6 +549,7 @@ def _upsert_structured_document(
         db.flush()
         db.commit()
         invalidate_bm25_cache_for_tenant(source.tenant_id)
+        _invalidate_answer_cache(source.tenant_id)
         _embedder_mod._run_tenant_knowledge_extraction_best_effort(
             document_id=doc.id,
             tenant_id=source.tenant_id,

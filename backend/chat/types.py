@@ -25,6 +25,11 @@ from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.chat.answer_cache import (
+    AnswerCacheCandidate,
+    AnswerCacheHit,
+    AnswerCacheScope,
+)
 from backend.chat.language import ResolvedLanguageContext
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.guards.types import Verdict
@@ -177,6 +182,13 @@ class ChatPipelineResult:
     cross_lingual_variants_count: int = 0
     query_kb_language_match: str | None = None
     retrieval_used_cross_lingual_variant: bool = False
+    # Set when the turn was served from the answer cache: retrieval and
+    # generation were skipped and the answer is a verbatim earlier one.
+    answer_cache: AnswerCacheHit | None = None
+    # Set when the fresh answer qualifies for the cache; the RAG handler
+    # stores it once the turn is persisted and the reply is still the pipeline
+    # answer (no escalation or handoff replaced it).
+    answer_cache_candidate: AnswerCacheCandidate | None = None
 
 
 @dataclass
@@ -196,6 +208,8 @@ class PipelineState:
     query_kb_language_match: Literal["native", "mismatch", "unknown"] = "unknown"
     query_variants: list[str] = field(default_factory=list)
     variant_vectors: list[list[float]] = field(default_factory=list)
+    # Resolved by the answer-cache step; None keeps both levels out of the turn.
+    answer_cache_scope: AnswerCacheScope | None = None
     embed_api_request_count: int = 0
     rewritten_variant: str | None = None
     query_rewrite_skip_reason: str | None = None
@@ -272,4 +286,7 @@ class PipelineRun:
     allow_clarification: bool = True
     guard_profile: TenantProfile | None = None
     question_intent: QuestionIntentResult = field(default_factory=QuestionIntentResult)
+    # Resolved before dispatch for turns the answer cache may serve or store;
+    # None keeps both cache levels out of the turn.
+    answer_cache_scope: AnswerCacheScope | None = None
     state: PipelineState = field(default_factory=PipelineState)

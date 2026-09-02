@@ -234,6 +234,8 @@ def _emit_chat_turn_event(
     model: str | None = None,
     plan_tier: str | None = None,
     session_id: str | None = None,
+    answer_cache_level: str | None = None,
+    answer_cache_saved_ms: int | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
@@ -242,6 +244,12 @@ def _emit_chat_turn_event(
             "chat_id": chat_id,
             "session_id": session_id,
             "strategy": strategy,
+            # A turn served from the answer cache skipped retrieval and
+            # generation; saved_ms is the wall time those stages took when the
+            # cached answer was originally produced.
+            "answer_cache_hit": answer_cache_level is not None,
+            "answer_cache_level": answer_cache_level,
+            "answer_cache_saved_ms": answer_cache_saved_ms,
             "reject_reason": reject_reason,
             "is_reject": is_reject,
             "escalated": escalated,

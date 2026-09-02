@@ -334,7 +334,27 @@ class RagHandler(PipelineHandler):
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
         from backend.core.db import run_sync
 
-        return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
+        outcome = await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
+        await self._store_answer_cache(ctx, outcome)
+        return outcome
+
+    async def _store_answer_cache(self, ctx: HandlerContext, outcome: ChatTurnOutcome) -> None:
+        """Store the fresh answer after the turn committed, but only if the
+        reply the user got is still the pipeline answer: an escalation offer
+        that replaced it or a handoff line appended under it is session state
+        the cache must not carry to another visitor."""
+        from backend.chat import answer_cache
+
+        result = ctx.extras.get("_pipeline_result")
+        candidate = getattr(result, "answer_cache_candidate", None)
+        if candidate is None:
+            return
+        if outcome.text != result.final_answer or ctx.chat.escalation_pre_confirm_pending:
+            return
+        try:
+            await answer_cache.store(candidate, db=ctx.async_db)
+        except Exception:
+            logger.debug("answer_cache_store_failed chat_id=%s", ctx.chat.id, exc_info=True)
 
     def _handle_sync(
         self, ctx: HandlerContext, sync_db: Session
@@ -960,8 +980,21 @@ class RagHandler(PipelineHandler):
                     "intent_runner_up_score": None,
                     "faq_top_score": faq_match.top_score if faq_match else None,
                     "kb_has_partial_answer": bool(chunk_texts),
+                    "answer_cache_hit": result.answer_cache is not None,
+                    "answer_cache_level": (
+                        result.answer_cache.level if result.answer_cache else None
+                    ),
+                    "answer_cache_similarity": (
+                        result.answer_cache.similarity if result.answer_cache else None
+                    ),
+                    "answer_cache_saved_ms": (
+                        result.answer_cache.saved_ms if result.answer_cache else None
+                    ),
                 },
-                tags=[build_variant_trace_tag(retrieval.variant_mode)],
+                tags=[
+                    build_variant_trace_tag(retrieval.variant_mode),
+                    *(["answer_cache_hit"] if result.answer_cache is not None else []),
+                ],
             )
         _emit_chat_turn_event(
             tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
@@ -991,6 +1024,8 @@ class RagHandler(PipelineHandler):
             retrieval_used_cross_lingual_variant=result.retrieval_used_cross_lingual_variant,
             model=settings.chat_model,
             plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
+            answer_cache_level=result.answer_cache.level if result.answer_cache else None,
+            answer_cache_saved_ms=result.answer_cache.saved_ms if result.answer_cache else None,
         )
         return ChatTurnOutcome(
             text=answer,

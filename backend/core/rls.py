@@ -48,6 +48,7 @@ from sqlalchemy.orm import Session
 
 # Tables with a tenant_id column, isolated directly.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
+    "answer_cache_entries",
     "background_jobs",
     "chats",
     "contact_sessions",

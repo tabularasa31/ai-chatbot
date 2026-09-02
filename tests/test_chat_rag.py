@@ -755,3 +755,52 @@ def test_build_rag_prompt_strong_context_line_goes_to_the_user_message() -> None
     baseline_system, baseline_user = build_rag_messages("Q?", ["chunk"])
     assert "CONTEXT MATCH (this turn)" not in baseline_user
     assert baseline_system == system_prompt
+
+
+def test_generate_answer_sends_cost_with_usage(mock_openai_client: Mock) -> None:
+    """Langfuse prices observations from its own model table, which does not
+    know the models we run — so the turn's cost has to travel with the usage
+    payload, and the cached part of the prompt at its cheaper rate."""
+
+    class FakeGeneration:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.generation_handle = FakeGeneration()
+            self.model: object | None = None
+
+        def generation(self, **kwargs: object) -> FakeGeneration:
+            self.model = kwargs["model"]
+            return self.generation_handle
+
+    response = mock_openai_client.chat.completions.create.return_value
+    response.choices = [Mock(message=Mock(content="The answer is 42"))]
+    response.model = "gpt-5-mini"
+    response.usage = Mock(
+        total_tokens=12_000,
+        prompt_tokens=10_000,
+        completion_tokens=2_000,
+        prompt_tokens_details=Mock(cached_tokens=8_000),
+    )
+    trace = FakeTrace()
+
+    asyncio.run(async_generate_answer("What?", ["chunk1"], api_key="sk-test", trace=trace))
+
+    usage = trace.generation_handle.end_calls[-1]["usage"]
+    expected = settings.compute_cost_breakdown("gpt-5-mini", 10_000, 2_000, 8_000)
+    assert usage == {
+        "unit": "TOKENS",
+        "input": 10_000,
+        "output": 2_000,
+        "inputCost": expected["input"],
+        "outputCost": expected["output"],
+        "totalCost": expected["total"],
+    }
+    assert usage["totalCost"] > 0
+    # The cached 8k of the prompt cost a tenth of the fresh 2k.
+    assert usage["inputCost"] < 10_000 / 1_000_000 * settings.model_cost_rates("gpt-5-mini")["input"]

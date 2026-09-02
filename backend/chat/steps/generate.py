@@ -492,22 +492,27 @@ async def _async_generate_answer_native(
         _input_tokens = _safe_int(prompt_tokens_raw)
         _output_tokens = _safe_int(completion_tokens_raw)
         _cached_tokens = _safe_int(cached_tokens_raw)
-        _cost_usd = settings.compute_cost_usd(actual_model, _input_tokens, _output_tokens)
+        _cost = settings.compute_cost_breakdown(
+            actual_model, _input_tokens, _output_tokens, _cached_tokens
+        )
+        _cost_usd = _cost["total"]
         _duration_s = perf_counter() - started_at
         _gen_duration_ms = round(_duration_s * 1000, 2)
         if generation is not None:
-            _cost_rates = settings.openai_model_costs.get(
-                actual_model,
-                {
-                    "input": settings.openai_default_cost_per_1m_input_tokens,
-                    "output": settings.openai_default_cost_per_1m_output_tokens,
-                },
-            )
+            _cost_rates = settings.model_cost_rates(actual_model)
+            # Costs travel with the usage payload, not just in metadata: this
+            # Langfuse instance prices observations from its own model table,
+            # which has no entry for the models we run, and an ingested cost
+            # takes precedence over an inferred one.
             generation.end(
                 output=answer_text.strip(),
                 usage={
+                    "unit": "TOKENS",
                     "input": _input_tokens,
                     "output": _output_tokens,
+                    "inputCost": _cost["input"],
+                    "outputCost": _cost["output"],
+                    "totalCost": _cost["total"],
                 },
                 metadata={
                     "total_tokens": _safe_int(total_tokens),

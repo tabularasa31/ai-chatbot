@@ -22,14 +22,20 @@ _SCRIPT_SAMPLE_CHARS = 4096
 
 @lru_cache(maxsize=4096)
 def _character_script(char: str) -> str | None:
-    """Return the Unicode script of a single letter, or None for non-letters."""
+    """Return the writing system of a single letter, or None for non-letters.
+
+    Taken from the leading token of the character's Unicode name. The token is
+    also split on "-" so a character shared between two writing systems (whose
+    name leads with both, joined) lands in one of them rather than in a bucket
+    of its own that no corpus can ever match.
+    """
     if not char.isalpha():
         return None
     try:
         name = unicodedata.name(char)
     except ValueError:
         return None
-    return name.split(" ", 1)[0].casefold() or None
+    return name.split(" ", 1)[0].split("-", 1)[0].casefold()
 
 
 def detect_script_bucket(text: str | None) -> str:

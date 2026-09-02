@@ -2425,9 +2425,10 @@ async def _async_kb_bucket_counts_from_scripts(
 ) -> dict[str, int] | None:
     """Count documents by writing system using ``Document.script``.
 
-    Returns ``None`` when no rows have a non-null script — callers can then
-    fall back to chunk sampling for backward compatibility with KBs indexed
-    before parse-time script detection landed.
+    Returns ``None`` when no row carries a usable script — either because
+    none is stored, or because every document is letterless. Callers then fall
+    back to chunk sampling, which is also what KBs indexed before parse-time
+    script detection landed rely on.
     """
     try:
         stmt = (
@@ -2495,28 +2496,37 @@ async def _async_tenant_has_unlabeled_documents(
         return False
 
 
-async def _async_resolve_kb_bucket_counts(
+async def _async_resolve_kb_bucket_sources(
     tenant_id: uuid.UUID, db: AsyncSession
-) -> dict[str, int]:
-    """Return per-bucket document counts, preferring stored Document.script.
+) -> list[dict[str, int]]:
+    """Return per-bucket counts, one distribution per source that contributed.
 
-    When the KB is partially labeled (some documents still NULL after the
-    add_documents_script_v1 migration), augment the labeled counts with a
-    chunk sample so unlabeled legacy documents are not silently dropped.
+    Sources are kept apart rather than summed because they are not on the same
+    scale: labeled documents are counted in full, while the legacy fallback
+    can only ever see ``_KB_SCRIPT_SAMPLE_SIZE`` chunks. Sharing one total
+    would let the labeled half drown the sampled half in any ratio test.
     """
     labeled = await _async_kb_bucket_counts_from_scripts(tenant_id, db)
     if labeled is None:
         # Pure legacy KB — no documents have a script stored.
-        return await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
+        sampled = await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db)
+        return [sampled] if sampled else []
     if not await _async_tenant_has_unlabeled_documents(tenant_id, db):
         # Fully labeled — labeled counts are authoritative.
-        return labeled
-    # Partial labeling — merge with chunk sample so unlabeled docs still
-    # contribute to bucket detection.
-    sampled = await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
-    merged = dict(labeled)
-    for bucket, count in sampled.items():
-        merged[bucket] = merged.get(bucket, 0) + count
+        return [labeled]
+    # Partial labeling — sample alongside so unlabeled docs still contribute.
+    sampled = await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db)
+    return [labeled, sampled] if sampled else [labeled]
+
+
+async def _async_resolve_kb_bucket_counts(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> dict[str, int]:
+    """Return per-bucket document counts across every contributing source."""
+    merged: dict[str, int] = {}
+    for source in await _async_resolve_kb_bucket_sources(tenant_id, db):
+        for bucket, count in source.items():
+            merged[bucket] = merged.get(bucket, 0) + count
     return merged
 
 
@@ -2558,7 +2568,8 @@ async def async_detect_tenant_kb_scripts(
 
     Scripts below :data:`_KB_SCRIPT_MIN_SHARE` of the corpus are dropped: the
     caller spends one LLM call per returned script on every turn, and a single
-    stray document is not worth that.
+    stray document is not worth that. The share is taken within each source
+    separately — see :func:`_async_resolve_kb_bucket_sources`.
     """
     key = str(tenant_id)
     now = time.monotonic()
@@ -2566,12 +2577,13 @@ async def async_detect_tenant_kb_scripts(
     if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
         return cached[0]
 
-    counts = await _async_resolve_kb_bucket_counts(tenant_id, db)
-    counted = {b: n for b, n in counts.items() if b != NO_SCRIPT_BUCKET}
-    total = sum(counted.values())
-    result = frozenset(
-        b for b, n in counted.items() if n >= total * _KB_SCRIPT_MIN_SHARE
-    )
+    result: frozenset[str] = frozenset()
+    for source in await _async_resolve_kb_bucket_sources(tenant_id, db):
+        counted = {b: n for b, n in source.items() if b != NO_SCRIPT_BUCKET}
+        total = sum(counted.values())
+        result |= frozenset(
+            b for b, n in counted.items() if n >= total * _KB_SCRIPT_MIN_SHARE
+        )
     _TENANT_KB_SCRIPTS_CACHE[key] = (result, now)
     return result
 

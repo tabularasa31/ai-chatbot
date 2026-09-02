@@ -154,8 +154,9 @@ def test_create_embeddings_success(
         }
         assert m["filename"] == "emb.md"
         assert m["file_type"] == "markdown"
-        # Document.language is detected at parse time; embeddings inherit it
-        # so retrieval can identify mixed-language KBs without re-sampling.
+        # Document.language is detected at parse time and copied onto each
+        # chunk. Retrieval reads the script off the text itself, so this is
+        # metadata for callers, not a retrieval input.
         assert m.get("language") is not None
 
 

@@ -28,40 +28,48 @@ _BACKFILL_BATCH_SIZE = 500
 _BACKFILL_TEXT_PREFIX = 4096
 
 
+_SELECT_FIRST_BATCH = (
+    "SELECT id, substr(parsed_text, 1, :prefix) AS sample "
+    "FROM documents "
+    "WHERE script IS NULL AND parsed_text IS NOT NULL "
+    "ORDER BY id LIMIT :batch"
+)
+_SELECT_NEXT_BATCH = (
+    "SELECT id, substr(parsed_text, 1, :prefix) AS sample "
+    "FROM documents "
+    "WHERE script IS NULL AND parsed_text IS NOT NULL AND id > :last_id "
+    "ORDER BY id LIMIT :batch"
+)
+_UPDATE_BATCH = sa.text(
+    "UPDATE documents SET script = :script WHERE id IN :ids"
+).bindparams(sa.bindparam("ids", expanding=True))
+
+
 def _backfill(bind) -> None:
     """Fill ``script`` for pre-existing rows from a prefix of their text.
 
-    Paginates by id rather than re-running the same predicate: the rows just
-    written no longer match ``script IS NULL``, but without a keyset the scan
-    would still walk past them on every batch.
+    Pages on the primary key with the id compared in its own type, so the scan
+    starts where the previous batch ended instead of walking the rows it has
+    already written. Each batch writes one statement per distinct script
+    rather than one per row.
     """
     last_id = None
     while True:
-        rows = bind.execute(
-            sa.text(
-                "SELECT id, substr(parsed_text, 1, :prefix) AS sample "
-                "FROM documents "
-                "WHERE script IS NULL AND parsed_text IS NOT NULL "
-                "AND (CAST(:last_id AS TEXT) IS NULL OR CAST(id AS TEXT) > CAST(:last_id AS TEXT)) "
-                "ORDER BY id "
-                "LIMIT :batch"
-            ),
-            {
-                "prefix": _BACKFILL_TEXT_PREFIX,
-                "batch": _BACKFILL_BATCH_SIZE,
-                "last_id": last_id,
-            },
-        ).fetchall()
+        params = {"prefix": _BACKFILL_TEXT_PREFIX, "batch": _BACKFILL_BATCH_SIZE}
+        if last_id is None:
+            rows = bind.execute(sa.text(_SELECT_FIRST_BATCH), params).fetchall()
+        else:
+            rows = bind.execute(
+                sa.text(_SELECT_NEXT_BATCH), {**params, "last_id": last_id}
+            ).fetchall()
         if not rows:
             return
-        bind.execute(
-            sa.text("UPDATE documents SET script = :script WHERE id = :id"),
-            [
-                {"id": row.id, "script": detect_script_bucket(row.sample)}
-                for row in rows
-            ],
-        )
-        last_id = str(rows[-1].id)
+        by_script: dict[str, list] = {}
+        for row in rows:
+            by_script.setdefault(detect_script_bucket(row.sample), []).append(row.id)
+        for script, ids in by_script.items():
+            bind.execute(_UPDATE_BATCH, {"script": script, "ids": ids})
+        last_id = rows[-1].id
 
 
 def upgrade() -> None:
@@ -75,6 +83,9 @@ def upgrade() -> None:
             sa.Column("script", sa.String(length=32), nullable=True),
         )
 
+    # Backfill before the index so its build is not repeated by every write.
+    _backfill(bind)
+
     indexes = {i["name"] for i in inspector.get_indexes("documents")}
     if "ix_documents_tenant_script" not in indexes:
         op.create_index(
@@ -82,8 +93,6 @@ def upgrade() -> None:
             "documents",
             ["tenant_id", "script"],
         )
-
-    _backfill(bind)
 
 
 def downgrade() -> None:

@@ -7,8 +7,9 @@ on:
   pull_request:
     branches: [main]
     paths:
+      # Deliberately not config.py: a price cut upstream must not redden
+      # every unrelated PR that happens to touch settings.
       - 'backend/core/model_prices.json'
-      - 'backend/core/config.py'
       - 'scripts/update_model_prices.py'
       - '.github/workflows/model-prices.yml'
   workflow_dispatch:
@@ -40,6 +41,9 @@ jobs:
       contents: write
       pull-requests: write
 
+    env:
+      BRANCH: chore/model-prices
+
     steps:
       - uses: actions/checkout@v4
 
@@ -48,15 +52,32 @@ jobs:
         with:
           python-version: "3.11"
 
+      # An open PR on the branch may carry a reviewer's own commits, and a
+      # force-push would discard them — leave it to be merged first.
+      - name: Look for an open pull request
+        id: open_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' | head -1)
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          if [ -n "$number" ]; then
+            echo "Pull request #$number is still open — leaving it alone."
+          fi
+
       - name: Refresh the price snapshot
-        run: python scripts/update_model_prices.py | tee refresh.log
+        if: steps.open_pr.outputs.number == ''
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/update_model_prices.py | tee refresh.log
 
       # The snapshot is rewritten only when a rate actually moved, so most
       # weeks this job ends here and nobody hears from it.
-      - name: Open or update the pull request
+      - name: Propose the refreshed prices
+        if: steps.open_pr.outputs.number == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: chore/model-prices
         run: |
           if git diff --quiet -- backend/core/model_prices.json; then
             echo "Prices unchanged — nothing to propose."
@@ -70,14 +91,11 @@ jobs:
           git commit -m "chore(pricing): refresh vendored OpenAI token prices"
           git push --force origin "$BRANCH"
 
-          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
-            echo "Existing pull request updated."
-            exit 0
-          fi
-
           {
             echo "Upstream token prices moved. Rates come from LiteLLM's price list;"
             echo "this branch is written by \`scripts/update_model_prices.py\`."
+            echo
+            echo "Actions cannot trigger other workflows, so the suite does not run here."
             echo
             echo '```'
             cat refresh.log

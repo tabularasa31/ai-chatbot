@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from backend.core import config
 from backend.core.config import MODEL_PRICES_PATH, settings
 
 
@@ -55,13 +58,37 @@ def test_cached_prompt_tokens_are_billed_at_the_cached_rate() -> None:
     assert breakdown["total"] == breakdown["input"]
 
 
-def test_cost_breakdown_sums_input_and_output() -> None:
+@pytest.mark.parametrize(
+    ("prompt_tokens", "completion_tokens", "cached_tokens"),
+    [(10_000, 500, 0), (1_021, 500, 510), (7, 3, 3), (0, 0, 0)],
+)
+def test_cost_breakdown_sums_input_and_output(
+    prompt_tokens: int, completion_tokens: int, cached_tokens: int
+) -> None:
     breakdown = settings.compute_cost_breakdown(
-        "gpt-5-mini", prompt_tokens=10_000, completion_tokens=500
+        "gpt-5-mini", prompt_tokens, completion_tokens, cached_tokens
     )
 
-    assert breakdown["total"] == round(breakdown["input"] + breakdown["output"], 6)
-    assert breakdown["total"] == settings.compute_cost_usd("gpt-5-mini", 10_000, 500)
+    assert breakdown["total"] == breakdown["input"] + breakdown["output"]
+    assert breakdown["total"] == settings.compute_cost_usd(
+        "gpt-5-mini", prompt_tokens, completion_tokens, cached_tokens
+    )
+
+
+def test_unreadable_snapshot_degrades_to_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cost telemetry must never be able to fail a chat turn."""
+    monkeypatch.setattr(config, "MODEL_PRICES_PATH", MODEL_PRICES_PATH.with_name("gone.json"))
+    config._model_price_snapshot.cache_clear()
+
+    try:
+        assert settings.model_cost_rates("gpt-5-mini") == {
+            "input": settings.openai_default_cost_per_1m_input_tokens,
+            "output": settings.openai_default_cost_per_1m_output_tokens,
+            "cached_input": settings.openai_default_cost_per_1m_input_tokens,
+        }
+    finally:
+        monkeypatch.undo()
+        config._model_price_snapshot.cache_clear()
 
 
 def test_cached_tokens_cannot_exceed_prompt_tokens() -> None:

@@ -854,8 +854,26 @@ def test_detect_query_script_bucket_distinguishes_cyrillic() -> None:
     assert detect_query_script_bucket("reset password") == "latin"
 
 
-def test_detect_query_script_bucket_uses_other_for_non_latin_non_cyrillic() -> None:
-    assert detect_query_script_bucket("パスワードをリセット") == "other"
+def test_detect_query_script_bucket_separates_every_writing_system() -> None:
+    """Each writing system gets its own bucket, not one shared catch-all."""
+    samples = [
+        "パスワードをリセット",
+        "επαναφορά κωδικού",
+        "إعادة تعيين كلمة المرور",
+        "비밀번호 재설정",
+        "重置密码",
+        "รีเซ็ตรหัสผ่าน",
+        "पासवर्ड रीसेट",
+        "איפוס סיסמה",
+    ]
+    buckets = [detect_query_script_bucket(sample) for sample in samples]
+    assert "other" not in buckets
+    assert len(set(buckets)) == len(buckets)
+
+
+def test_detect_query_script_bucket_uses_other_only_without_letters() -> None:
+    assert detect_query_script_bucket("12345 — !?") == "other"
+    assert detect_query_script_bucket("") == "other"
 
 
 def test_detect_query_script_bucket_prefers_cyrillic_for_mixed_script_query() -> None:
@@ -887,7 +905,7 @@ def test_apply_script_boost_prefers_matching_script_bucket() -> None:
     assert [item[0].id for item in boosted] == [russian.id, english.id]
 
 
-def test_apply_script_boost_treats_ukrainian_metadata_as_cyrillic() -> None:
+def test_apply_script_boost_reads_the_chunk_text_not_its_language_label() -> None:
     from backend.models import Embedding
 
     english = Embedding(
@@ -896,20 +914,21 @@ def test_apply_script_boost_treats_ukrainian_metadata_as_cyrillic() -> None:
         chunk_text="reset password in settings",
         metadata_json={"language": "en"},
     )
-    ukrainian = Embedding(
+    # A stale/wrong language label must not override the chunk's own script.
+    mislabeled = Embedding(
         id=uuid.uuid4(),
         document_id=uuid.uuid4(),
         chunk_text="скинути пароль в налаштуваннях",
-        metadata_json={"language": "uk"},
+        metadata_json={"language": "en"},
     )
 
     boosted = apply_script_boost(
         "cyrillic",
-        [(english, 0.81), (ukrainian, 0.79)],
+        [(english, 0.81), (mislabeled, 0.79)],
         top_k=2,
     )
 
-    assert [item[0].id for item in boosted] == [ukrainian.id, english.id]
+    assert [item[0].id for item in boosted] == [mislabeled.id, english.id]
 
 
 def test_mmr_select_replaces_near_duplicate_chunk() -> None:

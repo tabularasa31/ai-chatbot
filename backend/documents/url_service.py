@@ -20,6 +20,7 @@ import backend.documents.embedder as _embedder_mod
 import backend.documents.http_client as _http_client_mod
 import backend.documents.sitemap as _sitemap_mod
 from backend.core.db import SessionLocal
+from backend.core.scripts import detect_script_bucket
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.documents.embedder import ExtractedPage, StructuredSource
 from backend.documents.http_client import (
@@ -390,6 +391,7 @@ def _upsert_page_document(
     doc.file_type = DocumentType.url
     doc.parsed_text = page.text
     doc.language = detect_document_language(page.text)
+    doc.script = detect_script_bucket(page.text)
     doc.status = DocumentStatus.embedding
     db.flush()
 
@@ -494,6 +496,7 @@ def _upsert_structured_document(
     doc.file_type = DocumentType.swagger
     doc.parsed_text = parsed_text
     doc.language = detect_document_language(parsed_text)
+    doc.script = detect_script_bucket(parsed_text)
     doc.status = DocumentStatus.embedding
     db.flush()
 

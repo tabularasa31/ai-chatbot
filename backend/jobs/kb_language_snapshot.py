@@ -15,10 +15,10 @@ from datetime import UTC, date, datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from backend.core.scripts import NO_SCRIPT_BUCKET
 from backend.jobs._periodic import LockSpec, PeriodicJob
 from backend.models import Document, Tenant
 from backend.observability.metrics import capture_event
-from backend.search.service import CYRILLIC_LANGUAGE_PREFIXES, LATIN_LANGUAGE_PREFIXES
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +35,6 @@ _LOCK_TTL_SECONDS = 600
 # across the cluster. Keyed on the UTC date, so a new day is a fresh key; 26h
 # TTL is just to auto-clean stale keys (it outlasts the day comfortably).
 _DONE_MARKER_TTL_SECONDS = 26 * 3600
-
-
-def _lang_to_script(lang: str) -> str:
-    lower = lang.strip().lower()
-    if lower.startswith(CYRILLIC_LANGUAGE_PREFIXES):
-        return "cyrillic"
-    if lower.startswith(LATIN_LANGUAGE_PREFIXES):
-        return "latin"
-    return "other"
 
 
 def _emit_snapshot_for_tenant(tenant: Tenant, db: Session) -> bool:
@@ -74,12 +65,15 @@ def _emit_snapshot_for_tenant(tenant: Tenant, db: Session) -> bool:
         else None
     )
 
-    scripts: set[str] = set()
-    for lang in language_distribution:
-        s = _lang_to_script(lang)
-        if s != "other":
-            scripts.add(s)
-    kb_scripts = sorted(scripts)
+    script_rows = (
+        db.query(Document.script, func.count().label("cnt"))
+        .filter(Document.tenant_id == tenant.id)
+        .filter(Document.script.isnot(None))
+        .filter(Document.script != NO_SCRIPT_BUCKET)
+        .group_by(Document.script)
+        .all()
+    )
+    kb_scripts = sorted(script for script, _ in script_rows)
 
     tenant_created = tenant.created_at
     if tenant_created and tenant_created.tzinfo is None:

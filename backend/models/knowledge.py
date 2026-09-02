@@ -51,6 +51,7 @@ class Document(Base):
     )
     parsed_text = Column(Text, nullable=True)
     language = Column(String(8), nullable=True)
+    script = Column(String(32), nullable=True)
     status = Column(
         Enum(DocumentStatus, native_enum=False),
         nullable=False,

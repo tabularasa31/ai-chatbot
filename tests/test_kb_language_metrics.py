@@ -42,7 +42,10 @@ def _make_tenant(db: Session) -> Tenant:
 
 
 def _make_document(
-    db: Session, tenant: Tenant, language: str | None = "en"
+    db: Session,
+    tenant: Tenant,
+    language: str | None = "en",
+    script: str | None = "latin",
 ) -> Document:
     doc = Document(
         tenant_id=tenant.id,
@@ -51,6 +54,7 @@ def _make_document(
         status=DocumentStatus.ready,
         parsed_text="Hello world this is test content.",
         language=language,
+        script=script,
     )
     db.add(doc)
     db.commit()
@@ -155,9 +159,9 @@ def test_upload_document_emits_language_detected_false_when_null(
 
 def test_snapshot_emits_for_tenant_with_documents(db_session: Session, monkeypatch):
     tenant = _make_tenant(db_session)
-    _make_document(db_session, tenant, language="en")
-    _make_document(db_session, tenant, language="ru")
-    _make_document(db_session, tenant, language=None)
+    _make_document(db_session, tenant, language="en", script="latin")
+    _make_document(db_session, tenant, language="ru", script="cyrillic")
+    _make_document(db_session, tenant, language=None, script=None)
 
     events: list[dict] = []
 

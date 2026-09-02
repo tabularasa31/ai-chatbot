@@ -366,15 +366,16 @@ class TestSemanticRewriteDeduplication:
 
 def _make_async_db(
     *,
-    language_rows: list[tuple[str]] | None = None,
+    script_rows: list[tuple[str, int]] | None = None,
     has_unlabeled: bool = False,
     chunk_rows: list[tuple[str]] | None = None,
 ) -> MagicMock:
     """Mock AsyncSession whose execute() routes by the selected column.
 
     The async KB-script helpers issue three distinct statements:
-    - ``select(Document.language)`` → labeled-language counts (``.all()``)
-    - ``select(Document.id) ... language IS NULL limit 1`` → unlabeled
+    - ``select(Document.script, count) group by`` → per-script document
+      counts (``.all()``)
+    - ``select(Document.id) ... script IS NULL limit 1`` → unlabeled
       presence probe (``.scalar()``)
     - ``select(Embedding.chunk_text) join ...`` → legacy chunk sampling
       (``.all()``)
@@ -382,7 +383,7 @@ def _make_async_db(
     ``db.executed_columns`` records which paths actually ran so tests can
     assert e.g. that chunk sampling was skipped.
     """
-    languages = language_rows or []
+    scripts = script_rows or []
     chunks = chunk_rows or []
     db = MagicMock()
     db.executed_columns = []
@@ -391,8 +392,8 @@ def _make_async_db(
         column = list(stmt.selected_columns)[0].key
         db.executed_columns.append(column)
         result = MagicMock()
-        if column == "language":
-            result.all.return_value = languages
+        if column == "script":
+            result.all.return_value = scripts
         elif column == "id":
             result.scalar.return_value = object() if has_unlabeled else None
         elif column == "chunk_text":
@@ -416,29 +417,30 @@ def _clear_kb_script_caches(tenant_id) -> None:
 
 
 class TestDetectTenantKbScript:
-    """async_detect_tenant_kb_script() reads Document.language stored at parse time."""
+    """async_detect_tenant_kb_script() reads Document.script stored at parse time."""
 
     @pytest.mark.asyncio
-    async def test_returns_cyrillic_for_russian_documents(self):
+    async def test_returns_the_only_script_present(self):
         import uuid
         from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(language_rows=[("ru",), ("ru",), ("ru",)])
+        mock_db = _make_async_db(script_rows=[("cyrillic", 3)])
 
         assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
 
     @pytest.mark.asyncio
-    async def test_returns_latin_for_english_documents(self):
+    async def test_returns_a_script_outside_the_two_legacy_buckets(self):
+        """Regression: every non-latin/cyrillic KB used to collapse to None."""
         import uuid
         from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(language_rows=[("en",), ("en",)])
+        mock_db = _make_async_db(script_rows=[("greek", 2)])
 
-        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "latin"
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "greek"
 
     @pytest.mark.asyncio
     async def test_dominant_wins_for_mixed_kb(self):
@@ -448,7 +450,7 @@ class TestDetectTenantKbScript:
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(language_rows=[("en",), ("en",), ("en",), ("ru",)])
+        mock_db = _make_async_db(script_rows=[("latin", 3), ("cyrillic", 1)])
 
         assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "latin"
 
@@ -460,23 +462,23 @@ class TestDetectTenantKbScript:
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
 
-        # No documents with language set, no chunks indexed either.
-        mock_db = _make_async_db(language_rows=[], chunk_rows=[])
+        # No documents with a script set, no chunks indexed either.
+        mock_db = _make_async_db(script_rows=[], chunk_rows=[])
 
         assert await async_detect_tenant_kb_script(tenant_id, mock_db) is None
 
     @pytest.mark.asyncio
     async def test_falls_back_to_chunk_sampling_when_no_language_set(self):
-        """Legacy KBs (Document.language all NULL) fall back to chunk sampling."""
+        """Legacy KBs (Document.script all NULL) fall back to chunk sampling."""
         import uuid
         from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
 
-        # Language path returns no rows → fallback kicks in with Russian text.
+        # Stored-script path returns no rows → chunk sampling kicks in.
         mock_db = _make_async_db(
-            language_rows=[],
+            script_rows=[],
             chunk_rows=[
                 ("Сайт не открывается после подключения к CDN.",),
                 ("Проверьте NS-пропагацию.",),
@@ -489,9 +491,10 @@ class TestDetectTenantKbScript:
     async def test_partial_labeling_augments_labeled_with_chunk_sample(self):
         """Partial labeling must not blind us to unlabeled legacy documents.
 
-        Regression: a single new EN doc on top of 100 legacy RU docs (all
-        with language=NULL) used to misclassify the KB as Latin-only,
-        making the cyrillic half unreachable for cross-lingual rewrite.
+        Regression: a single newly labeled document on top of a hundred
+        legacy ones (all with script=NULL) used to misclassify the KB as
+        single-script, making the other half unreachable for cross-lingual
+        rewrite.
         """
         import uuid
         from backend.search.service import async_detect_tenant_kb_script
@@ -500,11 +503,11 @@ class TestDetectTenantKbScript:
         _clear_kb_script_caches(tenant_id)
 
         mock_db = _make_async_db(
-            # One labeled English document.
-            language_rows=[("en",)],
+            # One labeled latin-script document.
+            script_rows=[("latin", 1)],
             # _async_tenant_has_unlabeled_documents → at least one NULL row.
             has_unlabeled=True,
-            # Chunk sampling sees the legacy Russian content.
+            # Chunk sampling sees the legacy cyrillic-script content.
             chunk_rows=[
                 ("Сайт не открывается после подключения к CDN.",),
                 ("Проверьте NS-пропагацию.",),
@@ -512,12 +515,12 @@ class TestDetectTenantKbScript:
             ],
         )
 
-        # Russian sample dominates → KB is classified as cyrillic, not latin.
+        # The sampled majority dominates → cyrillic, not latin.
         assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
 
     @pytest.mark.asyncio
     async def test_full_labeling_skips_chunk_sampling(self):
-        """When every document has language set, sampling is not invoked."""
+        """When every document has a script set, sampling is not invoked."""
         import uuid
         from backend.search.service import async_detect_tenant_kb_script
 
@@ -525,7 +528,7 @@ class TestDetectTenantKbScript:
         _clear_kb_script_caches(tenant_id)
 
         # No unlabeled rows → sampling must be skipped.
-        mock_db = _make_async_db(language_rows=[("en",), ("en",)], has_unlabeled=False)
+        mock_db = _make_async_db(script_rows=[("latin", 2)], has_unlabeled=False)
 
         assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "latin"
         # chunk_text is the entry point for chunk sampling; assert it never ran.
@@ -538,7 +541,7 @@ class TestDetectTenantKbScript:
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(language_rows=[("ru",)])
+        mock_db = _make_async_db(script_rows=[("cyrillic", 1)])
 
         await async_detect_tenant_kb_script(tenant_id, mock_db)
         calls_after_first = mock_db.execute.call_count
@@ -553,29 +556,32 @@ class TestDetectTenantKbScripts:
 
     @pytest.mark.asyncio
     async def test_mixed_kb_returns_both_buckets(self):
-        """EN+RU KB → {cyrillic, latin}, so cross-lingual rewrite reaches both."""
+        """A two-script KB returns both, so cross-lingual rewrite reaches both."""
         import uuid
         from backend.search.service import async_detect_tenant_kb_scripts
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(language_rows=[("en",), ("ru",), ("en",)])
+        mock_db = _make_async_db(script_rows=[("latin", 2), ("cyrillic", 1)])
 
         assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
             {"cyrillic", "latin"}
         )
 
     @pytest.mark.asyncio
-    async def test_single_language_returns_single_bucket(self):
+    async def test_returns_every_script_present_beyond_two(self):
+        """Buckets outside the two legacy ones survive instead of being dropped."""
         import uuid
         from backend.search.service import async_detect_tenant_kb_scripts
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(language_rows=[("en",), ("es",), ("fr",)])
+        mock_db = _make_async_db(
+            script_rows=[("latin", 3), ("greek", 2), ("arabic", 1)]
+        )
 
         assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
-            {"latin"}
+            {"latin", "greek", "arabic"}
         )
 
     @pytest.mark.asyncio
@@ -585,7 +591,7 @@ class TestDetectTenantKbScripts:
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(language_rows=[], chunk_rows=[])
+        mock_db = _make_async_db(script_rows=[], chunk_rows=[])
 
         assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset()
 
@@ -598,7 +604,7 @@ class TestSemanticQueryRewriteForKb:
     """async_semantic_query_rewrite_for_kb() produces a KB-language rewrite."""
 
     @pytest.mark.asyncio
-    async def test_returns_russian_rewrite_for_cyrillic_kb(self):
+    async def test_returns_a_rewrite_targeting_the_kb_script(self):
         from backend.search.service import async_semantic_query_rewrite_for_kb
 
         client_patch, retry_patch = _patch_rewrite_layer()
@@ -617,7 +623,30 @@ class TestSemanticQueryRewriteForKb:
         assert result == "диагностика подключения CDN NS-пропагация A-запись SSL"
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_unknown_script(self):
+    async def test_rewrites_for_a_script_outside_the_two_legacy_buckets(self):
+        """Regression: any KB script but latin/cyrillic used to return None."""
+        from backend.search.service import async_semantic_query_rewrite_for_kb
+
+        client_patch, retry_patch = _patch_rewrite_layer()
+        with client_patch as mock_client, retry_patch as mock_retry:
+            mock_retry.return_value = _make_openai_response("επαναφορά κωδικού")
+            client = MagicMock()
+            mock_client.return_value = client
+
+            result = await async_semantic_query_rewrite_for_kb(
+                "How do I reset my password?",
+                kb_script="greek",
+                api_key="sk-test",
+            )
+
+        assert result == "επαναφορά κωδικού"
+        # The retry wrapper is mocked, so run its payload to capture the prompt.
+        mock_retry.call_args.args[1]()
+        create_kwargs = client.chat.completions.create.call_args.kwargs
+        assert "greek" in create_kwargs["messages"][0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_letterless_script(self):
         from backend.search.service import async_semantic_query_rewrite_for_kb
 
         result = await async_semantic_query_rewrite_for_kb(

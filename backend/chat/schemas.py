@@ -3,43 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
 from backend.chat.llm_unavailable import LlmFailureState
-
-
-class MessageFeedbackValue(str, Enum):
-    up = "up"
-    down = "down"
-    none = "none"
-
-
-class MessageFeedbackRequest(BaseModel):
-    feedback: MessageFeedbackValue
-    ideal_answer: str | None = None
-
-
-class MessageFeedbackResponse(BaseModel):
-    id: UUID
-    feedback: MessageFeedbackValue
-    ideal_answer: str | None
-
-
-class BadAnswerItem(BaseModel):
-    message_id: UUID
-    session_id: UUID
-    question: str | None
-    answer: str
-    ideal_answer: str | None
-    created_at: datetime
-
-
-class BadAnswerListResponse(BaseModel):
-    items: list[BadAnswerItem]
 
 
 class ChatRequest(BaseModel):
@@ -164,7 +133,7 @@ class ChatMessageLogItem(BaseModel):
 
     id: UUID
     session_id: UUID
-    role: Literal["user", "assistant"]
+    role: Literal["user", "assistant", "operator"]
     content: str
     feedback: Literal["none", "up", "down"]
     ideal_answer: str | None

@@ -1,6 +1,6 @@
 ---
 title: Dashboard Features
-description: What each section of the Chat9 dashboard does — Knowledge, Gap Analyzer, Logs, Review, and more.
+description: What each section of the Chat9 dashboard does — Knowledge, Gap Analyzer, Inbox, and more.
 ---
 
 The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **Admin** for platform admins). The top bar shows the Chat9 brand, your email, and **Logout**.
@@ -52,7 +52,7 @@ Formerly `/documents` — **that route is removed**; use **Knowledge**.
 Gap Analyzer is the operator backlog for things your documentation may be missing and questions your users keep asking.
 
 - **Mode A (docs-side):** looks at your indexed documentation and surfaces topics that appear under-covered.
-- **Mode B (user-side):** groups repeated low-confidence, fallback, rejected, escalated, or thumbs-down question signals into actionable clusters.
+- **Mode B (user-side):** groups repeated low-confidence, fallback, rejected, or escalated question signals into actionable clusters.
 - **Linked visibility:** when Chat9 sees the same issue from both directions, the active list keeps one primary card instead of showing obvious duplicates.
 - **Actions:** dismiss, reactivate, and generate a draft outline for a documentation update.
 - **Archive view:** review dismissed docs-side topics separately from closed or dismissed user-question clusters.
@@ -72,28 +72,19 @@ Gap Analyzer is the operator backlog for things your documentation may be missin
 
 - **Escalation settings** — support email address that receives L2 escalation tickets, and an optional escalation language override (pins the language of tenant-side ticket artifacts independently of what language end users write in — see [Language Support](/docs/language) for the full picture).
 
-## Chat Logs (`/logs`)
+## Inbox (`/inbox`)
 
-View all conversations your users have had with your bot.
+Every conversation your visitors have had with the bot, and the place where a person steps in.
 
-- **Inbox layout:** Sessions list on the left, full conversation on the right.
-- **Session details:** Last question, last answer preview, last activity time.
-- **Message view:** User messages and bot answers in a thread layout.
-- **Clarification visibility:** if the bot asked a follow-up question, you can see that turn in the conversation instead of guessing why the bot paused before continuing.
-- **Feedback:** Click thumbs-up or thumbs-down on any bot answer to rate its quality.
+- **Needs attention:** the default view — visitors waiting for a human (an open escalation ticket nobody has picked up, longest wait first) and conversations an operator is currently holding. The count of visitors waiting shows as a badge next to **Inbox** in the sidebar.
+- **All:** every conversation, newest activity first, including the ones the bot is handling on its own.
+- **Thread view:** the visitor's full session — visitor messages, bot answers and operator replies are styled differently, operator replies show who wrote them, and a divider marks where an idle conversation was restarted. Text is shown exactly as it was written.
+- **Reply:** type and send; the visitor sees the reply in the widget within a few seconds, signed as **Support** in the language of the conversation. Sending a reply takes the conversation: the bot stays silent while you hold it.
+- **Take / Return to bot:** take a conversation before you write, or hand it back to the bot explicitly. If you go quiet, the bot resumes on the visitor's next message after the idle window on its own.
+- **Mark resolved:** closes the escalation ticket (with an optional note), retires the e-mail reply address for that ticket, and returns the conversation to the bot. The row leaves *Needs attention*.
+- **Seats:** anybody in the workspace can read the Inbox. Replying, taking, returning and resolving need an operator seat (**Settings → Seats**). A reply sent by e-mail from a seat holder lands in the same thread and looks the same as one sent here.
 
-## Review Bad Answers (`/review`)
-
-A dedicated page showing answers marked with thumbs-down.
-
-- Review each bad answer with the original question.
-- Write or edit the ideal answer.
-- Use "Open in Logs" to see the full conversation context.
-
-This page and **Gap Analyzer** complement each other:
-
-- **Review Bad Answers** is best for inspecting a specific bad turn.
-- **Gap Analyzer** is best for spotting repeated patterns across many turns.
+Chat9 does not assign conversations. A held conversation shows who holds it, and a colleague can still answer in it.
 
 ## Response controls
 
@@ -110,9 +101,9 @@ Set the **response detail level** (Detailed / Standard / Corporate) from **Dashb
 - Server-side token example (Python) with copy-to-clipboard on the snippet block.
 - See [Embedding the Widget → Identified sessions](/docs/embedding-the-widget#identified-sessions-optional) for the full integration guide and SDK reference.
 
-## Escalations (`/escalations`)
+## Escalations
 
-L2 ticket inbox. A ticket is created automatically whenever a conversation is escalated.
+A ticket is created automatically whenever a conversation is escalated. Tickets live inside the conversation: open the visitor in **Inbox** to see the ticket number, its trigger and priority, answer, and mark it resolved.
 
 **What triggers escalation:**
 
@@ -126,10 +117,11 @@ L2 ticket inbox. A ticket is created automatically whenever a conversation is es
 **What happens when a ticket is created:**
 
 - The visitor's chat stays open — they can keep talking to the bot while your team works the ticket. It closes (`chat_ended`) only once the visitor confirms they need nothing further, and the widget then shows a "Start new chat" button.
-- An email notification is sent to the support email configured in Settings.
-- A ticket appears in this inbox with a sequential number (e.g. `ESC-42`), the trigger, and a link to the conversation log.
+- An email notification is sent to the support email configured in Settings. When the workspace holds a seat, the e-mail also links straight to the conversation in the Inbox, and replying to it from a seat holder's mailbox lands the reply in the thread.
+- The conversation appears under **Inbox → Needs attention** with a sequential ticket number (e.g. `ESC-42`).
+- Tickets whose conversation has gone quiet are closed automatically. That only clears the queue; it does not mean anyone answered.
 
-**Ticket priority** (shown in the inbox):
+**Ticket priority** (shown in the thread header):
 
 | Trigger | Standard user | Enterprise / Pro user |
 |---|---|---|
@@ -138,12 +130,6 @@ L2 ticket inbox. A ticket is created automatically whenever a conversation is es
 | Answer rejected | Medium | Medium |
 
 Priority is set from the `plan_tier` field in `userHints` (`enterprise` or `pro` → elevated priority). See [Embedding the Widget → userHints](/docs/embedding-the-widget#userhints-optional).
-
-**One ticket per conversation:** if the same visitor asks for a human again in the same conversation, the new message is added to the existing ticket and threaded under the original notification email — you won't get a new ticket number for every repeat.
-
-**Resolving tickets:** Click **Resolve** on any open ticket to close it. Resolved tickets remain visible with a filter toggle.
-
-**Auto-closed tickets:** when a conversation goes quiet for long enough, its ticket is moved to **Auto-closed** so the open queue stays meaningful. This only clears the queue — it does not mean anyone replied. Auto-closed tickets stay visible under the **Auto-closed** filter, and you can still mark one **Resolved** once your team has handled it.
 
 ## Admin (`/admin/metrics`)
 

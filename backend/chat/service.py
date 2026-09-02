@@ -20,7 +20,6 @@ from backend.chat.decision import (
 from backend.chat.events import (
     _emit_chat_completed_event,  # noqa: F401  (re-export)
     _emit_chat_escalated_event,  # noqa: F401  (re-export — handlers access via _svc.*)
-    _emit_chat_feedback_event,  # noqa: F401  (re-export)
     _emit_chat_session_ended_event,  # noqa: F401  (re-export)
     _emit_chat_turn_event,  # noqa: F401  (re-export)
     _session_duration_ms,  # noqa: F401  (re-export)
@@ -294,21 +293,6 @@ def _start_mode_b_followup(tenant_id: uuid.UUID) -> None:
         tenant_id,
         job_kind=GapJobKind.mode_b,
         trigger="chat_signal",
-    )
-
-
-def record_gap_feedback_for_message(
-    *,
-    db: Session,
-    tenant_id: uuid.UUID,
-    assistant_message_id: uuid.UUID,
-    feedback_value: str,
-) -> bool:
-    orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
-    return orchestrator.record_assistant_feedback(
-        tenant_id=tenant_id,
-        assistant_message_id=assistant_message_id,
-        feedback_value=feedback_value,
     )
 
 

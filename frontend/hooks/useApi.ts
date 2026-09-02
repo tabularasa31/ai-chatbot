@@ -5,10 +5,10 @@ import type {
   BotResponse,
   SupportSettingsResponse,
   DisclosureConfigResponse,
-  ChatSessionSummary,
-  ChatSessionLogs,
-  EscalationTicket,
   TenantMemberList,
+  InboxList,
+  InboxSummary,
+  Thread,
 } from "@/lib/api";
 
 export function useClientMe() {
@@ -34,20 +34,22 @@ export function useBotDisclosure(botId: string | null | undefined) {
   );
 }
 
-export function useChatSessions() {
-  return useSWR<ChatSessionSummary[]>("chat/sessions", () => api.chat.listSessions());
+export function useInbox(scope: "attention" | "all", refreshInterval = 0) {
+  return useSWR<InboxList>(["operator/inbox", scope], () => api.operator.inbox(scope), {
+    refreshInterval,
+  });
 }
 
-export function useChatSessionLogs(sessionId: string | null) {
-  return useSWR<ChatSessionLogs>(
-    sessionId ? `chat/session/${sessionId}/logs` : null,
-    () => api.chat.getSessionLogs(sessionId!)
-  );
+export function useInboxSummary(refreshInterval = 0) {
+  return useSWR<InboxSummary>("operator/inbox/summary", () => api.operator.summary(), {
+    refreshInterval,
+  });
 }
 
-export function useEscalations(status?: string) {
-  return useSWR<EscalationTicket[]>(
-    ["escalations", status ?? ""],
-    () => api.escalations.list(status ? { status } : undefined)
+export function useThread(sessionId: string | null, refreshInterval = 0) {
+  return useSWR<Thread>(
+    sessionId ? `operator/sessions/${sessionId}` : null,
+    () => api.operator.thread(sessionId!),
+    { refreshInterval }
   );
 }

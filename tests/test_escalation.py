@@ -1719,64 +1719,6 @@ def test_manual_escalation_mints_new_ticket_once_previous_resolved(
     assert len(tickets) == 2
 
 
-def test_escalation_api_returns_the_stored_question_to_its_owner(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """The ticket is the tenant's own data — no separate "originals" view."""
-    token = register_and_verify_user(tenant, db_session, email="esc-api@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc API Tenant"},
-    )
-    assert cl_resp.status_code == 201
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    ticket = create_escalation_ticket(
-        tenant_id,
-        "contact me at user@example.com",
-        EscalationTrigger.user_request,
-        db_session,
-    )
-
-    resp = tenant.get(
-        f"/escalations/{ticket.id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["primary_question"] == "contact me at user@example.com"
-    assert "primary_question_original" not in data
-
-
-def test_delete_escalation_original_route_is_gone(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="esc-delete@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc Delete Tenant"},
-    )
-    assert cl_resp.status_code == 201
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    ticket = create_escalation_ticket(
-        tenant_id,
-        "contact me at user@example.com",
-        EscalationTrigger.user_request,
-        db_session,
-    )
-
-    resp = tenant.post(
-        f"/escalations/{ticket.id}/delete-original",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 404
-
-
 def test_perform_manual_escalation_emits_chat_escalated_event(
     tenant: TestClient,
     db_session: Session,

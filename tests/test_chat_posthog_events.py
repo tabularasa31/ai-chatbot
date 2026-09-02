@@ -1,6 +1,6 @@
 """Tests for PostHog event shape in the chat pipeline.
 
-Verifies that chat_completed, chat_escalated, and chat_feedback events
+Verifies that chat_completed and chat_escalated events
 are emitted with the correct property names (tenant isolation guard included).
 """
 
@@ -13,7 +13,6 @@ import pytest
 from backend.chat.events import (
     _emit_chat_completed_event,
     _emit_chat_escalated_event,
-    _emit_chat_feedback_event,
     _emit_chat_turn_event,
 )
 from backend.observability.metrics import MetricsService, get_metrics
@@ -238,56 +237,6 @@ def test_chat_escalated_tenant_isolation_required():
         bot_public_id=None,
         chat_id="chat_xyz",
         escalation_reason="no_docs",
-    )
-
-
-# ---------------------------------------------------------------------------
-# chat_feedback event shape
-# ---------------------------------------------------------------------------
-
-def test_chat_feedback_positive(monkeypatch):
-    svc, client = _make_enabled_svc(monkeypatch)
-
-    _emit_chat_feedback_event(
-        tenant_public_id="tnt_abc",
-        bot_public_id=None,
-        distinct_id="user_123",
-        feedback="positive",
-    )
-
-    assert len(client.calls) == 1
-    call = client.calls[0]
-    assert call["event"] == "chat_feedback"
-    assert call["distinct_id"] == "user_123"
-    props = call["properties"]
-    assert props["tenant_id"] == "tnt_abc"
-    assert props["feedback"] == "positive"
-
-
-def test_chat_feedback_negative(monkeypatch):
-    svc, client = _make_enabled_svc(monkeypatch)
-
-    _emit_chat_feedback_event(
-        tenant_public_id="tnt_abc",
-        bot_public_id=None,
-        distinct_id="user_123",
-        feedback="negative",
-        decision_branch="direct_answer",
-        cap_reason=None,
-    )
-
-    props = client.calls[0]["properties"]
-    assert props["feedback"] == "negative"
-    assert props["decision_branch"] == "direct_answer"
-    assert props["cap_reason"] is None
-
-
-def test_chat_feedback_skipped_when_no_tenant():
-    _emit_chat_feedback_event(
-        tenant_public_id=None,
-        bot_public_id=None,
-        distinct_id="user_123",
-        feedback="positive",
     )
 
 

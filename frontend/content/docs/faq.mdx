@@ -72,8 +72,7 @@ If the answer is not in your documentation, the bot will either say it doesn't h
 **How can I improve answer quality?**
 - Upload more complete documentation.
 - Add or refresh URL sources if your docs live on a website.
-- Use the thumbs-up/thumbs-down feedback in Chat Logs to identify weak answers.
-- Use the "Review bad answers" page to write ideal answers for training.
+- Read real conversations in the Inbox to spot answers that missed.
 - Use Gap Analyzer to find repeated missing topics and recurring question clusters.
 
 **Can the bot answer questions outside my documentation?**
@@ -99,7 +98,7 @@ Escalation happens automatically or on request:
 For the automatic triggers the bot first asks in one sentence whether the user wants the request forwarded — no ticket exists until they agree, and if they decline the chat simply carries on. Once a ticket is created (immediately, when the user asked for a human outright), a badge with the ticket number appears above the transcript and the bot confirms the handoff; if no email is on file it asks for one, since support replies by email. The chat stays open throughout — the user can keep asking the bot questions while support works the ticket. Only when the user later confirms they need nothing further does the chat close, at which point the widget shows a **"Start new chat"** button with the existing transcript still visible above it.
 
 **What does the operator see?**
-A ticket appears in **Dashboard → Escalations** with the trigger type, a sequential ticket number (e.g. `ESC-42`), and a link to the full conversation log. A notification email is sent to the support email configured in Settings.
+The conversation appears under **Dashboard → Inbox → Needs attention** with the trigger type and a sequential ticket number (e.g. `ESC-42`). From there an operator with a seat reads the full conversation, replies to the visitor directly in the widget, and marks the ticket resolved. A notification email is also sent to the support email configured in Settings, with a link to the conversation.
 
 **Can I set the support email?**
 Yes. Go to **Dashboard → Settings** and enter the email address that should receive escalation notifications.
@@ -112,7 +111,7 @@ Yes, if you use identified sessions. Pass `plan_tier: "enterprise"` or `plan_tie
 ## Identified sessions and the SDK
 
 **What is an identified session?**
-By default the chat widget is anonymous. An identified session lets your server attach a verified user identity (user id, email, plan, etc.) to a conversation. This information appears in Chat Logs and can be used for routing and personalisation.
+By default the chat widget is anonymous. An identified session lets your server attach a verified user identity (user id, email, plan, etc.) to a conversation. This information appears in the Inbox and can be used for routing and personalisation.
 
 **Do I have to use identified sessions?**
 No. The basic anonymous embed works without any SDK or server-side code. Identified sessions are optional and intended for teams that want to link chat conversations to their own users.

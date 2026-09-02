@@ -140,6 +140,10 @@ class TenantMeResponse(TenantResponse):
     is_admin: bool
     is_verified: bool
     role: TenantRole
+    # Whether the caller may operate — answer from the console, take and
+    # release chats. Distinct from ``role``: an owner administers without a
+    # seat unless they take one.
+    has_seat: bool = False
 
 
 class CreateTenantResponse(TenantResponse):

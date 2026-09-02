@@ -221,10 +221,8 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 |--------|------|-------------|
 | POST | `/chat` | RAG chat (X-API-Key header); returns `text`, `session_id`, `chat_ended`, optional `ticket_number`, and trace fields `source_documents` / `tokens_used`; optional header `X-Browser-Locale` |
 | POST | `/chat/{session_id}/escalate` | Manual escalation / “not helpful” path (X-API-Key); JSON body: `user_note`, `trigger` (`user_request` or `answer_rejected`) |
-| GET | `/chat/sessions` | List chat sessions (JWT) |
-| GET | `/chat/logs/session/{id}` | Full session log (JWT) |
-| GET | `/chat/bad-answers` | Answers marked 👎 (JWT) |
-| POST | `/chat/messages/{id}/feedback` | Set 👍/👎 + ideal answer (JWT) |
+| GET | `/chat/sessions` | List chat sessions (JWT; not used by the dashboard, which reads `/operator/inbox`) |
+| GET | `/chat/logs/session/{id}` | Full session log (JWT; not used by the dashboard, which reads `/operator/sessions/{id}`) |
 
 ### Gap Analyzer
 | Method | Path | Description |
@@ -236,12 +234,16 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | POST | `/gap-analyzer/{source}/{gap_id}/reactivate` | Reactivate a dismissed or inactive gap item (JWT, verified) |
 | POST | `/gap-analyzer/{source}/{gap_id}/draft` | Generate transient draft markdown for a gap item (JWT, verified) |
 
-### Escalations (FI-ESC)
+### Operator console
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/escalations` | List support tickets for the tenant (JWT); optional query `status` = `open`, `in_progress`, or `resolved` |
-| GET | `/escalations/{id}` | Ticket detail (JWT) |
-| POST | `/escalations/{id}/resolve` | Mark resolved with `resolution_text` (JWT) |
+| GET | `/operator/inbox` | Queue of sessions; `scope=attention` (default: waiting or live) or `scope=all` (newest first, `limit`); carries `waiting_count` / `attention_count` (JWT, any member) |
+| GET | `/operator/inbox/summary` | Just the counts, for the sidebar badge (JWT, any member) |
+| GET | `/operator/sessions/{id}` | One visitor's whole session with operator turns signed by author, plus the current ticket and handoff state (JWT, any member) |
+| POST | `/operator/chats/{id}/take` | Claim the chat and mute the bot; 409 if a colleague holds it (JWT, seat) |
+| POST | `/operator/chats/{id}/messages` | Reply as operator; claims an unclaimed chat (JWT, seat) |
+| POST | `/operator/chats/{id}/release` | Hand the chat back to the bot (JWT, seat) |
+| POST | `/operator/chats/{id}/resolve` | Resolve every active ticket of the session, revoke their reply tokens, hand the chat back (JWT, seat) |
 
 ### Knowledge
 | Method | Path | Description |
@@ -292,7 +294,7 @@ Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs
 Gap Analyzer is the operator-facing backlog for documentation gaps and repeated user pain.
 
 - **Mode A** scans the indexed tenant corpus for under-covered documentation topics with deterministic sampling, extraction hashing, and dismissal persistence
-- **Mode B** clusters low-confidence / fallback / rejected / escalated / thumbs-down user questions into reusable product gaps
+- **Mode B** clusters low-confidence / fallback / rejected / escalated user questions into reusable product gaps
 - linked active Mode A + Mode B pairs dedupe in the dashboard with Mode B as the primary item
 - archive views stay source-specific; older archived Mode B items can age into an explicit `inactive` bucket
 - manual recalc and chat-side follow-ups now run through a durable DB-backed Gap Analyzer job queue with retryable orchestration state

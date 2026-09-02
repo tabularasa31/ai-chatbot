@@ -20,8 +20,14 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from backend.escalation.service import mark_ticket_in_progress
-from backend.models import Chat, Message, OperatorSessionEndReason, OperatorState
+from backend.escalation.service import mark_ticket_in_progress, resolve_session_tickets
+from backend.models import (
+    Chat,
+    EscalationTicket,
+    Message,
+    OperatorSessionEndReason,
+    OperatorState,
+)
 from backend.models.base import _utcnow
 from backend.operator.sessions import (
     emit_operator_session_ended,
@@ -62,6 +68,12 @@ class OperatorIngestResult:
     message: Message
     chat_reopened: bool
     claimed: bool
+
+
+@dataclass(frozen=True)
+class OperatorResolveResult:
+    chat: Chat
+    resolved_tickets: list[EscalationTicket]
 
 
 def taken_over_values() -> dict[str, object]:
@@ -278,3 +290,42 @@ def ingest_from_operator(
     return OperatorIngestResult(
         message=message, chat_reopened=chat_reopened, claimed=claimed
     )
+
+
+def resolve_from_operator(
+    db: Session,
+    *,
+    chat: Chat,
+    tenant_id: uuid.UUID,
+    resolution_text: str | None = None,
+) -> OperatorResolveResult:
+    """A human says this conversation is dealt with.
+
+    The fourth operator intent next to take, reply and release, and like the
+    others channel-agnostic. Two things happen in one transaction:
+
+    * every ticket still being worked anywhere in the visitor's session goes
+      ``resolved`` and its e-mail reply token is revoked — a closed request is
+      not somewhere an old notification should still be able to write;
+    * the chat is handed back to the bot, closing the operator's stretch, so
+      the visitor's next message gets an answer instead of silence.
+
+    A chat with no active ticket is simply released. Resolving what is
+    already resolved is a no-op that still reports the current state, so a
+    double click never fails.
+    """
+    from backend.chat.handlers.operator import release_to_bot
+
+    tickets = resolve_session_tickets(
+        db,
+        tenant_id=tenant_id,
+        session_id=chat.session_id,
+        resolution_text=resolution_text,
+    )
+    stretch = None
+    if chat.operator_state is not OperatorState.bot:
+        stretch = release_to_bot(db, chat, reason=OperatorSessionEndReason.released)
+    db.commit()
+    emit_operator_session_ended(stretch)
+    db.refresh(chat)
+    return OperatorResolveResult(chat=chat, resolved_tickets=tickets)

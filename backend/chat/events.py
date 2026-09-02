@@ -392,35 +392,6 @@ def _emit_chat_escalated_event(
         logger.warning("Failed to emit chat_escalated event", exc_info=True)
 
 
-def _emit_chat_feedback_event(
-    *,
-    tenant_public_id: str | None,
-    bot_public_id: str | None,
-    distinct_id: str,
-    feedback: str,
-    decision_branch: str | None = None,
-    cap_reason: str | None = None,
-) -> None:
-    """Emit chat_feedback on thumbs-up / thumbs-down from the dashboard."""
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    try:
-        capture_event(
-            "chat_feedback",
-            distinct_id=distinct_id,
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "feedback": feedback,
-                "decision_branch": decision_branch,
-                "cap_reason": cap_reason,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
-        logger.warning("Failed to emit chat_feedback event", exc_info=True)
-
-
 def _emit_ai_generation_event(
     *,
     tenant_public_id: str | None,

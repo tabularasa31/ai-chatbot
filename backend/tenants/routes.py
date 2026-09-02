@@ -15,6 +15,7 @@ from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import User
 from backend.observability.metrics import capture_event, group_identify
+from backend.seats.service import holds_seat
 from backend.tenants.api_keys_service import (
     assert_owner,
     list_api_keys,
@@ -109,6 +110,7 @@ def get_my_client(
         is_admin=current_user.is_admin,
         is_verified=current_user.is_verified,
         role=current_user.role,
+        has_seat=holds_seat(current_user),
     )
 
 

@@ -431,36 +431,6 @@ class GapAnalyzerOrchestrator:
             started_at=started_at,
         )
 
-    def record_assistant_feedback(
-        self,
-        *,
-        tenant_id: UUID,
-        assistant_message_id: UUID,
-        feedback_value: str,
-    ) -> bool:
-        if feedback_value not in {"up", "down", "none"}:
-            return False
-
-        repository = self._require_repository()
-        signal_state = repository.get_signal_state_for_assistant_message(
-            tenant_id=tenant_id,
-            assistant_message_id=assistant_message_id,
-        )
-        if signal_state is None:
-            return False
-
-        repository.update_signal_weight(
-            gap_question_id=signal_state.gap_question_id,
-            signal_weight=self._resolve_signal_weight_from_values(
-                answer_confidence=signal_state.answer_confidence,
-                had_fallback=signal_state.had_fallback,
-                was_rejected=signal_state.had_rejected,
-                was_escalated=signal_state.had_escalation,
-                user_thumbed_down=feedback_value == "down",
-            ),
-        )
-        return True
-
     def list_gaps(
         self,
         *,

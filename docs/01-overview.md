@@ -93,7 +93,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 3. Widget becomes active as soon as indexed knowledge is available
 
 #### Day 3+: Monitor & Improve
-1. Dashboard → Chat Logs
+1. Dashboard → Inbox
 2. View questions + AI answers + source docs used
 3. Leave 👍/👎 feedback or provide ideal answers
 

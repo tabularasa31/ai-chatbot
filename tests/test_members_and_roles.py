@@ -237,7 +237,7 @@ def test_operator_reaches_the_inbox_the_logs_and_the_knowledge_reads(
     db_session.commit()
 
     assert tenant.get("/chat/sessions", headers=headers).status_code == 200
-    assert tenant.get("/escalations", headers=headers).status_code == 200
+    assert tenant.get("/operator/inbox", headers=headers).status_code == 200
     assert tenant.get("/documents", headers=headers).status_code == 200
     assert tenant.get("/api/v1/knowledge/faq", headers=headers).status_code == 200
     assert tenant.get("/api/v1/knowledge/profile", headers=headers).status_code == 200

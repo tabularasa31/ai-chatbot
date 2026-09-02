@@ -118,10 +118,6 @@ class HandlerContext:
     # up front (in parallel with the human-request classifier) and read by the
     # RAG escalation path to pick the support-contact pre_confirm lead-in
     # instead of the generic "I couldn't find an answer" one.
-    support_contact_question: bool = False
-    # Full verdict of the same classifier. ``support_contact_question`` above is
-    # its escalation-facing axis; the remaining axes pick which stored quick
-    # answers are worth attaching this turn.
     question_intent: QuestionIntentResult = field(default_factory=QuestionIntentResult)
     # Whether the current user message states a concrete problem/question that
     # support could act on. Used together with ``explicit_human_request`` to

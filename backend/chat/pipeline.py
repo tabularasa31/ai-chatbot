@@ -70,7 +70,6 @@ async def async_run_chat_pipeline(
     agent_instructions: str | None = None,
     allow_clarification: bool = True,
     guard_profile: TenantProfile | None = None,
-    support_contact_question: bool = False,
     question_intent: QuestionIntentResult | None = None,
 ) -> ChatPipelineResult:
     """Run one chat turn through the RAG pipeline (see module docstring)."""
@@ -107,7 +106,6 @@ async def async_run_chat_pipeline(
         agent_instructions=agent_instructions,
         allow_clarification=allow_clarification,
         guard_profile=guard_profile,
-        support_contact_question=support_contact_question,
         question_intent=question_intent or QuestionIntentResult(),
     )
 

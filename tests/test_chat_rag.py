@@ -23,7 +23,7 @@ from backend.chat.service import (
 from backend.chat.types import QuestionIntentResult
 from backend.core.config import settings
 from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource
-from tests.conftest import register_and_verify_user
+from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 def test_build_rag_prompt() -> None:
@@ -814,3 +814,97 @@ def test_generate_answer_sends_cost_with_usage(mock_openai_client: Mock) -> None
     assert usage["totalCost"] > 0
     # The cached 8k of the prompt cost a tenth of the fresh 2k.
     assert usage["inputCost"] < 10_000 / 1_000_000 * settings.model_cost_rates("gpt-5-mini")["input"]
+
+
+def test_classified_intent_reaches_generation_as_quick_answers(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end seam: classifier verdict -> pipeline -> generation kwargs.
+
+    The unit tests above cover the verdict-to-keys mapping in isolation; this one
+    fails if the verdict is dropped anywhere on the way to the prompt.
+    """
+    from backend.chat.service import RetrievalContext
+    from backend.search.service import build_reliability_assessment
+
+    token = register_and_verify_user(tenant, db_session, email="intent-e2e@example.com")
+    created = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Intent E2E"},
+    )
+    assert created.status_code == 201
+    set_client_openai_key(tenant, token)
+    api_key = created.json()["api_key"]
+    tenant_id = uuid.UUID(created.json()["id"])
+
+    source = UrlSource(
+        tenant_id=tenant_id,
+        name="Site",
+        url="https://example.com/",
+        normalized_domain="example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.add(
+        QuickAnswer(
+            tenant_id=tenant_id,
+            source_id=source.id,
+            key="pricing_url",
+            value="https://example.com/pricing",
+            source_url="https://example.com/",
+            metadata_json={"method": "anchor"},
+        )
+    )
+    db_session.commit()
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+
+    async def _fake_retrieve(*_args, **_kwargs) -> RetrievalContext:
+        return RetrievalContext(
+            chunk_texts=["Plans and limits overview."],
+            document_ids=[],
+            scores=[0.8],
+            mode="hybrid",
+            best_rank_score=0.8,
+            best_confidence_score=0.8,
+            confidence_source="vector_similarity",
+            reliability=build_reliability_assessment(top_score=0.8, result_count=1),
+        )
+
+    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _fake_retrieve)
+
+    async def _fake_classifier(*_args, **_kwargs) -> QuestionIntentResult:
+        return QuestionIntentResult(pricing=True)
+
+    monkeypatch.setattr(
+        "backend.chat.service.classify_question_intent", _fake_classifier
+    )
+
+    seen: list[list[str] | None] = []
+
+    async def _fake_generate(*_args, **kwargs):
+        seen.append(kwargs.get("quick_answer_items"))
+        return ("Answer.", 50, 20, 30, False, False, False)
+
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer", _fake_generate
+    )
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(uuid.uuid4()), "question": "?"},
+    )
+
+    assert response.status_code == 200
+    assert seen == [["Pricing: https://example.com/pricing"]]

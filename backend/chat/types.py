@@ -271,6 +271,5 @@ class PipelineRun:
     agent_instructions: str | None = None
     allow_clarification: bool = True
     guard_profile: TenantProfile | None = None
-    support_contact_question: bool = False
     question_intent: QuestionIntentResult = field(default_factory=QuestionIntentResult)
     state: PipelineState = field(default_factory=PipelineState)

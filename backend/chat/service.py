@@ -584,7 +584,6 @@ async def _build_handler_context_async(
     status_callback: Callable[[str], None] | None = None,
     explicit_human_request: bool,
     human_request_explicit: bool = True,
-    support_contact_question: bool = False,
     question_intent: QuestionIntentResult | None = None,
     message_has_request_content: bool = False,
     turn_started_at: float,
@@ -648,7 +647,6 @@ async def _build_handler_context_async(
         status_callback=status_callback,
         explicit_human_request=explicit_human_request,
         human_request_explicit=human_request_explicit,
-        support_contact_question=support_contact_question,
         question_intent=question_intent or QuestionIntentResult(),
         message_has_request_content=message_has_request_content,
         turn_started_at=turn_started_at,
@@ -694,7 +692,6 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
                 agent_instructions=ctx.bot_agent_instructions,
                 allow_clarification=ctx.allow_clarification,
                 guard_profile=ctx.tenant_profile,
-                support_contact_question=ctx.support_contact_question,
                 question_intent=ctx.question_intent,
             )
             ctx.extras["_pipeline_result"] = pipeline_result
@@ -766,7 +763,6 @@ async def async_process_chat_message(
             detect_human_request(redacted_question, api_key, tenant_id),
             classify_question_intent(redacted_question, api_key, tenant_id),
         )
-    support_contact_question = question_intent.support_contact
     explicit_human_request = human_request_result.human_request
     _human_request_classifier_ms = round((perf_counter() - _hrc_start) * 1000, 2)
 
@@ -915,7 +911,6 @@ async def async_process_chat_message(
         status_callback=status_callback,
         explicit_human_request=explicit_human_request,
         human_request_explicit=human_request_result.human_request_explicit,
-        support_contact_question=support_contact_question,
         question_intent=question_intent,
         message_has_request_content=human_request_result.message_has_request_content,
         turn_started_at=_turn_started_at,

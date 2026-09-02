@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from backend.core.config import settings
-from backend.faq.faq_matcher import FAQRow, match_faq
+from backend.faq.faq_matcher import FAQRow, direct_applicability_guard, match_faq
 
 
 def _fake_rows(*rows: FAQRow) -> list[FAQRow]:
@@ -362,3 +362,41 @@ async def test_async_match_faq_within_timeout_classifies_normally(
 
     assert result.strategy == "faq_direct"
     assert result.faq_items == [row]
+
+
+def _guard(question: str, faq_question: str) -> bool:
+    return direct_applicability_guard(
+        question=question,
+        faq_question=faq_question,
+        faq_answer="irrelevant",
+    )
+
+
+def test_direct_guard_passes_on_high_token_overlap() -> None:
+    assert _guard("alpha beta gamma delta", "alpha beta gamma") is True
+
+
+def test_direct_guard_fails_on_low_token_overlap() -> None:
+    assert _guard("alpha beta gamma delta", "alpha epsilon") is False
+
+
+def test_direct_guard_fails_on_empty_input() -> None:
+    assert _guard("   ", "alpha beta") is False
+    assert _guard("alpha beta", "!!!") is False
+
+
+def test_direct_guard_decision_is_independent_of_token_identity() -> None:
+    """The same token structure must decide the same way whatever the tokens are.
+
+    Guards against reintroducing a per-language keyword list: two questions
+    with identical overlap ratios may not diverge just because one uses a
+    privileged word.
+    """
+    scripts = [
+        ("alpha beta gamma delta", "alpha beta epsilon zeta"),
+        ("како бета гама делта", "како бета епсилон зета"),
+        ("wie beta gamma delta", "wie beta epsilon zeta"),
+        ("reset beta gamma delta", "reset beta epsilon zeta"),
+    ]
+    decisions = {_guard(q, f) for q, f in scripts}
+    assert decisions == {False}

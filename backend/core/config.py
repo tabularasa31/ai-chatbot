@@ -1,10 +1,27 @@
 from __future__ import annotations
 
+import json
 import os
+import pathlib
+import re
+from functools import lru_cache
 from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Vendored OpenAI token prices, refreshed from LiteLLM's community price list
+#: by ``scripts/update_model_prices.py`` and checked against it in CI. Prices
+#: are not discoverable at runtime (``/v1/models`` carries none), so the only
+#: alternative is hand-typed rates that go stale unnoticed.
+MODEL_PRICES_PATH = pathlib.Path(__file__).with_name("model_prices.json")
+
+_RELEASE_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+
+@lru_cache(maxsize=1)
+def _model_price_snapshot() -> dict[str, dict[str, float]]:
+    return json.loads(MODEL_PRICES_PATH.read_text(encoding="utf-8"))["models"]
 
 
 class Settings(BaseSettings):
@@ -389,7 +406,7 @@ class Settings(BaseSettings):
     )
 
     # ── OpenAI token pricing ─────────────────────────────────────────────
-    # Fallback rates used when a model is not in the per-model map below.
+    # Fallback rates used when a model is absent from the price snapshot.
     openai_default_cost_per_1m_input_tokens: float = Field(
         0.30,
         alias="OPENAI_DEFAULT_COST_PER_1M_INPUT_TOKENS",
@@ -401,17 +418,54 @@ class Settings(BaseSettings):
 
     @property
     def openai_model_costs(self) -> dict[str, dict[str, float]]:
-        """Per-model token pricing (USD per 1M tokens) with input/output split."""
+        """Per-model token pricing (USD per 1M tokens) from the vendored snapshot."""
+        return {model: dict(rates) for model, rates in _model_price_snapshot().items()}
+
+    def model_cost_rates(self, model: str) -> dict[str, float]:
+        """Effective USD-per-1M rates for ``model``, falling back to the defaults.
+
+        A model id carrying a release date (``gpt-5-mini-2025-08-07``) resolves
+        to its base entry: OpenAI answers with the dated id even when the
+        request named the alias, and an exact-match-only lookup would silently
+        bill such a turn at the generic default rate.
+        """
+        prices = _model_price_snapshot()
+        rates = prices.get(model) or prices.get(_RELEASE_DATE_SUFFIX.sub("", model))
+        if rates is None:
+            return {
+                "input": self.openai_default_cost_per_1m_input_tokens,
+                "output": self.openai_default_cost_per_1m_output_tokens,
+                "cached_input": self.openai_default_cost_per_1m_input_tokens,
+            }
+        resolved = dict(rates)
+        resolved.setdefault("cached_input", resolved["input"])
+        return resolved
+
+    def compute_cost_breakdown(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cached_tokens: int = 0,
+    ) -> dict[str, float]:
+        """Split one LLM call's USD cost into input and output.
+
+        ``prompt_tokens`` includes the prompt-cache hits reported separately as
+        ``cached_tokens``; those are billed at a fraction of the input rate
+        (a tenth, for gpt-5-mini), so charging the whole prompt at full price
+        overstates every cached turn.
+        """
+        rates = self.model_cost_rates(model)
+        cached = min(max(cached_tokens, 0), prompt_tokens)
+        input_cost = (
+            (prompt_tokens - cached) / 1_000_000 * rates["input"]
+            + cached / 1_000_000 * rates["cached_input"]
+        )
+        output_cost = completion_tokens / 1_000_000 * rates["output"]
         return {
-            "gpt-4o": {"input": 2.50, "output": 10.00},
-            "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-            "gpt-4.1": {"input": 2.00, "output": 8.00},
-            "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
-            "gpt-5-mini": {"input": 1.10, "output": 4.40},
-            "o1": {"input": 15.00, "output": 60.00},
-            "o1-mini": {"input": 3.00, "output": 12.00},
-            "o3": {"input": 10.00, "output": 40.00},
-            "o3-mini": {"input": 1.10, "output": 4.40},
+            "input": round(input_cost, 6),
+            "output": round(output_cost, 6),
+            "total": round(input_cost + output_cost, 6),
         }
 
     def compute_cost_usd(
@@ -419,20 +473,12 @@ class Settings(BaseSettings):
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
+        cached_tokens: int = 0,
     ) -> float:
         """Estimate USD cost for one LLM call using per-model input/output rates."""
-        rates = self.openai_model_costs.get(model)
-        if rates:
-            input_rate = rates["input"]
-            output_rate = rates["output"]
-        else:
-            input_rate = self.openai_default_cost_per_1m_input_tokens
-            output_rate = self.openai_default_cost_per_1m_output_tokens
-        return round(
-            (prompt_tokens / 1_000_000) * input_rate
-            + (completion_tokens / 1_000_000) * output_rate,
-            6,
-        )
+        return self.compute_cost_breakdown(
+            model, prompt_tokens, completion_tokens, cached_tokens
+        )["total"]
 
     # ── Guard thread pool ────────────────────────────────────────────────
     guard_pool_workers: int = Field(

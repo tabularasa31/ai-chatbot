@@ -32,7 +32,6 @@ from backend.core.redis import is_enabled as redis_is_enabled
 from backend.documents.routes import documents_router
 from backend.email.routes import email_router
 from backend.embeddings.routes import embeddings_router
-from backend.escalation.routes import escalation_router
 from backend.gap_analyzer.jobs import request_graceful_shutdown as gap_graceful_shutdown
 from backend.gap_analyzer.routes import gap_analyzer_router
 from backend.jobs.analyze_chat_logs import shutdown_log_analysis_threads
@@ -208,7 +207,6 @@ app.include_router(embeddings_router, prefix="/embeddings", include_in_schema=Fa
 app.include_router(search_router, prefix="/search", include_in_schema=False)
 app.include_router(chat_router, prefix="/chat")
 app.include_router(email_router)
-app.include_router(escalation_router)
 app.include_router(gap_analyzer_router, prefix="/gap-analyzer")
 app.include_router(knowledge_router)
 app.include_router(operator_router)

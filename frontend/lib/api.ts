@@ -1,41 +1,6 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
 let authRedirectInProgress = false;
 
-export type ChatSessionSummary = {
-  session_id: string;
-  message_count: number;
-  last_question: string | null;
-  last_answer_preview: string | null;
-  last_activity: string;
-};
-
-export type MessageFeedbackValue = "up" | "down" | "none";
-
-export type ChatSessionLogs = {
-  session_id: string;
-  messages: {
-    id: string;
-    session_id: string;
-    role: "user" | "assistant";
-    content: string;
-    feedback: "none" | "up" | "down";
-    ideal_answer: string | null;
-    created_at: string;
-    // Conversation the message belongs to; a session spans several after
-    // idle rotation. The UI draws a divider when chat_id changes.
-    chat_id?: string | null;
-  }[];
-};
-
-export type BadAnswerItem = {
-  message_id: string;
-  session_id: string;
-  question: string | null;
-  answer: string;
-  ideal_answer: string | null;
-  created_at: string;
-};
-
 export type TenantResponse = {
   id: string;
   name: string;
@@ -72,6 +37,8 @@ export type TenantMeResponse = TenantResponse & {
   is_admin: boolean;
   is_verified: boolean;
   role: TenantRoleValue;
+  /** Whether the caller may operate: answer, take, release, resolve. */
+  has_seat: boolean;
 };
 
 export type TenantMember = {
@@ -132,27 +99,74 @@ export type SupportSettingsResponse = {
   fallback_email: string | null;
 };
 
-export type EscalationTicket = {
+export type HandoffState = "waiting" | "live" | "bot";
+
+export type InboxTicket = {
   id: string;
   ticket_number: string;
-  primary_question: string;
-  conversation_summary: string | null;
-  trigger: string;
-  best_similarity_score: number | null;
-  retrieved_chunks_preview: Array<Record<string, unknown>> | null;
-  user_id: string | null;
-  user_email: string | null;
-  user_name: string | null;
-  plan_tier: string | null;
-  user_note: string | null;
-  priority: string;
   status: string;
+  priority: string;
+  trigger: string;
+  user_note: string | null;
   resolution_text: string | null;
   created_at: string;
-  updated_at: string;
   resolved_at: string | null;
-  chat_id: string | null;
-  session_id: string | null;
+};
+
+export type InboxRow = {
+  session_id: string;
+  chat_id: string;
+  handoff_state: HandoffState;
+  ticket: InboxTicket | null;
+  assigned_operator_id: string | null;
+  assigned_operator_email: string | null;
+  waiting_since: string | null;
+  last_message_role: string | null;
+  last_message_preview: string | null;
+  last_activity: string;
+  message_count: number;
+  visitor_email: string | null;
+  visitor_name: string | null;
+};
+
+export type InboxList = {
+  items: InboxRow[];
+  waiting_count: number;
+  attention_count: number;
+};
+
+export type InboxSummary = {
+  waiting_count: number;
+  attention_count: number;
+};
+
+export type OperatorChatState = {
+  chat_id: string;
+  operator_state: "bot" | "live";
+  assigned_operator_id: string | null;
+  assigned_operator_email: string | null;
+  operator_joined_at: string | null;
+  operator_released_at: string | null;
+};
+
+export type ThreadMessage = {
+  id: string;
+  chat_id: string;
+  role: "user" | "assistant" | "operator" | (string & {});
+  content: string;
+  created_at: string;
+  author_label: string | null;
+};
+
+export type Thread = {
+  session_id: string;
+  chat: OperatorChatState;
+  handoff_state: HandoffState;
+  chat_ended: boolean;
+  ticket: InboxTicket | null;
+  visitor_email: string | null;
+  visitor_name: string | null;
+  messages: ThreadMessage[];
 };
 
 export type BotResponse = {
@@ -1155,43 +1169,6 @@ export const api = {
     },
   },
   chat: {
-    async listSessions(): Promise<ChatSessionSummary[]> {
-      const res = await apiFetch(`${BASE_URL}/chat/sessions`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list sessions"));
-      const list = data as { sessions: ChatSessionSummary[] };
-      return list.sessions;
-    },
-    async getSessionLogs(sessionId: string): Promise<ChatSessionLogs> {
-      const res = await apiFetch(`${BASE_URL}/chat/logs/session/${sessionId}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get session logs"));
-      const log = data as { messages: ChatSessionLogs["messages"] };
-      return { session_id: sessionId, messages: log.messages };
-    },
-    async setFeedback(
-      messageId: string,
-      feedback: MessageFeedbackValue,
-      idealAnswer?: string | null
-    ) {
-      const res = await apiFetch(`${BASE_URL}/chat/messages/${messageId}/feedback`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ feedback, ideal_answer: idealAnswer ?? null }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to set feedback"));
-      return data as { id: string; feedback: string; ideal_answer: string | null };
-    },
-    async listBadAnswers(limit = 50, offset = 0): Promise<BadAnswerItem[]> {
-      const res = await apiFetch(
-        `${BASE_URL}/chat/bad-answers?limit=${limit}&offset=${offset}`
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list bad answers"));
-      const list = data as { items: BadAnswerItem[] };
-      return list.items;
-    },
     async send(
       question: string,
       apiKey: string,
@@ -1258,32 +1235,56 @@ export const api = {
       };
     },
   },
-  escalations: {
-    async list(params?: { status?: string }): Promise<EscalationTicket[]> {
-      const q = params?.status
-        ? `?status=${encodeURIComponent(params.status)}`
-        : "";
-      const res = await apiFetch(`${BASE_URL}/escalations${q}`);
+  operator: {
+    async inbox(scope: "attention" | "all"): Promise<InboxList> {
+      const res = await apiFetch(`${BASE_URL}/operator/inbox?scope=${scope}`);
       const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list tickets"));
-      const list = data as { tickets: EscalationTicket[] };
-      return list.tickets;
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load inbox"));
+      return data as InboxList;
     },
-    async get(id: string): Promise<EscalationTicket> {
-      const res = await apiFetch(`${BASE_URL}/escalations/${id}`);
+    async summary(): Promise<InboxSummary> {
+      const res = await apiFetch(`${BASE_URL}/operator/inbox/summary`);
       const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load ticket"));
-      return data as EscalationTicket;
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load inbox summary"));
+      return data as InboxSummary;
     },
-    async resolve(id: string, resolutionText: string): Promise<EscalationTicket> {
-      const res = await apiFetch(`${BASE_URL}/escalations/${id}/resolve`, {
+    async thread(sessionId: string): Promise<Thread> {
+      const res = await apiFetch(`${BASE_URL}/operator/sessions/${sessionId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load conversation"));
+      return data as Thread;
+    },
+    async take(chatId: string): Promise<OperatorChatState> {
+      const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/take`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to take the chat"));
+      return data as OperatorChatState;
+    },
+    async reply(chatId: string, text: string) {
+      const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resolution_text: resolutionText }),
+        body: JSON.stringify({ text }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to resolve ticket"));
-      return data as EscalationTicket;
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send the reply"));
+      return data as { message_id: string; created_at: string; chat: OperatorChatState; chat_reopened: boolean };
+    },
+    async release(chatId: string): Promise<OperatorChatState> {
+      const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/release`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to return the chat to the bot"));
+      return data as OperatorChatState;
+    },
+    async resolve(chatId: string, resolutionText?: string | null) {
+      const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolution_text: resolutionText || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to mark the chat resolved"));
+      return data as { chat: OperatorChatState; resolved_ticket_numbers: string[] };
     },
   },
   admin: {

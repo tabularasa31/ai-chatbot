@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import ChatPipelineResult, RetrievalContext, process_chat_message
+from backend.chat.service import RetrievalContext
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
@@ -16,11 +15,10 @@ from backend.models import (
     GapQuestion,
     GapQuestionMessageLink,
     Message,
-    MessageFeedback,
     MessageRole,
 )
 from backend.search.service import build_reliability_assessment
-from tests.conftest import register_and_verify_user, set_client_openai_key
+from tests.conftest import register_and_verify_user
 
 
 def _create_client_and_token(
@@ -134,138 +132,3 @@ def test_gap_signal_ingestion_persists_weight_and_message_link(
     assert message_link.assistant_message_id == assistant_message.id
     assert message_link.chat_id == chat.id
     assert message_link.session_id == chat.session_id
-
-
-def test_feedback_down_reweights_linked_gap_signal(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-feedback@example.com",
-        name="Gap Feedback Tenant",
-    )
-    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    user_message = Message(chat_id=chat.id, role=MessageRole.user, content="How does this work?")
-    assistant_first = Message(chat_id=chat.id, role=MessageRole.assistant, content="First answer")
-    assistant_second = Message(chat_id=chat.id, role=MessageRole.assistant, content="Second answer")
-    db_session.add_all([user_message, assistant_first, assistant_second])
-    db_session.commit()
-    db_session.refresh(user_message)
-    db_session.refresh(assistant_first)
-    db_session.refresh(assistant_second)
-
-    gap_question_first = GapQuestion(
-        tenant_id=tenant_id,
-        question_text="How does this work?",
-        gap_signal_weight=1.0,
-    )
-    gap_question_second = GapQuestion(
-        tenant_id=tenant_id,
-        question_text="How does this work?",
-        gap_signal_weight=1.0,
-    )
-    db_session.add_all([gap_question_first, gap_question_second])
-    db_session.flush()
-    db_session.add_all(
-        [
-            GapQuestionMessageLink(
-                gap_question_id=gap_question_first.id,
-                user_message_id=user_message.id,
-                assistant_message_id=assistant_first.id,
-                chat_id=chat.id,
-                session_id=chat.session_id,
-                attempt_index=0,
-            ),
-            GapQuestionMessageLink(
-                gap_question_id=gap_question_second.id,
-                user_message_id=user_message.id,
-                assistant_message_id=assistant_second.id,
-                chat_id=chat.id,
-                session_id=chat.session_id,
-                attempt_index=1,
-            ),
-        ]
-    )
-    db_session.commit()
-
-    response = tenant.post(
-        f"/chat/messages/{assistant_second.id}/feedback",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"feedback": "down", "ideal_answer": "Better answer"},
-    )
-    assert response.status_code == 200, response.json()
-
-    db_session.refresh(assistant_second)
-    db_session.refresh(gap_question_first)
-    db_session.refresh(gap_question_second)
-
-    assert assistant_second.feedback == MessageFeedback.down
-    assert gap_question_first.gap_signal_weight == 1.0
-    assert gap_question_second.gap_signal_weight == 4.0
-
-
-def test_feedback_up_restores_base_weight_for_linked_gap_signal(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-feedback-up@example.com",
-        name="Gap Feedback Up Tenant",
-    )
-    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    user_message = Message(chat_id=chat.id, role=MessageRole.user, content="How does this work?")
-    assistant_message = Message(
-        chat_id=chat.id,
-        role=MessageRole.assistant,
-        content="First answer",
-        feedback=MessageFeedback.down,
-    )
-    db_session.add_all([user_message, assistant_message])
-    db_session.commit()
-    db_session.refresh(user_message)
-    db_session.refresh(assistant_message)
-
-    gap_question = GapQuestion(
-        tenant_id=tenant_id,
-        question_text="How does this work?",
-        gap_signal_weight=4.0,
-        answer_confidence=0.4,
-    )
-    db_session.add(gap_question)
-    db_session.flush()
-    db_session.add(
-        GapQuestionMessageLink(
-            gap_question_id=gap_question.id,
-            user_message_id=user_message.id,
-            assistant_message_id=assistant_message.id,
-            chat_id=chat.id,
-            session_id=chat.session_id,
-            attempt_index=0,
-        )
-    )
-    db_session.commit()
-
-    response = tenant.post(
-        f"/chat/messages/{assistant_message.id}/feedback",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"feedback": "up"},
-    )
-    assert response.status_code == 200, response.json()
-
-    db_session.refresh(assistant_message)
-    db_session.refresh(gap_question)
-
-    assert assistant_message.feedback == MessageFeedback.up
-    assert gap_question.gap_signal_weight == 1.5

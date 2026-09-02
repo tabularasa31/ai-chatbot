@@ -11,8 +11,12 @@ type NavItem = {
   icon: React.ReactNode;
   adminOnly?: boolean;
   ownerOnly?: boolean;
-  badgeKey?: "gapAnalyzer";
+  badgeKey?: "gapAnalyzer" | "inbox";
 };
+
+const INBOX_BADGE_POLL_MS = 30_000;
+/** Fired by the Inbox page after an operator action, so the badge does not wait for the next poll. */
+export const INBOX_CHANGED_EVENT = "chat9:inbox-changed";
 
 const mainNav: NavItem[] = [
   {
@@ -49,30 +53,13 @@ const mainNav: NavItem[] = [
     ),
   },
   {
-    href: "/logs",
-    label: "Logs",
+    href: "/inbox",
+    label: "Inbox",
+    badgeKey: "inbox",
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M2 3h11M2 7h11M2 11h7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/review",
-    label: "Review",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M2.5 7.5L5.5 10.5L12.5 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/escalations",
-    label: "Escalations",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M7.5 2v7M7.5 12v1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        <circle cx="7.5" cy="12.5" r="0.75" fill="currentColor" />
+        <path d="M2 3.5h11v8H2z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+        <path d="M2 8.5h3l1 1.5h3l1-1.5h3" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
       </svg>
     ),
   },
@@ -159,6 +146,7 @@ export function Sidebar() {
   // sees no flicker, and an operator loses the owner-only links a moment later.
   const [isOwner, setIsOwner] = useState(true);
   const [gapBadgeCount, setGapBadgeCount] = useState(0);
+  const [inboxBadgeCount, setInboxBadgeCount] = useState(0);
 
   useEffect(() => {
     api.clients
@@ -177,6 +165,27 @@ export function Sidebar() {
       .catch(() => {});
   }, []);
 
+  // Visitors waiting for a person. Polled, because the badge is the only
+  // place an operator on another page learns somebody is waiting.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api.operator
+        .summary()
+        .then((data) => {
+          if (!cancelled) setInboxBadgeCount(data.waiting_count);
+        })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, INBOX_BADGE_POLL_MS);
+    window.addEventListener(INBOX_CHANGED_EVENT, load);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      window.removeEventListener(INBOX_CHANGED_EVENT, load);
+    };
+  }, []);
+
   function isActive(href: string) {
     if (href === "/dashboard") return pathname === "/dashboard";
     if (href === "/settings") return pathname === "/settings";
@@ -184,7 +193,8 @@ export function Sidebar() {
   }
 
   function NavLink({ item }: { item: NavItem }) {
-    const badgeValue = item.badgeKey === "gapAnalyzer" ? gapBadgeCount : 0;
+    const badgeValue =
+      item.badgeKey === "gapAnalyzer" ? gapBadgeCount : item.badgeKey === "inbox" ? inboxBadgeCount : 0;
     return (
       <Link
         href={item.href}

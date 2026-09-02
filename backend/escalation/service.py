@@ -46,6 +46,7 @@ from backend.models import (
 from backend.models.base import _utcnow
 from backend.observability.cache_metrics import record_hit, record_miss
 from backend.observability.metrics import capture_event
+from backend.seats.service import tenant_has_any_seat
 from backend.support_config import public_support_config_dict
 
 logger = logging.getLogger(__name__)
@@ -618,8 +619,11 @@ def _build_escalation_email_body(
         "",
         f"A user on your bot ({tenant.name}) is asking for a human reply.",
         "Reply directly to this email — your response will reach the user.",
-        "",
     ]
+    console_url = _console_url(ticket, db)
+    if console_url:
+        lines.append(f"Or answer from the dashboard: {console_url}")
+    lines.append("")
 
     chat: Chat | None = ticket.chat if ticket.chat_id else None
     user_ctx: dict[str, Any] = {}
@@ -693,6 +697,22 @@ def _build_escalation_email_body(
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _console_url(ticket: EscalationTicket, db: Session) -> str | None:
+    """Where in the dashboard this request can be answered, if anywhere.
+
+    Only offered when somebody in the workspace holds a seat: without one
+    the console is read-only and the reply goes out by e-mail alone. The
+    same condition puts our token address in ``Reply-To``, so a body that
+    carries the link is never quoted straight back to the visitor.
+    """
+    if not tenant_has_any_seat(tenant_id=ticket.tenant_id, db=db):
+        return None
+    session_id = ticket.session_id or (ticket.chat.session_id if ticket.chat else None)
+    if session_id is None:
+        return None
+    return f"{settings.FRONTEND_URL.rstrip('/')}/inbox?session={session_id}"
 
 
 def _to_utc(when: datetime | None) -> datetime | None:
@@ -1415,6 +1435,15 @@ def resolve_ticket(
     if not ticket:
         raise ValueError("ticket not found")
 
+    _stage_ticket_resolved(db, ticket, resolution_text)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def _stage_ticket_resolved(
+    db: Session, ticket: EscalationTicket, resolution_text: str | None
+) -> None:
     ticket.status = EscalationStatus.resolved
     ticket.resolution_text = resolution_text
     # The reply address dies with the request it belongs to: a resolved
@@ -1426,9 +1455,31 @@ def resolve_ticket(
     # the note in ``_notify_tenant_new_ticket`` for the asyncpg rationale.
     ticket.resolved_at = _utcnow()
     db.add(ticket)
-    db.commit()
-    db.refresh(ticket)
-    return ticket
+
+
+def resolve_chat_tickets(
+    db: Session, *, chat_id: uuid.UUID, resolution_text: str | None
+) -> list[EscalationTicket]:
+    """Resolve every ticket still being worked in this chat. Staged, not committed.
+
+    The operator's "mark resolved" is about the conversation, not about one
+    ticket row: a visitor who escalated twice has two active tickets, and
+    closing one while the other keeps the chat reading "waiting" would put
+    the row straight back into the queue. Returns what was resolved so the
+    caller can report it; an empty list means nothing was active.
+    """
+    tickets = (
+        db.query(EscalationTicket)
+        .filter(
+            EscalationTicket.chat_id == chat_id,
+            EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
+        )
+        .order_by(EscalationTicket.created_at.asc())
+        .all()
+    )
+    for ticket in tickets:
+        _stage_ticket_resolved(db, ticket, resolution_text)
+    return tickets
 
 
 _PRIORITY_ORDER = {

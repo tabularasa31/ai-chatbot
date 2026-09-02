@@ -1129,9 +1129,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 | **Dashboard** (`/dashboard`) | **Your Bot ID** (bot's `public_id`, used as `data-bot-id`), **API key** (server-to-server `X-Api-Key`), **embed code** snippet; banner linking to Agents if OpenAI key is missing |
 | **Knowledge** (`/knowledge`) | Upload files, add URL sources, trigger embeddings/crawls, health indicators, delete; unified indexed sources table (replaces legacy `/documents`) |
 | **Agents** (`/settings`) | Per-client **OpenAI API key** (encrypted), save/update/remove |
-| **Logs** (`/logs`) | Full chat history across sessions; thumbs up/down feedback |
-| **Review** (`/review`) | Bad answers (thumbs down) with ideal answer input |
-| **Escalations** (`/escalations`) | L2 ticket inbox; resolve tickets |
+| **Inbox** (`/inbox`) | Every conversation; queue of visitors waiting for a person; reply, take, return to bot, mark resolved (seat holders) |
 | **Debug** (`/debug`) | Run RAG debug; answer + retrieval table with chunk previews and scores (code blocks use inline copy) |
 | **Response controls** (`/settings/disclosure`) | Disclosure level (Detailed / Standard / Corporate) |
 | **Widget settings** (`/widget-settings`) | Bot ID copy + Link Safety configuration (allowed domains for external link guard) |

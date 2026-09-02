@@ -3,10 +3,9 @@
 import asyncio
 import logging
 import uuid
-from collections import defaultdict
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from openai import APIError, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +16,6 @@ from backend.bots.service import (
     get_bot_for_tenant_by_public_id,
     get_default_bot_for_tenant,
 )
-from backend.chat.events import _emit_chat_feedback_event
 from backend.chat.history_service import (
     get_chat_history,
     get_session_logs,
@@ -26,8 +24,6 @@ from backend.chat.history_service import (
 from backend.chat.language import async_localize_text_to_language_result, detect_language
 from backend.chat.llm_unavailable import LlmFailureType, classify_llm_failure
 from backend.chat.schemas import (
-    BadAnswerItem,
-    BadAnswerListResponse,
     ChatHistoryResponse,
     ChatMessageLogItem,
     ChatMessageLogResponse,
@@ -35,13 +31,10 @@ from backend.chat.schemas import (
     ChatSessionListResponse,
     ChatSessionSummaryResponse,
     ChatTurnResponse,
-    MessageFeedbackRequest,
-    MessageFeedbackResponse,
     MessageResponse,
 )
 from backend.chat.service import (
     async_process_chat_message,
-    record_gap_feedback_for_message,
 )
 from backend.core.db import get_async_db, get_db, run_sync
 from backend.core.idempotency import idempotent_section
@@ -53,9 +46,6 @@ from backend.models import (
     Bot,
     Chat,
     EscalationTrigger,
-    Message,
-    MessageFeedback,
-    MessageRole,
     Tenant,
     TenantProfile,
     User,
@@ -376,133 +366,6 @@ def get_session_logs_route(
             for msg_id, sid, role, content, feedback, ideal_answer, created_at, chat_id in logs
         ],
     )
-
-
-@chat_router.post("/messages/{message_id}/feedback", response_model=MessageFeedbackResponse)
-def set_message_feedback(
-    message_id: uuid.UUID,
-    body: MessageFeedbackRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> MessageFeedbackResponse:
-    """
-    Set feedback (up/down) and optional ideal_answer on an assistant message.
-    JWT auth required. 400 if message is not assistant, 404 if not found or not owner.
-    """
-    from sqlalchemy.orm import joinedload
-
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    message = (
-        db.query(Message)
-        .options(joinedload(Message.chat))
-        .filter(Message.id == message_id)
-        .first()
-    )
-    if not message or message.chat.tenant_id != tenant.id:
-        raise HTTPException(status_code=404, detail="Message not found")
-    if message.role != MessageRole.assistant:
-        raise HTTPException(
-            status_code=400,
-            detail="Feedback can only be set on assistant messages",
-        )
-
-    message.feedback = MessageFeedback(body.feedback.value)
-    message.ideal_answer = body.ideal_answer if body.ideal_answer else None
-    db.commit()
-    db.refresh(message)
-    try:
-        record_gap_feedback_for_message(
-            db=db,
-            tenant_id=tenant.id,
-            assistant_message_id=message.id,
-            feedback_value=body.feedback.value,
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.warning(
-            "gap_analyzer_feedback_sync_failed: tenant_id=%s assistant_message_id=%s feedback=%s",
-            tenant.id,
-            message.id,
-            body.feedback.value,
-            exc_info=True,
-        )
-
-    if body.feedback.value in ("up", "down"):
-        _emit_chat_feedback_event(
-            tenant_public_id=getattr(tenant, "public_id", None),
-            bot_public_id=None,
-            distinct_id=str(current_user.id),
-            feedback="positive" if body.feedback.value == "up" else "negative",
-        )
-
-    return MessageFeedbackResponse(
-        id=message.id,
-        feedback=body.feedback,
-        ideal_answer=message.ideal_answer,
-    )
-
-
-@chat_router.get("/bad-answers", response_model=BadAnswerListResponse)
-def list_bad_answers(
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
-) -> BadAnswerListResponse:
-    """
-    List assistant messages with feedback=down for the authenticated tenant.
-    JWT auth required. Returns question (previous user msg), answer, ideal_answer.
-    """
-    from sqlalchemy.orm import joinedload
-
-    # N+1 fix: single query loads all tenant messages; prev user found in-memory (no per-message DB query)
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    all_messages = (
-        db.query(Message)
-        .join(Chat, Message.chat_id == Chat.id)
-        .options(joinedload(Message.chat))
-        .filter(Chat.tenant_id == tenant.id)
-        .order_by(Message.chat_id, Message.created_at)
-        .all()
-    )
-
-    messages_by_chat: dict[uuid.UUID, list[Message]] = defaultdict(list)
-    for msg in all_messages:
-        messages_by_chat[msg.chat_id].append(msg)
-
-    bad_answers: list[BadAnswerItem] = []
-    for _, messages in messages_by_chat.items():
-        for i, msg in enumerate(messages):
-            if msg.role == MessageRole.assistant and msg.feedback == MessageFeedback.down:
-                prev_user = None
-                for j in range(i - 1, -1, -1):
-                    if messages[j].role == MessageRole.user:
-                        prev_user = messages[j]
-                        break
-                question = prev_user.content if prev_user else None
-                chat = msg.chat
-                bad_answers.append(
-                    BadAnswerItem(
-                        message_id=msg.id,
-                        session_id=chat.session_id,
-                        question=question,
-                        answer=msg.content,
-                        ideal_answer=msg.ideal_answer,
-                        created_at=msg.created_at,
-                    )
-                )
-
-    bad_answers.sort(key=lambda x: x.created_at, reverse=True)
-    items = bad_answers[offset : offset + limit]
-
-    return BadAnswerListResponse(items=items)
 
 
 @chat_router.get("/history/{session_id}", response_model=ChatHistoryResponse)

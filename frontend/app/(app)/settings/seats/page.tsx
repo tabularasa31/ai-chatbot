@@ -90,17 +90,16 @@ export default function SeatsPage() {
         <h1 className="text-2xl font-semibold text-slate-800">Seats</h1>
         <p className="text-slate-500 text-sm mt-1">
           A seat is what lets someone answer inside Chat9. Everyone in the
-          workspace can sign in and read; a seat adds the operator API — take a
+          workspace can sign in and read; a seat adds the Inbox actions — take a
           live conversation, write a reply the visitor sees in the widget, hand
           it back to the bot. Seats are also what the workspace is priced on.
         </p>
         <p className="text-slate-500 text-sm mt-2">
-          What a seat will add, once built: a console screen for that API
-          instead of the API itself, replies sent by email coming back into the
-          conversation, and answers becoming source material for documentation
-          drafts. None of those work yet — today an emailed reply takes the
-          ordinary path out of your own mailbox and into the visitor&apos;s,
-          whether or not anyone here holds a seat.
+          With a seat, the Inbox page is where you answer: take a conversation,
+          reply, hand it back to the bot, mark it resolved. Replies sent by
+          e-mail from a seat holder land in the same conversation. Without a
+          seat the Inbox is read-only, and an emailed reply takes the ordinary
+          path out of your own mailbox straight to the visitor.
         </p>
       </div>
 

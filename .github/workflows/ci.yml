@@ -129,7 +129,7 @@ jobs:
         run: make lint-deprecated
 
       - name: Run tests (SQLite)
-        run: pytest tests/ -q --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop --cov=backend --cov-report=term-missing
+        run: pytest tests/ -q --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -n auto --cov=backend --cov-report=term-missing
 
   backend-pgvector:
     name: Backend pgvector (pg integration tests)

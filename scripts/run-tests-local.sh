@@ -26,7 +26,7 @@ done
 
 # 3) сначала обычные тесты (без pgvector / без multi-hop eval)
 echo "== Running backend unit/integration tests (SQLite) =="
-pytest -vv tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop --cov=backend --cov-report=term-missing --cov-report=xml
+pytest -vv tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -n auto --cov=backend --cov-report=term-missing --cov-report=xml
 
 # 4) потом pgvector-тесты + multi-hop retrieval eval (нужен Docker Postgres)
 echo "== Running pgvector integration tests (Docker Postgres) =="

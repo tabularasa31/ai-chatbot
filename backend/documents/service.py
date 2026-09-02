@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.core.scripts import detect_script_bucket
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY, MAX_FILE_SIZE
 from backend.documents.language_detection import detect_document_language
 from backend.documents.parsers import (
@@ -471,6 +472,7 @@ def upload_document(
         parsed = _parse_content(content, file_type)
         doc.parsed_text = parsed
         doc.language = detect_document_language(parsed)
+        doc.script = detect_script_bucket(parsed)
         doc.status = DocumentStatus.ready
     except ValueError:
         doc.status = DocumentStatus.error

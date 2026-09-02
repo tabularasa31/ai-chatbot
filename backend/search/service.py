@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, selectinload
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
+from backend.core.scripts import NO_SCRIPT_BUCKET, detect_script_bucket
 from backend.knowledge.entity_extractor import extract_entities_from_query
 from backend.models import Document, Embedding, Tenant
 from backend.observability import TraceHandle
@@ -64,8 +65,6 @@ RERANK_BM25_WEIGHT = 0.20
 RERANK_RRF_WEIGHT = 0.20
 SCRIPT_BOOST_FACTOR = 0.1
 MMR_LAMBDA = 0.7
-CYRILLIC_LANGUAGE_PREFIXES = ("ru", "uk", "bg", "sr", "mk", "be")
-LATIN_LANGUAGE_PREFIXES = ("en", "es", "fr", "de", "it", "pt", "tr", "nl")
 MAX_OVERLAP_CHECK_CANDIDATES = 5
 BM25_DEBUG_VARIANT_TEXT_MAX_LEN = 80
 # HTTP timeout for the query-rewrite LLM call. The effective latency cap is
@@ -1096,25 +1095,13 @@ def build_variant_trace_tag(variant_mode: VariantMode) -> str:
 
 
 def detect_query_script_bucket(text: str) -> str:
-    """Detect a coarse script bucket from the query text."""
-    if re.search(r"[а-яё]", text.casefold(), flags=re.UNICODE):  # noqa: RUF001
-        return "cyrillic"
-    if re.search(r"[a-z]", text.casefold(), flags=re.UNICODE):
-        return "latin"
-    return "other"
+    """Detect the writing system of the query text."""
+    return detect_script_bucket(text)
 
 
 def _embedding_script_bucket(embedding: Embedding) -> str:
-    """Infer a coarse script bucket from embedding metadata or chunk text."""
-    meta = embedding.metadata_json or {}
-    language = meta.get("language")
-    if isinstance(language, str) and language.strip():
-        lowered = language.strip().lower()
-        if lowered.startswith(CYRILLIC_LANGUAGE_PREFIXES):
-            return "cyrillic"
-        if lowered.startswith(LATIN_LANGUAGE_PREFIXES):
-            return "latin"
-    return detect_query_script_bucket(embedding.chunk_text or "")
+    """Infer the writing system of a chunk from its own text."""
+    return detect_script_bucket(embedding.chunk_text or "")
 
 
 def expand_query(query: str) -> list[str]:
@@ -1198,27 +1185,11 @@ _TENANT_KB_SCRIPT_CACHE: dict[str, tuple[str | None, float]] = {}
 _TENANT_KB_SCRIPTS_CACHE: dict[str, tuple[frozenset[str], float]] = {}
 _TENANT_KB_SCRIPT_CACHE_TTL = 300.0  # 5 minutes
 _KB_SCRIPT_SAMPLE_SIZE = 20
-
-_SCRIPT_TO_LANGUAGE_NAME: dict[str, str] = {
-    # Bucket-level approximation used when the rewrite needs to target a
-    # whole script family. Per-document Document.language gives the precise
-    # ISO code; this map is the coarse fallback used by the cross-lingual
-    # rewrite prompt.
-    "cyrillic": "Russian",
-    "latin": "English",
-}
-
-
-def _language_to_script_bucket(language: str | None) -> str | None:
-    """Map an ISO language code to a coarse script bucket (or None)."""
-    if not language:
-        return None
-    lower = language.strip().lower()
-    if lower.startswith(CYRILLIC_LANGUAGE_PREFIXES):
-        return "cyrillic"
-    if lower.startswith(LATIN_LANGUAGE_PREFIXES):
-        return "latin"
-    return None
+# Each script in this set costs one cross-lingual rewrite call per chat
+# turn, so a script has to carry a real share of the corpus to earn one.
+# A stray document must not put the whole tenant on the hook; a genuine
+# minority-language section still clears the bar.
+_KB_SCRIPT_MIN_SHARE = 0.05
 
 
 def invalidate_tenant_kb_script_cache(tenant_id: uuid.UUID) -> None:
@@ -1386,10 +1357,11 @@ def _resolve_bm25_expansion_mode() -> BM25ExpansionMode:
 def _is_en_query(query: str, query_script_bucket: str) -> bool:
     """Return True when the query is safe for English BM25 (pure ASCII).
 
-    Includes the "other" bucket (digits, punctuation, symbols) — these contain
-    no non-ASCII characters so BM25 against an English corpus is always safe.
+    Includes the letterless bucket (digits, punctuation, symbols) — these
+    contain no non-ASCII characters so BM25 against an English corpus is
+    always safe.
     """
-    if query_script_bucket not in ("latin", "other"):
+    if query_script_bucket not in ("latin", NO_SCRIPT_BUCKET):
         return False
     return all(ord(c) < 128 for c in query)
 
@@ -2208,8 +2180,7 @@ async def async_semantic_query_rewrite_for_kb(
     to the vector query pool so embeddings match same-language chunks more
     reliably.  Fails silently — returns None on any error.
     """
-    lang_name = _SCRIPT_TO_LANGUAGE_NAME.get(kb_script)
-    if not lang_name or not query or not api_key:
+    if kb_script == NO_SCRIPT_BUCKET or not kb_script or not query or not api_key:
         return None
     prompt = (
         _SEMANTIC_REWRITE_PROMPT_PREFIX
@@ -2217,9 +2188,11 @@ async def async_semantic_query_rewrite_for_kb(
         + "\"\n\n"
         "Write a short technical search query (5-10 words) using product feature "
         "terminology and technical concepts that would retrieve the relevant "
-        f"documentation. Focus on the FEATURE or SETTING being asked about, not "
-        f"the user's symptom. Output ONLY in {lang_name}, regardless of the input "
-        "language. Reply with ONLY the search query, nothing else."
+        "documentation. Focus on the FEATURE or SETTING being asked about, not "
+        "the user's symptom. Write the query in the language of the knowledge "
+        f"base, which uses the {kb_script} script — output ONLY in that script, "
+        "regardless of the input language. Reply with ONLY the search query, "
+        "nothing else."
     )
     try:
         client = get_async_openai_client(api_key, timeout=timeout)
@@ -2447,20 +2420,23 @@ async def _async_tenant_has_embeddings(
         return False
 
 
-async def _async_kb_bucket_counts_from_languages(
+async def _async_kb_bucket_counts_from_scripts(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> dict[str, int] | None:
-    """Count documents by script bucket using ``Document.language``.
+    """Count documents by writing system using ``Document.script``.
 
-    Returns ``None`` when no rows have a non-null language — callers can then
-    fall back to chunk sampling for backward compatibility with KBs indexed
-    before parse-time language detection landed.
+    Returns ``None`` when no row carries a usable script — either because
+    none is stored, or because every document is letterless. Callers then fall
+    back to chunk sampling, which is also what KBs indexed before parse-time
+    script detection landed rely on.
     """
     try:
         stmt = (
-            select(Document.language)
+            select(Document.script, func.count())
             .filter(Document.tenant_id == tenant_id)
-            .filter(Document.language.isnot(None))
+            .filter(Document.script.isnot(None))
+            .filter(Document.script != NO_SCRIPT_BUCKET)
+            .group_by(Document.script)
         )
         result = await db.execute(stmt)
         rows = result.all()
@@ -2468,13 +2444,7 @@ async def _async_kb_bucket_counts_from_languages(
         return None
     if not rows:
         return None
-    counts: dict[str, int] = {}
-    for (lang,) in rows:
-        bucket = _language_to_script_bucket(lang)
-        if bucket is None:
-            continue
-        counts[bucket] = counts.get(bucket, 0) + 1
-    return counts
+    return {script: count for script, count in rows}
 
 
 async def _async_kb_bucket_counts_from_chunk_sample(
@@ -2496,8 +2466,8 @@ async def _async_kb_bucket_counts_from_chunk_sample(
         return None
     counts: dict[str, int] = {}
     for (chunk_text,) in sample:
-        bucket = detect_query_script_bucket(chunk_text or "")
-        if bucket in ("cyrillic", "latin"):
+        bucket = detect_script_bucket(chunk_text or "")
+        if bucket != NO_SCRIPT_BUCKET:
             counts[bucket] = counts.get(bucket, 0) + 1
     return counts
 
@@ -2505,18 +2475,19 @@ async def _async_kb_bucket_counts_from_chunk_sample(
 async def _async_tenant_has_unlabeled_documents(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> bool:
-    """True when at least one document for this tenant has language IS NULL.
+    """True when at least one document for this tenant has script IS NULL.
 
     Used to decide whether labeled-only counts can be trusted: a partially
-    labeled KB (legacy unlabeled rows + a few new uploads with language set)
-    must still consider the unlabeled half, otherwise a single new EN doc
-    on top of 100 legacy RU docs misclassifies the KB as Latin-only.
+    labeled KB (legacy unlabeled rows + a few new uploads with script set)
+    must still consider the unlabeled half, otherwise a single new document
+    on top of a hundred legacy ones in another writing system misclassifies
+    the whole KB.
     """
     try:
         stmt = (
             select(Document.id)
             .filter(Document.tenant_id == tenant_id)
-            .filter(Document.language.is_(None))
+            .filter(Document.script.is_(None))
             .limit(1)
         )
         result = await db.execute(stmt)
@@ -2525,28 +2496,37 @@ async def _async_tenant_has_unlabeled_documents(
         return False
 
 
+async def _async_resolve_kb_bucket_sources(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> list[dict[str, int]]:
+    """Return per-bucket counts, one distribution per source that contributed.
+
+    Sources are kept apart rather than summed because they are not on the same
+    scale: labeled documents are counted in full, while the legacy fallback
+    can only ever see ``_KB_SCRIPT_SAMPLE_SIZE`` chunks. Sharing one total
+    would let the labeled half drown the sampled half in any ratio test.
+    """
+    labeled = await _async_kb_bucket_counts_from_scripts(tenant_id, db)
+    if labeled is None:
+        # Pure legacy KB — no documents have a script stored.
+        sampled = await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db)
+        return [sampled] if sampled else []
+    if not await _async_tenant_has_unlabeled_documents(tenant_id, db):
+        # Fully labeled — labeled counts are authoritative.
+        return [labeled]
+    # Partial labeling — sample alongside so unlabeled docs still contribute.
+    sampled = await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db)
+    return [labeled, sampled] if sampled else [labeled]
+
+
 async def _async_resolve_kb_bucket_counts(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> dict[str, int]:
-    """Return per-bucket document counts, preferring stored Document.language.
-
-    When the KB is partially labeled (some documents still NULL after the
-    add_documents_language_v1 migration), augment the labeled counts with a
-    chunk sample so unlabeled legacy documents are not silently dropped.
-    """
-    labeled = await _async_kb_bucket_counts_from_languages(tenant_id, db)
-    if labeled is None:
-        # Pure legacy KB — no documents have language stored.
-        return await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
-    if not await _async_tenant_has_unlabeled_documents(tenant_id, db):
-        # Fully labeled — labeled counts are authoritative.
-        return labeled
-    # Partial labeling — merge with chunk sample so unlabeled docs still
-    # contribute to bucket detection.
-    sampled = await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
-    merged = dict(labeled)
-    for bucket, count in sampled.items():
-        merged[bucket] = merged.get(bucket, 0) + count
+    """Return per-bucket document counts across every contributing source."""
+    merged: dict[str, int] = {}
+    for source in await _async_resolve_kb_bucket_sources(tenant_id, db):
+        for bucket, count in source.items():
+            merged[bucket] = merged.get(bucket, 0) + count
     return merged
 
 
@@ -2555,7 +2535,7 @@ async def async_detect_tenant_kb_script(
 ) -> str | None:
     """Return the predominant script bucket of a tenant's KB.
 
-    Backed by ``Document.language`` written at parse time; falls back to chunk
+    Backed by ``Document.script`` written at parse time; falls back to chunk
     sampling for KBs that pre-date parse-time detection. Cached per tenant to
     avoid a DB round-trip on every chat turn. Returns None when no documents
     map to a known script bucket.
@@ -2570,7 +2550,7 @@ async def async_detect_tenant_kb_script(
     result: str | None = None
     if counts:
         dominant = max(counts, key=counts.__getitem__)
-        if dominant in ("cyrillic", "latin"):
+        if dominant != NO_SCRIPT_BUCKET:
             result = dominant
 
     _TENANT_KB_SCRIPT_CACHE[key] = (result, now)
@@ -2584,7 +2564,12 @@ async def async_detect_tenant_kb_scripts(
 
     Mirrors :func:`async_detect_tenant_kb_script` but returns the full set so
     callers can issue cross-lingual rewrites for *each* KB language a query
-    does not natively cover (mixed EN+RU KBs in particular).
+    does not natively cover (mixed-script KBs in particular).
+
+    Scripts below :data:`_KB_SCRIPT_MIN_SHARE` of the corpus are dropped: the
+    caller spends one LLM call per returned script on every turn, and a single
+    stray document is not worth that. The share is taken within each source
+    separately — see :func:`_async_resolve_kb_bucket_sources`.
     """
     key = str(tenant_id)
     now = time.monotonic()
@@ -2592,8 +2577,13 @@ async def async_detect_tenant_kb_scripts(
     if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
         return cached[0]
 
-    counts = await _async_resolve_kb_bucket_counts(tenant_id, db)
-    result = frozenset(b for b in counts if b in ("cyrillic", "latin"))
+    result: frozenset[str] = frozenset()
+    for source in await _async_resolve_kb_bucket_sources(tenant_id, db):
+        counted = {b: n for b, n in source.items() if b != NO_SCRIPT_BUCKET}
+        total = sum(counted.values())
+        result |= frozenset(
+            b for b, n in counted.items() if n >= total * _KB_SCRIPT_MIN_SHARE
+        )
     _TENANT_KB_SCRIPTS_CACHE[key] = (result, now)
     return result
 

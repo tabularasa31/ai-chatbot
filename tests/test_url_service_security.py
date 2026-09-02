@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
+from backend.core.scripts import detect_script_bucket
 from backend.core.security import hash_password
 from backend.tenants.service import create_tenant
 from backend.documents import embedder as embedder_mod
@@ -492,6 +493,128 @@ def test_upsert_page_document_skips_reembedding_when_hash_matches(
     assert updated_doc.id == document.id
     assert updated_doc.filename == "Updated title"
     assert chunk_count == 1
+
+
+def test_upsert_page_document_persists_detected_script(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Document.script must be written on the crawl path too, not just uploads.
+
+    Uses a writing system the old two-bucket detector could not represent, so
+    the assertion cannot pass by accident.
+    """
+    user = User(
+        email="page-script@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        is_verified=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+    tenant, _ = create_tenant(user.id, "Tenant", db_session)
+
+    source = UrlSource(
+        tenant_id=tenant.id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.commit()
+
+    page = url_service.ExtractedPage(
+        url="https://docs.example.com/odigos",
+        title="Οδηγός",
+        text=(
+            "Αυτό το έγγραφο εξηγεί πώς οι πελάτες μπορούν να επαναφέρουν "
+            "τον κωδικό πρόσβασης από τη σελίδα του λογαριασμού."
+        ),
+        chunks=[
+            {
+                "chunk_index": 0,
+                "raw_text": "Οδηγός επαναφοράς κωδικού",
+                "section_title": "Οδηγός",
+                "chunk_text": "Οδηγός επαναφοράς κωδικού",
+                "token_count": 4,
+                "content_hash": "hash",
+            }
+        ],
+    )
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda *a, **k: [[0.1] * 1536])
+
+    doc, _ = url_service._upsert_page_document(
+        source=source,
+        page=page,
+        db=db_session,
+        api_key="sk-test",
+    )
+
+    assert doc.script == "greek"
+
+
+def test_upsert_structured_document_persists_detected_script(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Document.script must be written on the structured-source path too."""
+    user = User(
+        email="structured-script@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        is_verified=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+    tenant, _ = create_tenant(user.id, "Tenant", db_session)
+
+    source = UrlSource(
+        tenant_id=tenant.id,
+        name="API Docs",
+        url="https://docs.example.com/openapi.yaml",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.commit()
+
+    spec = """
+openapi: 3.0.0
+info:
+  title: Οδηγός API
+  version: "1.0"
+paths:
+  /users:
+    get:
+      summary: Κατάλογος χρηστών
+      responses:
+        "200":
+          description: Εντάξει
+"""
+    parsed_text, openapi_chunks, _, _ = build_openapi_ingestion_payload(
+        spec.encode("utf-8")
+    )
+    monkeypatch.setattr(
+        embedder_mod, "_embed_chunks", lambda *a, **k: [[0.1] * 1536] * len(openapi_chunks)
+    )
+
+    doc, _ = url_service._upsert_structured_document(
+        source=source,
+        url="https://docs.example.com/openapi.yaml",
+        title="Οδηγός API",
+        parsed_text=parsed_text,
+        chunks=openapi_chunks,
+        db=db_session,
+        api_key="sk-test",
+    )
+
+    # An OpenAPI document's parsed form is mostly schema keywords, so assert
+    # the stored value against the text itself rather than a guessed script.
+    assert doc.script is not None
+    assert doc.script == detect_script_bucket(doc.parsed_text)
 
 
 def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(

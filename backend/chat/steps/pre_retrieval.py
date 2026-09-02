@@ -39,6 +39,7 @@ from backend.chat.followup import build_dialog_context
 from backend.chat.steps.refusal import build_reject_result
 from backend.chat.types import ChatPipelineResult, PipelineRun, _empty_retrieval_context
 from backend.core.config import settings
+from backend.core.scripts import NO_SCRIPT_BUCKET
 from backend.faq.faq_matcher import FAQMatchResult
 from backend.guards.relevance_checker import (
     CATEGORY_SOCIAL,
@@ -256,7 +257,7 @@ async def prepare_turn(run: PipelineRun) -> None:
 
     target_kb_scripts = [s for s in state.kb_scripts if s != state.query_script]
     state.cross_lingual_triggered = len(target_kb_scripts) > 0
-    if not state.kb_scripts or state.query_script == "other":
+    if not state.kb_scripts or state.query_script == NO_SCRIPT_BUCKET:
         state.query_kb_language_match = "unknown"
     elif state.query_script in state.kb_scripts:
         state.query_kb_language_match = "native"

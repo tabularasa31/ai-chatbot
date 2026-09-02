@@ -33,6 +33,7 @@ from backend.chat.decision import (
     requires_blocking_clarify,
 )
 from backend.chat.prompts import _user_context_prompt_line, build_rag_prompt
+from backend.chat.types import QuestionIntentResult
 from backend.chat.streaming import (
     MarkerStreamFilter,
     _scrub_marker_literals,
@@ -570,8 +571,8 @@ def test_rescue_keeps_the_support_contact_variant_when_asked_how_to_reach_suppor
     _patch_retrieval(monkeypatch, score=0.5)
     _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
     monkeypatch.setattr(
-        "backend.chat.service.detect_support_contact_question",
-        _as_async(lambda *_a, **_kw: True),
+        "backend.chat.service.classify_question_intent",
+        _as_async(lambda *_a, **_kw: QuestionIntentResult(support_contact=True)),
     )
     seen = _capture_offer_variant(monkeypatch)
 

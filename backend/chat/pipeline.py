@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.chat.language import ResolvedLanguageContext
 from backend.chat.steps import generate, pre_retrieval, retrieval
-from backend.chat.types import ChatPipelineResult, PipelineRun
+from backend.chat.types import ChatPipelineResult, PipelineRun, QuestionIntentResult
 from backend.models import Chat, TenantProfile
 from backend.observability import TraceHandle
 
@@ -70,7 +70,7 @@ async def async_run_chat_pipeline(
     agent_instructions: str | None = None,
     allow_clarification: bool = True,
     guard_profile: TenantProfile | None = None,
-    support_contact_question: bool = False,
+    question_intent: QuestionIntentResult | None = None,
 ) -> ChatPipelineResult:
     """Run one chat turn through the RAG pipeline (see module docstring)."""
     # The language context is resolved by the caller on the normal chat path;
@@ -106,7 +106,7 @@ async def async_run_chat_pipeline(
         agent_instructions=agent_instructions,
         allow_clarification=allow_clarification,
         guard_profile=guard_profile,
-        support_contact_question=support_contact_question,
+        question_intent=question_intent or QuestionIntentResult(),
     )
 
     # --- Pre-retrieval: guards, query plan, FAQ --------------------------

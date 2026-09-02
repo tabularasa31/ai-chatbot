@@ -562,7 +562,7 @@ def test_chat_bootstrap_turn_skips_classifier_llm_calls(
 
     monkeypatch.setattr("backend.chat.service.detect_human_request", _fail_classifier)
     monkeypatch.setattr(
-        "backend.chat.service.detect_support_contact_question", _fail_classifier
+        "backend.chat.service.classify_question_intent", _fail_classifier
     )
 
     response = tenant.post(

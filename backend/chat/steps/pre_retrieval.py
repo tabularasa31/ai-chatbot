@@ -37,7 +37,12 @@ from sqlalchemy.orm import Session, selectinload
 from backend.chat.events import _emit_quick_answer_lookup_event
 from backend.chat.followup import build_dialog_context
 from backend.chat.steps.refusal import build_reject_result
-from backend.chat.types import ChatPipelineResult, PipelineRun, _empty_retrieval_context
+from backend.chat.types import (
+    ChatPipelineResult,
+    PipelineRun,
+    QuestionIntentResult,
+    _empty_retrieval_context,
+)
 from backend.core.config import settings
 from backend.core.scripts import NO_SCRIPT_BUCKET
 from backend.faq.faq_matcher import FAQMatchResult
@@ -51,14 +56,6 @@ from backend.observability import record_stage_ms
 from backend.search.service import detect_query_script_bucket
 
 logger = logging.getLogger(__name__)
-
-_PRICING_QUESTION_RE = re.compile(
-    r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b"
-)
-_STATUS_QUESTION_RE = re.compile(r"\b(status|incident|outage|downtime|uptime)\b")
-_DOCS_QUESTION_RE = re.compile(
-    r"\b(docs|documentation|guide|guides|api reference|help center|knowledge base)\b"
-)
 
 # Latin all-caps acronym tokens 2-5 chars (API, VPN, SLA, HTTP, B2B, 2FA, S3).
 # Lookahead bounds the length; the trailing pattern requires at least one
@@ -130,26 +127,23 @@ def _quick_answer_quality_score(answer) -> tuple[int, int, int]:
     return (method_rank, source_intent_rank, detected_ts)
 
 
-def _quick_answer_keys_for_question(
-    question: str, *, support_contact_question: bool = False
-) -> list[str]:
-    lowered = question.casefold()
+def _quick_answer_keys_for_question(intent: QuestionIntentResult | None) -> list[str]:
+    """Map the turn's intent verdict onto the quick-answer keys worth attaching."""
+    if intent is None:
+        return []
     selected: list[str] = []
 
-    if _PRICING_QUESTION_RE.search(lowered):
+    if intent.pricing:
         selected.extend(["pricing_url", "trial_info"])
-    if _STATUS_QUESTION_RE.search(lowered):
+    if intent.service_status:
         selected.append("status_page_url")
-    # Support-contact intent is detected by the language-agnostic LLM classifier
-    # (``detect_support_contact_question``), not by keyword matching — the bot is
-    # language-agnostic, so a per-language keyword list would be the wrong tool.
     # ``support_chat`` is intentionally omitted: surfacing the tenant's "contact
     # us in the panel chat" line dead-ends users who are already in the chat
     # widget. The bot's own forward-to-email handoff (see the system prompt)
     # is the canonical human path instead.
-    if support_contact_question:
+    if intent.support_contact:
         selected.extend(["support_email", "status_page_url"])
-    if _DOCS_QUESTION_RE.search(lowered):
+    if intent.documentation:
         selected.append("documentation_url")
 
     return list(dict.fromkeys(selected))
@@ -157,15 +151,11 @@ def _quick_answer_keys_for_question(
 
 def _quick_answers_context(
     tenant_id: uuid.UUID,
-    question: str,
     db: Session,
-    *,
-    support_contact_question: bool = False,
+    intent: QuestionIntentResult | None = None,
 ) -> list[str]:
-    """Return only the structured quick answers relevant to this question."""
-    selected_keys = _quick_answer_keys_for_question(
-        question, support_contact_question=support_contact_question
-    )
+    """Return only the structured quick answers relevant to this turn."""
+    selected_keys = _quick_answer_keys_for_question(intent)
     if not selected_keys:
         return []
     return _lookup_quick_answers(tenant_id, selected_keys, db)
@@ -793,9 +783,7 @@ async def load_generation_inputs(run: PipelineRun) -> None:
         if state.faq_match is not None and state.faq_match.strategy == "faq_context"
         else None
     )
-    selected_quick_answer_keys = _quick_answer_keys_for_question(
-        run.question, support_contact_question=run.support_contact_question
-    )
+    selected_quick_answer_keys = _quick_answer_keys_for_question(run.question_intent)
     if selected_quick_answer_keys:
         # Looked up via the service module so test monkeypatches on
         # ``backend.chat.service._async_lookup_quick_answers`` intercept it.

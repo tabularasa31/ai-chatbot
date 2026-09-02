@@ -45,6 +45,25 @@ RejectReasonLiteral = Literal[
 ]
 
 
+@dataclass(frozen=True)
+class QuestionIntentResult:
+    """What the user's message is asking about, as one classifier verdict.
+
+    ``support_contact`` — asking *how* to reach support / where to get help.
+    ``pricing`` — asking about price, plans, billing or trial terms.
+    ``service_status`` — asking whether the service is up, or about an incident.
+    ``documentation`` — asking where the docs / guides / API reference live.
+
+    The last three select which stored quick answers are worth putting in front
+    of the model this turn; they are hints, never a routing decision.
+    """
+
+    support_contact: bool = False
+    pricing: bool = False
+    service_status: bool = False
+    documentation: bool = False
+
+
 @dataclass
 class RetrievalContext:
     """Retrieved chunks plus the confidence signal used outside ranking."""
@@ -252,5 +271,5 @@ class PipelineRun:
     agent_instructions: str | None = None
     allow_clarification: bool = True
     guard_profile: TenantProfile | None = None
-    support_contact_question: bool = False
+    question_intent: QuestionIntentResult = field(default_factory=QuestionIntentResult)
     state: PipelineState = field(default_factory=PipelineState)

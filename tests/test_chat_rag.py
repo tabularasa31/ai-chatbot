@@ -20,9 +20,10 @@ from backend.chat.service import (
     build_rag_messages,
     build_rag_prompt,
 )
+from backend.chat.types import QuestionIntentResult
 from backend.core.config import settings
 from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource
-from tests.conftest import register_and_verify_user
+from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 def test_build_rag_prompt() -> None:
@@ -137,36 +138,43 @@ def test_quick_answers_context_returns_structured_lines(
     )
     db_session.commit()
 
-    answer = _quick_answers_context(tenant_id, "Where is your documentation?", db_session)
+    answer = _quick_answers_context(
+        tenant_id, db_session, QuestionIntentResult(documentation=True)
+    )
 
     assert answer == ["Documentation: https://docs.example.com/"]
 
 
 def test_quick_answer_keys_for_question_filters_by_topic() -> None:
-    assert _quick_answer_keys_for_question("Where can I find pricing and trial details?") == [
+    # Key selection reads the classifier verdict only — the question text and
+    # the language it is written in never reach this function.
+    assert _quick_answer_keys_for_question(QuestionIntentResult(pricing=True)) == [
         "pricing_url",
         "trial_info",
     ]
-    # Support-contact intent is language-agnostic: it is driven by the LLM
-    # classifier flag, not by keywords in the question text. The phrasing /
-    # language of the question is irrelevant — only the flag matters.
-    assert _quick_answer_keys_for_question("How can I contact support?") == []
+    assert _quick_answer_keys_for_question(QuestionIntentResult()) == []
+    assert _quick_answer_keys_for_question(None) == []
+    # ``support_chat`` is intentionally never surfaced.
     assert _quick_answer_keys_for_question(
-        "How can I contact support?", support_contact_question=True
+        QuestionIntentResult(support_contact=True)
     ) == [
         "support_email",
         "status_page_url",
     ]
-    # A non-English support question still resolves, because the flag — not the
-    # words — selects the keys. ``support_chat`` is intentionally never surfaced.
-    assert _quick_answer_keys_for_question(
-        "как написать в поддержку?", support_contact_question=True
-    ) == [
-        "support_email",
-        "status_page_url",
-    ]
-    assert _quick_answer_keys_for_question("Show me the documentation") == [
+    assert _quick_answer_keys_for_question(QuestionIntentResult(documentation=True)) == [
         "documentation_url",
+    ]
+    assert _quick_answer_keys_for_question(QuestionIntentResult(service_status=True)) == [
+        "status_page_url",
+    ]
+    # Several axes at once de-duplicate while keeping first-seen order.
+    assert _quick_answer_keys_for_question(
+        QuestionIntentResult(pricing=True, service_status=True, support_contact=True)
+    ) == [
+        "pricing_url",
+        "trial_info",
+        "status_page_url",
+        "support_email",
     ]
 
 
@@ -229,7 +237,9 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
     )
     db_session.commit()
 
-    answer = _quick_answers_context(tenant_id, "Where is the documentation?", db_session)
+    answer = _quick_answers_context(
+        tenant_id, db_session, QuestionIntentResult(documentation=True)
+    )
 
     assert answer == ["Documentation: https://docs.example.com/guide"]
 
@@ -804,3 +814,97 @@ def test_generate_answer_sends_cost_with_usage(mock_openai_client: Mock) -> None
     assert usage["totalCost"] > 0
     # The cached 8k of the prompt cost a tenth of the fresh 2k.
     assert usage["inputCost"] < 10_000 / 1_000_000 * settings.model_cost_rates("gpt-5-mini")["input"]
+
+
+def test_classified_intent_reaches_generation_as_quick_answers(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end seam: classifier verdict -> pipeline -> generation kwargs.
+
+    The unit tests above cover the verdict-to-keys mapping in isolation; this one
+    fails if the verdict is dropped anywhere on the way to the prompt.
+    """
+    from backend.chat.service import RetrievalContext
+    from backend.search.service import build_reliability_assessment
+
+    token = register_and_verify_user(tenant, db_session, email="intent-e2e@example.com")
+    created = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Intent E2E"},
+    )
+    assert created.status_code == 201
+    set_client_openai_key(tenant, token)
+    api_key = created.json()["api_key"]
+    tenant_id = uuid.UUID(created.json()["id"])
+
+    source = UrlSource(
+        tenant_id=tenant_id,
+        name="Site",
+        url="https://example.com/",
+        normalized_domain="example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.add(
+        QuickAnswer(
+            tenant_id=tenant_id,
+            source_id=source.id,
+            key="pricing_url",
+            value="https://example.com/pricing",
+            source_url="https://example.com/",
+            metadata_json={"method": "anchor"},
+        )
+    )
+    db_session.commit()
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+
+    async def _fake_retrieve(*_args, **_kwargs) -> RetrievalContext:
+        return RetrievalContext(
+            chunk_texts=["Plans and limits overview."],
+            document_ids=[],
+            scores=[0.8],
+            mode="hybrid",
+            best_rank_score=0.8,
+            best_confidence_score=0.8,
+            confidence_source="vector_similarity",
+            reliability=build_reliability_assessment(top_score=0.8, result_count=1),
+        )
+
+    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _fake_retrieve)
+
+    async def _fake_classifier(*_args, **_kwargs) -> QuestionIntentResult:
+        return QuestionIntentResult(pricing=True)
+
+    monkeypatch.setattr(
+        "backend.chat.service.classify_question_intent", _fake_classifier
+    )
+
+    seen: list[list[str] | None] = []
+
+    async def _fake_generate(*_args, **kwargs):
+        seen.append(kwargs.get("quick_answer_items"))
+        return ("Answer.", 50, 20, 30, False, False, False)
+
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer", _fake_generate
+    )
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(uuid.uuid4()), "question": "?"},
+    )
+
+    assert response.status_code == 200
+    assert seen == [["Pricing: https://example.com/pricing"]]

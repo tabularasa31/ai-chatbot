@@ -682,7 +682,7 @@ class RagHandler(PipelineHandler):
                     # Guard-detected complaint about support silence: lead
                     # with an apology, not "I couldn't find an answer".
                     _pre_confirm_variant = "support_complaint"
-                elif ctx.support_contact_question:
+                elif ctx.question_intent.support_contact:
                     _pre_confirm_variant = "support_contact"
                 else:
                     _pre_confirm_variant = "no_answer"
@@ -783,7 +783,7 @@ class RagHandler(PipelineHandler):
             # the second half of a doubled message. The neutral ``initial``
             # variant is the bare question, which is all this rescue needs.
             _rescue_variant = (
-                "support_contact" if ctx.support_contact_question else "initial"
+                "support_contact" if ctx.question_intent.support_contact else "initial"
             )
             try:
                 # Templated path only (no chat_messages): the canonical text is

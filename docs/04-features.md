@@ -681,33 +681,35 @@ dialog context) classifies the repeat as `support_complaint` and offers the hand
 
 Repeated questions are the cheapest latency win in the pipeline: a question the bot has
 already answered for the same bot, in the same language, against the same knowledge base
-is served from a two-level cache without guards, retrieval or generation.
+is served from a two-level cache.
 
 | Level | Store | When it runs | What matches |
 |---|---|---|---|
-| Exact | Redis (`cache:answer:<sha256>`) | First step of the pipeline, before the injection guard | Normalized wording (case, whitespace, edge punctuation — script-agnostic) |
-| Semantic | Postgres `answer_cache_entries` (pgvector) | After the FAQ matcher declined the turn | Nearest cached question of the scope with cosine ≥ `ANSWER_CACHE_SEMANTIC_THRESHOLD` (0.95); the hit is written through to the exact level |
+| Exact | Redis (`cache:answer:<sha256>`) | Before the pre-dispatch classifiers and every guard — a hit makes no OpenAI call at all | Normalized wording (case, whitespace, edge punctuation — script-agnostic) |
+| Semantic | Postgres `answer_cache_entries` (pgvector) | After the injection guard, the embedding and the FAQ matcher; skips retrieval and generation | Nearest cached question of the scope with cosine ≥ `ANSWER_CACHE_SEMANTIC_THRESHOLD` (0.95); the hit is written through to the exact level |
 
 Scope = tenant/bot + `response_language` (taken from the resolved language context, never
-from text heuristics) + a knowledge-base fingerprint. The fingerprint covers document rows,
-FAQ rows, the bot's `agent_instructions` and disclosure config, and a per-tenant generation
-counter bumped whenever embeddings are (re)written — uploading or deleting a document,
-re-indexing, crawling a URL source or editing the bot moves every key, so a stale answer is
-never looked up again. `ANSWER_CACHE_TTL_SECONDS` (default 3600, `0` disables the cache) is
-the floor for state the fingerprint does not see.
+from text heuristics) + a knowledge-base fingerprint over document rows, FAQ rows, the bot's
+`agent_instructions` and disclosure config. Uploading, deleting or re-indexing a document,
+crawling a URL source or editing the bot moves every key, so a stale answer is never looked
+up again. `ANSWER_CACHE_TTL_SECONDS` (default 3600, `0` disables the cache) is the floor for
+state the fingerprint does not see.
 
-Never cached and never served from cache: turns with widget `userHints` context in the prompt,
-questions that went through PII redaction, and every turn that does not reach the RAG
-pipeline (operator takeover, greetings, escalation / pre-confirm states). Stored answers are
-only self-contained, confident ones: first turn of a chat, strong retrieval, no escalation
-recommendation and no offer / handoff / clarification marker from the model; the entry is
+The cache is consulted and written only on the visitor's first question of a chat (a
+widget greeting does not count as a turn), and never when the prompt carries `userHints`
+context, when the question went through PII redaction, or when the chat is in any session
+state (operator takeover, escalation / pre-confirm / follow-up, closed). Stored answers are
+only confident ones: strong retrieval, no escalation recommendation, no offer / handoff /
+clarification marker from the model, and no echo of a visitor-specific detail (a name or
+an order number typed into the question) that the documents do not contain; the entry is
 written after the turn committed and only if the reply is still the pipeline answer.
 
 Observability: `answer_exact` / `answer_semantic` hit rates on the admin cache-metrics
 endpoint, `answer_cache_hit` / `answer_cache_level` / `answer_cache_saved_ms` on the
 `chat.turn` event, and an `answer-cache` span plus `answer_cache_*` metadata and the
 `answer_cache_hit` tag on the Langfuse trace. Redis or Postgres being unavailable degrades
-to a miss; the turn runs the full pipeline as before.
+to a miss (Redis calls are bounded to 300 ms); the turn then runs the full pipeline as before.
+Eval runs that repeat golden questions should set `ANSWER_CACHE_TTL_SECONDS=0`.
 
 ### PII redaction (FI-043)
 

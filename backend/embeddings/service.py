@@ -30,6 +30,7 @@ from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_bes
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.knowledge.entity_extractor import extract_entities_from_passage
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
+from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -237,8 +238,11 @@ def create_embeddings_for_document(
             detail="Document has no parsed text to embed.",
         )
 
-    # Delete existing embeddings (re-embed on demand)
+    # Delete existing embeddings (re-embed on demand). The document row is
+    # touched so its updated_at moves: retrieval changes here without any
+    # other column changing, and the answer cache fingerprints that timestamp.
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
+    doc.updated_at = _utcnow()
     db.commit()
     invalidate_bm25_cache_for_tenant(doc.tenant_id)
 
@@ -320,16 +324,7 @@ def create_embeddings_for_document(
         run_document_health_check(document_id, db)
     except Exception:
         pass
-    _invalidate_answer_cache(doc.tenant_id)
     return embeddings
-
-
-def _invalidate_answer_cache(tenant_id: uuid.UUID | None) -> None:
-    # Re-embedding changes what retrieval returns without touching the
-    # document row the answer cache fingerprints, so the cache is told directly.
-    from backend.chat.answer_cache import invalidate_tenant_sync
-
-    invalidate_tenant_sync(tenant_id)
 
 
 def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
@@ -419,11 +414,11 @@ def delete_embeddings_for_document(
     Returns:
         Count of deleted embeddings.
     """
-    tenant_id = (
-        db.query(Document.tenant_id).filter(Document.id == document_id).scalar()
-    )
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    tenant_id = doc.tenant_id if doc is not None else None
     result = db.query(Embedding).filter(Embedding.document_id == document_id).delete()
+    if doc is not None:
+        doc.updated_at = _utcnow()
     db.commit()
     invalidate_bm25_cache_for_tenant(tenant_id)
-    _invalidate_answer_cache(tenant_id)
     return result

@@ -1,31 +1,18 @@
 """Two-level cache of generated chat answers.
 
-Level 1 (exact) lives in Redis: the normalized question text, keyed together
-with the bot, the response language and a knowledge-base fingerprint, maps to
-the answer the pipeline produced for it. Level 2 (semantic) lives in Postgres
-next to the other pgvector tables: the question embedding the pipeline
-computes anyway is compared against the stored embeddings of the same scope,
-and the nearest cached answer is served when its cosine similarity clears
-``ANSWER_CACHE_SEMANTIC_THRESHOLD``. Plain Redis has no nearest-neighbour
-search; pgvector is what the FAQ matcher already uses at the same point of
-the pipeline.
+Exact level: Redis, keyed by normalized question + bot + response language +
+knowledge-base fingerprint. Semantic level: Postgres, the question embedding
+the pipeline already computes is matched by cosine distance (pgvector)
+against cached questions of the same scope. Plain Redis has no
+nearest-neighbour search; pgvector is what the FAQ matcher already uses at
+the same point of the pipeline.
 
-Both levels are best-effort: a Redis or Postgres error is a miss, and
-``ANSWER_CACHE_TTL_SECONDS=0`` disables lookups and writes.
-
-The knowledge-base fingerprint folds in the tenant's document and FAQ rows,
-the bot's instructions and disclosure config, and a Redis generation counter
-bumped whenever embeddings are (re)written. Any change moves every key of the
-scope, so a stale answer is never looked up again and simply expires with its
-TTL — the TTL is the lower bound the fingerprint cannot cover (tenant profile
-edits, quick answers).
-
-What gets stored is decided by the pipeline (``steps/answer_cache.py``): only
-self-contained, confident answers — first turn of a chat, no user context in
-the prompt, no PII redaction on the question, strong retrieval and no
-escalation / handoff / clarification signal from the model. Turns that depend
-on session state (operator, escalation FSM, greetings) never reach the RAG
-pipeline and so never touch the cache.
+The fingerprint folds in the tenant's document and FAQ rows and the bot's
+instructions and disclosure config, so any change moves every key of the
+scope and stale answers simply expire. ``ANSWER_CACHE_TTL_SECONDS`` is the
+floor for state the fingerprint does not see (tenant profile, quick
+answers); ``0`` disables the cache. Every Redis or Postgres failure is a
+miss. Which turns may read or store is decided in ``steps/answer_cache.py``.
 """
 
 from __future__ import annotations
@@ -37,9 +24,10 @@ import json
 import logging
 import unicodedata
 import uuid
+from collections.abc import Coroutine
 from dataclasses import asdict, dataclass
 from datetime import timedelta
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,8 +48,12 @@ AnswerCacheLevel = Literal["exact", "semantic"]
 
 _PAYLOAD_VERSION = 1
 _EXACT_KEY_PREFIX = "cache:answer:"
-_GENERATION_KEY_PREFIX = "cache:answer_gen:"
+# Both stores sit on the critical path of every eligible turn, so a stalled
+# backend must cost a bounded fraction of the latency the cache exists to save.
+_REDIS_TIMEOUT_SEC = 0.3
 _SEMANTIC_LOOKUP_TIMEOUT_SEC = 2.0
+
+_T = TypeVar("_T")
 
 
 def is_enabled() -> bool:
@@ -205,10 +197,6 @@ class AnswerCacheCandidate:
 # ---------------------------------------------------------------------------
 
 
-def _generation_key(tenant_id: uuid.UUID) -> str:
-    return f"{_GENERATION_KEY_PREFIX}{tenant_id}"
-
-
 async def _knowledge_base_state(tenant_id: uuid.UUID, db: AsyncSession) -> list[str]:
     docs = Document.tenant_id == tenant_id
     faqs = TenantFaq.tenant_id == tenant_id
@@ -250,14 +238,8 @@ async def resolve_scope(
     except Exception:
         logger.debug("answer_cache_kb_state_failed tenant_id=%s", tenant_id, exc_info=True)
         return None
-    generation = await redis_mod.cache_get(_generation_key(tenant_id))
     material = json.dumps(
-        [
-            kb_state,
-            agent_instructions or "",
-            disclosure_config or {},
-            generation or "0",
-        ],
+        [kb_state, agent_instructions or "", disclosure_config or {}],
         sort_keys=True,
         default=str,
     )
@@ -271,29 +253,23 @@ async def resolve_scope(
     )
 
 
-async def invalidate_tenant(tenant_id: uuid.UUID | None) -> None:
-    """Move every key of the tenant by bumping its generation counter."""
-    if tenant_id is None or not redis_mod.is_enabled():
-        return
-    await redis_mod.cache_incr(_generation_key(tenant_id))
-
-
-def invalidate_tenant_sync(tenant_id: uuid.UUID | None) -> None:
-    """Blocking :func:`invalidate_tenant` for sync services and worker threads."""
-    if tenant_id is None or not redis_mod.is_enabled():
-        return
-    redis_mod.cache_incr_sync(_generation_key(tenant_id))
-
-
 # ---------------------------------------------------------------------------
 # Level 1 — exact match (Redis)
 # ---------------------------------------------------------------------------
 
 
+async def _bounded(coro: Coroutine[Any, Any, _T], default: _T) -> _T:
+    try:
+        return await asyncio.wait_for(coro, timeout=_REDIS_TIMEOUT_SEC)
+    except Exception:
+        logger.debug("answer_cache_redis_call_failed", exc_info=True)
+        return default
+
+
 async def exact_get(scope: AnswerCacheScope) -> CachedAnswer | None:
     if not redis_mod.is_enabled():
         return None
-    raw = await redis_mod.cache_get(scope.exact_key)
+    raw = await _bounded(redis_mod.cache_get(scope.exact_key), None)
     cached = CachedAnswer.from_payload(raw) if raw else None
     if cached is None:
         record_miss(EXACT_CACHE_NAME)
@@ -302,11 +278,18 @@ async def exact_get(scope: AnswerCacheScope) -> CachedAnswer | None:
     return cached
 
 
+async def _exact_set(scope: AnswerCacheScope, cached: CachedAnswer) -> None:
+    await _bounded(
+        redis_mod.cache_set_with_ttl(
+            scope.exact_key, cached.to_json(), settings.answer_cache_ttl_seconds
+        ),
+        False,
+    )
+
+
 async def promote_exact(scope: AnswerCacheScope, cached: CachedAnswer) -> None:
     """Write a semantic hit through to the exact level under this wording."""
-    await redis_mod.cache_set_with_ttl(
-        scope.exact_key, cached.to_json(), settings.answer_cache_ttl_seconds
-    )
+    await _exact_set(scope, cached)
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +414,7 @@ async def store(candidate: AnswerCacheCandidate, *, db: AsyncSession | None) -> 
         return
     ttl = settings.answer_cache_ttl_seconds
     scope = candidate.scope
-    await redis_mod.cache_set_with_ttl(scope.exact_key, candidate.answer.to_json(), ttl)
+    await _exact_set(scope, candidate.answer)
     if db is None or not candidate.question_embedding:
         return
     now = _utcnow()
@@ -454,7 +437,6 @@ async def store(candidate: AnswerCacheCandidate, *, db: AsyncSession | None) -> 
                 bot_id=scope.bot_id,
                 kb_fingerprint=scope.kb_fingerprint,
                 response_language=scope.response_language,
-                question_hash=scope.question_hash,
                 question=scope.question,
                 question_embedding=list(candidate.question_embedding),
                 payload=candidate.answer.to_dict(),

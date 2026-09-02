@@ -82,6 +82,7 @@ from backend.chat.persistence import (
 )
 from backend.chat.pii import redact
 from backend.chat.rotation import latest_chat_query, should_rotate
+from backend.chat.steps import answer_cache as answer_cache_steps
 from backend.chat.types import QuestionIntentResult
 from backend.contact_sessions.service import touch_user_session
 from backend.core import db as core_db
@@ -103,7 +104,6 @@ from backend.escalation.openai_escalation import (
     render_pre_confirm_text,  # noqa: F401
 )
 from backend.escalation.service import (
-    HumanRequestResult,
     build_chat_messages_for_openai,  # noqa: F401
     classify_question_intent,
     create_escalation_ticket,  # noqa: F401
@@ -170,6 +170,12 @@ __all__ = (
 )
 
 _HANDLER_ROUTER: HandlerRouter = default_router()
+
+
+def _discard_task_result(task: asyncio.Future) -> None:
+    """Retrieve an abandoned future's outcome so asyncio does not log it."""
+    if not task.cancelled():
+        task.exception()
 
 
 def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any]) -> None:
@@ -668,7 +674,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
     for handler in _HANDLER_ROUTER.handlers:
         if not handler.can_handle(ctx):
             continue
-        if isinstance(handler, RagHandler):
+        if isinstance(handler, RagHandler) and "_pipeline_result" not in ctx.extras:
             # Egress boundary: the pipeline embeds this text, rewrites it,
             # and puts it in the generation prompt — every one of those is an
             # OpenAI call, so it gets the redacted question, never the raw
@@ -739,33 +745,23 @@ async def async_process_chat_message(
         tenant_row = tenant_result.scalar_one_or_none()
         if tenant_row is not None:
             set_cached_tenant(tenant_row)
-    # Release the pooled connection before the human-request classifier:
-    # detect_human_request makes an OpenAI call (up to 3s) and there are
-    # no DB operations until _ensure_chat_async below.
+    # Release the pooled connection before the classifier LLM calls; the chat
+    # setup below re-acquires one.
     await db.close()
 
     redacted_question = redact(question).redacted_text
 
-    # The human-request and support-contact classifiers are independent async
-    # coroutines, so run them concurrently — the support-contact result is
-    # consumed only on the rarer escalation path but classifying it here (in
-    # parallel) keeps that path from paying a second serialized ~3s call.
+    # The human-request and intent classifiers overlap the chat setup and the
+    # answer-cache lookup below; an exact cache hit abandons them. A bootstrap
+    # turn (widget open) carries an empty question and nothing to classify.
     _hrc_start = perf_counter()
-    if not redacted_question.strip():
-        # Bootstrap turn (widget open) carries an empty question — there is
-        # nothing to classify, so skip both classifier LLM calls entirely and
-        # keep the greeting latency out of the OpenAI round-trip budget.
-        human_request_result = HumanRequestResult(
-            human_request=False, message_has_request_content=False
-        )
-        question_intent = QuestionIntentResult()
-    else:
-        human_request_result, question_intent = await asyncio.gather(
+    classifier_task: asyncio.Future[tuple[Any, Any]] | None = None
+    if redacted_question.strip():
+        classifier_task = asyncio.gather(
             detect_human_request(redacted_question, api_key, tenant_id),
             classify_question_intent(redacted_question, api_key, tenant_id),
         )
-    explicit_human_request = human_request_result.human_request
-    _human_request_classifier_ms = round((perf_counter() - _hrc_start) * 1000, 2)
+        classifier_task.add_done_callback(_discard_task_result)
 
     trace = begin_trace(
         name="rag-query",
@@ -774,7 +770,6 @@ async def async_process_chat_message(
         input=redacted_question or None,
         metadata={"tenant_id": str(tenant_id), "session_id": str(session_id)},
         tags=[f"tenant:{tenant_id}"],
-        force_trace=explicit_human_request,
     )
 
     _setup_start = perf_counter()
@@ -809,17 +804,9 @@ async def async_process_chat_message(
         metadata={"duration_ms": _setup_ms},
     )
     record_stage_ms(trace, "chat_setup_ms", _setup_ms)
-    record_stage_ms(trace, "human_request_classifier_ms", _human_request_classifier_ms)
 
     question_text = question.strip()
     is_new_session = not chat.messages
-
-    # Sticky marker: once any turn carries a concrete problem/question, later
-    # bare handoff requests can escalate with that context instead of being
-    # re-asked. A bare greeting (message_has_request_content=False) never sets
-    # it. Persisted with the turn via the chat row already in this session.
-    if human_request_result.message_has_request_content and not chat.has_substantive_content:
-        chat.has_substantive_content = True
 
     _lang_start = perf_counter()
     _lang_span = trace.span(
@@ -910,12 +897,47 @@ async def async_process_chat_message(
         allow_clarification=chat.clarification_count < MAX_CLARIFICATIONS_PER_SESSION,
         stream_callback=stream_callback,
         status_callback=status_callback,
-        explicit_human_request=explicit_human_request,
-        human_request_explicit=human_request_result.human_request_explicit,
-        question_intent=question_intent,
-        message_has_request_content=human_request_result.message_has_request_content,
+        explicit_human_request=False,
         turn_started_at=_turn_started_at,
     )
+
+    # Answer cache, exact level: an identical question already answered for
+    # this bot skips the classifiers, the guards and the whole pipeline. A
+    # cached question was a real request, so the greeting handler must not
+    # claim the turn.
+    answer_cache_scope = await answer_cache_steps.resolve_scope_for_turn(handler_ctx, db)
+    handler_ctx.extras["_answer_cache_scope"] = answer_cache_scope
+    cached_result = (
+        await answer_cache_steps.exact_lookup(
+            answer_cache_scope, language_context=language_context, trace=trace
+        )
+        if answer_cache_scope is not None
+        else None
+    )
+    if cached_result is not None:
+        handler_ctx.extras["_pipeline_result"] = cached_result
+        handler_ctx.message_has_request_content = True
+        if classifier_task is not None:
+            classifier_task.cancel()
+    elif classifier_task is not None:
+        human_request_result, question_intent = await classifier_task
+        handler_ctx.explicit_human_request = human_request_result.human_request
+        handler_ctx.human_request_explicit = human_request_result.human_request_explicit
+        handler_ctx.question_intent = question_intent
+        handler_ctx.message_has_request_content = human_request_result.message_has_request_content
+        if human_request_result.human_request:
+            trace.promote(
+                metadata={"sampling_promoted": True, "promotion_reason": "explicit_human_request"}
+            )
+    record_stage_ms(
+        trace, "human_request_classifier_ms", round((perf_counter() - _hrc_start) * 1000, 2)
+    )
+    # Sticky marker: once any turn carries a concrete problem/question, later
+    # bare handoff requests can escalate with that context instead of being
+    # re-asked. A bare greeting (message_has_request_content=False) never sets
+    # it. Persisted with the turn via the chat row already in this session.
+    if handler_ctx.message_has_request_content and not chat.has_substantive_content:
+        chat.has_substantive_content = True
 
     try:
         outcome = await _async_dispatch(handler_ctx, db)

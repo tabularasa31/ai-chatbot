@@ -208,8 +208,6 @@ class PipelineState:
     query_kb_language_match: Literal["native", "mismatch", "unknown"] = "unknown"
     query_variants: list[str] = field(default_factory=list)
     variant_vectors: list[list[float]] = field(default_factory=list)
-    # Resolved by the answer-cache step; None keeps both levels out of the turn.
-    answer_cache_scope: AnswerCacheScope | None = None
     embed_api_request_count: int = 0
     rewritten_variant: str | None = None
     query_rewrite_skip_reason: str | None = None

@@ -79,7 +79,6 @@ class AnswerCacheEntry(Base):
     )
     kb_fingerprint = Column(String(32), nullable=False)
     response_language = Column(String(16), nullable=False)
-    question_hash = Column(String(64), nullable=False)
     question = Column(Text, nullable=False)
     question_embedding = Column(Vector(1536), nullable=False)
     payload = Column(JSON, nullable=False)

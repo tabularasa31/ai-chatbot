@@ -133,18 +133,6 @@ async def cache_set_with_ttl(key: str, value: str, ttl_seconds: int) -> bool:
         return False
 
 
-async def cache_incr(key: str) -> int | None:
-    """Atomically increment an integer key without TTL. Returns the new value,
-    or `None` on any error."""
-    if _client is None:
-        return None
-    try:
-        return int(await _client.incr(key))
-    except Exception as exc:
-        logger.debug("redis_cache_incr_failed key=%s: %s", key, exc)
-        return None
-
-
 async def acquire_lock(key: str, ttl_seconds: int) -> str | None:
     """Acquire a TTL-bounded lock. Returns the token to pass to `release_lock`,
     or `None` if the lock is held by someone else / Redis is unavailable.
@@ -251,16 +239,6 @@ def cache_get_sync(key: str, *, timeout: float = 3.0) -> str | None:
         timeout=timeout,
         default=None,
         label=f"redis_cache_get_sync key={key}",
-    )
-
-
-def cache_incr_sync(key: str, *, timeout: float = 3.0) -> int | None:
-    """Blocking :func:`cache_incr` for daemon / worker threads."""
-    return _run_coro_sync(
-        lambda: cache_incr(key),
-        timeout=timeout,
-        default=None,
-        label=f"redis_cache_incr_sync key={key}",
     )
 
 

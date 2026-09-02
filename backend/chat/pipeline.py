@@ -4,14 +4,14 @@
 async pipeline behind every RAG chat turn. It wires the step functions from
 ``backend/chat/steps/`` into a flat, top-down flow::
 
-    answer_cache.resolve_scope  # cache scope: bot + language + KB fingerprint
-    answer_cache.exact_lookup   # cache 1: identical question → cached answer
     prepare_turn                # tenant profile, KB scripts, dialog context
     injection_guard             # guard 1: structural → semantic (2 levels)
     launch_concurrent_tasks     # relevance guard ∥ embeddings ∥ query rewrite
     build_query_plan            # collect variants + embed
     match_faq                   # faq_direct short-circuit
-    answer_cache.semantic_lookup# cache 2: nearest cached question → answer
+    answer_cache.semantic_lookup# nearest cached question → cached answer
+                                # (the exact level runs before dispatch, see
+                                #  service.async_process_chat_message)
     start_speculative_retrieval # retrieval ∥ relevance-guard wait
     relevance_guard             # guard 2: off-topic / social / complaint
     load_generation_inputs      # prompt hints + quick answers
@@ -44,8 +44,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.chat.language import ResolvedLanguageContext
 from backend.chat.answer_cache import AnswerCacheScope
+from backend.chat.language import ResolvedLanguageContext
 from backend.chat.steps import answer_cache, generate, pre_retrieval, retrieval
 from backend.chat.types import ChatPipelineResult, PipelineRun, QuestionIntentResult
 from backend.models import Chat, TenantProfile
@@ -114,12 +114,6 @@ async def async_run_chat_pipeline(
         question_intent=question_intent or QuestionIntentResult(),
         answer_cache_scope=answer_cache_scope,
     )
-
-    # --- Answer cache, exact level: no guard, embedding or LLM call -------
-    await answer_cache.resolve_scope(run)
-    early = await answer_cache.exact_lookup(run)
-    if early is not None:
-        return early
 
     # --- Pre-retrieval: guards, query plan, FAQ --------------------------
     await pre_retrieval.prepare_turn(run)

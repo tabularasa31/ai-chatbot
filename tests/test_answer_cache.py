@@ -1,5 +1,5 @@
 """Answer cache: exact level (Redis) + semantic level (pgvector) in front of
-retrieval and generation. See backend/chat/answer_cache.py."""
+the chat pipeline. See backend/chat/answer_cache.py."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import random
 import uuid
 from dataclasses import replace
 from datetime import timedelta
+from time import perf_counter
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -21,12 +23,14 @@ from backend.chat.answer_cache import (
     CachedAnswer,
     normalize_question,
 )
+from backend.chat.handlers.rag import RagHandler
 from backend.chat.language import ResolvedLanguageContext
 from backend.chat.service import RetrievalContext, process_chat_message
 from backend.chat.steps import answer_cache as cache_steps
 from backend.chat.types import ChatPipelineResult, PipelineRun
 from backend.core import redis as redis_mod
 from backend.core.config import settings
+from backend.embeddings.service import delete_embeddings_for_document
 from backend.faq.faq_matcher import FAQMatchResult
 from backend.models import (
     AnswerCacheEntry,
@@ -36,6 +40,7 @@ from backend.models import (
     DocumentStatus,
     DocumentType,
     EscalationTrigger,
+    OperatorState,
     Tenant,
 )
 from backend.models.base import _utcnow
@@ -56,14 +61,10 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         store[key] = value
         return True
 
-    async def _incr(key: str) -> int:
-        store[key] = str(int(store.get(key, "0")) + 1)
-        return int(store[key])
-
+    monkeypatch.setattr(settings, "answer_cache_ttl_seconds", 3600)
     monkeypatch.setattr(redis_mod, "is_enabled", lambda: True)
     monkeypatch.setattr(redis_mod, "cache_get", _get)
     monkeypatch.setattr(redis_mod, "cache_set_with_ttl", _set)
-    monkeypatch.setattr(redis_mod, "cache_incr", _incr)
     return store
 
 
@@ -120,14 +121,16 @@ def _cached_answer(**overrides) -> CachedAnswer:
     return CachedAnswer(**defaults)
 
 
-def _make_run(tenant_id: uuid.UUID | None = None, db=None) -> PipelineRun:
+def _make_run(
+    scope: AnswerCacheScope | None, *, db=None, question: str = "How do I reset my password?"
+) -> PipelineRun:
     return PipelineRun(
-        tenant_id=tenant_id or uuid.uuid4(),
-        question="How do I reset my password?",
+        tenant_id=scope.tenant_id if scope else uuid.uuid4(),
+        question=question,
         db=db,
         api_key="test-key",
         language_context=_language_context(),
-        answer_cache_eligible=True,
+        answer_cache_scope=scope,
     )
 
 
@@ -201,7 +204,6 @@ def _insert_entry(
         bot_id=scope.bot_id,
         kb_fingerprint=scope.kb_fingerprint,
         response_language=scope.response_language,
-        question_hash=scope.question_hash,
         question=scope.question,
         question_embedding=embedding,
         payload=(cached or _cached_answer()).to_dict(),
@@ -214,7 +216,7 @@ def _insert_entry(
 
 
 # ---------------------------------------------------------------------------
-# Keys and payload
+# Keys, payload, fingerprint
 # ---------------------------------------------------------------------------
 
 
@@ -246,7 +248,7 @@ def test_cached_answer_payload_round_trip_and_validation() -> None:
 
 @pytest.mark.asyncio
 async def test_fingerprint_tracks_documents_bot_config_and_reindex(
-    db_session: Session, async_search_session, fake_redis: dict[str, str]
+    db_session: Session, async_search_session
 ) -> None:
     tenant_row, doc = _tenant_with_doc(db_session)
 
@@ -288,13 +290,15 @@ async def test_fingerprint_tracks_documents_bot_config_and_reindex(
     assert after_upload not in seen
     seen.add(after_upload)
 
+    # Re-indexing rewrites embeddings without changing any other document
+    # column; the embeddings service touches the row so the fingerprint moves.
+    delete_embeddings_for_document(doc.id, db_session)
+    after_reindex = (await resolve()).kb_fingerprint
+    assert after_reindex not in seen
+    seen.add(after_reindex)
+
     db_session.delete(doc)
     db_session.commit()
-    after_delete = (await resolve()).kb_fingerprint
-    assert after_delete not in seen
-    seen.add(after_delete)
-
-    await answer_cache.invalidate_tenant(tenant_row.id)  # what a re-index does
     assert (await resolve()).kb_fingerprint not in seen
 
 
@@ -304,13 +308,13 @@ async def test_fingerprint_tracks_documents_bot_config_and_reindex(
 
 
 def test_exact_lookup_serves_cached_answer(fake_redis: dict[str, str]) -> None:
-    run = _make_run()
-    scope = _scope(tenant_id=run.tenant_id)
-    run.state.answer_cache_scope = scope
+    scope = _scope()
     cached = _cached_answer()
     fake_redis[scope.exact_key] = cached.to_json()
 
-    result = asyncio.run(cache_steps.exact_lookup(run))
+    result = asyncio.run(
+        cache_steps.exact_lookup(scope, language_context=_language_context(), trace=None)
+    )
 
     assert result is not None
     assert result.final_answer == cached.answer
@@ -335,9 +339,8 @@ async def test_semantic_lookup_serves_paraphrase_and_promotes_to_exact(
     async def _slow_guard():
         await asyncio.sleep(30)
 
-    run = _make_run(tenant_row.id, async_search_session)
     lookup = _scope(tenant_id=tenant_row.id, question="how can i reset the password")
-    run.state.answer_cache_scope = lookup
+    run = _make_run(lookup, db=async_search_session)
     run.state.variant_vectors = [_unit(1.0, 0.05, 0.0)]  # cosine ≈ 0.9988
     run.state.rel_task = asyncio.create_task(_slow_guard())
 
@@ -354,7 +357,7 @@ async def test_semantic_lookup_serves_paraphrase_and_promotes_to_exact(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mismatch",
-    ["below_threshold", "response_language", "kb_fingerprint", "bot_id", "expired"],
+    ["below_threshold", "tenant_id", "bot_id", "response_language", "kb_fingerprint", "expired"],
 )
 async def test_semantic_lookup_misses_outside_scope(
     db_session: Session, async_search_session, fake_redis: dict[str, str], mismatch: str
@@ -368,15 +371,16 @@ async def test_semantic_lookup_misses_outside_scope(
     vector = _unit(1.0, 0.0, 0.0)
     if mismatch == "below_threshold":
         vector = _unit(1.0, 1.0, 0.0)  # cosine ≈ 0.707
+    elif mismatch == "tenant_id":
+        lookup = replace(stored, tenant_id=_tenant_with_doc(db_session)[0].id)
+    elif mismatch == "bot_id":
+        lookup = replace(stored, bot_id=uuid.uuid4())
     elif mismatch == "response_language":
         lookup = replace(stored, response_language="de")
     elif mismatch == "kb_fingerprint":
         lookup = replace(stored, kb_fingerprint="fp-2")
-    elif mismatch == "bot_id":
-        lookup = replace(stored, bot_id=uuid.uuid4())
 
-    run = _make_run(tenant_row.id, async_search_session)
-    run.state.answer_cache_scope = lookup
+    run = _make_run(lookup, db=async_search_session)
     run.state.variant_vectors = [vector]
 
     assert await cache_steps.semantic_lookup(run) is None
@@ -431,43 +435,82 @@ async def test_store_writes_both_levels_and_purges_stale_rows(
     assert fresh.expires_at > _utcnow() + timedelta(seconds=settings.answer_cache_ttl_seconds - 60)
 
 
-def test_build_store_candidate_only_for_self_contained_confident_answers() -> None:
-    def eligible_run() -> PipelineRun:
-        run = _make_run()
-        run.state.answer_cache_scope = _scope(tenant_id=run.tenant_id)
+def test_build_store_candidate_only_for_confident_self_contained_answers() -> None:
+    def run_with_scope(question: str = "How do I reset my password?") -> PipelineRun:
+        run = _make_run(_scope(question=question), question=question)
         run.state.variant_vectors = [_unit(1, 0, 0)]
         return run
 
-    run = eligible_run()
+    run = run_with_scope()
     candidate = cache_steps.build_store_candidate(
         run, _generated_result(llm_lang_retry_ms=250), strong_context=True
     )
     assert candidate is not None
-    assert candidate.scope is run.state.answer_cache_scope
+    assert candidate.scope is run.answer_cache_scope
     assert candidate.answer.answer == "Answer text"
     assert candidate.answer.llm_ms == 4000 + 250
 
-    follow_up = eligible_run()
-    follow_up.state.guard_dialog_context = "User: hi\nAssistant: hello"
-    assert cache_steps.build_store_candidate(follow_up, _generated_result(), strong_context=True) is None
-
-    assert cache_steps.build_store_candidate(eligible_run(), _generated_result(), strong_context=False) is None
+    assert cache_steps.build_store_candidate(_make_run(None), _generated_result(), strong_context=True) is None
+    assert cache_steps.build_store_candidate(run_with_scope(), _generated_result(), strong_context=False) is None
 
     capped = replace(
         build_reliability_assessment(top_score=0.9, result_count=2),
         cap="medium",
         cap_reason="source_overlap",
     )
-    rejected = [
+    for rejected in (
         _generated_result(_retrieval(reliability=capped)),
         _generated_result(escalation_recommended=True),
         _generated_result(llm_offered_ticket=True),
         _generated_result(llm_needs_human=True),
         _generated_result(llm_clarifying=True),
         _generated_result(clarify_required_reason="ambiguous_intent"),
-    ]
-    for result in rejected:
-        assert cache_steps.build_store_candidate(eligible_run(), result, strong_context=True) is None
+    ):
+        assert cache_steps.build_store_candidate(run_with_scope(), rejected, strong_context=True) is None
+
+    # A detail the visitor typed that the documents do not contain (a name, an
+    # order number) must not ride into an answer served to other visitors.
+    personal = run_with_scope("Hi, I'm John Smith, order 48213, how do I get a refund?")
+    echoing = _generated_result(
+        _retrieval(chunk_texts=["Refunds are issued within 14 days."]),
+        final_answer="Hi John, for order 48213 you can request a refund within 14 days.",
+    )
+    assert cache_steps.build_store_candidate(personal, echoing, strong_context=True) is None
+    generic = replace(echoing, final_answer="You can request a refund within 14 days.")
+    assert cache_steps.build_store_candidate(personal, generic, strong_context=True) is not None
+
+
+@pytest.mark.asyncio
+async def test_handler_stores_only_when_the_reply_is_the_pipeline_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored: list[AnswerCacheCandidate] = []
+
+    async def _store(candidate, *, db):
+        stored.append(candidate)
+
+    monkeypatch.setattr(answer_cache, "store", _store)
+    candidate = AnswerCacheCandidate(
+        scope=_scope(), question_embedding=_unit(1, 0, 0), answer=_cached_answer()
+    )
+
+    def ctx(*, pre_confirm: bool = False) -> SimpleNamespace:
+        result = _generated_result(final_answer="Answer text", answer_cache_candidate=candidate)
+        chat = SimpleNamespace(id=uuid.uuid4(), escalation_pre_confirm_pending=pre_confirm)
+        return SimpleNamespace(extras={"_pipeline_result": result}, chat=chat, async_db=None)
+
+    def outcome(text: str) -> SimpleNamespace:
+        return SimpleNamespace(text=text)
+
+    handler = RagHandler()
+    # Escalation replaced the answer, or a handoff line was appended under it.
+    await handler._store_answer_cache(ctx(), outcome("Shall I forward this to support?"))
+    await handler._store_answer_cache(ctx(), outcome("Answer text\n\nShall I forward this?"))
+    # The pre-confirm gate was armed by the LLM's own offer.
+    await handler._store_answer_cache(ctx(pre_confirm=True), outcome("Answer text"))
+    assert stored == []
+    await handler._store_answer_cache(ctx(), outcome("Answer text"))
+    assert stored == [candidate]
 
 
 # ---------------------------------------------------------------------------
@@ -476,8 +519,8 @@ def test_build_store_candidate_only_for_self_contained_confident_answers() -> No
 
 
 def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> dict[str, int]:
-    """Deterministic retrieval + generation so the test isolates the cache."""
-    counters = {"generate": 0, "retrieve": 0}
+    """Deterministic embedding, retrieval and generation so the test isolates the cache."""
+    counters = {"embed": 0, "generate": 0, "retrieve": 0}
 
     async def _generate(*_args, **_kwargs):
         counters["generate"] += 1
@@ -493,6 +536,7 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
     async def _embed(texts: list[str], **_kwargs) -> list[list[float]]:
         # Text-dependent vectors: the shared mock returns one constant vector
         # for every input, which would make every question a semantic hit.
+        counters["embed"] += 1
         vectors = []
         for text in texts:
             rng = random.Random(normalize_question(text))
@@ -557,26 +601,37 @@ def test_repeated_question_is_served_from_cache_without_openai(
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
     counters = _patch_pipeline_fakes(monkeypatch, answer="Use the reset link in Settings.")
 
-    first = _ask(cl_row, api_key, db_session)
+    # Widget flow: the session opens with an empty bootstrap turn (persisted
+    # greeting), then the visitor's first question.
+    session_id = uuid.uuid4()
+    _ask(cl_row, api_key, db_session, "", session_id=session_id)
+    first = _ask(cl_row, api_key, db_session, session_id=session_id)
     assert first.text == "Use the reset link in Settings."
-    assert counters == {"generate": 1, "retrieve": 1}
+    assert counters == {"embed": 1, "generate": 1, "retrieve": 1}
     assert db_session.query(AnswerCacheEntry).count() == 1
     assert turn_events[-1]["answer_cache_hit"] is False
-    embed_calls = mock_openai_client.embeddings.create.call_count
 
     async def _must_not_run(*_args, **_kwargs):
-        raise AssertionError("injection guard must not run on an exact cache hit")
+        raise AssertionError("the pipeline must not run on an exact cache hit")
+
+    async def _slow_classifier(*_args, **_kwargs):
+        # The classifiers start before the lookup; a hit must not wait for them.
+        await asyncio.sleep(5)
+        raise AssertionError("an exact cache hit must not wait for the classifiers")
 
     monkeypatch.setattr("backend.chat.service.async_detect_injection", _must_not_run)
+    monkeypatch.setattr("backend.chat.service.detect_human_request", _slow_classifier)
+    monkeypatch.setattr("backend.chat.service.classify_question_intent", _slow_classifier)
     trace = _Trace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: trace)
 
+    started = perf_counter()
     second = _ask(cl_row, api_key, db_session, "  how do I reset my PASSWORD? ")
 
+    assert perf_counter() - started < 2.0
     assert second.text == first.text
     assert second.document_ids == first.document_ids
-    assert counters == {"generate": 1, "retrieve": 1}
-    assert mock_openai_client.embeddings.create.call_count == embed_calls
+    assert counters == {"embed": 1, "generate": 1, "retrieve": 1}
     assert db_session.query(AnswerCacheEntry).count() == 1  # a hit is not re-stored
     assert turn_events[-1]["answer_cache_hit"] is True
     assert turn_events[-1]["answer_cache_level"] == "exact"
@@ -649,10 +704,22 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
     counters = _patch_pipeline_fakes(monkeypatch, answer="Answer")
     identified = {"name": "Alice", "plan_tier": "pro"}
+    lookups: list[str] = []
+    original_get = redis_mod.cache_get
 
-    # Identified visitor and PII-redacted question: nothing stored.
+    async def _spy(key: str):
+        lookups.append(key)
+        return await original_get(key)
+
+    monkeypatch.setattr(redis_mod, "cache_get", _spy)
+
+    def cache_lookups() -> int:
+        return sum(1 for key in lookups if key.startswith("cache:answer:"))
+
+    # Identified visitor and PII-redacted question: neither read nor stored.
     _ask(cl_row, api_key, db_session, user_context=identified)
     _ask(cl_row, api_key, db_session, "Reset the password for john.doe@example.com please")
+    assert cache_lookups() == 0
     assert fake_redis == {}
     assert db_session.query(AnswerCacheEntry).count() == 0
 
@@ -661,12 +728,15 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
     assert db_session.query(AnswerCacheEntry).count() == 1
     _ask(cl_row, api_key, db_session, user_context=identified)
     assert counters["generate"] == 4
+    assert cache_lookups() == 1
 
-    # A follow-up in an existing chat is never stored.
+    # A follow-up in an existing chat is neither read from nor stored in the cache.
     session_id = uuid.uuid4()
     _ask(cl_row, api_key, db_session, "Where can I find the notification settings page?", session_id=session_id)
     assert db_session.query(AnswerCacheEntry).count() == 2
-    _ask(cl_row, api_key, db_session, "And how do I change them afterwards?", session_id=session_id)
+    _ask(cl_row, api_key, db_session, session_id=session_id)  # the cached wording, second turn
+    assert counters["generate"] == 6
+    assert cache_lookups() == 2
     assert db_session.query(AnswerCacheEntry).count() == 2
 
     # An escalating reply is never stored.
@@ -677,30 +747,31 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
     _ask(cl_row, api_key, db_session, "Do you support SAML?")
     assert db_session.query(AnswerCacheEntry).count() == 2
 
-    # A chat waiting on the pre-confirm gate never consults the cache.
-    chat = Chat(
+    # A chat waiting on the pre-confirm gate and a chat held by a live
+    # operator never consult the cache, even for the cached wording.
+    pre_confirm = Chat(
         tenant_id=cl_row.id,
         session_id=uuid.uuid4(),
         user_context={},
         escalation_pre_confirm_pending=True,
         escalation_pre_confirm_context={"trigger": "low_similarity", "primary_question": "x"},
     )
-    db_session.add(chat)
+    held = Chat(
+        tenant_id=cl_row.id,
+        session_id=uuid.uuid4(),
+        user_context={},
+        operator_state=OperatorState.live,
+        operator_joined_at=_utcnow(),
+    )
+    db_session.add_all([pre_confirm, held])
     db_session.commit()
-    lookups: list[str] = []
-    original_get = redis_mod.cache_get
-
-    async def _spy(key: str):
-        lookups.append(key)
-        return await original_get(key)
-
-    monkeypatch.setattr(redis_mod, "cache_get", _spy)
     monkeypatch.setattr(
         "backend.chat.service.classify_pre_confirm_reply", _as_async(lambda **_: ("unclear", 0))
     )
-    outcome = _ask(cl_row, api_key, db_session, session_id=chat.session_id)
-    assert outcome.text != "Answer"
-    assert not any(key.startswith("cache:answer:") for key in lookups)
+    before = cache_lookups()
+    assert _ask(cl_row, api_key, db_session, session_id=pre_confirm.session_id).text != "Answer"
+    assert _ask(cl_row, api_key, db_session, session_id=held.session_id).delivered_to_operator
+    assert cache_lookups() == before
 
 
 def test_redis_unavailable_keeps_the_pipeline_working(
@@ -714,11 +785,12 @@ def test_redis_unavailable_keeps_the_pipeline_working(
     counters = _patch_pipeline_fakes(monkeypatch, answer="Answer")
 
     async def _down_get(key: str):
-        return None
+        raise ConnectionError("redis down")
 
     async def _down_set(key: str, value: str, ttl: int) -> bool:
-        return False
+        raise ConnectionError("redis down")
 
+    monkeypatch.setattr(settings, "answer_cache_ttl_seconds", 3600)
     monkeypatch.setattr(redis_mod, "is_enabled", lambda: True)
     monkeypatch.setattr(redis_mod, "cache_get", _down_get)
     monkeypatch.setattr(redis_mod, "cache_set_with_ttl", _down_set)

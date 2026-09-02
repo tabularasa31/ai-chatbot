@@ -34,6 +34,8 @@ _CTX = "NULLIF(current_setting('app.tenant_id', true), '')"
 
 
 def upgrade() -> None:
+    if op.get_context().as_sql:
+        return
     bind = op.get_bind()
     insp = sa_inspect(bind)
     is_postgres = bind.dialect.name == "postgresql"
@@ -46,7 +48,6 @@ def upgrade() -> None:
             sa.Column("bot_id", postgresql.UUID(as_uuid=True), nullable=True),
             sa.Column("kb_fingerprint", sa.String(length=32), nullable=False),
             sa.Column("response_language", sa.String(length=16), nullable=False),
-            sa.Column("question_hash", sa.String(length=64), nullable=False),
             sa.Column("question", sa.Text(), nullable=False),
             sa.Column("payload", sa.JSON(), nullable=False),
             sa.Column("created_at", sa.DateTime(), nullable=False),

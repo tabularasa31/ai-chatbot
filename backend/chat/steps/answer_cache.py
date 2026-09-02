@@ -1,16 +1,21 @@
-"""Answer-cache pipeline steps.
+"""Answer-cache steps.
 
-* :func:`resolve_scope` — cache scope for the turn (bot, language, KB
-  fingerprint); ``None`` leaves the cache out of the turn entirely.
-* :func:`exact_lookup` — level 1, runs before the guards: an identical
-  question already answered for this scope is served without any OpenAI call.
-* :func:`semantic_lookup` — level 2, runs once the question embedding exists
-  and the FAQ matcher has declined the turn: the nearest cached question of
-  the scope above the similarity threshold is served without retrieval or
-  generation.
-* :func:`build_store_candidate` — decides after generation whether the fresh
-  answer is self-contained and confident enough to be stored; the RAG handler
-  performs the write once the turn is persisted.
+Before handler dispatch (``service.async_process_chat_message``):
+
+* :func:`resolve_scope_for_turn` — the cache scope for the turn, or ``None``
+  for turns the cache must stay out of: user context in the prompt, a
+  PII-redacted question, any session state (operator hold, escalation
+  states, closed chat) and any turn after the visitor's first question.
+* :func:`exact_lookup` — level 1. Runs before the pre-dispatch classifiers
+  and every guard, so a hit costs no OpenAI call at all.
+
+Inside the RAG pipeline:
+
+* :func:`semantic_lookup` — level 2, once the question embedding exists and
+  the FAQ matcher has declined the turn.
+* :func:`build_store_candidate` — whether the fresh answer is confident and
+  free of visitor-specific content; the RAG handler performs the write once
+  the turn is persisted.
 
 Storage and key semantics live in ``backend/chat/answer_cache.py``.
 """
@@ -19,56 +24,80 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from dataclasses import replace
 from time import perf_counter
+from typing import TYPE_CHECKING
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.chat import answer_cache
 from backend.chat.answer_cache import (
     AnswerCacheCandidate,
     AnswerCacheHit,
     AnswerCacheLevel,
+    AnswerCacheScope,
     CachedAnswer,
 )
-from backend.chat.types import ChatPipelineResult, PipelineRun, RetrievalContext
+from backend.chat.language import ResolvedLanguageContext
+from backend.chat.types import ChatPipelineResult, PipelineRun, PipelineState, RetrievalContext
+from backend.models import MessageRole, OperatorState
 from backend.models.base import _utcnow
-from backend.observability import record_stage_ms
+from backend.observability import TraceHandle, record_stage_ms
 from backend.search.service import default_retrieval_reliability
+
+if TYPE_CHECKING:
+    from backend.chat.handlers.base import HandlerContext
 
 logger = logging.getLogger(__name__)
 
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
-async def resolve_scope(run: PipelineRun) -> None:
-    if not run.answer_cache_eligible or not answer_cache.is_enabled():
-        return
-    bot_id: uuid.UUID | None = None
-    if run.retry_bot_id:
-        try:
-            bot_id = uuid.UUID(run.retry_bot_id)
-        except ValueError:
-            bot_id = None
-    run.state.answer_cache_scope = await answer_cache.resolve_scope(
-        tenant_id=run.tenant_id,
-        bot_id=bot_id,
-        response_language=run.language_context.response_language,
-        question=run.question,
-        agent_instructions=run.agent_instructions,
-        disclosure_config=run.disclosure_config,
-        db=run.db,
+
+async def resolve_scope_for_turn(
+    ctx: HandlerContext, db: AsyncSession
+) -> AnswerCacheScope | None:
+    chat = ctx.chat
+    session_bound = (
+        chat.operator_state is OperatorState.live
+        or chat.ended_at is not None
+        or bool(chat.escalation_awaiting_ticket_id)
+        or bool(chat.escalation_pre_confirm_pending)
+        or bool(chat.escalation_awaiting_request)
+        or bool(chat.escalation_followup_pending)
+        or any(m.role == MessageRole.user for m in chat.messages or [])
+    )
+    if (
+        not ctx.question_text
+        or not answer_cache.is_enabled()
+        or ctx.user_context_line is not None
+        or ctx.redacted_question != ctx.question
+        or session_bound
+    ):
+        return None
+    return await answer_cache.resolve_scope(
+        tenant_id=ctx.tenant_id,
+        bot_id=ctx.bot_id,
+        response_language=ctx.language_context.response_language,
+        question=ctx.redacted_question,
+        agent_instructions=ctx.bot_agent_instructions,
+        disclosure_config=ctx.disclosure_config,
+        db=db,
     )
 
 
 def _end_lookup_span(
-    run: PipelineRun,
+    trace: TraceHandle | None,
     *,
     level: AnswerCacheLevel,
     started_at: float,
     hit: AnswerCacheHit | None,
 ) -> None:
-    duration_ms = round((perf_counter() - started_at) * 1000, 2)
-    if run.trace is None:
+    if trace is None:
         return
-    span = run.trace.span(name="answer-cache", input={"level": level})
+    duration_ms = round((perf_counter() - started_at) * 1000, 2)
+    span = trace.span(name="answer-cache", input={"level": level})
     span.end(
         output={
             "hit": hit is not None,
@@ -77,10 +106,14 @@ def _end_lookup_span(
         },
         metadata={"duration_ms": duration_ms},
     )
-    record_stage_ms(run.trace, "answer_cache_ms", duration_ms)
+    record_stage_ms(trace, "answer_cache_ms", duration_ms)
 
 
-def _hit_result(run: PipelineRun, hit: AnswerCacheHit) -> ChatPipelineResult:
+def _hit_result(
+    hit: AnswerCacheHit,
+    language_context: ResolvedLanguageContext,
+    state: PipelineState | None = None,
+) -> ChatPipelineResult:
     cached = hit.answer
     reliability = replace(
         default_retrieval_reliability(),
@@ -97,7 +130,18 @@ def _hit_result(run: PipelineRun, hit: AnswerCacheHit) -> ChatPipelineResult:
         confidence_source=cached.confidence_source,
         reliability=reliability,
     )
-    state = run.state
+    telemetry = (
+        dict(
+            faq_match=state.faq_match,
+            query_script=state.query_script or None,
+            kb_scripts=list(state.kb_scripts) if state.kb_scripts else None,
+            cross_lingual_triggered=state.cross_lingual_triggered,
+            cross_lingual_variants_count=state.cross_lingual_variants_added,
+            query_kb_language_match=state.query_kb_language_match if state.kb_scripts else None,
+        )
+        if state is not None
+        else {}
+    )
     return ChatPipelineResult(
         raw_answer=cached.answer,
         final_answer=cached.answer,
@@ -109,32 +153,29 @@ def _hit_result(run: PipelineRun, hit: AnswerCacheHit) -> ChatPipelineResult:
         retrieval=retrieval,
         escalation_recommended=False,
         escalation_trigger=None,
-        faq_match=state.faq_match,
-        language_context=run.language_context,
-        query_script=state.query_script or None,
-        kb_scripts=list(state.kb_scripts) if state.kb_scripts else None,
-        cross_lingual_triggered=state.cross_lingual_triggered,
-        cross_lingual_variants_count=state.cross_lingual_variants_added,
-        query_kb_language_match=state.query_kb_language_match if state.kb_scripts else None,
+        language_context=language_context,
         answer_cache=hit,
+        **telemetry,
     )
 
 
-async def exact_lookup(run: PipelineRun) -> ChatPipelineResult | None:
-    scope = run.state.answer_cache_scope
-    if scope is None:
-        return None
+async def exact_lookup(
+    scope: AnswerCacheScope,
+    *,
+    language_context: ResolvedLanguageContext,
+    trace: TraceHandle | None,
+) -> ChatPipelineResult | None:
     started_at = perf_counter()
     cached = await answer_cache.exact_get(scope)
     hit = AnswerCacheHit(level="exact", similarity=1.0, answer=cached) if cached else None
-    _end_lookup_span(run, level="exact", started_at=started_at, hit=hit)
+    _end_lookup_span(trace, level="exact", started_at=started_at, hit=hit)
     if hit is None:
         return None
-    return _hit_result(run, hit)
+    return _hit_result(hit, language_context)
 
 
 async def semantic_lookup(run: PipelineRun) -> ChatPipelineResult | None:
-    scope = run.state.answer_cache_scope
+    scope = run.answer_cache_scope
     state = run.state
     if scope is None or not state.variant_vectors:
         return None
@@ -145,7 +186,7 @@ async def semantic_lookup(run: PipelineRun) -> ChatPipelineResult | None:
         if match is not None
         else None
     )
-    _end_lookup_span(run, level="semantic", started_at=started_at, hit=hit)
+    _end_lookup_span(run.trace, level="semantic", started_at=started_at, hit=hit)
     if hit is None:
         return None
     # The relevance guard was launched alongside the embedding; a cached
@@ -155,7 +196,31 @@ async def semantic_lookup(run: PipelineRun) -> ChatPipelineResult | None:
         state.rel_task.cancel()
         await asyncio.gather(state.rel_task, return_exceptions=True)
     await answer_cache.promote_exact(scope, hit.answer)
-    return _hit_result(run, hit)
+    return _hit_result(hit, run.language_context, state)
+
+
+def _tokens(text: str) -> set[str]:
+    return set(_TOKEN_RE.findall(text.casefold()))
+
+
+def _answer_echoes_question_specifics(
+    question: str, answer: str, chunk_texts: list[str]
+) -> bool:
+    """True when the answer repeats a detail the visitor typed that the
+    retrieved documents do not contain — a name, an order or account number.
+
+    The structural PII redactor does not know such tokens; digit-bearing and
+    capitalised ones (past the first word) are the language-agnostic proxy.
+    """
+    grounded = _tokens(" ".join(chunk_texts))
+    answer_tokens = _tokens(answer)
+    raw_tokens = _TOKEN_RE.findall(question)
+    for index, token in enumerate(raw_tokens):
+        specific = any(ch.isdigit() for ch in token) or (index > 0 and token[:1].isupper())
+        folded = token.casefold()
+        if specific and folded not in grounded and folded in answer_tokens:
+            return True
+    return False
 
 
 def build_store_candidate(
@@ -164,19 +229,15 @@ def build_store_candidate(
     *,
     strong_context: bool,
 ) -> AnswerCacheCandidate | None:
-    """Wrap a fresh answer for storage, or ``None`` when it must not be reused.
-
-    Stored answers are served to other visitors verbatim, so the turn has to
-    be self-contained (first turn: no dialog history shaped the prompt) and
-    the answer confident: strong retrieval, no reliability cap, and no
-    escalation, handoff or clarification signal from the model.
+    """Wrap a fresh answer for storage, or ``None`` when it must not be reused:
+    weak retrieval or a reliability cap, any escalation / handoff / clarify
+    signal from the model, or an answer that echoes visitor-specific detail.
     """
     state = run.state
-    scope = state.answer_cache_scope
+    scope = run.answer_cache_scope
     retrieval = result.retrieval
     if (
         scope is None
-        or state.guard_dialog_context is not None
         or not state.variant_vectors
         or not strong_context
         or retrieval is None
@@ -190,7 +251,7 @@ def build_store_candidate(
     ):
         return None
     answer = result.final_answer.strip()
-    if not answer:
+    if not answer or _answer_echoes_question_specifics(run.question, answer, retrieval.chunk_texts):
         return None
     return AnswerCacheCandidate(
         scope=scope,

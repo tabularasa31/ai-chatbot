@@ -14,15 +14,6 @@ from backend.gap_analyzer.enums import GapCommandStatus, GapJobKind, GapJobStatu
 
 
 @dataclass(frozen=True)
-class StoredGapSignalState:
-    gap_question_id: UUID
-    answer_confidence: float | None
-    had_fallback: bool
-    had_rejected: bool
-    had_escalation: bool
-
-
-@dataclass(frozen=True)
 class ModeACorpusChunk:
     chunk_id: UUID
     document_id: UUID

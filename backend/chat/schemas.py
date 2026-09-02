@@ -135,8 +135,6 @@ class ChatMessageLogItem(BaseModel):
     session_id: UUID
     role: Literal["user", "assistant", "operator"]
     content: str
-    feedback: Literal["none", "up", "down"]
-    ideal_answer: str | None
     created_at: datetime
     # Conversation the message belongs to; a session spans several after
     # idle rotation. The dashboard draws a divider on chat_id change.

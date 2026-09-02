@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, joinedload
 from backend.models import (
     Chat,
     Message,
-    MessageFeedback,
     MessageRole,
 )
 
@@ -159,8 +158,6 @@ def get_session_logs(
             session_id,
             m.role.value,
             m.content,
-            (m.feedback or MessageFeedback.none).value,
-            m.ideal_answer,
             m.created_at,
             # Conversation boundary marker: the dashboard renders a divider
             # whenever chat_id changes between consecutive messages.

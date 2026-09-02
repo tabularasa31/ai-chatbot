@@ -243,8 +243,6 @@ endpoints below by tag.
 | GET  | `/chat/sessions` | List recent sessions for the current tenant. |
 | GET  | `/chat/logs/session/{session_id}` | Full conversation transcript for a session. |
 | POST | `/chat/logs/session/{session_id}/delete-original` | Erase the original transcript text after retention compliance review. |
-| POST | `/chat/messages/{message_id}/feedback` | Submit thumbs-up / thumbs-down feedback on a single assistant turn. |
-| GET  | `/chat/bad-answers` | Listing for the **Review bad answers** dashboard page. |
 
 ### Escalations
 

@@ -231,8 +231,6 @@ messages
 ├─ role (ENUM: user, assistant)
 ├─ content (TEXT, question or answer)
 ├─ source_documents (UUID[], JSON array of doc IDs)
-├─ feedback (ENUM: positive, negative; nullable)
-├─ ideal_answer (TEXT, nullable — provided when feedback is negative)
 ├─ token_count (INTEGER, nullable — tokens used for this response)
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)

@@ -261,7 +261,6 @@ def _try_ingest_gap_signal(
                 was_rejected=was_rejected,
                 had_fallback=had_fallback,
                 was_escalated=was_escalated,
-                user_thumbed_down=False,
                 language=language,
             )
         )

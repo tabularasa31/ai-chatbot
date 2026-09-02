@@ -85,7 +85,6 @@ def test_gap_analyzer_orchestrator_keeps_read_contracts_out_of_public_surface() 
         was_rejected=False,
         had_fallback=False,
         was_escalated=False,
-        user_thumbed_down=False,
     )
 
     with pytest.raises(RuntimeError):

@@ -92,12 +92,6 @@ class OperatorSessionEndReason(str, enum.Enum):
     reconciled = "reconciled"
 
 
-class MessageFeedback(str, enum.Enum):
-    none = "none"
-    up = "up"
-    down = "down"
-
-
 class EscalationTrigger(str, enum.Enum):
     low_similarity = "low_similarity"
     no_documents = "no_documents"

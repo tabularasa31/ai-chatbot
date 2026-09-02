@@ -1096,7 +1096,6 @@ class GapAnalyzerOrchestrator:
             had_fallback=signal.had_fallback,
             was_rejected=signal.was_rejected,
             was_escalated=signal.was_escalated,
-            user_thumbed_down=signal.user_thumbed_down,
         )
 
     def _resolve_signal_weight_from_values(
@@ -1106,7 +1105,6 @@ class GapAnalyzerOrchestrator:
         had_fallback: bool,
         was_rejected: bool,
         was_escalated: bool,
-        user_thumbed_down: bool,
     ) -> float:
         policy = SignalWeightPolicy()
         weight = policy.normal_weight
@@ -1116,6 +1114,4 @@ class GapAnalyzerOrchestrator:
             weight = max(weight, policy.rejection_weight)
         if was_escalated:
             weight = max(weight, policy.escalation_weight)
-        if user_thumbed_down:
-            weight = max(weight, policy.thumbdown_weight)
         return weight

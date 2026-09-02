@@ -5,12 +5,11 @@ Covers acceptance criteria from spec:
 2. Watermark delayed-insert guard (30s)
 3. MAX_FAQ_PER_RUN limit with priority by cluster size
 4. Answer = next assistant message after specific user message
-5. Thumbs-down clusters are skipped
-6. asyncio.sleep called between embedding batches
-7. Job timeout stops processing early
-8. FAQEntry contains cluster_size and source_message_ids
-9. analysis_version change resets watermark
-10. is_running = FALSE guaranteed in finally
+5. asyncio.sleep called between embedding batches
+6. Job timeout stops processing early
+7. FAQEntry contains cluster_size and source_message_ids
+8. analysis_version change resets watermark
+9. is_running = FALSE guaranteed in finally
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ from backend.models import (
     LogAnalysisState,
     Message,
     MessageEmbedding,
-    MessageFeedback,
     MessageRole,
     TenantFaq,
     User,
@@ -74,13 +72,11 @@ def _make_message(
     role: MessageRole,
     content: str,
     created_at: datetime | None = None,
-    feedback: MessageFeedback = MessageFeedback.none,
 ) -> Message:
     msg = Message(
         chat_id=chat.id,
         role=role,
         content=content,
-        feedback=feedback,
         created_at=created_at or datetime.now(timezone.utc),
     )
     db_session.add(msg)
@@ -228,59 +224,8 @@ def test_answer_is_next_message(db_session, client_row, chat_session):
     )
     db_session.commit()
 
-    answer_text, _ = _get_answer_for_message(db_session, user_msg.id, chat_session.id)
+    answer_text = _get_answer_for_message(db_session, user_msg.id, chat_session.id)
     assert answer_text == correct_answer.content
-
-
-# ── test_thumbs_down_skip ─────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_thumbs_down_skip(db_session, client_row, chat_session):
-    """Cluster where all answers are thumbs-down must not produce a FAQ candidate."""
-    from backend.jobs.analyze_chat_logs import (
-        MessageFeedback,
-        _get_answer_for_message,
-    )
-
-    now = datetime.now(timezone.utc)
-    # Create user messages + thumbs-down assistant answers. Timestamps step
-    # *forward* per turn so the rows form a real conversation (q, a, q, a, …).
-    # They used to step backward, which put all three questions before all
-    # three answers — a shape the pairing rule cannot read, and one no chat
-    # produces.
-    user_msgs = []
-    for i in range(3):
-        user_msg = _make_message(
-            db_session,
-            chat_session,
-            MessageRole.user,
-            f"Bad question {i}",
-            created_at=now - timedelta(seconds=60 - i * 10),
-        )
-        _make_message(
-            db_session,
-            chat_session,
-            MessageRole.assistant,
-            f"Bad answer {i}",
-            created_at=now - timedelta(seconds=55 - i * 10),
-            feedback=MessageFeedback.down,
-        )
-        user_msgs.append(user_msg)
-    db_session.commit()
-
-    # Verify feedback is read from ASSISTANT messages (not user messages)
-    for user_msg in user_msgs:
-        _, feedback = _get_answer_for_message(db_session, user_msg.id, chat_session.id)
-        assert feedback == MessageFeedback.down, (
-            "Feedback should come from the assistant message, not user message"
-        )
-
-    # All-thumbs-down → no FAQ candidate should be created
-    faq_count_before = (
-        db_session.query(TenantFaq).filter_by(tenant_id=client_row.id).count()
-    )
-    assert faq_count_before == 0
 
 
 # ── test_embedding_throttle ───────────────────────────────────────────────────
@@ -396,7 +341,6 @@ def test_faq_entry_has_explainability_fields(db_session, client_row, chat_sessio
     best_member = ClusterMember(
         message=representative,
         answer="You can cancel from Account Settings.",
-        has_thumbs_up=True,
     )
 
     mock_openai = MagicMock()
@@ -509,8 +453,8 @@ def test_swallowed_visitor_turns_get_no_answer(db_session, client_row, chat_sess
     Visitor turns during the handoff are swallowed by ``OperatorHandler`` and
     persisted with no reply. Unbounded, all of them would pair with the first
     bot answer *after* the release — an unrelated one — and be fed to OpenAI
-    as FAQ candidates, each carrying that answer's thumbs-up/down. A turn
-    nobody answered must return no answer.
+    as FAQ candidates, each carrying that answer. A turn nobody answered must
+    return no answer.
     """
     from backend.jobs.analyze_chat_logs import _get_answer_for_message
 
@@ -563,24 +507,17 @@ def test_swallowed_visitor_turns_get_no_answer(db_session, client_row, chat_sess
         MessageRole.assistant,
         "Open Settings → Plan to change it.",
         created_at=now - timedelta(seconds=20),
-        feedback=MessageFeedback.up,
     )
     db_session.commit()
 
     # The answered turn still pairs with its own answer.
-    text, _ = _get_answer_for_message(db_session, answered.id, chat_session.id)
+    text = _get_answer_for_message(db_session, answered.id, chat_session.id)
     assert text == its_answer.content
 
-    # None of the swallowed turns borrows the later, unrelated answer — nor
-    # its thumbs-up, which would otherwise be attributed to all three.
+    # None of the swallowed turns borrows the later, unrelated answer.
     for msg in swallowed:
-        text, feedback = _get_answer_for_message(db_session, msg.id, chat_session.id)
-        assert text is None
-        assert feedback == MessageFeedback.none
+        assert _get_answer_for_message(db_session, msg.id, chat_session.id) is None
 
     # The post-release turn keeps its own answer.
-    text, feedback = _get_answer_for_message(
-        db_session, after_release.id, chat_session.id
-    )
+    text = _get_answer_for_message(db_session, after_release.id, chat_session.id)
     assert text == unrelated_answer.content
-    assert feedback == MessageFeedback.up

@@ -218,14 +218,29 @@ def test_run_document_health_check_flags_poor_structure(db_session: Session) -> 
     assert "poor_structure" in [warning["type"] for warning in result["warnings"]]
 
 
-def test_run_document_health_check_flags_incomplete_section(
+def test_run_document_health_check_flags_unclosed_code_fence(
     db_session: Session,
 ) -> None:
     doc = _create_ready_document(
         db_session,
         email="incomplete@example.com",
-        filename="todo.md",
-        parsed_text="# Guide\n\n## Next steps\n\nTODO: add the final verification workflow.",
+        filename="cut-off.md",
+        parsed_text="# Guide\n\n## Next steps\n\nRun the verification workflow:\n\n```bash\nmake verify\n",
+    )
+
+    result = run_document_health_check(doc.id, db_session)
+
+    assert "incomplete_section" in [warning["type"] for warning in result["warnings"]]
+
+
+def test_run_document_health_check_flags_text_ending_mid_thought(
+    db_session: Session,
+) -> None:
+    doc = _create_ready_document(
+        db_session,
+        email="mid-thought@example.com",
+        filename="dangling.md",
+        parsed_text="# Guide\n\n## Next steps\n\nThe remaining verification steps are:",
     )
 
     result = run_document_health_check(doc.id, db_session)
@@ -316,9 +331,10 @@ def test_get_health_after_run_via_api_without_openai_key(
                 "x.md",
                 (
                     b"# Guide\n\n"
-                    b"TODO: finish the rollout checklist after validating the DNS delegation, SSL status, "
+                    b"Finish the rollout checklist after validating the DNS delegation, SSL status, "
                     b"cache behavior, and final HTTPS verification for the production domain. "
-                    b"Confirm each step in the panel before publishing the guide."
+                    b"Run the verification command:\n\n"
+                    b"```bash\nmake verify-domain\n"
                 ),
                 "text/markdown",
             )

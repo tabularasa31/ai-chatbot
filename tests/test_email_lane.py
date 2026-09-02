@@ -36,7 +36,7 @@ from backend.email.reply_lane import (
 )
 from backend.escalation.service import (
     _notify_tenant_new_ticket,
-    resolve_ticket,
+    stage_ticket_resolved,
 )
 from backend.models import (
     Chat,
@@ -352,7 +352,8 @@ def test_a_reply_to_a_just_resolved_request_still_reaches_the_visitor(
     token = ticket.reply_token
     assert token and token in address
 
-    resolve_ticket(ticket.id, tenant_id, "done", db_session)
+    stage_ticket_resolved(db_session, ticket, "done")
+    db_session.commit()
 
     with mock.patch(
         "backend.escalation.service._send_email_off_loop", return_value="mid"
@@ -384,7 +385,8 @@ def test_a_token_revoked_long_ago_addresses_nothing(
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
-    resolve_ticket(ticket.id, tenant_id, "done", db_session)
+    stage_ticket_resolved(db_session, ticket, "done")
+    db_session.commit()
     ticket = db_session.get(EscalationTicket, ticket.id)
     ticket.reply_token_revoked_at = _utcnow() - REVOKED_TOKEN_GRACE - timedelta(hours=1)
     db_session.commit()
@@ -989,7 +991,8 @@ def test_a_reopened_ticket_advertises_an_address_that_works(
     escalation_reply_to(ticket, db_session)
     db_session.commit()
 
-    resolve_ticket(ticket.id, tenant_id, "done", db_session)
+    stage_ticket_resolved(db_session, ticket, "done")
+    db_session.commit()
     ticket = db_session.get(EscalationTicket, ticket.id)
     assert ticket.reply_token_revoked_at is not None
 

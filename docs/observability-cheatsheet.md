@@ -74,7 +74,6 @@ python langfuse_runner.py \
 | Escalation triggers breakdown | `chat_escalated` | `trigger` |
 | Language match rate | `chat_completed` | `lang_match` (boolean) |
 | Reliability cap_reason distribution | `chat_completed` | `cap_reason` |
-| Thumbs-up/down ratio per week | `chat_feedback` | `feedback` (positive/negative) |
 
 ### Key event shapes
 
@@ -95,12 +94,6 @@ tenant_id, bot_id, chat_id,
 trigger ("no_docs" | "low_confidence" | "answer_rejected" | "user_request"),
 reason (full escalation reason string),
 plan_tier, priority ("Critical" | "High" | "Medium" | null)
-```
-
-**`chat_feedback`** — emitted on thumbs-up / thumbs-down:
-```
-tenant_id, feedback ("positive" | "negative"),
-decision_branch (optional), cap_reason (optional)
 ```
 
 **`$ai_generation`** — PostHog LLM Observability, one per LLM call:

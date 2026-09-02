@@ -294,7 +294,7 @@ Contract notes:
 - Deleting a single URL-derived page adds its `source_url` to a persistent manual exclusion list for that source, so the crawler does not recreate it on later refreshes.
 - `recent_runs[].failed_urls` uses a fixed object shape: `{ "url": string, "reason": string }`.
 - Mutating URL source actions (`create`, `edit`, `refresh`, `delete`, `delete page`) require a verified user.
-- Read-side dashboard routes for documents, knowledge, embeddings, search, chat logs/history/feedback, escalations, and gap analyzer now also require a verified user, keeping the whole tenant workspace behind the same verification boundary.
+- Read-side dashboard routes for documents, knowledge, embeddings, search, chat logs/history, the operator inbox, and gap analyzer now also require a verified user, keeping the whole tenant workspace behind the same verification boundary.
 
 ---
 
@@ -768,7 +768,7 @@ Behavior details:
 | Widget (public) | `bot_id` query param (bot `public_id`) | `POST /widget/chat?bot_id=…` |
 | Debug tool | JWT + `bot_id` query param (bot `public_id`) | `POST /chat/debug?bot_id=…` |
 
-The internal `/debug` and `/review` UI pages resolve the current bot automatically from the authenticated tenant; users are not expected to edit the URL manually.
+The internal `/debug` UI page resolves the current bot automatically from the authenticated tenant; users are not expected to edit the URL manually.
 
 ### Sessions, conversations, and history
 
@@ -792,7 +792,7 @@ What resets when a *new* conversation opens (after the window, or `Start new cha
 What survives rotation:
 
 - the session itself (`session_id`, widget localStorage, contact/user context)
-- previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and listed in the dashboard Logs with per-conversation dividers)
+- previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and shown in the dashboard Inbox thread with per-conversation dividers)
 - an **active escalation ticket still collecting the user's email** — one of two cases that *block* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
 - a **live operator handoff** (`operator_state = live`) — the other blocker. Rotating would open a fresh conversation with the bot answering while a human is mid-conversation on the old one, and the operator's thread would be orphaned. A handoff whose operator has really gone is released back to the bot by the sweeper first, so the block only ever holds a conversation someone is actually in.
 
@@ -852,10 +852,7 @@ The chat session is **not** immediately closed after escalation — the user can
 
 ### Ticket inbox (dashboard)
 
-Tenants see all their tickets at `/escalations`:
-- Status: `open` / `in_progress` / `resolved` / `auto_closed`
-- Trigger type, session link, creation time
-- One-click resolve button → `POST /escalations/{id}/resolve`
+Tickets live inside the conversation. The dashboard **Inbox** (`/inbox`, `GET /operator/inbox`) lists sessions that need a person — an active ticket nobody holds, longest wait first, then the chats an operator is serving — and the thread header shows the ticket number, status (`open` / `in_progress` / `resolved` / `auto_closed`), trigger and priority. **Mark resolved** → `POST /operator/chats/{id}/resolve` resolves every active ticket of the session, revokes their e-mail reply tokens and hands the chat back to the bot. Reads are open to any member; take, reply, release and resolve need an operator seat.
 
 `in_progress` is set automatically when an operator takes the conversation
 (either entry point — `POST /operator/chats/{id}/take` or simply answering via

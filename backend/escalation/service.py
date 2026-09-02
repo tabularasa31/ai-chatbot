@@ -1421,27 +1421,7 @@ def apply_collected_contact_email(
             )
 
 
-def resolve_ticket(
-    ticket_id: uuid.UUID,
-    tenant_id: uuid.UUID,
-    resolution_text: str,
-    db: Session,
-) -> EscalationTicket:
-    ticket = (
-        db.query(EscalationTicket)
-        .filter(EscalationTicket.id == ticket_id, EscalationTicket.tenant_id == tenant_id)
-        .first()
-    )
-    if not ticket:
-        raise ValueError("ticket not found")
-
-    _stage_ticket_resolved(db, ticket, resolution_text)
-    db.commit()
-    db.refresh(ticket)
-    return ticket
-
-
-def _stage_ticket_resolved(
+def stage_ticket_resolved(
     db: Session, ticket: EscalationTicket, resolution_text: str | None
 ) -> None:
     ticket.status = EscalationStatus.resolved
@@ -1457,28 +1437,35 @@ def _stage_ticket_resolved(
     db.add(ticket)
 
 
-def resolve_chat_tickets(
-    db: Session, *, chat_id: uuid.UUID, resolution_text: str | None
+def resolve_session_tickets(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    resolution_text: str | None,
 ) -> list[EscalationTicket]:
-    """Resolve every ticket still being worked in this chat. Staged, not committed.
+    """Resolve every ticket still being worked in a visitor's session. Staged.
 
-    The operator's "mark resolved" is about the conversation, not about one
-    ticket row: a visitor who escalated twice has two active tickets, and
-    closing one while the other keeps the chat reading "waiting" would put
-    the row straight back into the queue. Returns what was resolved so the
-    caller can report it; an empty list means nothing was active.
+    The operator's "mark resolved" is about the visitor, not about one ticket
+    row: a session that rotated after the escalation carries its ticket on an
+    older chat than the one the visitor is writing in, and a visitor who
+    escalated twice has two active tickets. Closing anything less would put
+    the row straight back into the queue. Returns what was resolved; an
+    empty list means nothing was active.
     """
     tickets = (
         db.query(EscalationTicket)
+        .join(Chat, Chat.id == EscalationTicket.chat_id)
         .filter(
-            EscalationTicket.chat_id == chat_id,
+            Chat.tenant_id == tenant_id,
+            Chat.session_id == session_id,
             EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
         )
         .order_by(EscalationTicket.created_at.asc())
         .all()
     )
     for ticket in tickets:
-        _stage_ticket_resolved(db, ticket, resolution_text)
+        stage_ticket_resolved(db, ticket, resolution_text)
     return tickets
 
 

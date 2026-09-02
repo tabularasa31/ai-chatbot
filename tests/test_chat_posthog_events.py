@@ -1,6 +1,6 @@
 """Tests for PostHog event shape in the chat pipeline.
 
-Verifies that chat_completed, chat_escalated, and chat_feedback events
+Verifies that chat_completed and chat_escalated events
 are emitted with the correct property names (tenant isolation guard included).
 """
 

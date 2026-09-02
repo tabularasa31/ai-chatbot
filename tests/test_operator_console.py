@@ -438,7 +438,7 @@ def test_after_resolve_the_bot_answers_the_next_turn(
     tenant: TestClient, db_session: Session
 ) -> None:
     """The visitor is not left talking to a silent, released operator."""
-    from backend.operator.service import OperatorActor, OperatorChannel, resolve_from_operator
+    from backend.operator.service import resolve_from_operator
 
     ws = _workspace(tenant, db_session, email="next@example.com", name="Next Co")
     chat = _chat(db_session, ws.tenant_id)
@@ -447,11 +447,7 @@ def test_after_resolve_the_bot_answers_the_next_turn(
     db_session.expire_all()
     chat = db_session.get(Chat, chat.id)
 
-    resolve_from_operator(
-        db_session,
-        chat=chat,
-        actor=OperatorActor(channel=OperatorChannel.console, user_id=ws.user_id),
-    )
+    resolve_from_operator(db_session, chat=chat, tenant_id=ws.tenant_id)
 
     db_session.expire_all()
     chat = db_session.get(Chat, chat.id)
@@ -459,6 +455,62 @@ def test_after_resolve_the_bot_answers_the_next_turn(
     assert chat.assigned_operator_id is None
     assert chat.escalation_awaiting_ticket_id is None
     assert chat.escalation_pre_confirm_pending is False
+
+
+def test_a_ticket_on_an_older_chat_of_the_session_still_counts(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Rotation must not strand a request: queue, thread and resolve agree."""
+    ws = _workspace(tenant, db_session, email="strand@example.com", name="Strand Co")
+    session_id = uuid.uuid4()
+    older = _chat(db_session, ws.tenant_id, session_id=session_id, ended_at=_utcnow())
+    ticket = _ticket(db_session, older, created_ago=timedelta(hours=2))
+    newer = _chat(db_session, ws.tenant_id, session_id=session_id)
+    _say(db_session, newer, MessageRole.user, "I'm back, any news?")
+
+    queue = tenant.get("/operator/inbox", headers=ws.auth).json()
+    assert [r["chat_id"] for r in queue["items"]] == [str(newer.id)]
+    assert queue["items"][0]["handoff_state"] == "waiting"
+    assert queue["items"][0]["ticket"]["ticket_number"] == ticket.ticket_number
+    assert queue["waiting_count"] == 1
+
+    thread = tenant.get(f"/operator/sessions/{session_id}", headers=ws.auth).json()
+    assert thread["chat"]["chat_id"] == str(newer.id)
+    assert thread["handoff_state"] == "waiting"
+    assert thread["ticket"]["ticket_number"] == ticket.ticket_number
+
+    resolved = tenant.post(f"/operator/chats/{newer.id}/resolve", headers=ws.auth, json={})
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["resolved_ticket_numbers"] == [ticket.ticket_number]
+    after = tenant.get("/operator/inbox", headers=ws.auth).json()
+    assert after["items"] == []
+    assert after["waiting_count"] == 0
+
+
+def test_a_released_but_unresolved_chat_waits_again(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="again@example.com", name="Again Co")
+    chat = _chat(db_session, ws.tenant_id)
+    ticket = _ticket(db_session, chat)
+    assert tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth).status_code == 200
+    assert tenant.get("/operator/inbox/summary", headers=ws.auth).json()["waiting_count"] == 0
+
+    assert tenant.post(f"/operator/chats/{chat.id}/release", headers=ws.auth).status_code == 200
+
+    row = tenant.get("/operator/inbox", headers=ws.auth).json()["items"][0]
+    assert row["handoff_state"] == "waiting"
+    assert row["ticket"]["status"] == "in_progress"
+    assert row["waiting_since"] is not None
+    assert row["assigned_operator_email"] is None
+    assert tenant.get("/operator/inbox/summary", headers=ws.auth).json()["waiting_count"] == 1
+    db_session.expire_all()
+    assert db_session.get(EscalationTicket, ticket.id).status is EscalationStatus.in_progress
+
+
+def test_an_unknown_scope_is_refused(tenant: TestClient, db_session: Session) -> None:
+    ws = _workspace(tenant, db_session, email="scope@example.com", name="Scope Co")
+    assert tenant.get("/operator/inbox?scope=everything", headers=ws.auth).status_code == 422
 
 
 # --------------------------------------------------------------------------

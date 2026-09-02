@@ -148,12 +148,16 @@ async def inbox(
     current_user: Annotated[User, Depends(require_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
     scope: Annotated[InboxScope, Query()] = "attention",
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> InboxListResponse:
-    """The queue. ``attention`` is what needs a human; ``all`` is everything."""
+    """The queue. ``attention`` is what needs a human; ``all`` is everything.
+
+    ``limit`` caps ``all`` only: the attention set is bounded by nature.
+    """
 
     def _work(sync_db) -> InboxListResponse:
         tenant_id = _require_tenant_id(sync_db, current_user)
-        rows = list_inbox(sync_db, tenant_id=tenant_id, scope=scope)
+        rows = list_inbox(sync_db, tenant_id=tenant_id, scope=scope, limit=limit)
         counts = inbox_counts(sync_db, tenant_id=tenant_id)
         return InboxListResponse(
             items=[_row(r) for r in rows],
@@ -313,13 +317,11 @@ async def resolve_chat_route(
     """
 
     def _work(sync_db) -> OperatorResolveResponse:
-        chat, _tenant_id = _require_chat(sync_db, chat_id=chat_id, user=current_user)
+        chat, tenant_id = _require_chat(sync_db, chat_id=chat_id, user=current_user)
         result = resolve_from_operator(
             sync_db,
             chat=chat,
-            actor=OperatorActor(
-                channel=OperatorChannel.console, user_id=current_user.id
-            ),
+            tenant_id=tenant_id,
             resolution_text=body.resolution_text,
         )
         return OperatorResolveResponse(

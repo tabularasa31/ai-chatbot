@@ -74,6 +74,7 @@ function InboxRowItem({
       <button
         type="button"
         onClick={onSelect}
+        aria-current={selected ? "true" : undefined}
         className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors ${
           selected ? "bg-violet-50 border-l-2 border-violet-500" : ""
         }`}
@@ -197,7 +198,7 @@ function Composer({
 
   const send = () => {
     const body = text.trim();
-    if (!body) return;
+    if (!body || busy !== null) return;
     void run("send", async () => {
       await api.operator.reply(chatId, body);
       setText("");
@@ -213,15 +214,17 @@ function Composer({
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             send();
           }
         }}
         rows={3}
+        aria-label="Reply to the visitor"
         placeholder="Reply to the visitor… (Enter to send, Shift+Enter for a new line)"
         className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
-        disabled={busy !== null}
+        readOnly={busy !== null}
       />
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -308,22 +311,26 @@ function ThreadView({
   onChanged,
 }: {
   sessionId: string;
-  canOperate: boolean;
+  canOperate: boolean | undefined;
   onChanged: () => Promise<unknown>;
 }) {
-  const [state, setState] = useState<HandoffState>("bot");
-  const { data: thread, error, isLoading, mutate } = useThread(sessionId, THREAD_REFRESH_MS[state]);
+  const [refreshMs, setRefreshMs] = useState(THREAD_REFRESH_MS.bot);
+  const { data: thread, error, isLoading, mutate } = useThread(sessionId, refreshMs);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageCount = thread?.messages.length ?? 0;
+  const handoffState = thread?.handoff_state;
 
   useEffect(() => {
-    if (thread) setState(thread.handoff_state);
-  }, [thread]);
+    if (handoffState) setRefreshMs(THREAD_REFRESH_MS[handoffState]);
+  }, [handoffState]);
 
+  // Follow new messages only when the operator is already at the bottom;
+  // someone reading history must not be yanked down by a poll.
+  const stickToBottom = useRef(true);
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messageCount, sessionId]);
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [messageCount]);
 
   const changed = useCallback(async () => {
     await Promise.all([mutate(), onChanged()]);
@@ -332,7 +339,7 @@ function ThreadView({
   if (isLoading && !thread) {
     return <div className="p-8 text-slate-500 text-sm">Loading conversation…</div>;
   }
-  if (error || !thread) {
+  if (!thread) {
     return (
       <div className="p-8 text-red-600 text-sm">
         {error instanceof Error ? error.message : "Failed to load the conversation"}
@@ -343,7 +350,19 @@ function ThreadView({
   return (
     <div className="flex flex-col h-[calc(100vh-200px)] min-h-[420px]">
       <ThreadHeader thread={thread} />
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
+      {error && (
+        <div className="mx-4 mt-3 text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
+          {error instanceof Error ? error.message : "Failed to refresh the conversation"}
+        </div>
+      )}
+      <div
+        ref={scrollRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
+        className="flex-1 overflow-y-auto p-4"
+      >
         {thread.messages.length === 0 ? (
           <p className="text-slate-500 text-sm">No messages yet.</p>
         ) : (
@@ -367,9 +386,8 @@ function ThreadView({
           </div>
         )}
       </div>
-      {canOperate ? (
-        <Composer thread={thread} onChanged={changed} />
-      ) : (
+      {canOperate === true && <Composer thread={thread} onChanged={changed} />}
+      {canOperate === false && (
         <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
           Read-only. Answering, taking and resolving conversations needs an operator seat.
         </div>
@@ -387,7 +405,7 @@ function InboxPageContent() {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (sessionFromUrl) setSelected(sessionFromUrl);
+    setSelected(sessionFromUrl);
   }, [sessionFromUrl]);
 
   useEffect(() => {
@@ -397,7 +415,7 @@ function InboxPageContent() {
 
   const { data: me } = useClientMe();
   const { data: inbox, error, isLoading, mutate } = useInbox(scope, INBOX_REFRESH_MS);
-  const canOperate = Boolean(me?.has_seat);
+  const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(
     (sessionId: string) => {
@@ -473,7 +491,7 @@ function InboxPageContent() {
           {!selected ? (
             <div className="p-8 text-center text-slate-500">Select a conversation.</div>
           ) : (
-            <ThreadView sessionId={selected} canOperate={canOperate} onChanged={refresh} />
+            <ThreadView key={selected} sessionId={selected} canOperate={canOperate} onChanged={refresh} />
           )}
         </div>
       </div>

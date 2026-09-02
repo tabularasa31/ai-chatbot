@@ -415,7 +415,7 @@ The loader and widget UI deploy together from a single Vercel project (`chat9-wi
   - Sources shown correctly
 
 ✅ View logs
-  - Dashboard → Chat Logs
+  - Dashboard → Inbox
   - See all 10 conversations
   - See questions, answers, sources
   - Verify accuracy

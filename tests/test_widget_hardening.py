@@ -257,17 +257,31 @@ def test_trusted_host_rejects_bad_host(monkeypatch: pytest.MonkeyPatch) -> None:
     import backend.core.config as config_module
     import backend.main as main_module
 
+    # Reloading rebinds the module's ``settings`` and ``app`` to fresh objects,
+    # while the ~50 modules that did ``from backend.core.config import settings``
+    # keep the original instance forever. Without restoring identity, every later
+    # test that patches a settings attribute patches an object production code no
+    # longer reads — silently, and only when it happens to run after this one.
+    original_settings = config_module.settings
+    original_app = main_module.app
+
     default_client = TestClient(main_module.app)
     assert default_client.get("/health", headers={"host": "evil.com"}).status_code == 200
 
-    monkeypatch.setenv("ALLOWED_HOSTS", "api.example.com")
-    importlib.reload(config_module)
-    reloaded_main = importlib.reload(main_module)
-    restricted_client = TestClient(reloaded_main.app)
+    try:
+        monkeypatch.setenv("ALLOWED_HOSTS", "api.example.com")
+        importlib.reload(config_module)
+        reloaded_main = importlib.reload(main_module)
+        restricted_client = TestClient(reloaded_main.app)
 
-    assert restricted_client.get("/health", headers={"host": "evil.com"}).status_code == 400
-    assert restricted_client.get("/health", headers={"host": "api.example.com"}).status_code == 200
-
-    monkeypatch.setenv("ALLOWED_HOSTS", "*")
-    importlib.reload(config_module)
-    importlib.reload(main_module)
+        assert restricted_client.get("/health", headers={"host": "evil.com"}).status_code == 400
+        assert (
+            restricted_client.get("/health", headers={"host": "api.example.com"}).status_code
+            == 200
+        )
+    finally:
+        monkeypatch.setenv("ALLOWED_HOSTS", "*")
+        importlib.reload(config_module)
+        importlib.reload(main_module)
+        config_module.settings = original_settings
+        main_module.app = original_app

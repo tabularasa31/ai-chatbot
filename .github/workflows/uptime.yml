@@ -1,0 +1,60 @@
+name: Uptime
+
+# External check of the production API: Sentry uptime monitors cannot target
+# the shared *.railway.app domain, so this is the alert. A failing check opens
+# an "uptime" issue (one at a time); the first healthy check closes it.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  health:
+    name: Production /health
+    runs-on: ubuntu-latest
+    env:
+      HEALTH_URL: https://ai-chatbot-production-6531.up.railway.app/health
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Probe /health (3 attempts)
+        id: probe
+        run: |
+          status=down
+          for attempt in 1 2 3; do
+            code=$(curl -s -m 15 -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
+            echo "attempt $attempt: HTTP $code"
+            if [ "$code" = "200" ]; then status=up; break; fi
+            sleep 20
+          done
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Open an incident issue when down
+        if: steps.probe.outputs.status == 'down'
+        run: |
+          existing=$(gh issue list --label uptime --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            echo "issue #$existing already open"
+          else
+            gh label create uptime --color B60205 --description "Production /health failing" --force >/dev/null
+            gh issue create --label uptime \
+              --title "Production API down: /health returned ${{ steps.probe.outputs.code }}" \
+              --body "Three consecutive probes of \`$HEALTH_URL\` failed (last HTTP ${{ steps.probe.outputs.code }}) at $(date -u +%Y-%m-%dT%H:%M:%SZ). Check the latest Railway deployment and its release step. This issue closes itself on the first healthy probe."
+          fi
+          exit 1
+
+      - name: Close the incident issue when back up
+        if: steps.probe.outputs.status == 'up'
+        run: |
+          for number in $(gh issue list --label uptime --state open --json number --jq '.[].number'); do
+            gh issue close "$number" --comment "Healthy again at $(date -u +%Y-%m-%dT%H:%M:%SZ) (HTTP 200)."
+          done

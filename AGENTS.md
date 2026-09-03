@@ -267,6 +267,14 @@ Chat responses now support structured clarification outcomes in addition to plai
 
 For `/chat` and `/widget/chat`, the response body uses the canonical `text` field only. Legacy aliases (`answer` on `/chat`, `response` on `/widget/chat`) have been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
+### Deployment safety
+
+Two services deploy from this repo on Railway (`ai-chatbot` = API, `worker` = ARQ), both from `main`. `alembic upgrade head` runs on every API deploy from the service's command (Railway ignores the Procfile `release` line). A migration that cannot apply therefore takes the deploy down — on 2026-09-03 two alembic heads (two PRs each revising the same parent, merged 36 minutes apart) crash-looped production for ~4 h.
+
+- **One alembic head, checked against the `main` you are merging into.** `scripts/check_migrations.py` runs in CI on the PR's merge commit, but that commit is stale as soon as another migration lands on `main`. The `main` ruleset therefore requires the branch to be up to date before merging ("Update branch" re-runs CI on the real merge). When re-parenting a migration, chain it after the revision production is on (`alembic_version` via the Railway Postgres public URL).
+- **Migrations before traffic.** The API service should run migrations as Railway's *pre-deploy command* with `/health` as the healthcheck path, so a failing migration fails the new deployment and the previous one keeps serving. Config-as-code (`railway.json`) is not used because it would apply the healthcheck to the worker too.
+- **Uptime.** `.github/workflows/uptime.yml` probes production `/health` every 5 minutes; three failed probes open a GitHub issue labelled `uptime`, the first healthy probe closes it. Sentry uptime monitors cannot target the shared `*.railway.app` domain.
+
 Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars defined in `backend/core/config.py`. Required: `DATABASE_URL`, `JWT_SECRET`. Optional by group:
 
 | Group | Key env vars |

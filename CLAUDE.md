@@ -105,7 +105,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 
 ## Deployment
 
-- **Backend**: Railway — `alembic upgrade head` runs automatically on each deploy (Procfile `release` step).
+- **Backend**: Railway — `alembic upgrade head` runs automatically on each deploy, in the service's start/pre-deploy command (the Procfile `release` line is not honoured by Railway). See **AGENTS.md → "Deployment safety"** for the migration-head rule, the `main` ruleset and the uptime check.
 - **Frontend**: Vercel — auto-deploys on `main` branch.
 - Never push directly to `main` without a PR (see global rules).
 

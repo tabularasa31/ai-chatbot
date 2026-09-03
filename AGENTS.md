@@ -267,6 +267,14 @@ Chat responses now support structured clarification outcomes in addition to plai
 
 For `/chat` and `/widget/chat`, the response body uses the canonical `text` field only. Legacy aliases (`answer` on `/chat`, `response` on `/widget/chat`) have been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
+### Deployment safety
+
+Two services deploy from this repo on Railway (`ai-chatbot` = API, `worker` = ARQ), both from `main`. `alembic upgrade head` runs on every API deploy from the service's command (Railway ignores the Procfile `release` line). A migration that cannot apply therefore takes the deploy down — on 2026-09-03 two alembic heads (two PRs each revising the same parent, merged 36 minutes apart) crash-looped production for ~4 h.
+
+- **One alembic head, checked against the `main` you are merging into.** `scripts/check_migrations.py` runs in CI on the PR's merge commit, but that commit is stale as soon as another migration lands on `main`. The `main` ruleset therefore requires the branch to be up to date before merging ("Update branch" re-runs CI on the real merge). When re-parenting a migration, chain it after the revision production is on (`alembic_version` via the Railway Postgres public URL).
+- **Migrations before traffic.** The API service should run migrations as Railway's *pre-deploy command* with `/health` as the healthcheck path, so a failing migration fails the new deployment and the previous one keeps serving. Config-as-code (`railway.json`) is not used because it would apply the healthcheck to the worker too.
+- **Liveness alert.** A Sentry uptime monitor ("Chat9 API /health") probes `https://api.getchat9.live/health` every minute from outside; three failures raise a Sentry issue through the usual alert rules. It must target the custom domain — Sentry refuses the shared `*.railway.app` domain — and the plan allows one active uptime monitor (a second one for the RU edge `api-ru.getchat9.live` exists but is disabled). Error capture alone is not a liveness signal: it lives inside the process that is not running when a deploy never reaches `uvicorn`.
+
 Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars defined in `backend/core/config.py`. Required: `DATABASE_URL`, `JWT_SECRET`. Optional by group:
 
 | Group | Key env vars |

@@ -273,7 +273,7 @@ Two services deploy from this repo on Railway (`ai-chatbot` = API, `worker` = AR
 
 - **One alembic head, checked against the `main` you are merging into.** `scripts/check_migrations.py` runs in CI on the PR's merge commit, but that commit is stale as soon as another migration lands on `main`. The `main` ruleset therefore requires the branch to be up to date before merging ("Update branch" re-runs CI on the real merge). When re-parenting a migration, chain it after the revision production is on (`alembic_version` via the Railway Postgres public URL).
 - **Migrations before traffic.** The API service should run migrations as Railway's *pre-deploy command* with `/health` as the healthcheck path, so a failing migration fails the new deployment and the previous one keeps serving. Config-as-code (`railway.json`) is not used because it would apply the healthcheck to the worker too.
-- **Uptime.** `.github/workflows/uptime.yml` probes production `/health` every 5 minutes; three failed probes open a GitHub issue labelled `uptime`, the first healthy probe closes it. Sentry uptime monitors cannot target the shared `*.railway.app` domain.
+- **Liveness alert.** The API sends a Sentry Crons check-in every minute (`backend/observability/heartbeat.py`, monitor `api-heartbeat`, started in the lifespan). Three missed check-ins raise a Sentry issue through the usual alert rules — the only signal that survives a deploy which never reaches `uvicorn`, since error capture lives inside the process that is not running. Sentry uptime monitors cannot target the shared `*.railway.app` domain.
 
 Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars defined in `backend/core/config.py`. Required: `DATABASE_URL`, `JWT_SECRET`. Optional by group:
 

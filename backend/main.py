@@ -60,6 +60,7 @@ from backend.observability import (
     shutdown_observability,
     shutdown_sentry,
 )
+from backend.observability.heartbeat import start_api_heartbeat, stop_api_heartbeat
 from backend.operator.routes import operator_router
 from backend.search.routes import search_router
 from backend.tenants.members_routes import members_router
@@ -88,6 +89,7 @@ async def lifespan(_: FastAPI):
     init_observability()
     init_metrics()
     init_sentry()
+    heartbeat = start_api_heartbeat()
     start_kb_snapshot_daily_thread()
     start_chat_session_sweeper_thread()
     start_guard_events_purge_thread()
@@ -102,6 +104,7 @@ async def lifespan(_: FastAPI):
         shutdown_guard_events_purge_thread()
         shutdown_expired_invitations_purge_thread()
         shutdown_metrics()
+        await stop_api_heartbeat(heartbeat)
         shutdown_sentry()
         shutdown_observability()
         await close_queue_pool()

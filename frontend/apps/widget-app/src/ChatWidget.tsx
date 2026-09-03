@@ -292,7 +292,7 @@ export function ChatWidget({
   const [handoffState, setHandoffState] = useState<"bot" | "waiting" | "live">("bot");
   // Byline above a human's reply, localized server-side into the language the
   // conversation is being held in. English until the server says otherwise.
-  const [operatorLabel, setOperatorLabel] = useState("Support");
+  const [operatorLabel, setOperatorLabel] = useState("Operator");
   // Cursor for /widget/messages: the id of the last message this widget knows
   // about. A ref rather than state — polling reads it and writes it, and a
   // re-render per poll would be pure churn.

@@ -97,10 +97,10 @@ class WidgetLinkSafetyLabels(BaseModel):
     cancel_label: str
 
 
-#: What the widget writes above a human's reply. Canonical English, localized
-#: at runtime like every other visitor-facing string — never a per-language
-#: table in the widget bundle.
-OPERATOR_LABEL = "Support"
+#: What the widget writes above a human's reply. Deliberately a fixed English
+#: word and not localized: the owner's call, so it stays out of the
+#: "every visitor-facing string is localized" rule.
+OPERATOR_LABEL = "Operator"
 
 
 class WidgetConfigResponse(BaseModel):
@@ -816,97 +816,6 @@ def _handoff_state(s, chat: Chat) -> str:
     return "waiting" if has_open_ticket else "bot"
 
 
-def _conversation_language(chat: Chat) -> str | None:
-    """The language this conversation is being held in, as best we know it.
-
-    ``last_response_language`` first — what the bot has actually been replying
-    in — then the last reliable detection, then the locale the widget was
-    mounted with. Read inside the sync session so nothing is touched on a
-    detached row afterwards.
-    """
-    user_ctx = chat.user_context if isinstance(chat.user_context, dict) else {}
-    return (
-        chat.last_response_language
-        or chat.last_detected_language
-        or user_ctx.get("locale")
-        or user_ctx.get("browser_locale")
-    )
-
-
-#: ``(tenant_id, language) -> byline``. Process-local and never invalidated,
-#: because the value it holds is a translation of one fixed English word: it
-#: cannot go stale. Cleared wholesale at the cap rather than evicted one by
-#: one -- there are only ever as many entries as workspaces times languages,
-#: and the cost of a rare cold start is one call.
-_OPERATOR_LABEL_CACHE: dict[tuple[str, str], str] = {}
-_OPERATOR_LABEL_CACHE_MAX = 2048
-
-
-async def _resolve_operator_label(
-    messages: list[WidgetHistoryMessage],
-    conversation_language: str | None,
-    *,
-    encrypted_api_key: str | None,
-    tenant_id: str,
-    bot_id: str,
-) -> str:
-    """``Support`` in the visitor's language — computed only when it is needed.
-
-    Localized here, on the responses that actually carry a human's reply,
-    rather than once on ``/widget/config``. Two reasons, and the second is the
-    one that decided it:
-
-    * a conversation that never reaches a human — nearly all of them — pays
-      nothing, whereas a label on the config response would buy an LLM round
-      trip on every widget mount for every non-English tenant;
-    * the target is the language the conversation is actually being held in
-      (``chats.last_response_language``), not the browser's locale, so a
-      visitor writing in Portuguese to a bot mounted with ``en-US`` still gets
-      a Portuguese byline.
-
-    English short-circuits inside the localizer with no provider call, and any
-    failure falls back to the canonical English: a byline in the wrong language
-    is a blemish, a missing one is a broken message.
-    """
-    if not any(m.role == MessageRole.operator.value for m in messages):
-        return OPERATOR_LABEL
-    target_language = sanitize_locale(conversation_language)
-    if not target_language:
-        return OPERATOR_LABEL
-
-    # One word, one language, one workspace: the answer does not change, and
-    # without a cache every mount of a conversation that ever reached a human
-    # bought a live provider round trip for it -- on a public endpoint, in
-    # front of the visitor, against the tenant's own key. The docstring's cost
-    # argument holds for conversations that never reach a human, which is not
-    # the population that lands here.
-    cache_key = (tenant_id, target_language)
-    cached = _OPERATOR_LABEL_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        result = await async_localize_text_to_language_result(
-            canonical_text=OPERATOR_LABEL,
-            target_language=target_language,
-            api_key=encrypted_api_key,
-            fallback_locale=target_language,
-            operation="widget_operator_label_localize",
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-        )
-    except Exception:
-        logger.debug("operator label localization failed", exc_info=True)
-        # Deliberately not cached: a provider hiccup must not pin this
-        # conversation to the English byline for the life of the process.
-        return OPERATOR_LABEL
-    label = result.text.strip() or OPERATOR_LABEL
-    if len(_OPERATOR_LABEL_CACHE) >= _OPERATOR_LABEL_CACHE_MAX:
-        _OPERATOR_LABEL_CACHE.clear()
-    _OPERATOR_LABEL_CACHE[cache_key] = label
-    return label
-
-
 class WidgetHistoryResponse(BaseModel):
     session_id: uuid.UUID
     messages: list[WidgetHistoryMessage]
@@ -914,9 +823,7 @@ class WidgetHistoryResponse(BaseModel):
     ticket_number: str | None = None
     #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
     handoff_state: str = "bot"
-    #: Byline the widget writes above an operator-authored message, in the
-    #: visitor's language. Canonical English until a human has actually
-    #: written — see :func:`_resolve_operator_label`.
+    #: Byline the widget writes above an operator-authored message.
     operator_label: str = OPERATOR_LABEL
     # Message indices where a newer conversation begins — the widget renders
     # a "new conversation" separator before each of them.
@@ -950,7 +857,7 @@ async def widget_history(
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail="Invalid session_id") from None
 
-    def _load_history(s) -> tuple[WidgetHistoryResponse, str | None] | None:
+    def _load_history(s) -> WidgetHistoryResponse | None:
         # Latest two conversations: the current one plus the previous one as
         # read-only context after rotation (oldest first after the slice).
         chats = (
@@ -1004,7 +911,7 @@ async def widget_history(
 
         # A rotated-away closed chat must not lock the widget input — the
         # visitor is about to start a fresh conversation.
-        response = WidgetHistoryResponse(
+        return WidgetHistoryResponse(
             session_id=sid,
             messages=[
                 WidgetHistoryMessage(id=m.id, role=m.role.value, content=m.content)
@@ -1016,19 +923,10 @@ async def widget_history(
             conversation_rotated=conversation_rotated,
             handoff_state=_handoff_state(s, latest),
         )
-        return response, _conversation_language(latest)
 
-    loaded = await run_sync(db, _load_history)
-    if loaded is None:
+    history = await run_sync(db, _load_history)
+    if history is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    history, conversation_language = loaded
-    history.operator_label = await _resolve_operator_label(
-        history.messages,
-        conversation_language,
-        encrypted_api_key=tenant.openai_api_key,
-        tenant_id=str(tenant.id),
-        bot_id=_bot.public_id,
-    )
     return history
 
 
@@ -1039,7 +937,7 @@ class WidgetMessagesResponse(BaseModel):
     #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
     handoff_state: str = "bot"
     chat_ended: bool = False
-    #: Byline for operator-authored messages, in the visitor's language.
+    #: Byline for operator-authored messages.
     operator_label: str = OPERATOR_LABEL
     #: The cursor named a message this conversation does not contain (the
     #: conversation rotated, or the widget is holding an id from a session that
@@ -1110,7 +1008,7 @@ async def widget_messages(
                 status_code=422, detail="Invalid after_message_id"
             ) from None
 
-    def _load_tail(s) -> tuple[WidgetMessagesResponse, str | None] | None:
+    def _load_tail(s) -> WidgetMessagesResponse | None:
         chat = (
             s.query(Chat)
             .filter(
@@ -1161,7 +1059,7 @@ async def widget_messages(
         # front means a backlog is drained over consecutive polls instead.
         page = rows[:_POLL_MESSAGE_LIMIT]
 
-        response = WidgetMessagesResponse(
+        return WidgetMessagesResponse(
             session_id=sid,
             messages=[
                 WidgetHistoryMessage(id=m.id, role=m.role.value, content=m.content)
@@ -1179,21 +1077,10 @@ async def widget_messages(
             ),
             cursor_stale=cursor_stale,
         )
-        return response, _conversation_language(chat)
 
-    loaded = await run_sync(db, _load_tail)
-    if loaded is None:
+    tail = await run_sync(db, _load_tail)
+    if tail is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    tail, conversation_language = loaded
-    # Only a poll that actually carries a human's reply pays for the byline;
-    # the many that return nothing cost nothing.
-    tail.operator_label = await _resolve_operator_label(
-        tail.messages,
-        conversation_language,
-        encrypted_api_key=tenant.openai_api_key,
-        tenant_id=str(tenant.id),
-        bot_id=_bot.public_id,
-    )
     return tail
 
 

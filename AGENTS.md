@@ -116,6 +116,7 @@ Redis is **foundational infra** — used for things that need cross-worker share
 |---|---|---|
 | **Rate-limit storage** | `backend/core/limiter.py` (slowapi `storage_uri`) | Required for correct enforcement under N workers (in-memory storage = limit × N). Tests force `memory://`. |
 | **Caches** (e.g. guard verdicts, embeddings) | `backend/core/redis.py` → `cache_get` / `cache_set_with_ttl` | Optional infra; helpers swallow connection errors and the caller treats it as a miss. |
+| **Answer cache, exact level** | `backend/chat/answer_cache.py` → `exact_get` / `store` | Identical question of the same bot, language and knowledge-base fingerprint → stored answer, before any guard or LLM call. The semantic level lives in Postgres (`answer_cache_entries`, pgvector). See "Answer cache" below. |
 | **Distributed locks** (e.g. scheduled jobs, crawl throttle) | `backend/core/redis.py` → `acquire_lock` / `release_lock` | Atomic `SET NX EX` + Lua check-and-delete on release. |
 | **ARQ queue broker** | `backend/core/queue.py` (worker process: `backend/worker.py`) | Durable retry-aware background work — see "Job queue" below. |
 | **Idempotency keys** | `backend/core/idempotency.py` → `idempotent_section` | Replays the cached response for retries of write endpoints — see "Idempotency-Key" below. |
@@ -128,6 +129,7 @@ Redis is **foundational infra** — used for things that need cross-worker share
 **Key namespaces** (`<domain>:<purpose>:<id>`, lowercase, colon-separated):
 - `ratelimit:*` — managed by slowapi (do not touch directly)
 - `cache:guard:<sha256>` — guard-verdict caches
+- `cache:answer:<sha256>` — exact-level answer cache; `cache:answer_gen:<tenant_id>` — per-tenant generation counter folded into the answer-cache fingerprint
 - `lock:gap_analyzer:<job>` — distributed locks for periodic jobs
 - `idempotency:<scope>:<tenant_id>:<key>:response` / `:lock` — idempotent-write replays
 
@@ -135,6 +137,19 @@ Redis is **foundational infra** — used for things that need cross-worker share
 - Cache misses on Redis errors must not break the request — log at debug, return as if cache miss.
 - Locks: when `acquire_lock` returns `None` (Redis down or already held), the caller decides whether to skip or run unguarded — never block forever.
 - Rate limit: failures surface as 500s on purpose (rate limiting is a security control; silent fallback to memory storage in production would create a window where a single worker has no shared limit).
+
+### Answer cache
+
+Two levels in front of the pipeline (`backend/chat/answer_cache.py`, steps in `backend/chat/steps/answer_cache.py`):
+
+- **Scope first.** `resolve_scope_for_turn` (called in `async_process_chat_message` before the pre-dispatch classifiers) decides whether the turn may touch the cache at all: it must be the visitor's first question in the chat (no prior user message — a persisted widget greeting does not count), with no user context in the prompt, no PII redaction on the question, and no session state (operator hold, escalation / pre-confirm / follow-up states, closed chat). Any of those → scope `None` → neither level is read or written. The scope = tenant/bot + `response_language` (from the resolved language context, never from text heuristics) + knowledge-base fingerprint.
+- **Exact** (Redis, `cache:answer:<sha256>`): normalized question in scope → stored answer. Runs before the human-request / intent classifiers and every guard, so a hit is served with no OpenAI call and no retrieval; the greeting handler is told the turn had request content so it does not claim it.
+- **Semantic** (Postgres `answer_cache_entries`, pgvector): the question embedding the pipeline already computed is matched against cached questions of the scope; cosine ≥ `ANSWER_CACHE_SEMANTIC_THRESHOLD` (0.95) serves the stored answer and writes it through to the exact level. Consulted only after the FAQ matcher declined the turn — a curated FAQ outranks a cached generated answer. Plain Redis has no nearest-neighbour search, which is why this level lives next to the other pgvector tables.
+- **Fingerprint / invalidation**: document count + latest `documents.updated_at`, FAQ count / approved count / latest `created_at`, `agent_instructions`, `disclosure_config`. Re-embedding touches `documents.updated_at` (`embeddings/service.py`) so a re-index moves the fingerprint like an upload does; nothing depends on Redis for invalidation. `ANSWER_CACHE_TTL_SECONDS` (3600; `0` disables the cache) is the floor for state the fingerprint does not see (tenant profile, quick answers).
+- **What is stored**: only strong-retrieval answers with no reliability cap and no escalation / offer / handoff / clarify signal from the model, and only when the answer does not echo a visitor-specific token from the question (digit-bearing or capitalised word absent from the retrieved chunks — the structural PII redactor does not know names or order numbers). The RAG handler writes the entry after the turn committed and only if the reply is still the pipeline answer (no handoff line appended, no pre-confirm armed).
+- **Observability**: `answer_exact` / `answer_semantic` in the admin cache-metrics endpoint; `answer_cache_hit` / `answer_cache_level` / `answer_cache_saved_ms` on the `chat.turn` PostHog event; an `answer-cache` span, `answer_cache_ms` stage timing, `answer_cache_*` trace metadata and the `answer_cache_hit` tag in Langfuse. Guard events are not written for exact hits (no guard ran).
+- **Degradation**: every Redis call is bounded to 300 ms and Postgres lookups to 2 s; Redis down → exact level misses (the semantic level still catches identical questions); lookup or store errors are logged at debug and never fail the turn.
+- **Evals**: a repeated golden question is served from the cache, so an eval run measures the cached answer unless it runs with `ANSWER_CACHE_TTL_SECONDS=0`.
 
 ---
 

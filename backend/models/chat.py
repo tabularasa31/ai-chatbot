@@ -53,6 +53,49 @@ class MessageEmbedding(Base):
     tenant = relationship("Tenant")
 
 
+class AnswerCacheEntry(Base):
+    """Semantic level of the chat answer cache (``backend/chat/answer_cache.py``).
+
+    One row per cached answer: the embedding of the question it was generated
+    for, the scope that makes it reusable (bot, response language, knowledge
+    base fingerprint) and the serialized answer payload. Rows are looked up by
+    nearest cosine distance inside a scope and expire at ``expires_at``.
+    """
+
+    __tablename__ = "answer_cache_entries"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    bot_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("bots.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    kb_fingerprint = Column(String(32), nullable=False)
+    response_language = Column(String(16), nullable=False)
+    question = Column(Text, nullable=False)
+    question_embedding = Column(Vector(1536), nullable=False)
+    payload = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_answer_cache_entries_scope",
+            "tenant_id",
+            "bot_id",
+            "kb_fingerprint",
+            "response_language",
+        ),
+        Index("ix_answer_cache_entries_expires_at", "expires_at"),
+    )
+
+
 class Chat(Base):
     __tablename__ = "chats"
 

@@ -9,6 +9,9 @@ async pipeline behind every RAG chat turn. It wires the step functions from
     launch_concurrent_tasks     # relevance guard ∥ embeddings ∥ query rewrite
     build_query_plan            # collect variants + embed
     match_faq                   # faq_direct short-circuit
+    answer_cache.semantic_lookup# nearest cached question → cached answer
+                                # (the exact level runs before dispatch, see
+                                #  service.async_process_chat_message)
     start_speculative_retrieval # retrieval ∥ relevance-guard wait
     relevance_guard             # guard 2: off-topic / social / complaint
     load_generation_inputs      # prompt hints + quick answers
@@ -41,8 +44,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.chat.answer_cache import AnswerCacheScope
 from backend.chat.language import ResolvedLanguageContext
-from backend.chat.steps import generate, pre_retrieval, retrieval
+from backend.chat.steps import answer_cache, generate, pre_retrieval, retrieval
 from backend.chat.types import ChatPipelineResult, PipelineRun, QuestionIntentResult
 from backend.models import Chat, TenantProfile
 from backend.observability import TraceHandle
@@ -71,6 +75,7 @@ async def async_run_chat_pipeline(
     allow_clarification: bool = True,
     guard_profile: TenantProfile | None = None,
     question_intent: QuestionIntentResult | None = None,
+    answer_cache_scope: AnswerCacheScope | None = None,
 ) -> ChatPipelineResult:
     """Run one chat turn through the RAG pipeline (see module docstring)."""
     # The language context is resolved by the caller on the normal chat path;
@@ -107,6 +112,7 @@ async def async_run_chat_pipeline(
         allow_clarification=allow_clarification,
         guard_profile=guard_profile,
         question_intent=question_intent or QuestionIntentResult(),
+        answer_cache_scope=answer_cache_scope,
     )
 
     # --- Pre-retrieval: guards, query plan, FAQ --------------------------
@@ -122,6 +128,12 @@ async def async_run_chat_pipeline(
     await pre_retrieval.build_query_plan(run)
 
     early = await pre_retrieval.match_faq(run)
+    if early is not None:
+        return early
+
+    # A curated FAQ outranks a cached generated answer, so the semantic level
+    # is consulted only once the FAQ matcher has declined the turn.
+    early = await answer_cache.semantic_lookup(run)
     if early is not None:
         return early
 

@@ -9,6 +9,7 @@ from backend.gap_analyzer.enums import (
 from backend.models.auth import User
 from backend.models.base import Base
 from backend.models.chat import (
+    AnswerCacheEntry,
     Chat,
     EscalationTicket,
     InboundEmailReceipt,
@@ -47,6 +48,7 @@ from backend.models.tenant import Bot, Tenant, TenantApiKey
 from backend.models.tenant_profile import LogAnalysisState, TenantFaq, TenantProfile
 
 __all__ = [
+    "AnswerCacheEntry",
     "BackgroundJob",
     "BackgroundJobStatus",
     "Base",

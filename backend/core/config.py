@@ -515,6 +515,27 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Answer cache ─────────────────────────────────────────────────────────
+    answer_cache_ttl_seconds: int = Field(
+        3600,
+        alias="ANSWER_CACHE_TTL_SECONDS",
+        ge=0,
+        description=(
+            "TTL (seconds) for cached chat answers: the exact level in Redis and "
+            "the semantic level in Postgres. 0 disables lookups and writes."
+        ),
+    )
+    answer_cache_semantic_threshold: float = Field(
+        0.95,
+        alias="ANSWER_CACHE_SEMANTIC_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum cosine similarity between the question embedding and a cached "
+            "question of the same bot for the semantic level to serve the stored answer."
+        ),
+    )
+
     # ── Guard telemetry retention ────────────────────────────────────────────
     # ``guard_events`` grows ~2 rows per chat turn with no natural expiry; a
     # daily purge job (backend/jobs/guard_events_purge.py) bounds it. Unlabeled

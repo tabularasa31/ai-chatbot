@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, joinedload
 from backend.models import (
     Chat,
     Message,
-    MessageFeedback,
     MessageRole,
 )
 
@@ -136,7 +135,7 @@ def get_session_logs(
     session_id: uuid.UUID,
     tenant_id: uuid.UUID,
     db: Session,
-) -> list[tuple[uuid.UUID, uuid.UUID, str, str, str, str | None, datetime, uuid.UUID]] | None:
+) -> list[tuple[uuid.UUID, uuid.UUID, str, str, datetime, uuid.UUID]] | None:
     """Full message log of a session as stored — i.e. the original wording.
 
     The tenant owns this conversation data; masking happens where text leaves
@@ -159,8 +158,6 @@ def get_session_logs(
             session_id,
             m.role.value,
             m.content,
-            (m.feedback or MessageFeedback.none).value,
-            m.ideal_answer,
             m.created_at,
             # Conversation boundary marker: the dashboard renders a divider
             # whenever chat_id changes between consecutive messages.

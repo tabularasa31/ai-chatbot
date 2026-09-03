@@ -26,7 +26,6 @@ from backend.models.enums import (
     EscalationPriority,
     EscalationStatus,
     EscalationTrigger,
-    MessageFeedback,
     MessageRole,
     OperatorState,
 )
@@ -377,12 +376,6 @@ class Message(Base):
         ARRAY(PG_UUID(as_uuid=True)),
         nullable=True,
     )
-    feedback = Column(
-        Enum(MessageFeedback, native_enum=False),
-        nullable=False,
-        default=MessageFeedback.none,
-    )
-    ideal_answer = Column(Text, nullable=True)
     # Set on ``MessageRole.operator`` rows when the author could be resolved to
     # a tenant user. NULL for an unattributed operator reply (phase 1: an
     # inbound e-mail from an address that matches no user) and for every

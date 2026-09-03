@@ -190,9 +190,9 @@ def test_cross_tenant_write_blocked(
         with pytest.raises(ProgrammingError, match="row-level security"):
             conn.execute(
                 text(
-                    "INSERT INTO messages (id, chat_id, role, content, feedback, "
+                    "INSERT INTO messages (id, chat_id, role, content, "
                     "created_at, updated_at) VALUES (:id, :chat_id, 'user', 'x', "
-                    "'none', now(), now())"
+                    "now(), now())"
                 ),
                 {"id": str(uuid.uuid4()), "chat_id": str(seed.chat_b)},
             )

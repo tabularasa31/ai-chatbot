@@ -67,7 +67,6 @@ def test_gap_signal_default_timestamp_is_naive_utc() -> None:
         was_rejected=False,
         had_fallback=False,
         was_escalated=False,
-        user_thumbed_down=False,
     )
     assert signal.created_at.tzinfo is None
 
@@ -116,7 +115,6 @@ def test_gap_signal_ingestion_persists_weight_and_message_link(
         "was_rejected": False,
         "had_fallback": False,
         "was_escalated": False,
-        "user_thumbed_down": False,
     }
     signal_payload.update(signal_kwargs)
     orchestrator.ingest_signal(GapSignal(**signal_payload))

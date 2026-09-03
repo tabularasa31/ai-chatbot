@@ -45,7 +45,7 @@ The module persists and reads from these main storage surfaces:
 - `gap_clusters`: Mode B clustered gaps
 - `gap_doc_topics`: Mode A docs-side gap topics
 - `gap_dismissals`: dismissal store used to preserve suppression state
-- `gap_question_message_links`: exact user/assistant/message correlation for feedback rewiring
+- `gap_question_message_links`: exact user/assistant message correlation
 - `gap_unified`: read-side view that normalizes Mode A and Mode B inventory
 
 At the API layer the frontend receives backend-owned DTOs from `backend/gap_analyzer/schemas.py`, not raw database rows.
@@ -79,13 +79,11 @@ Signals are created after the final assistant outcome is known. Typical sources 
 - fallback outcomes
 - rejection paths
 - escalations
-- thumbs-down feedback
 
 Important implementation details:
 
 - one stored question signal is created per relevant user-question event
 - exact message correlation is persisted in `gap_question_message_links`
-- thumbs-down rewires the exact stored signal instead of guessing from chronology
 - unclustered questions are either joined into an existing cluster or create a new cluster
 - coverage is re-evaluated against the current tenant corpus
 - weekly reclustering rebuilds recent active and closed history to reduce cluster drift
@@ -187,7 +185,6 @@ The frontend does not merge raw rows on its own. It renders the backend-owned re
 Gap Analyzer coverage currently has dedicated tests by phase, including:
 
 - schema and boundary coverage
-- exact message-link feedback rewiring
 - Mode A gating and hash no-op behavior
 - Mode B clustering and coverage transitions
 - dashboard API contract

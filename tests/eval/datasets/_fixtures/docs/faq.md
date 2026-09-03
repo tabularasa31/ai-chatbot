@@ -72,8 +72,6 @@ If the answer is not in your documentation, the bot will either say it doesn't h
 **How can I improve answer quality?**
 - Upload more complete documentation.
 - Add or refresh URL sources if your docs live on a website.
-- Use the thumbs-up/thumbs-down feedback in Chat Logs to identify weak answers.
-- Use the "Review bad answers" page to write ideal answers for training.
 - Use Gap Analyzer to find repeated missing topics and recurring question clusters.
 - Use the Debug page to see which document chunks are being retrieved.
 

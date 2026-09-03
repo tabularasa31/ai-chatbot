@@ -12,7 +12,6 @@ from backend.models import (
     DocumentStatus,
     DocumentType,
     Message,
-    MessageFeedback,
     MessageRole,
     User,
 )
@@ -77,7 +76,6 @@ def _create_message(
         chat_id=chat.id,
         role=role,
         content="Hello assistant",
-        feedback=MessageFeedback.none,
     )
     db_session.add(message)
     db_session.commit()
@@ -211,16 +209,6 @@ def test_cascade_delete_chat_deletes_messages(db_session) -> None:
         .all()
     )
     assert remaining_messages == []
-
-
-def test_message_feedback_enum_default(db_session) -> None:
-    """Сообщение по умолчанию должно иметь feedback = none."""
-    user = _create_user(db_session)
-    tenant = _create_client(db_session, user)
-    chat = _create_chat(db_session, tenant)
-    message = _create_message(db_session, chat)
-
-    assert message.feedback == MessageFeedback.none
 
 
 def test_timestamps_are_utc(db_session) -> None:

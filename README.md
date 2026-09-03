@@ -46,9 +46,8 @@
 - **Response controls (FI-DISC v1)** — tenant-wide answer detail level (Detailed / Standard / Corporate); dashboard **Response controls**; `GET`/`PUT /clients/me/disclosure`
 - **Optional identified sessions (FI-KYC)** — HMAC-signed identity token + `POST /widget/session/init`; dashboard **Widget API** page for signing secrets
 - **Gap Analyzer** — bounded docs-gap + user-signal backlog with Mode A/Mode B pipelines, linking/dedupe, archive lifecycle, draft generation, weekly reclustering, and lightweight badge summary endpoint
-- **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`) for files and URL sources, **Agents / Settings**, chat logs, feedback, escalations, admin metrics
+- **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`) for files and URL sources, **Agents / Settings**, chat logs, escalations, admin metrics
 - **Chat logs** — inbox-style view of all conversations
-- **Feedback loop** — 👍/👎 on answers + ideal answer + review bad answers
 - **Email verification** — signup link via Brevo HTTP API
 - **Admin metrics** — platform-wide and per-client stats (admin role)
 - **Per-client OpenAI key** — encrypted at rest, client controls AI costs

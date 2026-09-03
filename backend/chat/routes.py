@@ -358,12 +358,10 @@ def get_session_logs_route(
                 session_id=sid,
                 role=role,
                 content=content,
-                feedback=feedback,
-                ideal_answer=ideal_answer,
                 created_at=created_at,
                 chat_id=chat_id,
             )
-            for msg_id, sid, role, content, feedback, ideal_answer, created_at, chat_id in logs
+            for msg_id, sid, role, content, created_at, chat_id in logs
         ],
     )
 

@@ -27,7 +27,6 @@ class GapSignal:
     answer_confidence: float | None
     was_rejected: bool
     was_escalated: bool
-    user_thumbed_down: bool
     had_fallback: bool = False
     chat_id: UUID | None = None
     session_id: UUID | None = None

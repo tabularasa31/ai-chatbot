@@ -375,7 +375,7 @@ Gap Analyzer is the dashboard feature that turns both documentation coverage gap
 It has two coordinated pipelines:
 
 - `Mode A` analyzes the indexed documentation corpus itself to suggest topics that appear missing or under-covered in docs
-- `Mode B` clusters real user questions that produced low confidence, fallback, rejection, escalation, or explicit negative feedback signals
+- `Mode B` clusters real user questions that produced low confidence, fallback, rejection, or escalation signals
 
 ### Mode A — docs-side gap discovery
 
@@ -389,7 +389,7 @@ Important constraints:
 
 ### Mode B — user-question clustering
 
-Mode B ingests signals from the chat pipeline after the final turn outcome is known. Signals are stored with explicit message correlation, so thumbs-down feedback can reweight the exact underlying question signal rather than guessing from chat history.
+Mode B ingests signals from the chat pipeline after the final turn outcome is known. Signals are stored with explicit message correlation to the user and assistant turns that produced them.
 
 Current behavior:
 

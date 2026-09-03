@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-import logging
-from uuid import UUID
-
 from sqlalchemy.orm import Session
 
-from backend.gap_analyzer._repo.records import StoredGapSignalState
 from backend.gap_analyzer.events import GapSignal
 from backend.models import GapQuestion, GapQuestionMessageLink
-
-logger = logging.getLogger(__name__)
 
 
 def store_signal(db: Session, signal: GapSignal, *, signal_weight: float) -> None:
@@ -46,58 +40,4 @@ def store_signal(db: Session, signal: GapSignal, *, signal_weight: float) -> Non
             created_at=signal.created_at,
         )
     )
-    db.flush()
-
-
-def get_signal_state_for_assistant_message(
-    db: Session,
-    *,
-    tenant_id: UUID,
-    assistant_message_id: UUID,
-) -> StoredGapSignalState | None:
-    matches = (
-        db.query(GapQuestion)
-        .join(
-            GapQuestionMessageLink,
-            GapQuestionMessageLink.gap_question_id == GapQuestion.id,
-        )
-        .filter(
-            GapQuestion.tenant_id == tenant_id,
-            GapQuestionMessageLink.assistant_message_id == assistant_message_id,
-        )
-        .order_by(GapQuestion.created_at.desc(), GapQuestion.id.desc())
-        .all()
-    )
-    if not matches:
-        return None
-    if len(matches) > 1:
-        logger.warning(
-            "gap_analyzer_multiple_signal_links_for_assistant_message: tenant_id=%s assistant_message_id=%s matches=%s",
-            tenant_id,
-            assistant_message_id,
-            len(matches),
-        )
-
-    gap_question = matches[0]
-    return StoredGapSignalState(
-        gap_question_id=gap_question.id,
-        answer_confidence=gap_question.answer_confidence,
-        had_fallback=bool(gap_question.had_fallback),
-        # Phase 2 persists reject/fallback turns in the same underlying bucket.
-        had_rejected=bool(gap_question.had_fallback),
-        had_escalation=bool(gap_question.had_escalation),
-    )
-
-
-def update_signal_weight(
-    db: Session,
-    *,
-    gap_question_id: UUID,
-    signal_weight: float,
-) -> None:
-    gap_question = db.get(GapQuestion, gap_question_id)
-    if gap_question is None:
-        raise ValueError(f"GapQuestion not found for id={gap_question_id}")
-    gap_question.gap_signal_weight = signal_weight
-    db.add(gap_question)
     db.flush()

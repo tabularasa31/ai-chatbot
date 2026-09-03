@@ -29,7 +29,6 @@ class ClusteringPolicy:
 
 @dataclass(frozen=True)
 class SignalWeightPolicy:
-    thumbdown_weight: float = 4.0
     escalation_weight: float = 3.0
     rejection_weight: float = 2.0
     low_conf_weight: float = 1.5

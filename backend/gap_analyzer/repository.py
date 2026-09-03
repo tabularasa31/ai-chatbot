@@ -47,7 +47,6 @@ from backend.gap_analyzer._repo.records import (
     ModeADismissalRecord,
     ModeBClusterRecord,
     ModeBQuestionRecord,
-    StoredGapSignalState,
     TenantBm25Match,
     TenantVectorMatch,
 )
@@ -68,7 +67,6 @@ __all__ = [
     "ModeBClusterRecord",
     "ModeBQuestionRecord",
     "SqlAlchemyGapAnalyzerRepository",
-    "StoredGapSignalState",
     "TenantBm25Match",
     "TenantVectorMatch",
     "invalidate_bm25_cache_for_tenant",
@@ -79,22 +77,6 @@ class GapAnalyzerRepository(Protocol):
     """Command-side persistence boundary for Gap Analyzer."""
 
     def store_signal(self, signal: GapSignal, *, signal_weight: float) -> None:
-        ...
-
-    def get_signal_state_for_assistant_message(
-        self,
-        *,
-        tenant_id: UUID,
-        assistant_message_id: UUID,
-    ) -> StoredGapSignalState | None:
-        ...
-
-    def update_signal_weight(
-        self,
-        *,
-        gap_question_id: UUID,
-        signal_weight: float,
-    ) -> None:
         ...
 
     def get_client_openai_key(self, tenant_id: UUID) -> str | None:
@@ -259,30 +241,6 @@ class SqlAlchemyGapAnalyzerRepository:
 
     def store_signal(self, signal: GapSignal, *, signal_weight: float) -> None:
         _signals.store_signal(self.db, signal, signal_weight=signal_weight)
-
-    def get_signal_state_for_assistant_message(
-        self,
-        *,
-        tenant_id: UUID,
-        assistant_message_id: UUID,
-    ) -> StoredGapSignalState | None:
-        return _signals.get_signal_state_for_assistant_message(
-            self.db,
-            tenant_id=tenant_id,
-            assistant_message_id=assistant_message_id,
-        )
-
-    def update_signal_weight(
-        self,
-        *,
-        gap_question_id: UUID,
-        signal_weight: float,
-    ) -> None:
-        _signals.update_signal_weight(
-            self.db,
-            gap_question_id=gap_question_id,
-            signal_weight=signal_weight,
-        )
 
     # --- mode A ---
 

@@ -135,7 +135,7 @@ def get_session_logs(
     session_id: uuid.UUID,
     tenant_id: uuid.UUID,
     db: Session,
-) -> list[tuple[uuid.UUID, uuid.UUID, str, str, str, str | None, datetime, uuid.UUID]] | None:
+) -> list[tuple[uuid.UUID, uuid.UUID, str, str, datetime, uuid.UUID]] | None:
     """Full message log of a session as stored — i.e. the original wording.
 
     The tenant owns this conversation data; masking happens where text leaves

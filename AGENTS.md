@@ -22,7 +22,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 Gap Analyzer is implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
 
 - `Mode A` — documentation-side gap discovery from the indexed corpus, with deterministic sampling, hash-based no-op skips, coverage gating, dismissal persistence, and Swagger/OpenAPI sources excluded from this document-analysis path
-- `Mode B` — user-question clustering from low-confidence / fallback / rejected / escalated chat signals, with exact feedback correlation, incremental clustering, periodic full reclustering, inactive archive aging, and Mode A ↔ Mode B linking/dedupe on the read side
+- `Mode B` — user-question clustering from low-confidence / fallback / rejected / escalated chat signals, with incremental clustering, periodic full reclustering, inactive archive aging, and Mode A ↔ Mode B linking/dedupe on the read side
 
 Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with claim/retry state. The dashboard/API surface includes `GET /gap-analyzer`, `GET /gap-analyzer/summary`, `POST /gap-analyzer/recalculate`, dismiss/reactivate, and draft-generation endpoints. Linked active Mode B items are the primary surface; archive views stay source-specific.
 
@@ -264,7 +264,7 @@ Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars
 | RAG / BM25 | `BM25_EXPANSION_MODE` |
 | OpenAI | `OPENAI_API_KEY`, `OPENAI_REQUEST_TIMEOUT_SECONDS`, `OPENAI_USER_RETRY_*` |
 | Gap Analyzer jobs | `GAP_TRANSIENT_MAX_ATTEMPTS`, `GAP_BASE_DELAY_SECONDS`, `GAP_MAX_DELAY_SECONDS` |
-| Log analysis | `LOG_ANALYSIS_BATCH_SIZE`, `LOG_CLUSTER_*`, `MAX_FAQ_PER_RUN`, `FAQ_CONFIDENCE_AUTO_ACCEPT`, `LOG_ANALYSIS_CRON_HOURS`, `LOG_ANALYSIS_THRESHOLD_MESSAGES`, `LOG_EMBEDDINGS_RETENTION_DAYS`, `EMBEDDING_BATCH_*`, `MAX_JOB_DURATION_SEC`, `ALIAS_MIN_*` |
+| Log analysis | `LOG_ANALYSIS_BATCH_SIZE`, `LOG_CLUSTER_*`, `MAX_FAQ_PER_RUN`, `LOG_ANALYSIS_CRON_HOURS`, `LOG_ANALYSIS_THRESHOLD_MESSAGES`, `LOG_EMBEDDINGS_RETENTION_DAYS`, `EMBEDDING_BATCH_*`, `MAX_JOB_DURATION_SEC`, `ALIAS_MIN_*` |
 | Email | `BREVO_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL`, `INBOUND_EMAIL_SECRET`, `INBOUND_EMAIL_DOMAIN` |
 
 See `docs/07-observability-rollout.md` for Langfuse/trace rollout details.

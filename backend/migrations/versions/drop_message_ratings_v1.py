@@ -20,8 +20,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    if op.get_bind().dialect.name == "postgresql":
-        op.execute("ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_feedback_check")
     with op.batch_alter_table("messages") as batch_op:
         batch_op.drop_column("feedback")
         batch_op.drop_column("ideal_answer")

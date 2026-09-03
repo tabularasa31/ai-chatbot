@@ -555,8 +555,6 @@ class Settings(BaseSettings):
     log_cluster_min_size: int = Field(3, alias="LOG_CLUSTER_MIN_SIZE")
     # Maximum FAQ candidates created per job run
     max_faq_per_run: int = Field(20, alias="MAX_FAQ_PER_RUN")
-    # Minimum confidence to auto-approve a FAQ (skip human review)
-    faq_confidence_auto_accept: float = Field(0.85, alias="FAQ_CONFIDENCE_AUTO_ACCEPT")
     faq_direct_threshold: float = Field(0.92, alias="FAQ_DIRECT_THRESHOLD")
     faq_context_threshold: float = Field(0.70, alias="FAQ_CONTEXT_THRESHOLD")
     faq_context_max_items: int = Field(2, alias="FAQ_CONTEXT_MAX_ITEMS", ge=1)

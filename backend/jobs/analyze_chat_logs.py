@@ -436,14 +436,14 @@ def _create_faq_candidate(
     db: Session,
     tenant_id: uuid.UUID,
     representative: MessageRow,
-    best_member: ClusterMember,
+    answered: ClusterMember,
     cluster_members: list[MessageRow],
     api_key: str,
 ) -> bool:
     """Embed question, dedup, then insert. Returns True if created."""
     oai = get_openai_client(api_key)
     question = representative.content.strip()
-    answer = (best_member.answer or "").strip()
+    answer = (answered.answer or "").strip()
     if not question or not answer:
         return False
 
@@ -459,8 +459,6 @@ def _create_faq_candidate(
             return False  # duplicate pending — skip
 
     cluster_size = len(cluster_members)
-    confidence = _calculate_confidence(cluster_size)
-    approved = confidence >= settings.faq_confidence_auto_accept
 
     db.add(
         TenantFaq(
@@ -468,9 +466,9 @@ def _create_faq_candidate(
             question=question,
             answer=answer,
             question_embedding=q_emb,
-            confidence=confidence,
+            confidence=_calculate_confidence(cluster_size),
             source="logs",
-            approved=approved,
+            approved=False,
             cluster_size=cluster_size,
             source_message_ids=[str(m.id) for m in cluster_members[:10]],
         )
@@ -661,8 +659,12 @@ async def run_job(
 
             if members:
                 representative = _representative_question(cluster)
+                answered = next(
+                    (m for m in members if m.message.id == representative.id),
+                    members[0],
+                )
                 created = _create_faq_candidate(
-                    db, tenant_id, representative, members[0], cluster, api_key
+                    db, tenant_id, representative, answered, cluster, api_key
                 )
                 if created:
                     faq_count += 1

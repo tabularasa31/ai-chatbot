@@ -13,7 +13,7 @@ backend/core/rls.py); the policy DDL is a frozen snapshot, not an import.
 Idempotent: inspects live state before acting.
 
 Revision ID: answer_cache_v1
-Revises: add_documents_script_v1
+Revises: drop_message_ratings_v1
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects import postgresql
 
 revision = "answer_cache_v1"
-down_revision = "add_documents_script_v1"
+down_revision = "drop_message_ratings_v1"
 branch_labels = None
 depends_on = None
 

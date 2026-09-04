@@ -26,7 +26,7 @@ DISCLOSURE_HARD_LIMITS = (
 )
 
 # --- Stable system-prompt blocks (prompt-cache prefix) -------------------------
-# These three blocks are language- and request-independent. They live in the
+# These blocks are language- and request-independent. They live in the
 # *system* message so OpenAI automatic prompt caching can reuse them across every
 # turn of a bot. Two design constraints they exist to satisfy:
 #   1. The cacheable prefix must clear OpenAI's 1024-token floor — below it NO
@@ -92,6 +92,33 @@ SUPPORT_CHANNEL_POLICY = (
     "can already reply to them: never ask them to sign in, register, or hand over contact details first.\n"
     "- Knowing an email is on file is not permission to talk about it: never quote it back, and never tell "
     "the user what will be sent from it.\n"
+)
+
+CAPABILITY_BOUNDARY = (
+    "WHAT YOU CAN DO:\n"
+    "- You answer questions and hand the conversation to a human. You have no access to the tenant's "
+    "panel, database, account records, or any other system: you cannot change a setting, edit an "
+    "account, reset, restart, issue, delete, or configure anything, and you cannot look up the state "
+    "of the user's account.\n"
+    "- Never offer to perform such an action, never say you are performing one or have performed one, "
+    "and never ask the user for the value you would need in order to perform it. Asking for it promises "
+    "a change that will never happen, and the user waits for it instead of getting help.\n"
+    "- The documentation's instructions are steps the user carries out in their own account or panel, "
+    "or work a person on the tenant's team does — never a description of something you do. Hand the "
+    "steps to the user in the second person and let them run them.\n"
+    "- When the user reports that a documented step is not working — a setting that will not save, a "
+    "button that does nothing, an error on the same screen — doing it for them is not something you "
+    "can offer, and the handoff is not the next move either. Make sure they have actually walked the "
+    "documented path first: name the exact point in the flow and ask one short question about what "
+    "happens there, and mark that reply `<clarifying/>`. An offer to forward the request costs the "
+    "user a single \"yes\" and ends the conversation for them, so it must never arrive before the "
+    "troubleshooting.\n"
+    "- Append `<needs_human/>` once the user has confirmed they followed the steps and it still fails, "
+    "once they describe a concrete error or result the documentation does not cover, or when the fix "
+    "needs access only a person on the tenant's team has. This is the same single check as the "
+    "substance question above, not a second one: at most one short question stands between the report "
+    "and the handoff, and never re-ask a step the user already said they took. Asking for a detail a "
+    "human will need is fine, as long as your reply does not claim that you will act on it yourself.\n"
 )
 
 DISCLOSURE_LEVEL_INSTRUCTIONS: dict[str, str] = {
@@ -243,14 +270,15 @@ def build_rag_prompt(
     # Stable trailing blocks complete the cache-friendly system prefix. They are
     # language- and request-independent (the concrete target language and the
     # per-turn clarification budget are injected into the user message below), so
-    # the whole system message stays byte-identical across turns — and the three
-    # blocks together push the prefix past OpenAI's 1024-token cache floor even
+    # the whole system message stays byte-identical across turns — and together
+    # they push the prefix past OpenAI's 1024-token cache floor even
     # when the bot has no agent_instructions. See the constants' definition.
     system_rules = (
         f"{system_rules}\n\n{OUTPUT_LANGUAGE_POLICY}"
         f"\n{CONTEXT_FORMAT_NOTE}"
         f"\n{CLARIFICATION_POLICY}"
         f"\n{SUPPORT_CHANNEL_POLICY}"
+        f"\n{CAPABILITY_BOUNDARY}"
     )
 
     # Per-request content lives in the user message (after the Context: split) so

@@ -597,6 +597,14 @@ class RagHandler(PipelineHandler):
             escalate = False
             esc_trigger = None
 
+        # The escalate branch below replaces the reply wholesale, so a
+        # retrieval-score escalation would swap the model's ``<clarifying/>``
+        # troubleshooting question for the handoff offer.
+        _clarifying_stood_down = escalate and result.llm_clarifying
+        if _clarifying_stood_down:
+            escalate = False
+            esc_trigger = None
+
         # Enforce policy decision: clarify_loop_limit and loop_detected escalations
         # must become real escalations even when the RAG pipeline did not
         # independently recommend it. Both route through the same pre-confirm
@@ -610,27 +618,12 @@ class RagHandler(PipelineHandler):
             escalate = True
             esc_trigger = EscalationTrigger.low_similarity
 
-        # Charge the per-session clarification budget for every turn that
-        # actually asked something, whether or not decide() called for it. Two
-        # asymmetries motivated this: a turn classified as a blocking clarify
-        # that came back as a plain answer must NOT be charged (the budget used
-        # to run out on questions nobody was asked, and the next genuinely
-        # ambiguous turn escalated on clarify_loop_limit instead of asking), and
-        # a question the model asked on its own must be. The substance check in
-        # the prompt asks for a missing detail on high-confidence turns, where
-        # decide() returns answer_with_citations — gating on the verdict left
-        # those uncounted, so "ask at most once per conversation" had no
-        # enforcement at all and a user who kept answering vaguely could be
-        # asked forever. Spending budget here can push a later ambiguous turn
-        # into clarify_loop_limit, which escalates: the right terminal state for
-        # a conversation that has already asked its way to the ceiling.
+        # A policy escalation re-arms the handoff over the stand-down: the user
+        # gets the offer after all, so nothing was stood down.
+        _clarifying_stood_down = _clarifying_stood_down and not escalate
+
         _clarification_count_before = chat.clarification_count
         _clarify_asked = result.llm_clarifying
-        _clarification_charged = _clarify_asked
-        if _clarification_charged:
-            chat.clarification_count += 1
-            ctx.db.add(chat)
-            # Counter is committed in the same transaction as the assistant message below.
 
         if ctx.trace is not None:
             escalation_decision_span = ctx.trace.span(
@@ -647,6 +640,7 @@ class RagHandler(PipelineHandler):
                     "trigger": esc_trigger.value if esc_trigger else None,
                     "reliability_score": reliability_score,
                     "low_similarity_deferred": _defer_low_similarity,
+                    "clarifying_stood_down": _clarifying_stood_down,
                 }
             )
             if reliability_score == "low" or escalate:
@@ -665,6 +659,9 @@ class RagHandler(PipelineHandler):
         # retries escalation once OpenAI recovers, rather than restarting from
         # a fresh "first rephrase" prompt.
         _escalation_render_failed_on_zero_hits = False
+        # True once the handoff offer has taken the place of the generated
+        # reply, so the user never saw what the model wrote.
+        _reply_replaced_by_handoff = False
         if escalate and esc_trigger is not None:
             try:
                 preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
@@ -746,6 +743,7 @@ class RagHandler(PipelineHandler):
                     round((perf_counter() - _esc_openai_start) * 1000, 2),
                 )
                 answer = esc.message_to_user
+                _reply_replaced_by_handoff = True
                 tokens_used = tokens_used + esc.tokens_used
                 # The reply is now the generic handoff question, not a RAG
                 # answer — drop the retrieved sources so we don't persist or
@@ -767,6 +765,15 @@ class RagHandler(PipelineHandler):
                     and not chunk_texts
                 ):
                     _escalation_render_failed_on_zero_hits = True
+
+        # The budget is charged for every question the user actually received,
+        # whatever decide() asked for, and never for one the handoff offer
+        # replaced above.
+        _clarification_charged = _clarify_asked and not _reply_replaced_by_handoff
+        if _clarification_charged:
+            chat.clarification_count += 1
+            ctx.db.add(chat)
+            # Counter is committed in the same transaction as the assistant message below.
 
         # Dead-end rescue: the LLM ends a reply with HANDOFF_MARKER when the
         # only way forward it can offer is reaching a human — including the
@@ -896,7 +903,10 @@ class RagHandler(PipelineHandler):
             user_content=ctx.question,
             assistant_content=answer,
             set_rephrase_flag=_escalation_render_failed_on_zero_hits,
-            set_low_confidence_flag=_defer_low_similarity,
+            # Standing down for a clarifying question keeps the weak-turn
+            # tracker armed: the turn was still weak, so the next weak one
+            # counts as consecutive instead of restarting the two-strike count.
+            set_low_confidence_flag=_defer_low_similarity or _clarifying_stood_down,
             document_ids=document_ids,
             extra_tokens=tokens_used,
             language_context=ctx.language_context,
@@ -1015,6 +1025,8 @@ class RagHandler(PipelineHandler):
             reliability_score=reliability_score,
             best_confidence_score=retrieval.best_confidence_score,
             decision=_decision,
+            clarifying_reply=_clarification_charged,
+            handoff_stood_down=_clarifying_stood_down,
             escalation_trigger=esc_trigger.value if esc_trigger else None,
             query_script=result.query_script,
             kb_scripts=result.kb_scripts,

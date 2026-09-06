@@ -6,6 +6,7 @@ import logging
 import threading
 from collections import deque
 from datetime import datetime
+from enum import Enum
 from time import monotonic
 from typing import Any
 
@@ -13,6 +14,16 @@ from backend.chat.decision import Decision
 from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
+
+
+class TurnOutcome(str, Enum):
+    """Its own vocabulary, not ``DecisionKind``: the answer verdicts collapse into one bucket."""
+
+    answer = "answer"
+    diagnose = "diagnose"
+    escalate = "escalate"
+    reject = "reject"
+
 
 # ---------------------------------------------------------------------------
 # Escalation rate monitor — global sliding-window counter.
@@ -222,6 +233,8 @@ def _emit_chat_turn_event(
     reliability_score: str | None = None,
     best_confidence_score: float | None = None,
     decision: Decision | None = None,
+    clarifying_reply: bool = False,
+    handoff_stood_down: bool = False,
     escalation_trigger: str | None = None,
     query_script: str | None = None,
     kb_scripts: list[str] | None = None,
@@ -253,6 +266,14 @@ def _emit_chat_turn_event(
             "reject_reason": reject_reason,
             "is_reject": is_reject,
             "escalated": escalated,
+            "clarifying_reply": clarifying_reply,
+            "handoff_stood_down": handoff_stood_down,
+            "turn_outcome": (
+                TurnOutcome.reject if is_reject
+                else TurnOutcome.escalate if escalated
+                else TurnOutcome.diagnose if clarifying_reply
+                else TurnOutcome.answer
+            ).value,
             "identified": identified,
             "latency_ms": latency_ms,
             "retrieval_ms": retrieval_ms,

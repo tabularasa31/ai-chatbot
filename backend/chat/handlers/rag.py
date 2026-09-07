@@ -569,31 +569,39 @@ class RagHandler(PipelineHandler):
 
         # Second-attempt rule for the weak-retrieval band. ``low_similarity``
         # means retrieval found something but scored it below the handoff
-        # floor — the answer the pipeline just generated may still be useful,
-        # and the user may only need to rephrase. Offering the handoff on that
-        # first miss throws the answer away (the pre-confirm reply replaces it)
-        # and puts a one-word "yes" in front of a user who never asked for a
-        # person. So the first weak turn keeps its answer and only arms the
-        # tracker; a second consecutive weak turn is evidence the user is
-        # actually stuck, and escalates as before.
+        # floor; the slow-path ``no_documents`` means an auxiliary source (FAQ
+        # or quick answer) carried the turn while the document search came back
+        # empty. Either way the answer the pipeline just generated may still be
+        # useful, and the user may only need to rephrase. Offering the handoff
+        # on that first miss throws the answer away (the pre-confirm reply
+        # replaces it) and puts a one-word "yes" in front of a user who never
+        # asked for a person. So the first weak turn keeps its answer and only
+        # arms the tracker; a second weak turn is evidence the user is actually
+        # stuck, and escalates as before.
         #
-        # ``no_documents`` is untouched: retrieval found nothing at all, so
-        # there is no answer to preserve, and that path already asks the user
-        # to rephrase once before it escalates (see steps/retrieval.py).
+        # The two flavours share one tracker rather than one each: a
+        # conversation alternating between them must still reach the handoff on
+        # its second weak turn. The zero-hits fast path escalates only on its
+        # own second consecutive miss, which it records in
+        # ``last_reply_was_rephrase_prompt`` — counting that flag as a strike
+        # here is what leaves its verdict standing instead of deferring it once
+        # more.
         #
         # The session-window guard mirrors the zero-hits tracker: once the
         # inactivity sweeper has reported the session ended, a user resuming
         # days later starts from a clean first attempt.
-        _defer_low_similarity = (
+        _weak_turn_already_seen = (
+            chat.last_reply_was_low_confidence or chat.last_reply_was_rephrase_prompt
+        ) and chat.session_ended_event_at is None
+        _defer_weak_turn = (
             escalate
-            and esc_trigger == EscalationTrigger.low_similarity
-            and bool(chunk_texts)
-            and not (
-                chat.last_reply_was_low_confidence
-                and chat.session_ended_event_at is None
+            and (
+                (esc_trigger == EscalationTrigger.low_similarity and bool(chunk_texts))
+                or esc_trigger == EscalationTrigger.no_documents
             )
+            and not _weak_turn_already_seen
         )
-        if _defer_low_similarity:
+        if _defer_weak_turn:
             escalate = False
             esc_trigger = None
 
@@ -639,7 +647,10 @@ class RagHandler(PipelineHandler):
                     "escalate": escalate,
                     "trigger": esc_trigger.value if esc_trigger else None,
                     "reliability_score": reliability_score,
-                    "low_similarity_deferred": _defer_low_similarity,
+                    # Key name predates the widening to ``no_documents`` and
+                    # now covers both flavours; production dashboards filter
+                    # on it, so it must not be renamed.
+                    "low_similarity_deferred": _defer_weak_turn,
                     "clarifying_stood_down": _clarifying_stood_down,
                 }
             )
@@ -906,7 +917,7 @@ class RagHandler(PipelineHandler):
             # Standing down for a clarifying question keeps the weak-turn
             # tracker armed: the turn was still weak, so the next weak one
             # counts as consecutive instead of restarting the two-strike count.
-            set_low_confidence_flag=_defer_low_similarity or _clarifying_stood_down,
+            set_low_confidence_flag=_defer_weak_turn or _clarifying_stood_down,
             document_ids=document_ids,
             extra_tokens=tokens_used,
             language_context=ctx.language_context,

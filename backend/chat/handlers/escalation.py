@@ -161,7 +161,9 @@ class EscalationStateMachine(PipelineHandler):
         # merely inferred — "I can't change the settings" read as a plea for
         # help — is answered instead: RagHandler takes the turn, and the
         # ordinary low_similarity / no_documents path escalates with its
-        # pre_confirm question if the knowledge base has nothing. Keeping the
+        # pre_confirm question if the knowledge base has nothing — on the
+        # second consecutive weak turn, the first one keeping its answer.
+        # Keeping the
         # inferred case out of the FSM entirely also keeps the elicitation
         # state below honest: ``escalation_awaiting_request`` is only ever
         # entered by an outright ask, so the reply that fills it in escalates

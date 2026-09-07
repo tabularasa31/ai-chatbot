@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -44,11 +45,21 @@ class MessageEmbedding(Base):
         PG_UUID(as_uuid=True),
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     embedding = Column(Vector(1536), nullable=False)
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    last_used_at = Column(DateTime, nullable=False, default=_utcnow)
+    created_at = Column(
+        DateTime, nullable=False, default=_utcnow, server_default=func.now()
+    )
+    last_used_at = Column(
+        DateTime, nullable=False, default=_utcnow, server_default=func.now()
+    )
+
+    # The only index the database has (phase4_message_embeddings_v1). Its
+    # leading column serves lookups by tenant_id alone, so a standalone
+    # tenant_id index would be redundant — and was never created.
+    __table_args__ = (
+        Index("ix_message_embeddings_tenant_last_used", "tenant_id", "last_used_at"),
+    )
 
     tenant = relationship("Tenant")
 

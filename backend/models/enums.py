@@ -106,10 +106,13 @@ class EscalationTrigger(str, enum.Enum):
     llm_self_offer = "llm_self_offer"
     # The relevance guard classified the message as a complaint about support
     # being unresponsive (waiting on a reply, being ignored). Routed to the
-    # pre-confirm escalation offer instead of an off-topic reject. Value must
-    # stay ≤ 15 chars: the escalation_tickets.trigger column was narrowed to
-    # the longest legacy value's length (VARCHAR(15)) by 67aaa83e5689.
+    # pre-confirm escalation offer instead of an off-topic reject.
     user_complaint = "user_complaint"
+    loop_detected = "loop_detected"
+    # 18 chars: escalation_tickets.trigger was VARCHAR(15) (narrowed by
+    # 67aaa83e5689 to the longest legacy value) until esc_trigger_width_v1
+    # widened it to 32.
+    clarify_loop_limit = "clarify_loop_limit"
 
 
 class EscalationPriority(str, enum.Enum):

@@ -311,7 +311,7 @@ class EscalationTicket(Base):
     conversation_summary = Column(Text, nullable=True)
 
     trigger = Column(
-        Enum(EscalationTrigger, native_enum=False),
+        Enum(EscalationTrigger, native_enum=False, length=32),
         nullable=False,
         index=True,
     )

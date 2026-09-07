@@ -468,10 +468,15 @@ def compute_priority(
         return EscalationPriority.critical
     if trigger in (EscalationTrigger.user_request, EscalationTrigger.user_complaint):
         return EscalationPriority.high
+    # loop_detected / clarify_loop_limit sit in this bucket because they used
+    # to be recorded as low_similarity: splitting them off is an accounting
+    # change, and must not move any ticket's priority.
     if trigger in (
         EscalationTrigger.low_similarity,
         EscalationTrigger.no_documents,
         EscalationTrigger.llm_self_offer,
+        EscalationTrigger.loop_detected,
+        EscalationTrigger.clarify_loop_limit,
     ) and enterprise:
         return EscalationPriority.high
     if trigger == EscalationTrigger.answer_rejected:

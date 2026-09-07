@@ -164,7 +164,11 @@ def test_zero_retrieval_clarifying_question_reaches_user(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``no_documents`` escalates immediately — but not over a clarifying question."""
+    """A ``no_documents`` handoff stands down for a clarifying question.
+
+    The first zero-chunk turn is already held back by the two-strike deferral,
+    so the stand-down is what keeps the second one's question on screen.
+    """
     tenant_id, api_key = _setup(tenant, db_session, "clarify-zero@example.com")
     session_id = uuid.uuid4()
     events = _patch_common(monkeypatch)
@@ -177,16 +181,25 @@ def test_zero_retrieval_clarifying_question_reaches_user(
         llm_clarifying=True,
     )
 
-    outcome = process_chat_message(
+    process_chat_message(
         tenant_id, "the widget shows an error", session_id, db_session, api_key=api_key
+    )
+    first_props = _turn_props(events)
+    # Nothing was stood down on the deferred turn: there was no offer yet.
+    assert first_props["handoff_stood_down"] is False
+    assert _chat(db_session, session_id).last_reply_was_low_confidence is True
+
+    events.clear()
+    outcome = process_chat_message(
+        tenant_id, "it still fails", session_id, db_session, api_key=api_key
     )
 
     assert outcome.text == CLARIFYING_ANSWER
     chat = _chat(db_session, session_id)
     assert chat.escalation_pre_confirm_pending is False
     assert chat.escalation_pre_confirm_context is None
-    # The user saw the question, so it costs budget.
-    assert chat.clarification_count == 1
+    # The user saw both questions, so both cost budget.
+    assert chat.clarification_count == 2
 
     props = _turn_props(events)
     assert props["turn_outcome"] == "diagnose"

@@ -5,7 +5,7 @@ description: Chat9 HTTP API — schema-accurate reference auto-generated from th
 
 Chat9 exposes its HTTP API at **`https://api.getchat9.live`**. The pages
 below are generated directly from the live OpenAPI spec, so they stay
-in sync with the running service. Two authentication models are in
+in sync with the running service. Three authentication models are in
 use; the rest of this page explains them, then the sidebar takes over.
 
 ## Hosts
@@ -17,7 +17,7 @@ use; the rest of this page explains them, then the sidebar takes over.
 
 ## Authentication
 
-Two surfaces, two credentials:
+Three surfaces, three credentials:
 
 - **Public widget endpoints** (under the `widget` tag in the sidebar:
   `POST /widget/session/init`, `POST /widget/chat`,
@@ -28,13 +28,22 @@ Two surfaces, two credentials:
   has its own per-IP rate limit. Optional [identified sessions](/docs/embedding-the-widget)
   attach an HMAC-SHA256 token signed by your backend.
 
-- **Dashboard / management endpoints** (Documents, Chat, Escalations,
-  Gap Analyzer, Knowledge) — authenticated with the bot's `ck_...`
-  widget API key issued in [Settings → API keys](/docs/api-keys).
-  Send `Authorization: Bearer <ck_...>` on each request. Account-level
-  endpoints (sign-up, login, tenant settings, bot CRUD) are not part
-  of the public surface — they live behind the dashboard at
-  [getchat9.live](https://getchat9.live).
+- **Server-to-server chat** (`POST /chat`,
+  `POST /chat/{session_id}/escalate`) — authenticated with your
+  `ck_...` API key issued in [Settings → API keys](/docs/api-keys).
+  Send it as an `X-API-Key` header. This is the credential for
+  custom backend integrations that drive a conversation from your
+  own server, not from the embedded widget.
+
+- **Dashboard / management endpoints** (Documents, Gap Analyzer,
+  Knowledge, and the read side of Chat — sessions, logs, history) —
+  authenticated with a JWT bearer token. `POST /auth/login` with your
+  e-mail and password returns an `access_token`; send that as
+  `Authorization: Bearer <access_token>` on each request. A `ck_...`
+  key does **not** authenticate these routes. The account-level
+  endpoints themselves (sign-up, login, tenant settings, bot CRUD)
+  are not part of the documented surface — they live behind the
+  dashboard at [getchat9.live](https://getchat9.live).
 
 ## Streaming responses
 

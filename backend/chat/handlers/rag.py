@@ -118,7 +118,7 @@ from backend.chat.types import (
     PipelineState as _PipelineState,  # noqa: F401  (re-export, legacy name)
 )
 from backend.core.config import settings
-from backend.models import Chat, MessageRole
+from backend.models import Chat, EscalationTrigger, MessageRole
 from backend.observability import record_stage_ms
 
 logger = logging.getLogger(__name__)
@@ -136,6 +136,13 @@ LOW_CONFIDENCE_THRESHOLD = KB_LOW_CONFIDENCE_THRESHOLD
 _ESCALATION_THRESHOLD = KB_HIGH_CONFIDENCE_THRESHOLD
 _floor_kb_confidence = floor_kb_confidence
 _classify_kb_confidence = classify_kb_confidence
+
+# ``decide()`` escalate_reason → the trigger recorded on the ticket, for the
+# escalations policy forces on top of the retrieval verdict.
+_POLICY_ESCALATE_TRIGGERS = {
+    "clarify_loop_limit": EscalationTrigger.clarify_loop_limit,
+    "loop_detected_repeat_source_docs": EscalationTrigger.loop_detected,
+}
 
 
 @dataclass(frozen=True)
@@ -613,18 +620,18 @@ class RagHandler(PipelineHandler):
             escalate = False
             esc_trigger = None
 
-        # Enforce policy decision: clarify_loop_limit and loop_detected escalations
-        # must become real escalations even when the RAG pipeline did not
-        # independently recommend it. Both route through the same pre-confirm
-        # handoff, just with a different escalate_reason in the trace.
+        # ``_pre_confirm_variant`` below keys on ``user_complaint`` alone, so
+        # these triggers render the same variant low_similarity does.
+        _policy_trigger = _POLICY_ESCALATE_TRIGGERS.get(
+            _decision.escalate_reason or ""
+        )
         if (
             _decision.kind == DecisionKind.escalate
-            and _decision.escalate_reason
-            in ("clarify_loop_limit", "loop_detected_repeat_source_docs")
+            and _policy_trigger is not None
             and not escalate
         ):
             escalate = True
-            esc_trigger = EscalationTrigger.low_similarity
+            esc_trigger = _policy_trigger
 
         # A policy escalation re-arms the handoff over the stand-down: the user
         # gets the offer after all, so nothing was stood down.

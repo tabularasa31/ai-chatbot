@@ -619,6 +619,31 @@ def test_run_generation_never_sets_strong_and_low_context_together(
     assert calls["strong_context"] is False
 
 
+def test_run_generation_clears_strong_context_when_blocking_clarify_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """classify_kb_confidence (keyed off best_confidence_score) and
+    reliability.score (keyed off top rank score) use different thresholds on
+    different scores, so a turn can clear reliability's "not low" bar — leaving
+    low_context False — while kb_confidence still reads low and
+    requires_blocking_clarify fires. Left unreconciled, the prompt told the
+    model both "the context clears the bar, answer from it" and "ask one
+    question, do not enumerate cases" in the same turn, and the model split the
+    difference by answering from an off-topic top chunk anyway."""
+    calls = _capture_generation_kwargs(
+        monkeypatch,
+        retrieval_ctx=_retrieval_ctx(
+            best_rank_score=0.5,
+            best_confidence_score=0.3,
+            reliability=build_reliability_assessment(top_score=0.5, result_count=3),
+        ),
+        escalate=False,
+    )
+    assert calls["low_context"] is False
+    assert calls["require_clarification"] == "low_retrieval_confidence"
+    assert calls["strong_context"] is False
+
+
 def test_run_generation_resolves_seam_via_rag_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

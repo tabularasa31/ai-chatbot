@@ -713,6 +713,13 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     # Low reliability wins — it is the more conservative of the two.
     _low_context = not state.reranker_rescued and retrieval.reliability.score == "low"
 
+    # ``_require_clarification`` is derived from ``classify_kb_confidence``, a
+    # different threshold on a different score than ``reliability.score`` (see
+    # its docstring), so it can fire even when neither ``escalate`` nor
+    # ``_low_context`` does. Left out of this flag, the prompt told the model
+    # both "the context clears the bar, answer from it" and "confidence is low,
+    # ask one question and do not enumerate cases" in the same turn — the model
+    # split the difference by answering from an off-topic top chunk anyway.
     _generate_kwargs: dict[str, Any] = dict(
         api_key=run.api_key,
         user_context_line=run.user_context_line,
@@ -723,7 +730,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         quick_answer_items=state.quick_answer_items,
         agent_instructions=run.agent_instructions,
         low_context=_low_context,
-        strong_context=not escalate and not _low_context,
+        strong_context=not escalate and not _low_context and not _require_clarification,
         allow_clarification=run.allow_clarification,
         require_clarification=_require_clarification,
         trace=trace,

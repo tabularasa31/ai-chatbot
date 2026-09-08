@@ -43,7 +43,7 @@ PLACEHOLDER_ENV = {
 
 # The documented surface. Everything else in the app -- auth, admin, billing,
 # tenant management -- is deliberately absent from the published reference.
-PUBLIC_TAGS = {"widget", "documents", "chat", "escalations", "gap-analyzer", "knowledge"}
+PUBLIC_TAGS = {"widget", "documents", "chat", "gap-analyzer", "knowledge"}
 PUBLIC_PATHS = {"/health"}
 OPERATIONS = ("get", "post", "put", "patch", "delete", "head", "options", "trace")
 

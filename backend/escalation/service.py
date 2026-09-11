@@ -1618,6 +1618,47 @@ def raise_ticket_priority_if_higher(
     db.add(ticket)
 
 
+def request_raised_at(ticket: EscalationTicket) -> datetime:
+    """When the visitor last asked for a human on this ticket."""
+    return ticket.requested_again_at or ticket.created_at
+
+
+def operator_answered_since_request(ticket: EscalationTicket, db: Session) -> bool:
+    """An operator wrote somewhere in the visitor's session after the request.
+
+    The session rather than the ticket's chat: the reply lands in the newest
+    chat while the ticket may sit on an older one after idle rotation.
+    """
+    chat = ticket.chat
+    if chat is None:
+        return False
+    return (
+        db.query(Message.id)
+        .join(Chat, Chat.id == Message.chat_id)
+        .filter(
+            Chat.session_id == chat.session_id,
+            Message.role == MessageRole.operator,
+            Message.created_at >= request_raised_at(ticket),
+        )
+        .first()
+        is not None
+    )
+
+
+def note_repeat_human_request(ticket: EscalationTicket, db: Session) -> bool:
+    """A reused ticket's visitor asked for a human again. Returns whether it re-queued.
+
+    Only an already-answered request moves: stamping a repeat on one nobody
+    has answered yet would reset the visitor's wait to zero and drop them
+    down the queue for asking twice.
+    """
+    if not operator_answered_since_request(ticket, db):
+        return False
+    ticket.requested_again_at = _utcnow()
+    db.add(ticket)
+    return True
+
+
 def mark_ticket_in_progress(db: Session, *, chat_id: uuid.UUID) -> EscalationTicket | None:
     """Move this chat's open ticket to ``in_progress``. Returns it, or ``None``.
 
@@ -1938,6 +1979,7 @@ def _perform_manual_escalation_impl(
     if existing_ticket is not None:
         ticket = existing_ticket
         raise_ticket_priority_if_higher(ticket, trigger, effective, db)
+        note_repeat_human_request(ticket, db)
         try:
             # ``enriched_note``, not ``user_note`` — it carries the
             # ``[llm_failure: ...]`` prefix support needs to read a repeat press

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from backend.auth.roles import ROLE_OPERATOR
 from backend.auth.service import create_token_for_user
 from backend.email.reply_lane import mint_reply_token
-from backend.escalation.service import _notify_tenant_new_ticket
+from backend.escalation.service import _notify_tenant_new_ticket, note_repeat_human_request
 from backend.models import (
     Chat,
     EscalationStatus,
@@ -559,6 +559,38 @@ def test_an_answer_in_a_newer_chat_of_the_session_counts_for_an_older_ticket(
         "waiting_count": 0,
         "attention_count": 0,
     }
+
+
+def test_asking_for_a_human_again_after_an_answer_re_enters_the_queue(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="repeat@example.com", name="Repeat Co")
+    chat = _chat(db_session, ws.tenant_id)
+    ticket = _ticket(db_session, chat, created_ago=timedelta(days=2))
+    sent = tenant.post(f"/operator/chats/{chat.id}/messages", headers=ws.auth, json={"text": "Done."})
+    assert sent.status_code == 200, sent.text
+    assert tenant.post(f"/operator/chats/{chat.id}/release", headers=ws.auth).status_code == 200
+    assert tenant.get("/operator/inbox", headers=ws.auth).json()["items"] == []
+
+    db_session.expire_all()
+    ticket = db_session.get(EscalationTicket, ticket.id)
+    assert note_repeat_human_request(ticket, db_session) is True
+    db_session.commit()
+
+    queue = tenant.get("/operator/inbox", headers=ws.auth).json()
+    row = queue["items"][0]
+    assert row["chat_id"] == str(chat.id)
+    assert row["handoff_state"] == "waiting"
+    assert row["ticket"]["status"] == "in_progress"
+    assert row["waiting_since"] > ticket.created_at.isoformat()
+    assert queue["waiting_count"] == 1
+    thread = tenant.get(f"/operator/sessions/{chat.session_id}", headers=ws.auth).json()
+    assert thread["handoff_state"] == "waiting"
+
+    again = tenant.post(f"/operator/chats/{chat.id}/messages", headers=ws.auth, json={"text": "Yes?"})
+    assert again.status_code == 200, again.text
+    assert tenant.post(f"/operator/chats/{chat.id}/release", headers=ws.auth).status_code == 200
+    assert tenant.get("/operator/inbox/summary", headers=ws.auth).json()["waiting_count"] == 0
 
 
 def test_an_answer_before_the_request_does_not_count(

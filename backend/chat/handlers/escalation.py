@@ -38,6 +38,7 @@ from backend.escalation.service import (
     apply_collected_contact_email,
     get_latest_escalation_ticket_for_chat,
     get_open_escalation_ticket_for_chat,
+    note_repeat_human_request,
     notify_support_of_repeat_escalation,
     parse_contact_email,
     raise_ticket_priority_if_higher,
@@ -542,6 +543,7 @@ class EscalationStateMachine(PipelineHandler):
             raise_ticket_priority_if_higher(
                 ticket, esc_trigger, ctx.effective_user_ctx, ctx.db
             )
+            note_repeat_human_request(ticket, ctx.db)
             try:
                 notify_sent = notify_support_of_repeat_escalation(
                     ticket, ctx.db, latest_user_text=ctx.question

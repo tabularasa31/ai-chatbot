@@ -385,6 +385,14 @@ class EscalationTicket(Base):
     # dropped, not merely that it was.
     claim_bounced_at = Column(DateTime, nullable=True)
 
+    # When the visitor asked for a human again after an operator had already
+    # answered this request. The inbox counts a request as waiting only while
+    # no operator has written since it was (last) raised, so without this a
+    # visitor who was answered, handed back to the bot and then asked again
+    # could never re-enter the queue. Bumped only once an answer exists: a
+    # repeat while still unanswered keeps the original wait.
+    requested_again_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

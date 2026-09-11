@@ -3,9 +3,11 @@
 Nothing here is stored separately — "needs a human" is derived from the
 chat's ``operator_state``, its escalation tickets and the transcript. A
 session waits for a human while a ticket of it is active and no operator has
-written in the session since that ticket was raised; once someone answered,
-the ticket may stay ``in_progress`` (the request is not closed) but the
-conversation is no longer in anyone's queue. The widget asks a different
+written in the session since that ticket was (last) raised; once someone
+answered, the ticket may stay ``in_progress`` (the request is not closed) but
+the conversation is no longer in anyone's queue — until the visitor asks for
+a human again, which stamps ``requested_again_at`` and starts a new wait. The
+widget asks a different
 question — "might a human still answer here?" — so it keeps polling on any
 active ticket; only the console narrows to "has nobody answered yet".
 
@@ -31,7 +33,7 @@ from typing import Literal
 from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
-from backend.escalation.service import ACTIVE_TICKET_STATUSES
+from backend.escalation.service import ACTIVE_TICKET_STATUSES, request_raised_at
 from backend.models import (
     Chat,
     EscalationTicket,
@@ -96,18 +98,22 @@ def _waiting_session_ids(tenant_id: uuid.UUID, session_ids=None):
     """Sessions with an active ticket that no operator has answered.
 
     "Answered" is an operator turn anywhere in the session written after the
-    ticket was raised — the session, not the ticket's chat, because the reply
-    lands in the session's newest chat while the ticket may sit on an older
-    one. A claim with no reply behind it does not count: the visitor is still
-    waiting for a person to say something.
+    request was last raised — the session, not the ticket's chat, because the
+    reply lands in the session's newest chat while the ticket may sit on an
+    older one. A claim with no reply behind it does not count: the visitor is
+    still waiting for a person to say something. Mirrors
+    :func:`backend.escalation.service.operator_answered_since_request`.
     """
     ticket_chat = aliased(Chat)
     answer_chat = aliased(Chat)
+    raised_at = func.coalesce(
+        EscalationTicket.requested_again_at, EscalationTicket.created_at
+    )
     answered = exists().where(
         answer_chat.session_id == ticket_chat.session_id,
         Message.chat_id == answer_chat.id,
         Message.role == MessageRole.operator,
-        Message.created_at >= EscalationTicket.created_at,
+        Message.created_at >= raised_at,
     )
     q = (
         select(ticket_chat.session_id)
@@ -322,7 +328,7 @@ def list_inbox(
                 ticket=ticket,
                 assigned_operator_id=chat.assigned_operator_id,
                 assigned_operator_email=emails.get(chat.assigned_operator_id),
-                waiting_since=ticket.created_at if state == "waiting" and ticket else None,
+                waiting_since=request_raised_at(ticket) if state == "waiting" and ticket else None,
                 last_message_role=newest.role.value if newest is not None else None,
                 last_message_preview=_preview(newest.content) if newest is not None else None,
                 last_activity=newest.created_at if newest is not None else chat.created_at,

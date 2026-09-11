@@ -137,6 +137,10 @@ def _needs_attention(tenant_id: uuid.UUID):
     )
 
 
+def _has_messages():
+    return exists().where(Message.chat_id == Chat.id)
+
+
 def _session_ids_where(tenant_id: uuid.UUID, predicate):
     return (
         select(Chat.session_id)
@@ -294,9 +298,12 @@ def list_inbox(
     ``attention`` keeps only sessions that need a human — a chat of theirs is
     live, or a ticket of theirs is active and nobody has answered it yet —
     ordered longest wait first, then whoever is being served, newest
-    activity first. ``all`` is every
-    conversation the tenant has, newest first, capped at ``limit`` because a
-    tenant's history is unbounded and the console is a queue, not an archive.
+    activity first. ``all`` is every conversation the tenant has, newest
+    first, capped at ``limit`` because a tenant's history is unbounded and
+    the console is a queue, not an archive.
+    Sessions without a single message are left out of ``all`` unless they
+    need a human: a mount the visitor never typed into is not a conversation
+    anyone can act on, and ``all`` must still contain the whole queue.
     """
     if scope == "attention":
         chats = _newest_chats(
@@ -305,7 +312,14 @@ def list_inbox(
             session_ids=_session_ids_where(tenant_id, _needs_attention(tenant_id)),
         )
     else:
-        chats = _newest_chats(db, tenant_id=tenant_id, limit=limit)
+        chats = _newest_chats(
+            db,
+            tenant_id=tenant_id,
+            session_ids=_session_ids_where(
+                tenant_id, or_(_has_messages(), _needs_attention(tenant_id))
+            ),
+            limit=limit,
+        )
 
     session_ids = [c.session_id for c in chats]
     tickets = _tickets_by_session(db, tenant_id=tenant_id, session_ids=session_ids)

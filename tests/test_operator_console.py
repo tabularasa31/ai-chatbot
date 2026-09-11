@@ -193,6 +193,20 @@ def test_scope_all_includes_conversations_the_bot_is_handling(
     assert row["visitor_email"] == "q@example.com"
 
 
+def test_scope_all_skips_sessions_nobody_wrote_in(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="mount@example.com", name="Mount Co")
+    _chat(db_session, ws.tenant_id, user_context={"email": "silent@example.com"})
+    spoken = _chat(db_session, ws.tenant_id)
+    _say(db_session, spoken, MessageRole.user, "hello")
+
+    held = _chat(db_session, ws.tenant_id, operator_state=OperatorState.live)
+
+    everything = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()
+    assert {r["chat_id"] for r in everything["items"]} == {str(spoken.id), str(held.id)}
+
+
 def test_a_rotated_session_is_one_row_pointing_at_its_newest_chat(
     tenant: TestClient, db_session: Session
 ) -> None:

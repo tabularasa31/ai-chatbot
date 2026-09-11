@@ -111,6 +111,8 @@ export type InboxTicket = {
   resolution_text: string | null;
   created_at: string;
   resolved_at: string | null;
+  forwarded_reply_at: string | null;
+  forwarded_reply_from: string | null;
 };
 
 export type InboxRow = {

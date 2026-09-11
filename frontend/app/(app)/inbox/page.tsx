@@ -58,6 +58,11 @@ function ticketStatusLabel(status: string): string {
   return status.replace("_", " ");
 }
 
+function answeredByEmail(ticket: { forwarded_reply_at: string | null; forwarded_reply_from: string | null } | null): string | null {
+  if (!ticket?.forwarded_reply_at || !ticket.forwarded_reply_from) return null;
+  return `Answered by e-mail · ${ticket.forwarded_reply_from} · ${formatDateTime(ticket.forwarded_reply_at)}`;
+}
+
 function InboxRowItem({
   row,
   selected,
@@ -92,7 +97,9 @@ function InboxRowItem({
           {row.last_message_preview ?? "(no messages)"}
         </p>
         <p className="text-xs text-slate-400 mt-1 truncate">
-          {row.handoff_state === "waiting" && row.waiting_since
+          {row.handoff_state === "waiting" && answeredByEmail(row.ticket)
+            ? answeredByEmail(row.ticket)
+            : row.handoff_state === "waiting" && row.waiting_since
             ? `Waiting ${waitingFor(row.waiting_since, now)} · unassigned`
             : row.assigned_operator_email
               ? `Held by ${row.assigned_operator_email}`
@@ -148,6 +155,14 @@ function ThreadHeader({ thread }: { thread: Thread }) {
           <span className="font-mono text-slate-700">{ticket.ticket_number}</span>
           {" · "}
           {ticketStatusLabel(ticket.status)} · {ticket.priority} priority · {ticket.trigger.replace("_", " ")}
+          {answeredByEmail(ticket) && (
+            <>
+              {" · "}
+              <span className="text-amber-700" title="The reply went to the visitor by e-mail from an address without a seat; nothing was written into this conversation.">
+                {answeredByEmail(ticket)}
+              </span>
+            </>
+          )}
           {ticket.user_note && (
             <>
               {" · "}

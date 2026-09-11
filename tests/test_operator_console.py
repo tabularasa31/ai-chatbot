@@ -508,6 +508,79 @@ def test_a_released_but_unresolved_chat_waits_again(
     assert db_session.get(EscalationTicket, ticket.id).status is EscalationStatus.in_progress
 
 
+def test_an_answered_request_handed_back_to_the_bot_leaves_the_queue(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Answered and released is not waiting, even though the ticket stays open."""
+    ws = _workspace(tenant, db_session, email="handed@example.com", name="Handed Co")
+    chat = _chat(db_session, ws.tenant_id)
+    ticket = _ticket(db_session, chat)
+    sent = tenant.post(
+        f"/operator/chats/{chat.id}/messages", headers=ws.auth, json={"text": "Which form is it?"}
+    )
+    assert sent.status_code == 200, sent.text
+    assert tenant.post(f"/operator/chats/{chat.id}/release", headers=ws.auth).status_code == 200
+
+    queue = tenant.get("/operator/inbox", headers=ws.auth).json()
+    assert queue["items"] == []
+    assert queue["waiting_count"] == 0
+    assert queue["attention_count"] == 0
+
+    everything = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()
+    row = everything["items"][0]
+    assert row["chat_id"] == str(chat.id)
+    assert row["handoff_state"] == "bot"
+    assert row["waiting_since"] is None
+    assert row["ticket"]["status"] == "in_progress"
+    thread = tenant.get(f"/operator/sessions/{chat.session_id}", headers=ws.auth).json()
+    assert thread["handoff_state"] == "bot"
+    db_session.expire_all()
+    assert db_session.get(EscalationTicket, ticket.id).status is EscalationStatus.in_progress
+
+
+def test_an_answer_in_a_newer_chat_of_the_session_counts_for_an_older_ticket(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="rotated@example.com", name="Rotated Co")
+    session_id = uuid.uuid4()
+    older = _chat(db_session, ws.tenant_id, session_id=session_id, ended_at=_utcnow())
+    _ticket(db_session, older, created_ago=timedelta(hours=2))
+    newer = _chat(db_session, ws.tenant_id, session_id=session_id)
+    _say(db_session, newer, MessageRole.user, "I'm back, any news?")
+    assert tenant.get("/operator/inbox/summary", headers=ws.auth).json()["waiting_count"] == 1
+
+    sent = tenant.post(
+        f"/operator/chats/{newer.id}/messages", headers=ws.auth, json={"text": "On it."}
+    )
+    assert sent.status_code == 200, sent.text
+    assert tenant.post(f"/operator/chats/{newer.id}/release", headers=ws.auth).status_code == 200
+
+    assert tenant.get("/operator/inbox/summary", headers=ws.auth).json() == {
+        "waiting_count": 0,
+        "attention_count": 0,
+    }
+
+
+def test_an_answer_before_the_request_does_not_count(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A visitor who was helped once and asks again is waiting again."""
+    ws = _workspace(tenant, db_session, email="again2@example.com", name="Again2 Co")
+    chat = _chat(db_session, ws.tenant_id)
+    _say(
+        db_session,
+        chat,
+        MessageRole.operator,
+        "Sorted, anything else?",
+        created_at=_utcnow() - timedelta(hours=3),
+    )
+    _ticket(db_session, chat, created_ago=timedelta(hours=1))
+
+    queue = tenant.get("/operator/inbox", headers=ws.auth).json()
+    assert [r["handoff_state"] for r in queue["items"]] == ["waiting"]
+    assert queue["waiting_count"] == 1
+
+
 def test_an_unknown_scope_is_refused(tenant: TestClient, db_session: Session) -> None:
     ws = _workspace(tenant, db_session, email="scope@example.com", name="Scope Co")
     assert tenant.get("/operator/inbox?scope=everything", headers=ws.auth).status_code == 422

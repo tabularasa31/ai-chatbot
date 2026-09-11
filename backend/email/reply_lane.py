@@ -56,9 +56,9 @@ logger = logging.getLogger(__name__)
 #: parser routes the whole domain to one webhook regardless.
 REPLY_LOCAL_PART = "reply"
 
-#: 32 random bytes, URL-safe base64 — 43 characters, all of them valid in an
-#: e-mail local part, and far past guessing. Sized to leave room inside the
-#: column's 64 characters for the day this grows a prefix.
+#: 24 random bytes as lowercase hex — 48 characters, far past guessing, and
+#: with no case for a mailer to fold. Sized so ``reply+<token>`` stays within
+#: the 64-octet local part and the column's 64 characters.
 _TOKEN_BYTES = 24
 
 

@@ -606,13 +606,21 @@ def _stamp_forwarded(reply: InboundReply, ticket: EscalationTicket, db: Session)
     no seat is not a message of this conversation and must not be stored as
     one. Only ever the newest forward — the inbox needs the latest fact.
     """
-    ticket.forwarded_reply_at = _utcnow()
-    ticket.forwarded_reply_from = reply.from_email[:255]
-    db.add(ticket)
-    # Committed here, as the ingest path commits its own write: the receipt
-    # that follows commits only when the payload carried a message id, and
-    # the stamp must not depend on that.
-    db.commit()
+    try:
+        ticket.forwarded_reply_at = _utcnow()
+        ticket.forwarded_reply_from = reply.from_email[:255]
+        db.add(ticket)
+        # Committed here rather than left to the receipt, which commits only
+        # when the payload carried a message id.
+        db.commit()
+    except Exception:
+        # The answer has already reached the visitor. Failing now would make
+        # Brevo redeliver the batch and forward it a second time, which is a
+        # worse outcome than an inbox that does not know about this one.
+        db.rollback()
+        logger.warning(
+            "email_lane_forward_stamp_failed ticket=%s", ticket.ticket_number, exc_info=True
+        )
 
 
 def _forward_reason(*, seated: bool, chat: Chat | None, live: bool) -> str:

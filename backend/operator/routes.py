@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth.middleware import require_member, require_seated_member
 from backend.core.db import get_async_db, run_sync
+from backend.escalation.service import request_raised_at
 from backend.models import Chat, EscalationTicket, User
 from backend.operator.inbox import (
     InboxRow,
@@ -74,6 +75,12 @@ def _state(chat: Chat, *, assigned_operator_email: str | None = None) -> Operato
 def _ticket(ticket: EscalationTicket | None) -> InboxTicket | None:
     if ticket is None:
         return None
+    # A mailed answer counts only against the request it answered: once the
+    # visitor asks for a human again, the stamp predates the wait and showing
+    # it would dress a fresh, unanswered request as handled.
+    forwarded_at = ticket.forwarded_reply_at
+    if forwarded_at is not None and forwarded_at < request_raised_at(ticket):
+        forwarded_at = None
     return InboxTicket(
         id=ticket.id,
         ticket_number=ticket.ticket_number,
@@ -84,8 +91,8 @@ def _ticket(ticket: EscalationTicket | None) -> InboxTicket | None:
         resolution_text=ticket.resolution_text,
         created_at=ticket.created_at,
         resolved_at=ticket.resolved_at,
-        forwarded_reply_at=ticket.forwarded_reply_at,
-        forwarded_reply_from=ticket.forwarded_reply_from,
+        forwarded_reply_at=forwarded_at,
+        forwarded_reply_from=ticket.forwarded_reply_from if forwarded_at else None,
     )
 
 

@@ -551,6 +551,35 @@ def test_a_forwarded_reply_leaves_its_mark_on_the_ticket_and_in_the_inbox(
     assert thread["messages"] == []
 
 
+def test_the_mark_hides_once_the_visitor_asks_again(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A mailed answer counts against the request it answered, not the next
+    one: after the visitor asks for a human again the inbox must show the
+    fresh wait, not yesterday's "answered by e-mail".
+    """
+    token, tenant_id = _workspace(
+        tenant, db_session, email="owner-again@example.com", name="Again", seated=True
+    )
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
+
+    db_session.expire_all()
+    ticket.requested_again_at = ticket.forwarded_reply_at + timedelta(minutes=5)
+    db_session.commit()
+
+    auth = {"Authorization": f"Bearer {token}"}
+    [row] = tenant.get("/operator/inbox", headers=auth).json()["items"]
+    assert row["handoff_state"] == "waiting"
+    assert row["ticket"]["forwarded_reply_at"] is None
+    assert row["ticket"]["forwarded_reply_from"] is None
+
+
 def test_an_ingested_reply_leaves_no_forward_mark(
     tenant: TestClient, db_session: Session
 ) -> None:

@@ -59,7 +59,7 @@ REPLY_LOCAL_PART = "reply"
 #: 32 random bytes, URL-safe base64 — 43 characters, all of them valid in an
 #: e-mail local part, and far past guessing. Sized to leave room inside the
 #: column's 64 characters for the day this grows a prefix.
-_TOKEN_BYTES = 32
+_TOKEN_BYTES = 24
 
 
 def lane_is_wired() -> bool:
@@ -100,7 +100,7 @@ def mint_reply_token(ticket: EscalationTicket, db: Session) -> str:
     address on notifications already sitting in someone's inbox.
     """
     if not ticket.reply_token:
-        ticket.reply_token = secrets.token_urlsafe(_TOKEN_BYTES)
+        ticket.reply_token = secrets.token_hex(_TOKEN_BYTES)
     if ticket.reply_token_revoked_at is not None:
         # The ticket has been reopened. Minting is what puts this address into
         # a notification going out right now, so leaving yesterday's revocation
@@ -181,10 +181,11 @@ def token_from_recipients(addresses: list[str]) -> str | None:
         local, _, host = addr.rpartition("@")
         if host.strip().lower() != domain:
             continue
-        local = local.strip()
-        # The local part is compared case-sensitively after the prefix: the
-        # token is base64url and ``a`` and ``A`` are different tokens.
-        if local[: len(prefix)].lower() != prefix:
+        # Case-folded end to end: Brevo lower-cases ``Reply-To`` on the way
+        # out, so the token an operator answers to may not match the minted
+        # spelling byte for byte.
+        local = local.strip().lower()
+        if not local.startswith(prefix):
             continue
         token = local[len(prefix) :]
         if token:
@@ -209,7 +210,7 @@ def ticket_for_token(token: str, db: Session) -> EscalationTicket | None:
         return None
     ticket = (
         db.query(EscalationTicket)
-        .filter(EscalationTicket.reply_token == token)
+        .filter(func.lower(EscalationTicket.reply_token) == token.lower())
         .first()
     )
     if ticket is None:

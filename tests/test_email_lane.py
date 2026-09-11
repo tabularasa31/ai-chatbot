@@ -32,6 +32,7 @@ from backend.email.reply_lane import (
     REVOKED_TOKEN_GRACE,
     escalation_reply_to,
     reply_address,
+    ticket_for_token,
     token_from_recipients,
 )
 from backend.escalation.service import (
@@ -250,6 +251,39 @@ def test_token_is_read_out_of_the_recipient_address() -> None:
     assert token_from_recipients(["reply+abc123@example.com"]) is None
     assert token_from_recipients([f"support@{_DOMAIN}"]) is None
     assert token_from_recipients([]) is None
+
+
+def test_a_token_survives_the_mailer_lower_casing_the_address(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Brevo lower-cases ``Reply-To`` on send, so what comes back is not
+    byte-identical to what was minted. Pinned against the real ESC-0659 miss:
+    a mixed-case token in the row, a lower-cased one in the reply, 404.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="fold@example.com", name="Fold", seated=True
+    )
+    ticket = _ticket(db_session, tenant_id)
+    ticket.reply_token = "MiXeD-Case_Legacy_Token"
+    db_session.commit()
+
+    assert ticket_for_token("mixed-case_legacy_token", db_session) is ticket
+    assert (
+        token_from_recipients([f"reply+MiXeD-Case@{_DOMAIN}"]) == "mixed-case"
+    )
+
+
+def test_freshly_minted_tokens_carry_no_case_at_all(
+    tenant: TestClient, db_session: Session
+) -> None:
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="hex@example.com", name="Hex", seated=True
+    )
+    ticket = _ticket(db_session, tenant_id)
+    address = escalation_reply_to(ticket, db_session)
+    token = ticket.reply_token
+    assert token and token == token.lower() and token in address
+    assert len(f"reply+{token}") <= 64  # RFC 5321 local-part limit
 
 
 def test_brevo_extracted_body_is_preferred_over_the_raw_text() -> None:

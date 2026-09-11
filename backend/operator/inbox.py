@@ -7,9 +7,9 @@ written in the session since that ticket was (last) raised; once someone
 answered, the ticket may stay ``in_progress`` (the request is not closed) but
 the conversation is no longer in anyone's queue — until the visitor asks for
 a human again, which stamps ``requested_again_at`` and starts a new wait. The
-widget asks a different
-question — "might a human still answer here?" — so it keeps polling on any
-active ticket; only the console narrows to "has nobody answered yet".
+widget asks a different question — "might a human still answer here?" — so
+it keeps polling on any active ticket; only the console narrows to "has
+nobody answered yet".
 
 The unit is the visitor's session, not the ``Chat`` row. A session spans
 several chats once idle rotation kicks in, and the ticket that put a visitor

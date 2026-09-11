@@ -1,9 +1,15 @@
 """Read side of the operator console: the queue and one conversation.
 
 Nothing here is stored separately — "needs a human" is derived from the
-chat's ``operator_state`` and its escalation tickets, exactly the way the
-widget derives its own waiting/live state, so the console and the visitor
-can never disagree about whether somebody is on the way.
+chat's ``operator_state``, its escalation tickets and the transcript. A
+session waits for a human while a ticket of it is active and no operator has
+written in the session since that ticket was (last) raised; once someone
+answered, the ticket may stay ``in_progress`` (the request is not closed) but
+the conversation is no longer in anyone's queue — until the visitor asks for
+a human again, which stamps ``requested_again_at`` and starts a new wait. The
+widget asks a different question — "might a human still answer here?" — so
+it keeps polling on any active ticket; only the console narrows to "has
+nobody answered yet".
 
 The unit is the visitor's session, not the ``Chat`` row. A session spans
 several chats once idle rotation kicks in, and the ticket that put a visitor
@@ -25,10 +31,17 @@ from datetime import datetime
 from typing import Literal
 
 from sqlalchemy import case, exists, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
-from backend.escalation.service import ACTIVE_TICKET_STATUSES
-from backend.models import Chat, EscalationTicket, Message, OperatorState, User
+from backend.escalation.service import ACTIVE_TICKET_STATUSES, request_raised_at
+from backend.models import (
+    Chat,
+    EscalationTicket,
+    Message,
+    MessageRole,
+    OperatorState,
+    User,
+)
 
 InboxScope = Literal["attention", "all"]
 HandoffState = Literal["waiting", "live", "bot"]
@@ -81,15 +94,47 @@ class Thread:
     messages: list[ThreadMessage]
 
 
-def _active_ticket_exists():
-    return exists().where(
-        EscalationTicket.chat_id == Chat.id,
-        EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
+def _waiting_session_ids(tenant_id: uuid.UUID, session_ids=None):
+    """Sessions with an active ticket that no operator has answered.
+
+    "Answered" is an operator turn anywhere in the session written after the
+    request was last raised — the session, not the ticket's chat, because the
+    reply lands in the session's newest chat while the ticket may sit on an
+    older one. A claim with no reply behind it does not count: the visitor is
+    still waiting for a person to say something. Mirrors
+    :func:`backend.escalation.service.operator_answered_since_request`.
+    """
+    ticket_chat = aliased(Chat)
+    answer_chat = aliased(Chat)
+    raised_at = func.coalesce(
+        EscalationTicket.requested_again_at, EscalationTicket.created_at
     )
+    answered = exists().where(
+        answer_chat.session_id == ticket_chat.session_id,
+        Message.chat_id == answer_chat.id,
+        Message.role == MessageRole.operator,
+        Message.created_at >= raised_at,
+    )
+    q = (
+        select(ticket_chat.session_id)
+        .join(EscalationTicket, EscalationTicket.chat_id == ticket_chat.id)
+        .where(
+            ticket_chat.tenant_id == tenant_id,
+            EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
+            ~answered,
+        )
+        .distinct()
+    )
+    if session_ids is not None:
+        q = q.where(ticket_chat.session_id.in_(session_ids))
+    return q
 
 
-def _needs_attention():
-    return or_(Chat.operator_state == OperatorState.live, _active_ticket_exists())
+def _needs_attention(tenant_id: uuid.UUID):
+    return or_(
+        Chat.operator_state == OperatorState.live,
+        Chat.session_id.in_(_waiting_session_ids(tenant_id)),
+    )
 
 
 def _session_ids_where(tenant_id: uuid.UUID, predicate):
@@ -100,10 +145,18 @@ def _session_ids_where(tenant_id: uuid.UUID, predicate):
     )
 
 
-def handoff_state(chat: Chat, ticket: EscalationTicket | None) -> HandoffState:
+def _waiting_sessions(
+    db: Session, *, tenant_id: uuid.UUID, session_ids: list[uuid.UUID]
+) -> set[uuid.UUID]:
+    if not session_ids:
+        return set()
+    return set(db.execute(_waiting_session_ids(tenant_id, session_ids)).scalars())
+
+
+def handoff_state(chat: Chat, *, waiting: bool) -> HandoffState:
     if chat.operator_state is OperatorState.live:
         return "live"
-    if ticket is not None and ticket.status in ACTIVE_TICKET_STATUSES:
+    if waiting:
         return "waiting"
     return "bot"
 
@@ -239,8 +292,9 @@ def list_inbox(
     """The queue: one row per session, pointing at the session's newest chat.
 
     ``attention`` keeps only sessions that need a human — a chat of theirs is
-    live, or a ticket of theirs is still active — ordered longest wait first,
-    then whoever is being served, newest activity first. ``all`` is every
+    live, or a ticket of theirs is active and nobody has answered it yet —
+    ordered longest wait first, then whoever is being served, newest
+    activity first. ``all`` is every
     conversation the tenant has, newest first, capped at ``limit`` because a
     tenant's history is unbounded and the console is a queue, not an archive.
     """
@@ -248,14 +302,14 @@ def list_inbox(
         chats = _newest_chats(
             db,
             tenant_id=tenant_id,
-            session_ids=_session_ids_where(tenant_id, _needs_attention()),
+            session_ids=_session_ids_where(tenant_id, _needs_attention(tenant_id)),
         )
     else:
         chats = _newest_chats(db, tenant_id=tenant_id, limit=limit)
 
-    tickets = _tickets_by_session(
-        db, tenant_id=tenant_id, session_ids=[c.session_id for c in chats]
-    )
+    session_ids = [c.session_id for c in chats]
+    tickets = _tickets_by_session(db, tenant_id=tenant_id, session_ids=session_ids)
+    waiting_sessions = _waiting_sessions(db, tenant_id=tenant_id, session_ids=session_ids)
     last = _last_messages(db, [c.id for c in chats])
     emails = _emails_by_user(
         db, {c.assigned_operator_id for c in chats if c.assigned_operator_id}
@@ -264,7 +318,7 @@ def list_inbox(
     rows: list[InboxRow] = []
     for chat in chats:
         ticket = tickets.get(chat.session_id)
-        state = handoff_state(chat, ticket)
+        state = handoff_state(chat, waiting=chat.session_id in waiting_sessions)
         newest, count = last.get(chat.id, (None, 0))
         rows.append(
             InboxRow(
@@ -274,7 +328,7 @@ def list_inbox(
                 ticket=ticket,
                 assigned_operator_id=chat.assigned_operator_id,
                 assigned_operator_email=emails.get(chat.assigned_operator_id),
-                waiting_since=ticket.created_at if state == "waiting" and ticket else None,
+                waiting_since=request_raised_at(ticket) if state == "waiting" and ticket else None,
                 last_message_role=newest.role.value if newest is not None else None,
                 last_message_preview=_preview(newest.content) if newest is not None else None,
                 last_activity=newest.created_at if newest is not None else chat.created_at,
@@ -295,16 +349,16 @@ def inbox_counts(db: Session, *, tenant_id: uuid.UUID) -> InboxCounts:
     """How many sessions wait for a human, and how many need one at all.
 
     ``waiting`` is the sidebar badge: it drops to zero when every request has
-    been picked up. ``attention`` is the size of the default queue. Both
-    count sessions, like the queue does; a session with a live chat is being
-    served whatever its older chats' tickets say.
+    been answered or is being served. ``attention`` is the size of the default
+    queue. Both count sessions, like the queue does; a session with a live
+    chat is being served whatever its older chats' tickets say.
     """
     live_sessions = _session_ids_where(tenant_id, Chat.operator_state == OperatorState.live)
     waiting = (
         db.query(func.count(func.distinct(Chat.session_id)))
         .filter(
             Chat.tenant_id == tenant_id,
-            _active_ticket_exists(),
+            Chat.session_id.in_(_waiting_session_ids(tenant_id)),
             Chat.session_id.not_in(live_sessions),
         )
         .scalar()
@@ -312,7 +366,7 @@ def inbox_counts(db: Session, *, tenant_id: uuid.UUID) -> InboxCounts:
     )
     attention = (
         db.query(func.count(func.distinct(Chat.session_id)))
-        .filter(Chat.tenant_id == tenant_id, _needs_attention())
+        .filter(Chat.tenant_id == tenant_id, _needs_attention(tenant_id))
         .scalar()
         or 0
     )
@@ -354,13 +408,14 @@ def load_thread(
     ticket = _tickets_by_session(db, tenant_id=tenant_id, session_ids=[session_id]).get(
         session_id
     )
+    waiting = bool(_waiting_sessions(db, tenant_id=tenant_id, session_ids=[session_id]))
     emails = _emails_by_user(
         db, {current.assigned_operator_id} if current.assigned_operator_id else set()
     )
     return Thread(
         session_id=session_id,
         chat=current,
-        handoff_state=handoff_state(current, ticket),
+        handoff_state=handoff_state(current, waiting=waiting),
         ticket=ticket,
         assigned_operator_email=emails.get(current.assigned_operator_id),
         visitor=visitor_of(current, ticket),

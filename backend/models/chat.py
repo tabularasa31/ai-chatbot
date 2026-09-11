@@ -385,6 +385,10 @@ class EscalationTicket(Base):
     # dropped, not merely that it was.
     claim_bounced_at = Column(DateTime, nullable=True)
 
+    # Set when the visitor asks for a human again after an operator answered;
+    # the inbox reads the wait from coalesce(requested_again_at, created_at).
+    requested_again_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

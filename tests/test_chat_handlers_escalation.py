@@ -843,6 +843,79 @@ def test_repeat_explicit_request_reuses_open_ticket(db_session: Session) -> None
     assert len(tickets) == 1
 
 
+def _drive_repeat_request(db: Session, tenant: Tenant, chat: Chat) -> None:
+    ctx = _make_handler_context(
+        db=db,
+        tenant=tenant,
+        chat=chat,
+        question_text="I need a person again",
+        explicit_human_request=True,
+        message_has_request_content=True,
+    )
+    handoff = Mock()
+    handoff.message_to_user = "passed to support"
+    handoff.tokens_used = 0
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch("backend.chat.service.create_escalation_ticket", _fail_if_ticket_handoff),
+        patch("backend.chat.service.complete_escalation_openai_turn", _async_ret(handoff)),
+        patch("backend.chat.service._escalation_turn_response", lambda **_kw: object()),
+        patch(
+            "backend.chat.handlers.escalation.notify_support_of_repeat_escalation",
+            lambda *_a, **_kw: True,
+        ),
+        patch("backend.chat.service._emit_chat_escalated_event", lambda **_kw: None),
+    ):
+        EscalationStateMachine()._handle_sync(ctx, db)
+
+
+def _in_progress_ticket(db: Session, tenant: Tenant, chat: Chat) -> EscalationTicket:
+    ticket = EscalationTicket(
+        tenant_id=tenant.id,
+        ticket_number="ESC-0002",
+        primary_question="refund",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.in_progress,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email="user@example.com",
+    )
+    db.add(ticket)
+    db.flush()
+    return ticket
+
+
+def test_repeat_request_after_an_answer_puts_the_request_back_in_the_queue(
+    db_session: Session,
+) -> None:
+    """Answered, handed back to the bot, asked again: a new wait starts."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ticket = _in_progress_ticket(db_session, tenant, chat)
+    db_session.add(Message(chat_id=chat.id, role=MessageRole.operator, content="Which form?"))
+    db_session.flush()
+
+    _drive_repeat_request(db_session, tenant, chat)
+
+    db_session.refresh(ticket)
+    assert ticket.status is EscalationStatus.in_progress
+    assert ticket.requested_again_at is not None
+    assert ticket.requested_again_at >= ticket.created_at
+
+
+def test_repeat_request_while_still_unanswered_keeps_the_original_wait(
+    db_session: Session,
+) -> None:
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ticket = _in_progress_ticket(db_session, tenant, chat)
+
+    _drive_repeat_request(db_session, tenant, chat)
+
+    db_session.refresh(ticket)
+    assert ticket.requested_again_at is None
+
+
 def test_can_handle_true_when_awaiting_request(db_session: Session) -> None:
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)

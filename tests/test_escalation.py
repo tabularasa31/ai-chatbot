@@ -1652,6 +1652,47 @@ def test_repeat_manual_escalation_reuses_open_ticket(
     assert len(tickets) == 1
 
 
+def test_repeat_manual_escalation_after_an_answer_re_enters_the_queue(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A repeat press while unanswered keeps the wait; after an answer it restarts it."""
+    token = register_and_verify_user(
+        tenant, db_session, email="manual-requeue@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual Requeue"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "known@example.com"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+    escalate = dict(api_key="sk-test", user_note="talk to support", trigger=EscalationTrigger.user_request)
+
+    _msg, number = _run_manual_escalation(db_session, cl, chat.session_id, **escalate)
+    _run_manual_escalation(db_session, cl, chat.session_id, **escalate)
+    ticket = db_session.query(EscalationTicket).filter(EscalationTicket.ticket_number == number).one()
+    assert ticket.requested_again_at is None
+
+    db_session.add(Message(chat_id=chat.id, role=MessageRole.operator, content="Sorted."))
+    db_session.commit()
+    _run_manual_escalation(db_session, cl, chat.session_id, **escalate)
+
+    db_session.refresh(ticket)
+    assert ticket.requested_again_at is not None
+
+
 def test_manual_escalation_mints_new_ticket_once_previous_resolved(
     tenant: TestClient,
     db_session: Session,

@@ -225,9 +225,13 @@ declare global {
       return widgetBaseUrl + "?" + params.toString();
     }
 
-    function makeIframe(): HTMLIFrameElement {
+    // Bubble mode leaves ``src`` unset until the first open: the widget app
+    // bootstraps a session and a greeting as soon as it loads, and doing that
+    // for every page view minted an empty conversation per visitor who never
+    // clicked the bubble.
+    function makeIframe(load: boolean): HTMLIFrameElement {
       const f = document.createElement("iframe");
-      f.src = buildIframeSrc();
+      if (load) f.src = buildIframeSrc();
       f.id = "chat9-widget-iframe";
       f.style.cssText = "width:100%;height:100%;border:none;display:block;";
       f.allow = "microphone; camera";
@@ -260,7 +264,7 @@ declare global {
         return;
       }
 
-      const inlineFrame = makeIframe();
+      const inlineFrame = makeIframe(true);
       inlineFrame.style.cssText =
         "width:100%;height:600px;border:none;display:block;border-radius:12px;overflow:hidden;";
 
@@ -370,7 +374,7 @@ declare global {
       '<circle cx="2" cy="6" r="1.2" fill="rgba(255,255,255,0.45)"/>' +
       "</svg>";
 
-    const iframe = makeIframe();
+    const iframe = makeIframe(false);
 
     const resizeOverlay = document.createElement("div");
     resizeOverlay.style.cssText =
@@ -400,6 +404,7 @@ declare global {
 
     function openChat() {
       isOpen = true;
+      if (!iframe.src) iframe.src = buildIframeSrc();
       chatWindow.style.display = "block";
       requestAnimationFrame(() => {
         chatWindow.style.opacity = "1";

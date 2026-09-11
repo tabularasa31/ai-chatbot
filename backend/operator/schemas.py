@@ -63,6 +63,10 @@ class InboxTicket(BaseModel):
     resolution_text: str | None = None
     created_at: datetime
     resolved_at: datetime | None = None
+    # The newest mailed reply forwarded to the visitor outside the product —
+    # a sender with no seat. Not a message: nothing of it is in the thread.
+    forwarded_reply_at: datetime | None = None
+    forwarded_reply_from: str | None = None
 
 
 class InboxRowResponse(BaseModel):

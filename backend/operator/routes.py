@@ -84,6 +84,8 @@ def _ticket(ticket: EscalationTicket | None) -> InboxTicket | None:
         resolution_text=ticket.resolution_text,
         created_at=ticket.created_at,
         resolved_at=ticket.resolved_at,
+        forwarded_reply_at=ticket.forwarded_reply_at,
+        forwarded_reply_from=ticket.forwarded_reply_from,
     )
 
 

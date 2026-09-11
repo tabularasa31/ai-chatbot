@@ -389,6 +389,14 @@ class EscalationTicket(Base):
     # the inbox reads the wait from coalesce(requested_again_at, created_at).
     requested_again_at = Column(DateTime, nullable=True)
 
+    # The newest mailed reply that was forwarded to the visitor without
+    # entering the conversation — a sender with no seat, or a request already
+    # closed. The answer went out by mail, outside the product; this is what
+    # lets the inbox say so instead of showing the request as never answered.
+    # No body is kept: the reply is not a message and must not become one.
+    forwarded_reply_at = Column(DateTime, nullable=True)
+    forwarded_reply_from = Column(String(255), nullable=True)
+
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

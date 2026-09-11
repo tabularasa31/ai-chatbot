@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.email.reply_lane import token_from_recipients, user_by_email
 from backend.models import Chat, EscalationTicket
+from backend.models.base import _utcnow
 from backend.observability.metrics import capture_event
 from backend.seats.service import user_holds_seat
 
@@ -578,6 +579,7 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
         return InboundResult(
             InboundOutcome.forward_failed, ticket.ticket_number, ticket.id, thread_match
         )
+    _stamp_forwarded(reply, ticket, db)
     _capture(
         "email_lane.reply_forwarded",
         ticket,
@@ -593,6 +595,24 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
     return InboundResult(
         InboundOutcome.forwarded, ticket.ticket_number, ticket.id, thread_match
     )
+
+
+def _stamp_forwarded(reply: InboundReply, ticket: EscalationTicket, db: Session) -> None:
+    """Leave the fact of the forward on the ticket — sender and time, no body.
+
+    The answer reached the visitor outside the product, and without this the
+    inbox kept showing the request as never answered, so a colleague answered
+    it again. The text stays out on purpose: a reply from an address holding
+    no seat is not a message of this conversation and must not be stored as
+    one. Only ever the newest forward — the inbox needs the latest fact.
+    """
+    ticket.forwarded_reply_at = _utcnow()
+    ticket.forwarded_reply_from = reply.from_email[:255]
+    db.add(ticket)
+    # Committed here, as the ingest path commits its own write: the receipt
+    # that follows commits only when the payload carried a message id, and
+    # the stamp must not depend on that.
+    db.commit()
 
 
 def _forward_reason(*, seated: bool, chat: Chat | None, live: bool) -> str:

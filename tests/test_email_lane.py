@@ -513,6 +513,66 @@ def test_a_reply_from_a_seatless_sender_is_forwarded_not_refused(
     )
 
 
+def test_a_forwarded_reply_leaves_its_mark_on_the_ticket_and_in_the_inbox(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The answer went out by mail, outside the product. Until this stamp the
+    inbox showed the request as never answered and a colleague answered it
+    again. Sender and time are kept; the body is not — the reply is not a
+    message of this conversation and must not be stored as one.
+    """
+    token, tenant_id = _workspace(
+        tenant, db_session, email="owner-mark@example.com", name="Mark", seated=True
+    )
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        resp = _post_inbound(
+            tenant, _brevo_item(to=address, sender="alias@agency.example")
+        )
+    assert resp.json()["outcomes"] == [InboundOutcome.forwarded.value]
+
+    db_session.expire_all()
+    assert ticket.forwarded_reply_from == "alias@agency.example"
+    assert ticket.forwarded_reply_at is not None
+    assert ticket.status is EscalationStatus.open
+    assert db_session.query(Message).filter(Message.chat_id == chat.id).count() == 0
+
+    auth = {"Authorization": f"Bearer {token}"}
+    [row] = tenant.get("/operator/inbox", headers=auth).json()["items"]
+    assert row["handoff_state"] == "waiting"
+    assert row["ticket"]["forwarded_reply_from"] == "alias@agency.example"
+    assert row["ticket"]["forwarded_reply_at"]
+    thread = tenant.get(f"/operator/sessions/{chat.session_id}", headers=auth).json()
+    assert thread["ticket"]["forwarded_reply_from"] == "alias@agency.example"
+    assert thread["messages"] == []
+
+
+def test_an_ingested_reply_leaves_no_forward_mark(
+    tenant: TestClient, db_session: Session
+) -> None:
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-nomark@example.com", name="NoMark", seated=True
+    )
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        resp = _post_inbound(
+            tenant, _brevo_item(to=address, sender="owner-nomark@example.com")
+        )
+    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
+
+    db_session.expire_all()
+    assert ticket.forwarded_reply_at is None
+    assert ticket.forwarded_reply_from is None
+
+
 def test_a_reply_from_a_stranger_is_forwarded_not_refused(
     tenant: TestClient, db_session: Session
 ) -> None:

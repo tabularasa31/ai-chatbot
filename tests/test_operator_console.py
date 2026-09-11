@@ -201,8 +201,10 @@ def test_scope_all_skips_sessions_nobody_wrote_in(
     spoken = _chat(db_session, ws.tenant_id)
     _say(db_session, spoken, MessageRole.user, "hello")
 
+    held = _chat(db_session, ws.tenant_id, operator_state=OperatorState.live)
+
     everything = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()
-    assert [r["chat_id"] for r in everything["items"]] == [str(spoken.id)]
+    assert {r["chat_id"] for r in everything["items"]} == {str(spoken.id), str(held.id)}
 
 
 def test_a_rotated_session_is_one_row_pointing_at_its_newest_chat(

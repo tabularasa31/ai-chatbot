@@ -1624,11 +1624,16 @@ def request_raised_at(ticket: EscalationTicket) -> datetime:
 
 
 def operator_answered_since_request(ticket: EscalationTicket, db: Session) -> bool:
-    """An operator wrote somewhere in the visitor's session after the request.
+    """Somebody answered the visitor after the request.
 
-    The session rather than the ticket's chat: the reply lands in the newest
-    chat while the ticket may sit on an older one after idle rotation.
+    Either an operator wrote somewhere in the visitor's session — the session
+    rather than the ticket's chat, because the reply lands in the newest chat
+    while the ticket may sit on an older one after idle rotation — or a
+    mailed reply was forwarded to the visitor since the request was raised.
     """
+    raised_at = request_raised_at(ticket)
+    if ticket.forwarded_reply_at is not None and ticket.forwarded_reply_at >= raised_at:
+        return True
     chat = ticket.chat
     if chat is None:
         return False
@@ -1638,7 +1643,7 @@ def operator_answered_since_request(ticket: EscalationTicket, db: Session) -> bo
         .filter(
             Chat.session_id == chat.session_id,
             Message.role == MessageRole.operator,
-            Message.created_at >= request_raised_at(ticket),
+            Message.created_at >= raised_at,
         )
         .first()
         is not None

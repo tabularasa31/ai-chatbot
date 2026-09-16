@@ -614,6 +614,7 @@ def test_the_mark_hides_once_the_visitor_asks_again(
     db_session.expire_all()
     ticket.requested_again_at = ticket.forwarded_reply_at + timedelta(minutes=5)
     db_session.commit()
+    assert note_repeat_human_request(ticket, db_session) is False
 
     auth = {"Authorization": f"Bearer {token}"}
     [row] = tenant.get("/operator/inbox", headers=auth).json()["items"]

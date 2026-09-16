@@ -24,14 +24,6 @@ export function Footer() {
             >
               Docs
             </Link>
-            <a
-              href="https://github.com/tabularasa31/chat9-sdks"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-nd-text/80 hover:text-nd-info transition-colors"
-            >
-              GitHub
-            </a>
           </div>
 
           {/* Copyright */}

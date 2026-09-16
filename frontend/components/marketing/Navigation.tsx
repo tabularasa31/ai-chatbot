@@ -37,14 +37,6 @@ export function Navigation() {
             >
               Docs
             </Link>
-            <a
-              href="https://github.com/tabularasa31/chat9-sdks"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
-            >
-              GitHub
-            </a>
           </div>
 
           {/* Sign in + CTA - Desktop */}
@@ -106,14 +98,6 @@ export function Navigation() {
                 >
                   Docs
                 </Link>
-                <a
-                  href="https://github.com/tabularasa31/chat9-sdks"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
-                >
-                  GitHub
-                </a>
                 {isAuthed ? (
                   <Link
                     href="/dashboard"

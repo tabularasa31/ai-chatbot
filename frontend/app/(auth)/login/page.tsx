@@ -2,13 +2,12 @@
 
 import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { api, hasSession, markSession, takeSignOutReason } from "@/lib/api";
+import { useSearchParams } from "next/navigation";
+import { api, markSession, takeSignOutReason } from "@/lib/api";
 import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 import { AuthTransition } from "@/components/AuthTransition";
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -28,15 +27,12 @@ function LoginForm() {
     if (takeSignOutReason() === "workspace_deleted") setWorkspaceDeleted(true);
   }, []);
 
+  // A full navigation, not `router.replace`: the app router may still hold
+  // `/dashboard` from a moment ago as the redirect back to `/login` it got
+  // without a session, and would replay that instead of asking the server.
   const onAuthTransitionComplete = useCallback(() => {
-    router.replace("/dashboard");
-  }, [router]);
-
-  useEffect(() => {
-    if (hasSession()) {
-      router.replace("/dashboard");
-    }
-  }, [router]);
+    window.location.replace("/dashboard");
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

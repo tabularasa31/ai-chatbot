@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { api, markSession } from "@/lib/api";
 import { AuthCardCentered, authStyles } from "@/components/auth/AuthCard";
 
@@ -10,7 +10,6 @@ type Status = "idle" | "loading" | "success" | "error";
 
 function VerifyContent() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const token = searchParams.get("token");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
@@ -27,13 +26,13 @@ function VerifyContent() {
       .then(() => {
         markSession();
         setStatus("success");
-        router.replace("/dashboard");
+        window.location.replace("/dashboard");
       })
       .catch((err) => {
         setStatus("error");
         setError(err instanceof Error ? err.message : "Verification failed");
       });
-  }, [token, router]);
+  }, [token]);
 
   if (status === "idle" || status === "loading") {
     return (

@@ -457,14 +457,18 @@ function getErrorMessage(data: unknown, fallback: string): string {
 const SESSION_KEY = "chat9_session";
 const SESSION_MAX_AGE_SECONDS = 86400;
 
+/**
+ * Same signal `middleware.ts` uses, so the client and the edge never disagree
+ * about whether a session exists. A `localStorage` copy would outlive the
+ * cookie and send the sign-in screen bouncing off a redirect.
+ */
 export function hasSession(): boolean {
   if (typeof window === "undefined") return false;
-  return localStorage.getItem(SESSION_KEY) === "1";
+  return document.cookie.split("; ").includes(`${SESSION_KEY}=1`);
 }
 
 export function markSession(): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(SESSION_KEY, "1");
   const secure = window.location.protocol === "https:" ? "; secure" : "";
   document.cookie = `${SESSION_KEY}=1; path=/; max-age=${SESSION_MAX_AGE_SECONDS}; samesite=lax${secure}`;
 }

@@ -1680,6 +1680,58 @@ def test_a_claim_that_produced_an_answer_does_not_bounce(
     )
 
 
+def test_a_claim_answered_by_forwarded_mail_does_not_bounce(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """The answer reached the visitor by mail and left only a stamp on the
+    ticket. The queue treats that as answered; the bounce must agree, or the
+    ticket would be re-notified as abandoned while the inbox shows it handled.
+    """
+    from backend.core.config import settings
+    from backend.jobs.chat_session_sweeper import (
+        auto_close_stale_tickets,
+        bounce_abandoned_claims,
+    )
+
+    tenant_row = _bare_tenant(db_session, "Mailed Co")
+    operator = _second_user_in_tenant(
+        db_session, tenant_row.id, email="quiet@mailed.example"
+    )
+    sent = _count_bounce_emails(monkeypatch)
+    chat, ticket = _claimed_chat_with_ticket(
+        db_session,
+        tenant_row.id,
+        operator_id=operator.id,
+        claimed_ago=timedelta(
+            seconds=settings.conversation_idle_timeout_seconds + 3600
+        ),
+    )
+    ticket.forwarded_reply_at = chat.operator_joined_at + timedelta(minutes=2)
+    ticket.forwarded_reply_from = "alias@agency.example"
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.query(Chat).filter(Chat.id == chat.id).update(
+        {
+            "operator_state": OperatorState.bot,
+            "assigned_operator_id": None,
+            "updated_at": chat.updated_at,
+        },
+        synchronize_session=False,
+    )
+    db_session.commit()
+
+    assert bounce_abandoned_claims(db_session) == 0
+    assert sent == []
+
+    assert auto_close_stale_tickets(db_session) == 1
+    db_session.expire_all()
+    assert (
+        db_session.get(EscalationTicket, ticket.id).status
+        is EscalationStatus.auto_closed
+    )
+
+
 def test_a_fresh_claim_is_not_bounced_on_the_release_clock(
     db_session: Session,
     monkeypatch,

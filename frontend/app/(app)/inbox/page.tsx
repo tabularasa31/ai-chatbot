@@ -97,7 +97,7 @@ function InboxRowItem({
           {row.last_message_preview ?? "(no messages)"}
         </p>
         <p className="text-xs text-slate-400 mt-1 truncate">
-          {row.handoff_state === "waiting" && answeredByEmail(row.ticket)
+          {answeredByEmail(row.ticket)
             ? answeredByEmail(row.ticket)
             : row.handoff_state === "waiting" && row.waiting_since
             ? `Waiting ${waitingFor(row.waiting_since, now)} · unassigned`

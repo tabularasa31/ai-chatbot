@@ -288,14 +288,15 @@ def release_idle_operator_chats(db: Session, *, now: datetime | None = None) -> 
 
 
 def _operator_answered_exists():
-    """True for chats where an operator actually wrote something.
+    """True for tickets whose visitor was answered — in the chat or by mail.
 
     Shared by the two passes that must tell "a human answered" apart from "a
     human claimed the request and said nothing": the bounce, which acts on the
     second, and auto-close, which must not bury it. One definition, so the two
-    cannot drift into disagreeing about what an answer is.
+    cannot drift into disagreeing about what an answer is — and the same one
+    the inbox queue uses: a reply forwarded to the visitor by mail counts.
     """
-    return (
+    wrote_in_chat = (
         select(Message.id)
         .where(
             Message.chat_id == Chat.id,
@@ -303,6 +304,7 @@ def _operator_answered_exists():
         )
         .exists()
     )
+    return or_(wrote_in_chat, EscalationTicket.forwarded_reply_at.isnot(None))
 
 
 def bounce_abandoned_claims(db: Session, *, now: datetime | None = None) -> int:

@@ -37,6 +37,7 @@ from backend.email.reply_lane import (
 )
 from backend.escalation.service import (
     _notify_tenant_new_ticket,
+    note_repeat_human_request,
     stage_ticket_resolved,
 )
 from backend.models import (
@@ -519,12 +520,14 @@ def test_a_forwarded_reply_leaves_its_mark_on_the_ticket_and_in_the_inbox(
     """The answer went out by mail, outside the product. Until this stamp the
     inbox showed the request as never answered and a colleague answered it
     again. Sender and time are kept; the body is not — the reply is not a
-    message of this conversation and must not be stored as one.
+    message of this conversation and must not be stored as one. The queue
+    treats it as an answer all the same: the visitor is no longer waiting.
     """
     token, tenant_id = _workspace(
         tenant, db_session, email="owner-mark@example.com", name="Mark", seated=True
     )
     chat = _chat(db_session, tenant_id)
+    db_session.add(Message(chat_id=chat.id, role=MessageRole.user, content="Help me"))
     ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
@@ -539,16 +542,55 @@ def test_a_forwarded_reply_leaves_its_mark_on_the_ticket_and_in_the_inbox(
     assert ticket.forwarded_reply_from == "alias@agency.example"
     assert ticket.forwarded_reply_at is not None
     assert ticket.status is EscalationStatus.open
-    assert db_session.query(Message).filter(Message.chat_id == chat.id).count() == 0
+    assert [m.role for m in db_session.query(Message).filter(Message.chat_id == chat.id)] == [
+        MessageRole.user
+    ]
 
     auth = {"Authorization": f"Bearer {token}"}
-    [row] = tenant.get("/operator/inbox", headers=auth).json()["items"]
-    assert row["handoff_state"] == "waiting"
+    queue = tenant.get("/operator/inbox", headers=auth).json()
+    assert queue["items"] == []
+    assert queue["waiting_count"] == 0
+    [row] = tenant.get("/operator/inbox?scope=all", headers=auth).json()["items"]
+    assert row["handoff_state"] == "bot"
+    assert row["waiting_since"] is None
     assert row["ticket"]["forwarded_reply_from"] == "alias@agency.example"
     assert row["ticket"]["forwarded_reply_at"]
     thread = tenant.get(f"/operator/sessions/{chat.session_id}", headers=auth).json()
+    assert thread["handoff_state"] == "bot"
     assert thread["ticket"]["forwarded_reply_from"] == "alias@agency.example"
-    assert thread["messages"] == []
+    assert [m["role"] for m in thread["messages"]] == ["user"]
+
+
+def test_a_forwarded_reply_answers_the_request_so_asking_again_re_queues(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The visitor got their answer by mail; asking for a human again is a new
+    request and starts a new wait, exactly as after an answer in the thread.
+    Before the forward the repeat changes nothing — the visitor still waits
+    from the first request.
+    """
+    token, tenant_id = _workspace(
+        tenant, db_session, email="owner-requeue@example.com", name="Requeue", seated=True
+    )
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+    assert note_repeat_human_request(ticket, db_session) is False
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
+
+    db_session.expire_all()
+    assert note_repeat_human_request(ticket, db_session) is True
+    db_session.commit()
+
+    auth = {"Authorization": f"Bearer {token}"}
+    queue = tenant.get("/operator/inbox", headers=auth).json()
+    [row] = queue["items"]
+    assert row["handoff_state"] == "waiting"
+    assert row["ticket"]["forwarded_reply_at"] is None
+    assert queue["waiting_count"] == 1
 
 
 def test_the_mark_hides_once_the_visitor_asks_again(
@@ -572,10 +614,12 @@ def test_the_mark_hides_once_the_visitor_asks_again(
     db_session.expire_all()
     ticket.requested_again_at = ticket.forwarded_reply_at + timedelta(minutes=5)
     db_session.commit()
+    assert note_repeat_human_request(ticket, db_session) is False
 
     auth = {"Authorization": f"Bearer {token}"}
     [row] = tenant.get("/operator/inbox", headers=auth).json()["items"]
     assert row["handoff_state"] == "waiting"
+    assert row["waiting_since"] == ticket.requested_again_at.isoformat()
     assert row["ticket"]["forwarded_reply_at"] is None
     assert row["ticket"]["forwarded_reply_from"] is None
 

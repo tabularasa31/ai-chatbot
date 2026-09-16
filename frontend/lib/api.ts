@@ -475,7 +475,6 @@ export function markSession(): void {
 
 export function clearSession(): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem("chat9_access_token");
   const secure = window.location.protocol === "https:" ? "; secure" : "";
   document.cookie = `${SESSION_KEY}=; path=/; max-age=0; samesite=lax${secure}`;

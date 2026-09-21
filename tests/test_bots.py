@@ -105,6 +105,153 @@ def test_update_bot_link_safety_normalizes_allowed_domains(
     assert updated["allowed_domains"] == ["example.com", "help.example.com"]
 
 
+def test_create_bot_without_instructions_defaults_to_support_agent_preset(
+    tenant: TestClient, db_session: Session
+) -> None:
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+
+    token, _ = _auth(tenant, db_session, "create-preset@example.com")
+
+    bot = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Preset Bot"},
+    ).json()
+
+    assert bot["agent_instructions"] is None
+    assert bot["preset"] == "support_agent"
+    assert bot["custom_instructions"] is None
+    assert bot["instructions_source"] == "preset"
+    assert bot["effective_instructions"] == PRESET_SUPPORT_AGENT
+
+
+def test_update_bot_instructions_layering(tenant: TestClient, db_session: Session) -> None:
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+
+    token, _ = _auth(tenant, db_session, "layering-bot@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Layered Bot"},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": "X"},
+    )
+    body = resp.json()
+    assert body["instructions_source"] == "preset+custom"
+    assert body["effective_instructions"].endswith("X")
+    assert body["effective_instructions"].startswith(PRESET_SUPPORT_AGENT.split("\n")[0])
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"preset": None},
+    )
+    assert resp.json()["instructions_source"] == "custom"
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": None, "preset": "support_agent"},
+    )
+    assert resp.json()["instructions_source"] == "preset"
+
+
+def test_update_bot_custom_instructions_clears_legacy_agent_instructions(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, _ = _auth(tenant, db_session, "legacy-clear@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Legacy Bot", "agent_instructions": "Always answer in haiku."},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": "New text"},
+    )
+    body = resp.json()
+    assert body["agent_instructions"] is None
+    # preset carries its server_default ("support_agent") for existing rows,
+    # so clearing the legacy field falls back to preset+custom, not bare custom.
+    assert body["instructions_source"] == "preset+custom"
+
+
+def test_update_bot_agent_instructions_only_still_works(tenant: TestClient, db_session: Session) -> None:
+    """Patching only the deprecated field keeps behaving as before."""
+    token, _ = _auth(tenant, db_session, "legacy-only@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot"},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agent_instructions": "Custom legacy text."},
+    )
+    body = resp.json()
+    assert body["agent_instructions"] == "Custom legacy text."
+    assert body["instructions_source"] == "legacy"
+    assert body["effective_instructions"] == "Custom legacy text."
+
+
+def test_custom_instructions_too_long_rejected(tenant: TestClient, db_session: Session) -> None:
+    token, _ = _auth(tenant, db_session, "too-long@example.com")
+
+    resp = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "custom_instructions": "x" * 3001},
+    )
+    assert resp.status_code == 422
+
+
+def test_unknown_preset_rejected(tenant: TestClient, db_session: Session) -> None:
+    token, _ = _auth(tenant, db_session, "bad-preset@example.com")
+
+    resp = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "preset": "not_a_real_preset"},
+    )
+    assert resp.status_code == 422
+
+
+def test_onboarding_enrichment_stores_custom_instructions_not_preset_snapshot(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    from backend.bots import routes as bots_routes
+    from backend.models import Bot
+
+    token, _ = _auth(tenant, db_session, "onboarding-bot@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Onboarded Bot"},
+    ).json()["id"]
+
+    monkeypatch.setattr(
+        "backend.onboarding.extractor.extract_company_description",
+        lambda url, api_key: "Acme sells widgets.",
+    )
+
+    bot = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    bots_routes._enrich_bot_instructions(bot.id, bot.tenant_id, "https://acme.example", "sk-fake")
+
+    db_session.expire_all()
+    refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    assert refreshed.custom_instructions == "Acme sells widgets."
+    assert refreshed.preset == "support_agent"
+    assert refreshed.agent_instructions is None
+
+
 def test_delete_bot_blocked_when_last(tenant: TestClient, db_session: Session) -> None:
     """Deleting the only bot (the auto-created default) should return 409."""
     token, _ = _auth(tenant, db_session, "del-bot@example.com")

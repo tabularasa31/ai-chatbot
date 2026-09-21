@@ -159,9 +159,8 @@ def test_analytics_summary_operator_messages_excluded(
 def test_analytics_summary_ticket_without_in_window_messages(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """Deflection edge case: a session has an in-window ticket but its only
-    messages are outside the window, so it never enters the ``conversations``
-    denominator. This documents current behaviour; it is not a fix target."""
+    """Deflection edge case: a ticket whose session has no in-window message
+    is excluded from both the conversation count and the escalated count."""
     client = tenant
     ws = _workspace(client, db_session, email="deflect-edge@example.com", name="Deflect Co")
 
@@ -184,9 +183,8 @@ def test_analytics_summary_ticket_without_in_window_messages(
     assert resp.status_code == 200, resp.text
     body = resp.json()
 
-    # Current behaviour: the session contributes 0 to `conversations` (no
-    # in-window message) but 1 to escalated-session count, since the ticket
-    # query has no join on Message/window. With conversations == 0 the
-    # service short-circuits deflection_rate to None rather than dividing.
+    # The session contributes 0 to both `conversations` and the escalated
+    # count, so the service short-circuits deflection_rate to None rather
+    # than dividing.
     assert body["conversations"] == 0
     assert body["deflection_rate"] is None

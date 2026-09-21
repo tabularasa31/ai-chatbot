@@ -133,6 +133,15 @@ REJECT_REASON_TURN_OUTCOME: dict[str, TurnOutcome] = {
 }
 
 
+def _turn_outcome_for(result: ChatPipelineResult) -> TurnOutcome | None:
+    """Map a reject/faq_direct pipeline result to its persisted turn outcome."""
+    if result.is_faq_direct:
+        return TurnOutcome.answered
+    if result.is_reject:
+        return REJECT_REASON_TURN_OUTCOME[result.reject_reason]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Decision-side helpers: retrieval-confidence classification and the
 # loop-detection heuristic RagHandler feeds into decide().
@@ -446,13 +455,7 @@ class RagHandler(PipelineHandler):
                 language_context=ctx.language_context,
                 trace=ctx.trace,
                 set_rephrase_flag=(result.reject_reason == "rephrase"),
-                turn_outcome=(
-                    TurnOutcome.answered
-                    if result.is_faq_direct
-                    else REJECT_REASON_TURN_OUTCOME[result.reject_reason]
-                    if result.is_reject
-                    else None
-                ),
+                turn_outcome=_turn_outcome_for(result),
             )
             _try_ingest_gap_signal(
                 chat=chat,

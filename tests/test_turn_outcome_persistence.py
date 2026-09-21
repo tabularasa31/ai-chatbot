@@ -29,6 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from backend.chat.handlers.rag import REJECT_REASON_TURN_OUTCOME
 from backend.chat.persistence import (
     _persist_assistant_message,
     _persist_assistant_message_with_response_language,
@@ -190,6 +191,26 @@ def test_assistant_only_message_infers_from_escalation_state(db_session: Session
     )
     escalating_reply = escalating_chat.messages[-1]
     assert escalating_reply.turn_outcome == TurnOutcome.escalation.value
+
+
+@pytest.mark.parametrize(
+    "reject_reason,expected",
+    [
+        ("injection", TurnOutcome.filtered),
+        ("not_relevant", TurnOutcome.filtered),
+        ("rephrase", TurnOutcome.unanswered),
+        ("low_retrieval", TurnOutcome.unanswered),
+        ("social", TurnOutcome.social),
+        ("social_question", TurnOutcome.social),
+    ],
+)
+def test_reject_reason_maps_to_expected_turn_outcome(
+    reject_reason: str, expected: TurnOutcome
+) -> None:
+    """Every ``RejectReasonLiteral`` value must be mapped explicitly in
+    ``RagHandler``'s reject-reason -> ``TurnOutcome`` table (no default-to-
+    filtered fallback)."""
+    assert REJECT_REASON_TURN_OUTCOME[reject_reason] == expected
 
 
 def test_guard_rejected_chat_turn_persists_filtered_end_to_end(

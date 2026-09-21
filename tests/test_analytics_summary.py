@@ -21,7 +21,6 @@ from backend.models import (
     Message,
     MessageRole,
     TurnOutcome,
-    User,
 )
 from backend.models.base import _utcnow
 from tests.conftest import register_and_verify_user
@@ -132,6 +131,63 @@ def test_analytics_summary_exact_values(tenant: TestClient, db_session: Session)
     assert body["answered_rate"] == pytest.approx(4 / 5)
     # 1 of the 3 conversations (session A) has an in-window ticket.
     assert body["deflection_rate"] == pytest.approx(1 - 1 / 3)
+
+
+def test_analytics_summary_social_excluded_from_answered_rate(
+    tenant: TestClient, db_session: Session
+) -> None:
+    client = tenant
+    ws = _workspace(client, db_session, email="social-owner@example.com", name="Social Co")
+
+    now = _utcnow()
+    recent = now - timedelta(hours=1)
+
+    chat = _chat(db_session, ws.tenant_id)
+    _say(db_session, chat, MessageRole.user, created_at=recent)
+    _say(db_session, chat, MessageRole.assistant, turn_outcome=TurnOutcome.answered.value, created_at=recent)
+    for _ in range(3):
+        _say(db_session, chat, MessageRole.assistant, turn_outcome=TurnOutcome.social.value, created_at=recent)
+
+    resp = client.get("/analytics/summary", headers=ws.auth)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # social rows must not inflate the denominator nor be counted answered.
+    assert body["answered_rate"] == pytest.approx(1.0)
+
+
+def test_analytics_summary_deflection_rate_stays_within_bounds(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Tickets whose session has no in-window message must not count toward
+    deflection — otherwise the numerator can exceed the conversation-set
+    denominator and push the rate outside [0, 1]."""
+    client = tenant
+    ws = _workspace(client, db_session, email="edge-owner@example.com", name="Edge Co")
+
+    now = _utcnow()
+    recent = now - timedelta(hours=1)
+    old = now - timedelta(days=40)
+
+    # One real conversation in the window, no ticket.
+    conversation_chat = _chat(db_session, ws.tenant_id)
+    _say(db_session, conversation_chat, MessageRole.user, created_at=recent)
+
+    # Two sessions with only old messages (outside the conversation set) but
+    # tickets created inside the window.
+    for _ in range(2):
+        stale_chat = _chat(db_session, ws.tenant_id)
+        _say(db_session, stale_chat, MessageRole.user, created_at=old)
+        _ticket(db_session, stale_chat, created_at=recent)
+
+    resp = client.get("/analytics/summary", headers=ws.auth)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["conversations"] == 1
+    assert body["deflection_rate"] is not None
+    assert 0.0 <= body["deflection_rate"] <= 1.0
+    assert body["deflection_rate"] == pytest.approx(1.0)
 
 
 def test_analytics_summary_empty_tenant(tenant: TestClient, db_session: Session) -> None:

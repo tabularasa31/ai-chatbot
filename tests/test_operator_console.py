@@ -531,7 +531,9 @@ def test_resolving_a_chat_never_taken_still_emits_with_chat_was_with_operator_fa
     )
 
     ws = _workspace(tenant, db_session, email="ticketnottaken@example.com", name="Not Taken Co")
-    chat = _chat(db_session, ws.tenant_id)
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == ws.tenant_id).one()
+    bot_row = db_session.query(Bot).filter(Bot.tenant_id == ws.tenant_id).one()
+    chat = _chat(db_session, ws.tenant_id, bot_id=bot_row.id)
     _ticket(db_session, chat)
 
     resolve_from_operator(db_session, chat=chat, tenant_id=ws.tenant_id)
@@ -541,6 +543,8 @@ def test_resolving_a_chat_never_taken_still_emits_with_chat_was_with_operator_fa
     assert events[0]["properties"]["resolved_count"] == 1
     assert events[0]["properties"]["chat_was_with_operator"] is False
     assert events[0]["properties"]["has_resolution_text"] is False
+    assert events[0]["tenant_id"] == str(tenant_row.public_id)
+    assert events[0]["bot_id"] == str(bot_row.public_id)
 
 
 def test_resolving_with_no_active_ticket_emits_nothing(

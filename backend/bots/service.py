@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import HTTPException
+from sqlalchemy import null
 from sqlalchemy.orm import Session
 
 from backend.bots.schemas import BotUpdate
@@ -105,12 +106,15 @@ def create_bot(
     # but honour an explicit `preset: null` in the request instead of overriding it.
     if agent_instructions is None and preset is None and not preset_was_set:
         preset = "support_agent"
+    # `preset` has a DB-level server_default("support_agent"); a bare None on INSERT
+    # falls back to it, so an explicit `preset: null` needs the SQL NULL sentinel.
+    preset_value = null() if preset_was_set and preset is None else preset
     bot = Bot(
         tenant_id=tenant_id,
         name=name,
         agent_instructions=agent_instructions,
         custom_instructions=custom_instructions,
-        preset=preset,
+        preset=preset_value,
         link_safety_enabled=bool(link_safety_enabled),
         allowed_domains=normalize_allowed_domains(allowed_domains),
     )

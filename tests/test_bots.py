@@ -747,15 +747,24 @@ def test_run_refresh_writes_once_and_then_reports_current(engine) -> None:
         assert verify.get(Bot, bot_id).agent_instructions == PRESET_SUPPORT_AGENT
 
 
-def test_dashboard_preset_matches_the_backend_preset() -> None:
-    """The settings page ships its own copy; a drifted copy writes the old text back."""
-    from pathlib import Path
-
+def test_preset_text_reflects_bot_preset(tenant: TestClient, db_session: Session) -> None:
     from backend.chat.presets import PRESET_SUPPORT_AGENT
 
-    repo_root = Path(__file__).resolve().parents[1]
-    page = (repo_root / "frontend/app/(app)/settings/page.tsx").read_text(encoding="utf-8")
-    start = page.index("content: `") + len("content: `")
-    shipped = page[start : page.index("`,", start)]
+    token, _ = _auth(tenant, db_session, "preset-text@example.com")
+    resp = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot"},
+    )
+    assert resp.status_code == 201
+    bot = resp.json()
+    assert bot["preset"] == "support_agent"
+    assert bot["preset_text"] == PRESET_SUPPORT_AGENT
 
-    assert shipped == PRESET_SUPPORT_AGENT.strip()
+    resp = tenant.patch(
+        f"/bots/{bot['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"preset": None},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["preset_text"] is None

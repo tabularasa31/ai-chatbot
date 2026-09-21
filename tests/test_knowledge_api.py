@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,18 @@ def _create_client(http: TestClient, db: Session, *, email: str) -> tuple[str, T
 
 def _kbase(_client_row: Tenant) -> str:
     return "/api/v1/knowledge"
+
+
+@pytest.fixture
+def faq_events(monkeypatch) -> list[dict]:
+    """Every faq.reviewed event emitted during the test, in order."""
+    events: list[dict] = []
+
+    def fake_capture(event, **kwargs):
+        events.append({"event": event, **kwargs})
+
+    monkeypatch.setattr("backend.knowledge.events.capture_event", fake_capture)
+    return events
 
 
 def _update_profile(db: Session, tenant_id: uuid.UUID, **fields: object) -> TenantProfile:
@@ -280,3 +293,209 @@ def test_tenant_isolation(tenant: TestClient, db_session: Session) -> None:
     assert resp2.status_code == 200
     assert resp1.json()["product_name"] == "Tenant One Product"
     assert resp2.json()["product_name"] != "Tenant One Product"
+
+
+def test_approve_emits_faq_reviewed(
+    tenant: TestClient, db_session: Session, faq_events: list[dict]
+) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-events-approve@example.com")
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="Q",
+        answer="A",
+        approved=False,
+        source="docs",
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    resp = tenant.post(
+        f"{_kbase(client_row)}/faq/{faq.id}/approve",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(faq_events) == 1
+    event = faq_events[0]
+    assert event["event"] == "faq.reviewed"
+    assert event["distinct_id"] == str(client_row.public_id)
+    assert event["tenant_id"] == str(client_row.public_id)
+    assert event["groups"] == {"tenant": str(client_row.public_id)}
+    assert event["properties"] == {"action": "approve", "count": 1, "faq_source": "docs"}
+
+
+def test_reject_emits_faq_reviewed(
+    tenant: TestClient, db_session: Session, faq_events: list[dict]
+) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-events-reject@example.com")
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="Q",
+        answer="A",
+        approved=False,
+        source="logs",
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    resp = tenant.post(
+        f"{_kbase(client_row)}/faq/{faq.id}/reject",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(faq_events) == 1
+    assert faq_events[0]["properties"] == {"action": "reject", "count": 1, "faq_source": "logs"}
+
+
+def test_delete_route_emits_reject_action(
+    tenant: TestClient, db_session: Session, faq_events: list[dict]
+) -> None:
+    """DELETE /faq/{id} shares the reject user intent (removing an FAQ candidate)."""
+    token, client_row = _create_client(tenant, db_session, email="kapi-events-delete@example.com")
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="Q",
+        answer="A",
+        approved=False,
+        source="swagger",
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    resp = tenant.delete(
+        f"{_kbase(client_row)}/faq/{faq.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(faq_events) == 1
+    assert faq_events[0]["properties"] == {
+        "action": "reject",
+        "count": 1,
+        "faq_source": "swagger",
+    }
+
+
+def test_update_emits_content_changed_true(
+    tenant: TestClient, db_session: Session, faq_events: list[dict]
+) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-events-update@example.com")
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="How?",
+        answer="Like this.",
+        approved=True,
+        source="docs",
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    resp = tenant.put(
+        f"{_kbase(client_row)}/faq/{faq.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "How exactly?", "answer": "Like this."},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(faq_events) == 1
+    assert faq_events[0]["properties"] == {
+        "action": "update",
+        "count": 1,
+        "content_changed": True,
+        "faq_source": "docs",
+    }
+
+
+def test_update_emits_content_changed_false(
+    tenant: TestClient, db_session: Session, faq_events: list[dict]
+) -> None:
+    token, client_row = _create_client(
+        tenant, db_session, email="kapi-events-update-noop@example.com"
+    )
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="How?",
+        answer="Like this.",
+        approved=True,
+        source="docs",
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    resp = tenant.put(
+        f"{_kbase(client_row)}/faq/{faq.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "How?", "answer": "Like this."},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(faq_events) == 1
+    assert faq_events[0]["properties"]["content_changed"] is False
+
+
+def test_approve_all_emits_faq_reviewed_with_count(
+    tenant: TestClient, db_session: Session, faq_events: list[dict]
+) -> None:
+    token, client_row = _create_client(
+        tenant, db_session, email="kapi-events-approve-all@example.com"
+    )
+    db_session.add_all(
+        [
+            TenantFaq(
+                tenant_id=client_row.id, question="Q1", answer="A1", approved=False, source="docs"
+            ),
+            TenantFaq(
+                tenant_id=client_row.id, question="Q2", answer="A2", approved=False, source="docs"
+            ),
+        ]
+    )
+    db_session.commit()
+
+    resp = tenant.post(
+        f"{_kbase(client_row)}/faq/approve-all",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(faq_events) == 1
+    assert faq_events[0]["properties"] == {"action": "approve_all", "count": 2}
+
+
+def test_approve_all_noop_still_emits_zero_count(
+    tenant: TestClient, db_session: Session, faq_events: list[dict]
+) -> None:
+    token, client_row = _create_client(
+        tenant, db_session, email="kapi-events-approve-all-noop@example.com"
+    )
+
+    resp = tenant.post(
+        f"{_kbase(client_row)}/faq/approve-all",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(faq_events) == 1
+    assert faq_events[0]["properties"] == {"action": "approve_all", "count": 0}
+
+
+def test_faq_reviewed_never_carries_question_or_answer_text(
+    tenant: TestClient, db_session: Session, faq_events: list[dict]
+) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-events-notext@example.com")
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="Very secret question text",
+        answer="Very secret answer text",
+        approved=False,
+        source="docs",
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    tenant.post(
+        f"{_kbase(client_row)}/faq/{faq.id}/approve",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    for event in faq_events:
+        for value in event["properties"].values():
+            assert "secret" not in str(value)

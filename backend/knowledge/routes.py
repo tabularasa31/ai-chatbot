@@ -13,6 +13,14 @@ from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.openai_client import get_openai_client
+from backend.knowledge.events import (
+    ACTION_APPROVE,
+    ACTION_APPROVE_ALL,
+    ACTION_REJECT,
+    ACTION_UPDATE,
+    FaqReviewed,
+    emit_faq_reviewed,
+)
 from backend.knowledge.schemas import (
     KnowledgeFaqApproveAllResponse,
     KnowledgeFaqApproveResponse,
@@ -215,6 +223,13 @@ def approve_all_faq(
         .update({TenantFaq.approved: True}, synchronize_session=False)
     )
     db.commit()
+    emit_faq_reviewed(
+        FaqReviewed(
+            tenant_public_id=str(tenant.public_id),
+            action=ACTION_APPROVE_ALL,
+            count=int(updated),
+        )
+    )
     if tenant.openai_api_key:
         for faq_id, question in missing_embedding:
             background_tasks.add_task(
@@ -235,9 +250,17 @@ def approve_faq(
 ) -> KnowledgeFaqApproveResponse:
     tenant = _get_tenant(db, current_user)
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
+    faq_source = faq.source
     faq.approved = True
     db.add(faq)
     db.commit()
+    emit_faq_reviewed(
+        FaqReviewed(
+            tenant_public_id=str(tenant.public_id),
+            action=ACTION_APPROVE,
+            faq_source=faq_source,
+        )
+    )
 
     if faq.question_embedding is None and tenant.openai_api_key:
         background_tasks.add_task(
@@ -258,8 +281,16 @@ def reject_faq(
 ) -> KnowledgeFaqRejectResponse:
     tenant = _get_tenant(db, current_user)
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
+    faq_source = faq.source
     db.delete(faq)
     db.commit()
+    emit_faq_reviewed(
+        FaqReviewed(
+            tenant_public_id=str(tenant.public_id),
+            action=ACTION_REJECT,
+            faq_source=faq_source,
+        )
+    )
     return KnowledgeFaqRejectResponse(id=faq_id, deleted=True)
 
 
@@ -276,6 +307,8 @@ def update_faq(
 
     question_changed = payload.question.strip() != faq.question.strip()
     answer_changed = payload.answer.strip() != faq.answer.strip()
+    content_changed = question_changed or answer_changed
+    faq_source = faq.source
     faq.question = payload.question.strip()
     faq.answer = payload.answer.strip()
     if question_changed or answer_changed:
@@ -285,6 +318,14 @@ def update_faq(
     db.add(faq)
     db.commit()
     db.refresh(faq)
+    emit_faq_reviewed(
+        FaqReviewed(
+            tenant_public_id=str(tenant.public_id),
+            action=ACTION_UPDATE,
+            content_changed=content_changed,
+            faq_source=faq_source,
+        )
+    )
 
     if question_changed and tenant.openai_api_key:
         background_tasks.add_task(
@@ -314,6 +355,14 @@ def delete_faq(
 ) -> KnowledgeFaqRejectResponse:
     tenant = _get_tenant(db, current_user)
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
+    faq_source = faq.source
     db.delete(faq)
     db.commit()
+    emit_faq_reviewed(
+        FaqReviewed(
+            tenant_public_id=str(tenant.public_id),
+            action=ACTION_REJECT,
+            faq_source=faq_source,
+        )
+    )
     return KnowledgeFaqRejectResponse(id=faq_id, deleted=True)

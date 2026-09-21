@@ -188,6 +188,7 @@ def call_openai_with_retry(
                 langfuse_observation,
                 attempt_count=attempt,
                 was_retried=attempt > 1,
+                **_present_provider_stamps(result),
             )
             return result
 
@@ -314,6 +315,7 @@ async def async_call_openai_with_retry(
                 langfuse_observation,
                 attempt_count=attempt,
                 was_retried=attempt > 1,
+                **_present_provider_stamps(result),
             )
             return result
 
@@ -413,6 +415,24 @@ def _stamp_failure_observation(
         retry_exhausted=True,
         retry_failure_kind=classified.kind.value,
     )
+
+
+def provider_response_stamps(response: Any) -> dict[str, str | None]:
+    """Provider-side identifiers of a chat completion or one of its stream chunks.
+
+    Both keys are always present so streaming and non-streaming spans carry
+    the same field set; a missing or non-string attribute yields ``None``.
+    """
+    request_id = getattr(response, "id", None)
+    fingerprint = getattr(response, "system_fingerprint", None)
+    return {
+        "provider_request_id": request_id if isinstance(request_id, str) else None,
+        "system_fingerprint": fingerprint if isinstance(fingerprint, str) else None,
+    }
+
+
+def _present_provider_stamps(response: Any) -> dict[str, str]:
+    return {k: v for k, v in provider_response_stamps(response).items() if v is not None}
 
 
 def _stamp_observation(observation: Any | None, **kvs: Any) -> None:

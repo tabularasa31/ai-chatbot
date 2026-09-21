@@ -419,9 +419,10 @@ async def _async_generate_answer_native(
                 async for chunk in stream:
                     if isinstance(getattr(chunk, "model", None), str):
                         actual_model = chunk.model
-                    _provider_stamps.update(
-                        {k: v for k, v in provider_response_stamps(chunk).items() if v is not None}
-                    )
+                    if None in _provider_stamps.values():
+                        _provider_stamps.update(
+                            {k: v for k, v in provider_response_stamps(chunk).items() if v is not None}
+                        )
                     if getattr(chunk, "usage", None):
                         total_tokens = chunk.usage.total_tokens or 0
                         prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0

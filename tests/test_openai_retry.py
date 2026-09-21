@@ -372,6 +372,38 @@ def test_observation_skips_missing_provider_identifiers(
     assert obs.updates == [{"attempt_count": 1, "was_retried": False}]
 
 
+def test_async_observation_stamped_with_provider_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _runner() -> None:
+        obs = _RecordingObservation()
+        response = SimpleNamespace(id="chatcmpl-async", system_fingerprint="fp_async")
+
+        async def _fn() -> SimpleNamespace:
+            return response
+
+        async def _no_sleep(_: float) -> None:
+            return None
+
+        monkeypatch.setattr("backend.core.openai_retry.asyncio.sleep", _no_sleep)
+
+        result = await async_call_openai_with_retry(
+            "chat_generate", _fn, langfuse_observation=obs
+        )
+
+        assert result is response
+        assert obs.updates == [
+            {
+                "attempt_count": 1,
+                "was_retried": False,
+                "provider_request_id": "chatcmpl-async",
+                "system_fingerprint": "fp_async",
+            }
+        ]
+
+    asyncio.run(_runner())
+
+
 def test_provider_response_stamps_always_has_both_keys() -> None:
     assert provider_response_stamps(None) == {
         "provider_request_id": None,

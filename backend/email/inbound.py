@@ -584,6 +584,7 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
         "email_lane.reply_forwarded",
         ticket,
         properties={
+            "response_ms": _forward_response_ms(ticket),
             # The actual reason, not the first plausible one. The earlier
             # expression reported "not_live" for a seated operator whose chat
             # had been deleted, which is a different failure with a different
@@ -621,6 +622,27 @@ def _stamp_forwarded(reply: InboundReply, ticket: EscalationTicket, db: Session)
         logger.warning(
             "email_lane_forward_stamp_failed ticket=%s", ticket.ticket_number, exc_info=True
         )
+
+
+def _forward_response_ms(ticket: EscalationTicket) -> int | None:
+    """From the request being raised to the forward, on the forward's own clock.
+
+    Deliberately not ``first_response_ms``: a reply from an address holding
+    no seat opens no operator stretch, and the product metric measures the
+    product. Analytics may add the two; this code never does.
+    """
+    from backend.chat.events import _session_duration_ms
+    from backend.escalation.service import request_raised_at
+
+    try:
+        if ticket.forwarded_reply_at is None:
+            return None
+        return _session_duration_ms(request_raised_at(ticket), ticket.forwarded_reply_at)
+    except Exception:
+        # Evaluated before ``_capture``'s own guard, after the visitor already
+        # has the mail: raising here would make Brevo redeliver and forward twice.
+        logger.debug("email lane response clock failed", exc_info=True)
+        return None
 
 
 def _forward_reason(*, seated: bool, chat: Chat | None, live: bool) -> str:

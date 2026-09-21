@@ -593,6 +593,42 @@ def test_a_forwarded_reply_answers_the_request_so_asking_again_re_queues(
     assert queue["waiting_count"] == 1
 
 
+def test_a_forwarded_reply_reports_its_own_clock_not_first_response(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """The visitor waited exactly until this mail, so the wait is recorded —
+    on the forward's own event, never on ``first_response_ms``: the product
+    metric measures the product, and this answer happened outside it. The
+    clock starts at the latest ask, as the queue's own wait does.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-clock@example.com", name="Clock", seated=True
+    )
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+    address = escalation_reply_to(ticket, db_session)
+    ticket.created_at = _utcnow() - timedelta(minutes=10)
+    ticket.requested_again_at = _utcnow() - timedelta(minutes=3)
+    db_session.commit()
+
+    with (
+        patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"),
+        patch("backend.email.inbound.capture_event") as captured,
+    ):
+        _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
+
+    db_session.expire_all()
+    [forwarded] = [
+        c for c in captured.call_args_list if c.args[0] == "email_lane.reply_forwarded"
+    ]
+    expected = int(
+        (ticket.forwarded_reply_at - ticket.requested_again_at).total_seconds() * 1000
+    )
+    assert forwarded.kwargs["properties"]["response_ms"] == expected
+    assert timedelta(minutes=3) <= timedelta(milliseconds=expected) < timedelta(minutes=4)
+    assert "first_response_ms" not in forwarded.kwargs["properties"]
+
+
 def test_the_mark_hides_once_the_visitor_asks_again(
     tenant: TestClient, db_session: Session
 ) -> None:

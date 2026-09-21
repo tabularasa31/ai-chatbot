@@ -262,8 +262,10 @@ def test_empty_chat_reaped_on_short_window_message_chat_kept(
 def test_legacy_ended_at_chat_is_swept_like_any_other(
     db_session: Session, monkeypatch
 ) -> None:
-    # Rows closed before the closed-chat state was removed: the sweeper
-    # ignores ``ended_at`` and reports them on the idle rule.
+    # The sweeper ignores ``ended_at``. Rows closed before the closed-chat
+    # state was removed already carry the marker (backfilled by
+    # ``legacy_closed_chats_marker_v1``), so in practice this only reaches
+    # a legacy row the backfill never saw.
     tenant = _make_tenant(db_session)
     chat = _make_chat(db_session, tenant, age_minutes=90)
     # Query-level update: a plain ORM commit would fire updated_at's onupdate

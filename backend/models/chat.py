@@ -271,13 +271,13 @@ class Chat(Base):
 
 
 # Partial index for the inactivity sweeper's scan (runs every few minutes).
-# Only un-reported, un-closed chats are indexed, so it stays small as the bulk
-# of chats acquire the marker; it covers both the filter and the ORDER BY.
+# Only un-reported chats are indexed, so it stays small as the bulk of chats
+# acquire the marker; it covers both the filter and the ORDER BY.
 Index(
     "ix_chats_sweeper_pending",
     Chat.updated_at,
-    postgresql_where=Chat.session_ended_event_at.is_(None) & Chat.ended_at.is_(None),
-    sqlite_where=Chat.session_ended_event_at.is_(None) & Chat.ended_at.is_(None),
+    postgresql_where=Chat.session_ended_event_at.is_(None),
+    sqlite_where=Chat.session_ended_event_at.is_(None),
 )
 
 # Partial index for finding the chats an operator is currently in. Follows the

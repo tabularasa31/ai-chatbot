@@ -9,7 +9,7 @@ Chat9 is language-agnostic. End users can write in any language and the bot repl
 
 - **The default greeting (shown before the user types anything)** comes out in the language picked by this chain, in order: the `locale` you passed via `userHints` → the browser's reported locale → English.
 - **As soon as the user sends a message, the bot replies in the language of that message.** This is the default and covers the vast majority of cases.
-- **Once the conversation has settled on a language, it stays in that language for the rest of the session.** A clearly non-English first message locks the language right away; an English first message locks once a second turn confirms it. After lock, off-language turns don't change the bot's reply language. To switch languages mid-conversation, end users start a new chat.
+- **Once the conversation has settled on a language, it stays in that language for the rest of the session.** A clearly non-English first message locks the language right away; an English first message locks once a second turn confirms it. After lock, off-language turns don't change the bot's reply language, and the lock holds until the conversation rolls over after a week of silence.
 - **Tickets and support-team artifacts** can be pinned to a fixed language from your dashboard, independent of what language end users write in.
 
 ## What the user sees

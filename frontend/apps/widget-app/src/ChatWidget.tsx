@@ -141,7 +141,6 @@ const RETRYABLE_SESSION_ERROR_CODES = new Set([
   "session_invalid",
   "session_not_found",
   "session_forbidden",
-  "session_closed",
 ]);
 
 function sessionStorageKey(botId: string, userId?: string | null): string {
@@ -296,10 +295,8 @@ export function ChatWidget({
   // re-render per poll would be pure churn.
   const cursorRef = useRef<string | null>(null);
   const pollInFlightRef = useRef(false);
-  // Mirrors of the two values that decide whether a conversation is still
-  // waiting on a human. Callbacks read them without taking them as
-  // dependencies, which would rebuild those callbacks on every poll.
-  const handoffStateRef = useRef<"bot" | "waiting" | "live">("bot");
+  // Mirror of the ticket the poll was dispatched for. Callbacks read it
+  // without taking it as a dependency, which would rebuild them on every poll.
   const activeTicketRef = useRef<string | null>(null);
   const [streamingText, setStreamingText] = useState<string>("");
   const [statusStage, setStatusStage] = useState<string | null>(null);
@@ -433,9 +430,6 @@ export function ChatWidget({
     el.scrollTop = el.scrollHeight;
   }, [messages, loading, isOpen]);
 
-  useEffect(() => {
-    handoffStateRef.current = handoffState;
-  }, [handoffState]);
   useEffect(() => {
     activeTicketRef.current = activeTicket;
   }, [activeTicket]);

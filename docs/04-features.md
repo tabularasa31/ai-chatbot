@@ -357,7 +357,7 @@ Observability for this layer is emitted through a single `faq_match` span with s
 ### Controlled clarification layer
 
 The chat pipeline routes every turn through a single decision engine
-(`backend/chat/decision.py::decide`) which returns one of eight
+(`backend/chat/decision.py::decide`) which returns one of nine
 `DecisionKind` outcomes (e.g. `answer_from_faq`, `answer_with_citations`,
 `answer_with_caveat`, `answer_with_caveat_and_inline_clarify`, `clarify`,
 `escalate`, `reject`). The full block-rules contract is documented in the
@@ -817,7 +817,7 @@ What survives rotation:
 - an **active escalation ticket still collecting the user's email** — one of two cases that *block* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
 - a **live operator handoff** (`operator_state = live`) — the other blocker. Rotating would open a fresh conversation with the bot answering while a human is mid-conversation on the old one, and the operator's thread would be orphaned. A handoff whose operator has really gone is released back to the bot by the sweeper first, so the block only ever holds a conversation someone is actually in.
 
-`Chat.ended_at` is a legacy column from the removed closed-chat state: old rows still carry a value, nothing reads it, and such a chat behaves like any open conversation. Dropping the column is a separate migration.
+`Chat.ended_at` is a legacy column from the removed closed-chat state: old rows still carry a value, nothing reads it, and such a chat behaves like any open conversation. Their `chat_session_ended` event was already emitted at close time, so `legacy_closed_chats_marker_v1` backfilled `session_ended_event_at` for them (and rebuilt `ix_chats_sweeper_pending` on the marker alone) to keep the event at-most-once. Dropping the column is a separate migration.
 
 Widget protocol: `GET /widget/history` returns the last two conversations flattened, `boundary_indices` (positions where a newer conversation starts) and `conversation_rotated` (true when the next message will open a new conversation — the widget renders a separator and requests a fresh greeting by POSTing an empty message with the existing `session_id`).
 

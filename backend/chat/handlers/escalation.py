@@ -358,26 +358,10 @@ class EscalationStateMachine(PipelineHandler):
             decision = out.followup_decision or "unclear"
             if decision == "unclear" and _escalation_clarify_already_asked(chat):
                 decision = "yes"
-            if decision == "yes":
-                chat.escalation_followup_pending = False
-                _clear_escalation_clarify_flag(chat)
-                ctx.db.add(chat)
-                if followup_span is not None:
-                    followup_span.end(output={"decision": decision, "chat_ended": False})
-                return _svc._escalation_turn_response(
-                    db=ctx.db,
-                    chat=chat,
-                    tenant_id=ctx.tenant_id,
-                    language_context=ctx.language_context,
-                    question=ctx.question,
-                    out=out,
-                    trace=ctx.trace,
-                    trace_source="escalation_followup",
-                    escalated=True,
-                )
-            if decision == "no":
-                # Goodbye, but the conversation stays open: idle rotation is
-                # the only boundary, and the sweeper reports the session end.
+            if decision in ("yes", "no"):
+                # Either way the gate drops and the conversation stays open —
+                # "no" is a goodbye, not a close; idle rotation is the only
+                # boundary, and the sweeper reports the session end.
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
                 ctx.db.add(chat)

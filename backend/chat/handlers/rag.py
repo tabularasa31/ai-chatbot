@@ -118,7 +118,7 @@ from backend.chat.types import (
     PipelineState as _PipelineState,  # noqa: F401  (re-export, legacy name)
 )
 from backend.core.config import settings
-from backend.models import Chat, EscalationTrigger, MessageRole
+from backend.models import Chat, EscalationTrigger, MessageRole, TurnOutcome
 from backend.observability import record_stage_ms
 
 logger = logging.getLogger(__name__)
@@ -437,6 +437,7 @@ class RagHandler(PipelineHandler):
                 language_context=ctx.language_context,
                 trace=ctx.trace,
                 set_rephrase_flag=(result.reject_reason == "rephrase"),
+                turn_outcome=(TurnOutcome.filtered if result.is_reject else None),
             )
             _try_ingest_gap_signal(
                 chat=chat,

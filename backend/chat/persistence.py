@@ -12,7 +12,7 @@ from backend.chat.language import ResolvedLanguageContext
 from backend.chat.language_context import _set_last_response_language
 from backend.chat.pii import redact
 from backend.contact_sessions.service import record_user_session_turn
-from backend.models import Chat, Message, MessageRole, PiiEvent, PiiEventDirection
+from backend.models import Chat, Message, MessageRole, PiiEvent, PiiEventDirection, TurnOutcome
 from backend.observability import TraceHandle
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,28 @@ logger = logging.getLogger(__name__)
 
 def _source_docs_for_db(db: Session, document_ids: list[uuid.UUID]) -> list[uuid.UUID] | None:
     return document_ids if "postgresql" in str(db.bind.url) else None
+
+
+def _infer_turn_outcome(
+    chat: Chat, document_ids: list[uuid.UUID] | None
+) -> TurnOutcome:
+    """Default ``turn_outcome`` for an assistant reply, from structural signals only.
+
+    Never inspects the reply text. An active escalation FSM state on the chat
+    (armed by the handler before this call) takes precedence over the document
+    count: an escalation offer/handoff turn commonly clears or never sets
+    ``source_documents``, but its outcome is still "escalation", not
+    "unanswered". Callers that already know the outcome (e.g. a guard
+    rejection) pass ``turn_outcome`` explicitly instead of relying on this.
+    """
+    if (
+        chat.escalation_pre_confirm_pending
+        or chat.escalation_awaiting_ticket_id is not None
+        or chat.escalation_followup_pending
+        or chat.escalation_awaiting_request
+    ):
+        return TurnOutcome.escalation
+    return TurnOutcome.answered if document_ids else TurnOutcome.unanswered
 
 
 def _create_message(
@@ -31,6 +53,7 @@ def _create_message(
     content: str,
     source_documents: list[uuid.UUID] | None = None,
     operator_user_id: uuid.UUID | None = None,
+    turn_outcome: TurnOutcome | None = None,
 ) -> Message:
     """Persist one turn's message with its ORIGINAL text.
 
@@ -43,6 +66,9 @@ def _create_message(
     ``operator_user_id`` is set only on ``MessageRole.operator`` rows whose
     author resolves to a tenant user; it stays NULL for an unattributed
     operator reply and for every user / assistant row.
+
+    ``turn_outcome`` is a bot-reply-only classification; callers never pass it
+    for ``MessageRole.user`` / ``MessageRole.operator`` rows, which keep it NULL.
     """
     message = Message(
         id=uuid.uuid4(),
@@ -51,6 +77,7 @@ def _create_message(
         content=content,
         source_documents=source_documents,
         operator_user_id=operator_user_id,
+        turn_outcome=turn_outcome,
     )
     db.add(message)
     redaction = redact(content)
@@ -218,6 +245,7 @@ def _persist_turn(
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
     set_low_confidence_flag: bool = False,
+    turn_outcome: TurnOutcome | None = None,
 ) -> tuple[Message, Message]:
     _persist_start = perf_counter()
     _persist_span = None
@@ -240,6 +268,9 @@ def _persist_turn(
         role=MessageRole.assistant,
         content=assistant_content,
         source_documents=_source_docs_for_db(db, document_ids),
+        turn_outcome=(
+            turn_outcome if turn_outcome is not None else _infer_turn_outcome(chat, document_ids)
+        ),
     )
     _finalize_persisted_messages(
         db=db,
@@ -272,6 +303,7 @@ def _persist_turn_with_response_language(
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
     set_low_confidence_flag: bool = False,
+    turn_outcome: TurnOutcome | None = None,
 ) -> tuple[Message, Message]:
     _set_last_response_language(
         db=db,
@@ -292,6 +324,7 @@ def _persist_turn_with_response_language(
         trace=trace,
         set_rephrase_flag=set_rephrase_flag,
         set_low_confidence_flag=set_low_confidence_flag,
+        turn_outcome=turn_outcome,
     )
 
 
@@ -301,6 +334,7 @@ def _persist_assistant_message(
     tenant_id: uuid.UUID,
     assistant_content: str,
     extra_tokens: int,
+    turn_outcome: TurnOutcome | None = None,
 ) -> None:
     _create_message(
         db,
@@ -309,6 +343,9 @@ def _persist_assistant_message(
         role=MessageRole.assistant,
         content=assistant_content,
         source_documents=None,
+        turn_outcome=(
+            turn_outcome if turn_outcome is not None else _infer_turn_outcome(chat, None)
+        ),
     )
     _finalize_persisted_messages(
         db=db,
@@ -328,6 +365,7 @@ def _persist_assistant_message_with_response_language(
     assistant_content: str,
     extra_tokens: int,
     language_context: ResolvedLanguageContext | None = None,
+    turn_outcome: TurnOutcome | None = None,
 ) -> None:
     _set_last_response_language(
         db=db,
@@ -343,4 +381,5 @@ def _persist_assistant_message_with_response_language(
         tenant_id,
         assistant_content,
         extra_tokens,
+        turn_outcome=turn_outcome,
     )

@@ -118,10 +118,28 @@ from backend.chat.types import (
     PipelineState as _PipelineState,  # noqa: F401  (re-export, legacy name)
 )
 from backend.core.config import settings
-from backend.models import Chat, EscalationTrigger, MessageRole
+from backend.models import Chat, EscalationTrigger, MessageRole, TurnOutcome
 from backend.observability import record_stage_ms
 
 logger = logging.getLogger(__name__)
+
+REJECT_REASON_TURN_OUTCOME: dict[str, TurnOutcome] = {
+    "injection": TurnOutcome.filtered,
+    "not_relevant": TurnOutcome.filtered,
+    "rephrase": TurnOutcome.unanswered,
+    "low_retrieval": TurnOutcome.unanswered,
+    "social": TurnOutcome.social,
+    "social_question": TurnOutcome.social,
+}
+
+
+def _turn_outcome_for(result: ChatPipelineResult) -> TurnOutcome | None:
+    """Map a reject/faq_direct pipeline result to its persisted turn outcome."""
+    if result.is_faq_direct:
+        return TurnOutcome.answered
+    if result.is_reject:
+        return REJECT_REASON_TURN_OUTCOME[result.reject_reason]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +455,7 @@ class RagHandler(PipelineHandler):
                 language_context=ctx.language_context,
                 trace=ctx.trace,
                 set_rephrase_flag=(result.reject_reason == "rephrase"),
+                turn_outcome=_turn_outcome_for(result),
             )
             _try_ingest_gap_signal(
                 chat=chat,

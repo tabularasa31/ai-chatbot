@@ -705,7 +705,7 @@ Each bot's system prompt is assembled from three layers, applied in order:
 
 The global `ENABLE_AGENT_INSTRUCTIONS` setting (default on) is a kill switch: when off, none of these layers are added to the system prompt regardless of what a bot has configured.
 
-**Legacy column backfill (completed).** `scripts/backfill_bot_instructions.py` was a one-off CLI, run once against production, that split every bot's old single-field `agent_instructions` text into `preset` + `custom_instructions`; the column is now `NULL` on every bot.
+**Legacy column backfill (completed).** A one-off script, run once against production and since removed, split every bot's old single-field `agent_instructions` text into `preset` + `custom_instructions`; the column has been dropped from `bots`.
 
 ### Answer cache
 

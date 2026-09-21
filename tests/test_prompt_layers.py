@@ -16,6 +16,15 @@ def test_legacy_source_when_only_agent_instructions_set() -> None:
     assert (text, source) == ("Legacy text.", "legacy")
 
 
+def test_whitespace_only_legacy_is_not_legacy() -> None:
+    """Symmetric with the custom-instructions whitespace-only case: a legacy
+    field containing only whitespace must not count as set."""
+    text, source = effective_agent_instructions(
+        agent_instructions="   ", custom_instructions=None, preset=None
+    )
+    assert (text, source) == (None, "none")
+
+
 def test_custom_present_wins_over_legacy() -> None:
     """A non-None custom_instructions means the bot has moved off the legacy
     path, even if agent_instructions still has a value in the column."""

@@ -152,6 +152,10 @@ def update_bot(
         bot.is_active = update.is_active  # type: ignore[assignment]
     if "agent_instructions" in fields:
         bot.agent_instructions = update.agent_instructions  # None clears the field
+        if update.agent_instructions and bot.custom_instructions:
+            # Last write wins: the legacy field would otherwise be silently
+            # ignored by effective_agent_instructions while custom is set.
+            bot.custom_instructions = None
     elif ("custom_instructions" in fields or "preset" in fields) and bot.agent_instructions:
         # The tenant is moving off the legacy single-field prompt onto the new model.
         bot.agent_instructions = None

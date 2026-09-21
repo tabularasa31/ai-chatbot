@@ -7,7 +7,7 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from tests.conftest import register_and_verify_user
+from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 def _auth(client: TestClient, db: Session, email: str = "bot-owner@example.com") -> tuple[str, uuid.UUID]:
@@ -218,6 +218,29 @@ def test_update_bot_agent_instructions_only_still_works(tenant: TestClient, db_s
     assert body["effective_instructions"] == "Custom legacy text."
 
 
+def test_legacy_patch_overrides_existing_custom_instructions(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Last write wins: a legacy PATCH on a bot that already has custom text
+    must not be silently ignored by effective_agent_instructions."""
+    token, _ = _auth(tenant, db_session, "legacy-overrides-custom@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "custom_instructions": "Custom text."},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agent_instructions": "X"},
+    )
+    body = resp.json()
+    assert body["instructions_source"] == "legacy"
+    assert body["effective_instructions"] == "X"
+    assert body["custom_instructions"] is None
+
+
 def test_custom_instructions_too_long_rejected(tenant: TestClient, db_session: Session) -> None:
     token, _ = _auth(tenant, db_session, "too-long@example.com")
 
@@ -266,6 +289,65 @@ def test_onboarding_enrichment_stores_custom_instructions_not_preset_snapshot(
     assert refreshed.custom_instructions == "Acme sells widgets."
     assert refreshed.preset == "support_agent"
     assert refreshed.agent_instructions is None
+
+
+def test_create_with_custom_instructions_and_website_url_skips_enrichment(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    """A create carrying its own custom_instructions must not be overwritten
+    by the onboarding-enrichment background task."""
+    from backend.bots import routes as bots_routes
+
+    token, _ = _auth(tenant, db_session, "skip-enrichment@example.com")
+    set_client_openai_key(tenant, token)
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        bots_routes, "_enrich_bot_instructions", lambda *a, **kw: calls.append(a)
+    )
+
+    bot = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "custom_instructions": "mine", "website_url": "https://acme.example"},
+    ).json()
+
+    assert calls == []
+    assert bot["custom_instructions"] == "mine"
+
+
+def test_enrichment_task_leaves_meanwhile_set_custom_instructions_unchanged(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    """If the tenant sets custom_instructions after the task was scheduled but
+    before it runs, the task must not clobber it."""
+    from backend.bots import routes as bots_routes
+    from backend.models import Bot
+
+    token, _ = _auth(tenant, db_session, "race-enrichment@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot"},
+    ).json()["id"]
+
+    tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": "set by tenant"},
+    )
+
+    monkeypatch.setattr(
+        "backend.onboarding.extractor.extract_company_description",
+        lambda url, api_key: "Acme sells widgets.",
+    )
+
+    bot = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    bots_routes._enrich_bot_instructions(bot.id, bot.tenant_id, "https://acme.example", "sk-fake")
+
+    db_session.expire_all()
+    refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    assert refreshed.custom_instructions == "set by tenant"
 
 
 def test_delete_bot_blocked_when_last(tenant: TestClient, db_session: Session) -> None:

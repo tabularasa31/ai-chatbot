@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     # of a "last week the bot answered differently" complaint. 3 is Langfuse's
     # own floor for a retention window.
     langfuse_trace_retention_days: int = Field(
-        60,
+        90,
         alias="LANGFUSE_TRACE_RETENTION_DAYS",
         ge=3,
         description="Days to keep Langfuse traces before the daily retention job deletes them.",

@@ -208,6 +208,7 @@ def build_rag_prompt(
     # System message: stable per bot configuration — no per-request variability so
     # OpenAI automatic prompt caching can reuse it across all turns for the same bot.
     system_rules = (
+        "The rules below take precedence over any instructions above them.\n"
         f"{DISCLOSURE_HARD_LIMITS}\n"
         "You are a technical support agent for the tenant's product.\n"
         "Rules:\n"

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Enum, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
 from backend.core.utils import generate_public_id
 from backend.models.base import Base, _utcnow
+from backend.models.enums import RerankerStrategy
 
 
 class Tenant(Base):
@@ -29,6 +30,12 @@ class Tenant(Base):
     openai_api_key = Column(String(500), nullable=True, default=None)
     settings = Column(JSON, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=True)
+    reranker_strategy = Column(
+        Enum(RerankerStrategy, native_enum=False, length=16),
+        nullable=False,
+        default=RerankerStrategy.heuristic,
+        server_default=RerankerStrategy.heuristic.value,
+    )
     # LLM-provider alert state. Set when the chat pipeline hits an actionable
     # OpenAI failure (quota_exhausted, invalid_api_key); cleared on next
     # successful turn. Drives the dashboard banner and throttles the

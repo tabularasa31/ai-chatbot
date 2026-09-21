@@ -23,7 +23,7 @@ from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
 from backend.core.scripts import NO_SCRIPT_BUCKET, detect_script_bucket
 from backend.knowledge.entity_extractor import extract_entities_from_query
-from backend.models import Document, Embedding, Tenant
+from backend.models import Document, Embedding, RerankerStrategy, Tenant
 from backend.observability import TraceHandle
 from backend.observability.formatters import (
     format_embedding_results,
@@ -41,6 +41,13 @@ from backend.search.contradiction_adjudication import (
     serialize_contradiction_adjudication,
     serialize_contradiction_adjudication_run,
 )
+from backend.search.reranking import (
+    RerankSignals,
+    embedding_tiebreak_key,
+    lexical_overlap_score,
+    rerank_with_fallback,
+)
+from backend.tenants.cache import get_cached_tenant
 from backend.utils.math import cosine_similarity
 
 # Number of vector candidates to pre-fetch before BM25 scoring.
@@ -59,10 +66,6 @@ BM25_PREFILTER_MAX_QUERY_TOKENS = 32
 # top_k anyway, so any cap >> that pool is safe.
 ENTITY_SEARCH_CANDIDATE_LIMIT = 1000
 RRF_CANDIDATE_POOL_MULTIPLIER = 4
-RERANK_LEXICAL_WEIGHT = 0.35
-RERANK_VECTOR_WEIGHT = 0.25
-RERANK_BM25_WEIGHT = 0.20
-RERANK_RRF_WEIGHT = 0.20
 SCRIPT_BOOST_FACTOR = 0.1
 MMR_LAMBDA = 0.7
 MAX_OVERLAP_CHECK_CANDIDATES = 5
@@ -1048,22 +1051,13 @@ class BM25SearchBundle:
     winner_by_id: dict[uuid.UUID, BM25Winner]
 
 
-def _embedding_tiebreak_key(embedding: Embedding) -> tuple[str, int, str]:
-    """Deterministic secondary key for equal-score ordering."""
-    meta = embedding.metadata_json or {}
-    chunk_index = meta.get("chunk_index", -1)
-    if not isinstance(chunk_index, int):
-        chunk_index = -1
-    return (str(embedding.document_id), chunk_index, str(embedding.id))
-
-
 def _sort_scored_embeddings(
     scored: list[tuple[Embedding, float]],
 ) -> list[tuple[Embedding, float]]:
     """Sort DESC by score with a deterministic tie-breaker."""
     return sorted(
         scored,
-        key=lambda item: (-item[1], _embedding_tiebreak_key(item[0])),
+        key=lambda item: (-item[1], embedding_tiebreak_key(item[0])),
     )
 
 
@@ -1275,7 +1269,7 @@ def _lexical_overlap_results(
 ) -> list[tuple[Embedding, float]]:
     """Current lexical branch participation criteria over a ranked output list."""
     lexical_overlap_scored = [
-        (embedding, _lexical_overlap_score(query, embedding.chunk_text or ""))
+        (embedding, lexical_overlap_score(query, embedding.chunk_text or ""))
         for embedding in candidates
     ]
     lexical_overlap_scored = [
@@ -1534,7 +1528,7 @@ def reciprocal_rank_fusion(
 
     sorted_ids = sorted(
         scores.keys(),
-        key=lambda id_: (-scores[id_], _embedding_tiebreak_key(id_to_emb[id_])),
+        key=lambda id_: (-scores[id_], embedding_tiebreak_key(id_to_emb[id_])),
     )
     return [(id_to_emb[id_], scores[id_]) for id_ in sorted_ids[:top_k]]
 
@@ -1547,67 +1541,6 @@ def _collect_score_map(results: list[tuple[Embedding, float]]) -> dict[uuid.UUID
         if existing is None or score > existing:
             score_map[embedding.id] = score
     return score_map
-
-
-def _lexical_overlap_score(query: str, chunk_text: str) -> float:
-    """Cheap lexical signal used as an interim reranker until a cross-encoder is added."""
-    query_tokens = set(re.findall(r"\w+", query.casefold(), flags=re.UNICODE))
-    if not query_tokens:
-        return 0.0
-    chunk_tokens = set(re.findall(r"\w+", (chunk_text or "").casefold(), flags=re.UNICODE))
-    if not chunk_tokens:
-        return 0.0
-    overlap = len(query_tokens & chunk_tokens)
-    return overlap / len(query_tokens)
-
-
-def rerank_candidates(
-    query: str,
-    candidates: list[tuple[Embedding, float]],
-    *,
-    vector_scores: dict[uuid.UUID, float] | None = None,
-    bm25_scores: dict[uuid.UUID, float] | None = None,
-    lexical_query: str | None = None,
-    top_k: int,
-) -> list[tuple[Embedding, float]]:
-    """Apply an interim heuristic reranking stage over fused candidates.
-
-    lexical_query: when the user query is non-EN, pass the EN rewrite here so
-    that _lexical_overlap_score operates against English corpus text instead of
-    always returning ~0 for non-ASCII queries.
-    """
-    if not candidates:
-        return []
-
-    max_rrf = max(score for _, score in candidates)
-    vector_scores = vector_scores or {}
-    bm25_scores = bm25_scores or {}
-    effective_lexical_query = lexical_query or query
-
-    rescored: list[tuple[Embedding, float]] = []
-    for embedding, rrf_score in candidates:
-        lexical_score = _lexical_overlap_score(effective_lexical_query, embedding.chunk_text or "")
-        vector_score = vector_scores.get(embedding.id, 0.0)
-        bm25_score = bm25_scores.get(embedding.id, 0.0)
-        normalized_rrf = rrf_score / max_rrf if max_rrf else 0.0
-        final_score = (
-            (lexical_score * RERANK_LEXICAL_WEIGHT)
-            + (vector_score * RERANK_VECTOR_WEIGHT)
-            + (bm25_score * RERANK_BM25_WEIGHT)
-            + (normalized_rrf * RERANK_RRF_WEIGHT)
-        )
-        rescored.append((embedding, round(final_score, 6)))
-
-    rescored = sorted(
-        rescored,
-        key=lambda item: (
-            -item[1],
-            -vector_scores.get(item[0].id, 0.0),
-            -bm25_scores.get(item[0].id, 0.0),
-            _embedding_tiebreak_key(item[0]),
-        ),
-    )
-    return rescored[:top_k]
 
 
 def apply_script_boost(
@@ -1837,33 +1770,66 @@ class _QualityStageResult:
 # ---------------------------------------------------------------------------
 
 
-def _run_ranking_stage(
+async def _async_resolve_reranker_strategy(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> str:
+    """Tenant's reranker choice; the heuristic when the row cannot be read."""
+    cached = get_cached_tenant(tenant_id)
+    if cached is not None:
+        return _reranker_strategy_value(cached.reranker_strategy)
+    try:
+        result = await db.execute(
+            select(Tenant.reranker_strategy).filter(Tenant.id == tenant_id)
+        )
+        return _reranker_strategy_value(result.scalar_one_or_none())
+    except Exception:
+        logger.warning("reranker_strategy_lookup_failed", exc_info=True)
+        return RerankerStrategy.heuristic.value
+
+
+def _reranker_strategy_value(raw: object) -> str:
+    value = raw.value if isinstance(raw, RerankerStrategy) else raw
+    if isinstance(value, str) and value in {s.value for s in RerankerStrategy}:
+        return value
+    return RerankerStrategy.heuristic.value
+
+
+async def _async_run_ranking_stage(
     *,
     query: str,
     query_stage: _QueryStageResult,
     candidate_stage: _CandidateStageResult,
     top_k: int,
     trace: TraceHandle | None,
+    reranker_strategy: str,
+    tenant_id: uuid.UUID,
+    api_key: str | None,
 ) -> _RankingStageResult:
     q = query_stage
     c = candidate_stage
 
-    rerank_started_at = perf_counter()
-    reranked_results = rerank_candidates(
+    rerank_outcome = await rerank_with_fallback(
         query,
         c.fused_results,
-        vector_scores=_collect_score_map(c.vector_candidates),
-        bm25_scores=_collect_score_map(c.bm25_bundle.results),
-        lexical_query=c.rerank_lexical_query,
+        strategy=reranker_strategy,
+        signals=RerankSignals(
+            vector_scores=_collect_score_map(c.vector_candidates),
+            bm25_scores=_collect_score_map(c.bm25_bundle.results),
+            lexical_query=c.rerank_lexical_query,
+        ),
         top_k=top_k,
+        api_key=api_key,
+        tenant_id=tenant_id,
     )
+    reranked_results = rerank_outcome.results
     if trace is not None:
         trace.span(
             name="reranking",
             input={
                 "query": query,
                 "candidate_count": len(c.fused_results),
-                "model": "heuristic-rrf-v0",
+                "strategy": rerank_outcome.strategy_requested,
+                "model": rerank_outcome.model,
             },
         ).end(
             output={
@@ -1872,7 +1838,9 @@ def _run_ranking_stage(
                     score_name="reranker_score",
                 ),
                 "top_score": reranked_results[0][1] if reranked_results else None,
-                "duration_ms": round((perf_counter() - rerank_started_at) * 1000, 2),
+                "strategy_applied": rerank_outcome.strategy_applied,
+                "fallback_reason": rerank_outcome.fallback_reason,
+                "duration_ms": rerank_outcome.duration_ms,
             }
         )
 
@@ -3115,12 +3083,16 @@ async def search_similar_chunks_detailed_async(
             q, c, round((perf_counter() - retrieval_started_at) * 1000, 2)
         )
 
-    r = _run_ranking_stage(
+    reranker_strategy = await _async_resolve_reranker_strategy(tenant_id, db)
+    r = await _async_run_ranking_stage(
         query=query,
         query_stage=q,
         candidate_stage=c,
         top_k=top_k,
         trace=trace,
+        reranker_strategy=reranker_strategy,
+        tenant_id=tenant_id,
+        api_key=api_key,
     )
     quality = await _async_run_quality_stage(
         final_results=r.final_results,

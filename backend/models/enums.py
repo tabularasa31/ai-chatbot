@@ -35,6 +35,14 @@ class SourceSchedule(str, enum.Enum):
     manual = "manual"
 
 
+class RerankerStrategy(str, enum.Enum):
+    """Per-tenant retrieval reranking strategy; heuristic is the always-on baseline."""
+
+    heuristic = "heuristic"
+    llm = "llm"
+    cross_encoder = "cross_encoder"
+
+
 class MessageRole(str, enum.Enum):
     user = "user"
     assistant = "assistant"

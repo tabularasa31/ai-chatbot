@@ -477,6 +477,108 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
     }
 
 
+class _ProviderStampTrace:
+    """Trace double that only records the generation's ``end`` payload."""
+
+    class _Generation:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    def __init__(self) -> None:
+        self.generation_handle = self._Generation()
+
+    def generation(self, **kwargs: object) -> "_ProviderStampTrace._Generation":
+        return self.generation_handle
+
+
+def _generation_end_metadata(trace: _ProviderStampTrace) -> dict[str, object]:
+    assert len(trace.generation_handle.end_calls) == 1
+    metadata = trace.generation_handle.end_calls[0]["metadata"]
+    assert isinstance(metadata, dict)
+    return metadata
+
+
+def test_generate_answer_traces_provider_identifiers_non_streaming(
+    mock_openai_client: Mock,
+) -> None:
+    mock_openai_client.chat.completions.create.return_value = Mock(
+        id="chatcmpl-abc123",
+        system_fingerprint="fp_44709d6f",
+        choices=[Mock(message=Mock(content="The answer is 42"), finish_reason="stop")],
+        usage=Mock(total_tokens=100, prompt_tokens=60, completion_tokens=40),
+    )
+    trace = _ProviderStampTrace()
+
+    asyncio.run(async_generate_answer("What?", ["ctx"], api_key="sk-test", trace=trace))
+
+    metadata = _generation_end_metadata(trace)
+    assert metadata["provider_request_id"] == "chatcmpl-abc123"
+    assert metadata["system_fingerprint"] == "fp_44709d6f"
+
+
+def test_generate_answer_traces_provider_identifiers_streaming(
+    mock_openai_client: Mock,
+) -> None:
+    chunks = [
+        Mock(
+            id="chatcmpl-stream1",
+            system_fingerprint="fp_stream",
+            choices=[Mock(delta=Mock(content="The answer "), finish_reason=None)],
+            usage=None,
+        ),
+        Mock(
+            id="chatcmpl-stream1",
+            system_fingerprint="fp_stream",
+            choices=[Mock(delta=Mock(content="is 42"), finish_reason="stop")],
+            usage=None,
+        ),
+        Mock(
+            id="chatcmpl-stream1",
+            system_fingerprint="fp_stream",
+            choices=[],
+            usage=Mock(total_tokens=100, prompt_tokens=60, completion_tokens=40),
+        ),
+    ]
+    mock_openai_client.chat.completions.create.side_effect = lambda *a, **kw: list(chunks)
+    trace = _ProviderStampTrace()
+
+    asyncio.run(
+        async_generate_answer(
+            "What?", ["ctx"], api_key="sk-test", trace=trace, stream_callback=lambda _: None
+        )
+    )
+
+    metadata = _generation_end_metadata(trace)
+    assert metadata["provider_request_id"] == "chatcmpl-stream1"
+    assert metadata["system_fingerprint"] == "fp_stream"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_generate_answer_traces_none_when_provider_identifiers_absent(
+    mock_openai_client: Mock, streaming: bool
+) -> None:
+    """The default conftest mocks carry no string ``id`` / ``system_fingerprint``:
+    both keys must still be present, as ``None``, on either path."""
+    trace = _ProviderStampTrace()
+
+    asyncio.run(
+        async_generate_answer(
+            "What?",
+            ["ctx"],
+            api_key="sk-test",
+            trace=trace,
+            stream_callback=(lambda _: None) if streaming else None,
+        )
+    )
+
+    metadata = _generation_end_metadata(trace)
+    assert metadata["provider_request_id"] is None
+    assert metadata["system_fingerprint"] is None
+
+
 def test_generate_answer_ends_generation_on_openai_error(mock_openai_client: Mock) -> None:
     class FakeGeneration:
         def __init__(self) -> None:

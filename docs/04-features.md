@@ -311,7 +311,7 @@ Pure vector search struggles with exact keyword matches (product names, error co
 1. **Vector candidate acquisition** — semantic similarity (`pgvector` in PostgreSQL, Python cosine in SQLite tests)
 2. **Candidate-pool BM25** — keyword ranking (`rank-bm25` library, run only over the in-memory candidate pool for the current request)
 
-The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through heuristic reranking and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
+The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through a per-tenant reranking stage (see *Reranking strategies* below) and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
 
 Vector remains the recall stage and shared candidate acquisition step. BM25 stays a lexical confirmation / precision stage over that already-built in-memory pool; even when lexical expansion is enabled, it adds repeated lexical scoring over the same shared pool rather than a second corpus-acquisition search.
 
@@ -323,6 +323,20 @@ BM25 lexical expansion is an explicit policy:
 “Symmetric” here applies to query handling only. It does not mean BM25 stops depending on the vector-built pool, and it does not imply that future freer rewrites/paraphrases from vector expansion automatically become valid BM25 inputs. BM25 should continue consuming only lexical-safe normalization variants unless that contract is revisited deliberately.
 
 > Note: in the test environment (SQLite), pgvector is still unavailable, so vector candidates come from Python cosine similarity. After candidate-set construction (acquisition + merge/dedup + truncation), SQLite follows the same BM25 → RRF → reranking → post-ranking orchestration contract as PostgreSQL over that in-memory candidate pool.
+
+### Reranking strategies
+
+After RRF the fused pool (4 × `top_k` candidates) is re-ordered by a reranker chosen **per tenant** (`tenants.reranker_strategy`, set through `PATCH /tenants/me` with `reranker_strategy`; default `heuristic`, so existing tenants keep today's ranking). Implementations live in `backend/search/reranking.py` behind one `Reranker` protocol:
+
+| Strategy | What it does | Cost / latency | When to use |
+|---|---|---|---|
+| `heuristic` (default) | Weighted blend of lexical overlap, vector similarity, BM25 and RRF rank. Pure CPU, ~0 ms. | none | Baseline for every tenant; the fallback for the two below. |
+| `llm` | One chat completion on the tenant's BYO key (`RERANKER_LLM_MODEL`, default `gpt-4.1-mini`) grades up to 20 passages 0–10 by meaning; final score = 0.8 × LLM + 0.2 × heuristic. | tenant tokens (~2–3k input per turn); one extra LLM round-trip | Large / noisy knowledge bases where the right chunk lands at rank 8–12 behind generic FAQ text. |
+| `cross_encoder` | Local sentence-transformers cross-encoder (`RERANKER_CROSS_ENCODER_MODEL`, default `cross-encoder/ms-marco-MiniLM-L-6-v2`, English-only; use `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` for multilingual KBs). Runs in the thread pool; the model is loaded lazily once per process. Needs `requirements-reranker.txt` installed. | no API cost; RSS ≈ +300 MB (MiniLM-L6) / +560 MB (mMiniLMv2-L12); 20 × 600-char passages score in ~30 ms / ~60 ms on an M1 Pro (expect 3–5× on a Railway vCPU); cold load ~7 s from the HF cache, ~100–330 s on first download | Same as `llm` when the tenant should not pay tokens and the service has the RAM headroom. |
+
+Degradation is graceful, not a kill switch: every semantic pass runs under `RERANKER_TIMEOUT_SECONDS` (default 2.5 s); on timeout, provider error, missing tenant key or missing optional dependency the turn keeps the heuristic ranking. The first `cross_encoder` request after a cold start therefore falls back once while the model loads in the background. The Langfuse `reranking` span records `strategy` and `model` on input and `strategy_applied` / `fallback_reason` / `duration_ms` on output, so rollout health is visible per turn. Scores stay on the 0–1 scale the relevance gate (`RERANKER_BYPASS_THRESHOLD`) and reliability assessment already read.
+
+Rollout gate: switch the eval test tenant, run the eval before/after (`backend/evals/`, see `docs/06-developer-test-runbook.md` § Eval pipeline), and only widen a semantic strategy to other tenants when the pass rate improves by ≥ 5 points without moving latency p95.
 
 ### Retrieval observability (FI-115)
 

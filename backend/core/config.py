@@ -577,6 +577,26 @@ class Settings(BaseSettings):
         alias="RERANKER_BYPASS_THRESHOLD",
     )
 
+    # ── Reranking (per-tenant strategy lives on tenants.reranker_strategy) ──
+    reranker_llm_model: str = Field(
+        "gpt-4.1-mini",
+        alias="RERANKER_LLM_MODEL",
+        description="Model for the LLM relevance-judge reranker (tenant BYO key).",
+    )
+    reranker_cross_encoder_model: str = Field(
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        alias="RERANKER_CROSS_ENCODER_MODEL",
+        description="sentence-transformers cross-encoder for the local reranker.",
+    )
+    # Hard wall-clock cap for a semantic rerank pass; on breach the turn keeps
+    # the heuristic ranking so reranking never adds more than this to latency.
+    reranker_timeout_seconds: float = Field(
+        2.5,
+        alias="RERANKER_TIMEOUT_SECONDS",
+        gt=0,
+        description="Wall-clock timeout (seconds) for LLM / cross-encoder reranking; falls back to heuristic on breach.",
+    )
+
     # ── Phase 4: Chat-log analysis ─────────────────────────────────────────
     # Messages fetched per analysis job run
     log_analysis_batch_size: int = Field(1000, alias="LOG_ANALYSIS_BATCH_SIZE")

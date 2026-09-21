@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from time import monotonic, perf_counter
 
 from backend.core.config import settings
+from backend.guards.injection_seeds import INJECTION_SEEDS, INJECTION_SEEDS_HASH
 from backend.guards.types import Verdict, VerdictReason
 from backend.observability import TraceHandle, record_stage_ms
 from backend.observability.cache_metrics import record_hit, record_miss
@@ -50,6 +51,11 @@ class InjectionDetectionResult:
     # True = cache hit, False = computed after a miss, None = level 2 not
     # consulted / caching disabled (structural hit, no tenant, Redis off).
     cache_hit: bool | None = None
+    # The cut-off ``score`` was compared against and the seed-list fingerprint
+    # in effect, set only when level 2 actually produced the verdict (computed
+    # or served from cache). None for structural hits and pass-throughs.
+    threshold: float | None = None
+    seeds_hash: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -135,8 +141,6 @@ async def _get_reference_embeddings_async(api_key: str) -> list[list[float]]:
     global _reference_embeddings
     async with _async_seed_lock:
         if _reference_embeddings is None:
-            from backend.guards.injection_seeds import INJECTION_SEEDS
-
             _reference_embeddings = await async_embed_queries(
                 INJECTION_SEEDS,
                 api_key=api_key,
@@ -260,16 +264,20 @@ def _passthrough_result(normalized: str) -> InjectionDetectionResult:
 # cached in Redis keyed by ``hash(tenant_id, guard_kind, normalized_input)``.
 # The structural level (L1) is a regex sweep and not worth caching.
 #
-# The semantic verdict depends only on the normalized text (the injection seeds
-# and threshold are global) — dialog context and tenant-profile version, which
-# the relevance-guard cache folds into its key, are not inputs here, so they are
-# deliberately absent from this key. Graceful: when Redis is unset/unreachable
-# the core helpers return miss/False and detection runs directly.
+# What is cached is the cosine ``score``, deterministic for a given normalized
+# text and seed list — hence the seeds fingerprint in the key. The threshold is
+# deliberately NOT in the key: it is applied on read, so an env change takes
+# effect on cached entries immediately rather than after the TTL. Graceful:
+# when Redis is unset/unreachable the core helpers return miss/False and
+# detection runs directly.
 
 
 def _semantic_cache_key(tenant_id: str, normalized: str) -> str:
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return f"guard:verdict:{VerdictReason.INJECTION_SEMANTIC.value}:{tenant_id}:{digest}"
+    return (
+        f"guard:verdict:{VerdictReason.INJECTION_SEMANTIC.value}:"
+        f"{INJECTION_SEEDS_HASH}:{tenant_id}:{digest}"
+    )
 
 
 def _emit_semantic_cache_metric(tenant_id: str, cache_hit: bool) -> None:
@@ -299,15 +307,25 @@ async def _semantic_cache_get(
         data = json.loads(raw)
     except (ValueError, TypeError):
         return None
-    detected = bool(data.get("d"))
+    score = data.get("s")
+    if not isinstance(score, (int, float)):
+        return None
+    score = float(score)
+    detected = _score_detects(score)
     return InjectionDetectionResult(
         detected=detected,
         level=2 if detected else None,
         method="semantic" if detected else None,
         pattern=None,
-        score=data.get("s"),
+        score=score,
         normalized_input=normalized,
+        threshold=settings.injection_semantic_threshold,
+        seeds_hash=INJECTION_SEEDS_HASH,
     )
+
+
+def _score_detects(score: float) -> bool:
+    return score >= settings.injection_semantic_threshold
 
 
 async def _semantic_cache_set(key: str, result: InjectionDetectionResult) -> None:
@@ -369,7 +387,7 @@ async def async_detect_injection_semantic(
             cosine_similarity(embedding, ref) for ref in ref_embeddings
         )
         _record_semantic_success(api_key)
-        if max_score >= settings.injection_semantic_threshold:
+        if _score_detects(max_score):
             result = InjectionDetectionResult(
                 detected=True,
                 level=2,
@@ -377,6 +395,8 @@ async def async_detect_injection_semantic(
                 pattern=None,
                 score=max_score,
                 normalized_input=normalized,
+                threshold=settings.injection_semantic_threshold,
+                seeds_hash=INJECTION_SEEDS_HASH,
             )
         else:
             result = InjectionDetectionResult(
@@ -386,6 +406,8 @@ async def async_detect_injection_semantic(
                 pattern=None,
                 score=max_score,
                 normalized_input=normalized,
+                threshold=settings.injection_semantic_threshold,
+                seeds_hash=INJECTION_SEEDS_HASH,
             )
         # Deterministic for a given normalized input — safe to cache either
         # outcome. Only failures (timeout/error below) are left uncached so a
@@ -418,7 +440,9 @@ def _to_verdict(result: InjectionDetectionResult, *, gating: bool = True) -> Ver
     """
     build = Verdict.of if gating else Verdict.observation
     if not result.detected:
-        return build(VerdictReason.OK, score=result.score or 0.0)
+        return build(
+            VerdictReason.OK, score=result.score or 0.0, threshold=result.threshold
+        )
     if result.level == 1:
         return build(
             VerdictReason.INJECTION_STRUCTURAL,
@@ -427,7 +451,11 @@ def _to_verdict(result: InjectionDetectionResult, *, gating: bool = True) -> Ver
         )
     # Evidence is omitted for the semantic level — the cosine ``score`` is the
     # signal; a constant string would hash to a useless constant.
-    return build(VerdictReason.INJECTION_SEMANTIC, score=result.score or 0.0)
+    return build(
+        VerdictReason.INJECTION_SEMANTIC,
+        score=result.score or 0.0,
+        threshold=result.threshold,
+    )
 
 
 async def async_detect_injection(
@@ -482,7 +510,13 @@ async def async_detect_injection(
             )
             _l2_span.end(
                 output={"detected": result.detected, "score": result.score},
-                metadata={"duration_ms": _l2_ms, "method": "semantic"},
+                metadata={
+                    "duration_ms": _l2_ms,
+                    "method": "semantic",
+                    "cache_hit": result.cache_hit,
+                    "threshold": result.threshold,
+                    "seeds_hash": result.seeds_hash,
+                },
             )
             record_stage_ms(trace, "injection_guard_ms", _l2_ms)
         if result.detected:
@@ -511,6 +545,7 @@ def _finalize_injection(
             verdict=verdict,
             latency_ms=round((perf_counter() - start) * 1000, 2),
             cache_hit=result.cache_hit,
+            seeds_hash=result.seeds_hash,
         )
     return verdict
 

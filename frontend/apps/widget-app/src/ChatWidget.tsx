@@ -298,6 +298,11 @@ export function ChatWidget({
   // Mirror of the ticket the poll was dispatched for. Callbacks read it
   // without taking it as a dependency, which would rebuild them on every poll.
   const activeTicketRef = useRef<string | null>(null);
+  // The newest operator reply rendered but not yet reported as read. Reported
+  // only while the panel is open in a visible tab; until then it waits here,
+  // and the server mails the reply to the visitor if the wait outlasts its
+  // grace period.
+  const [pendingReadId, setPendingReadId] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState<string>("");
   const [statusStage, setStatusStage] = useState<string | null>(null);
   const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
@@ -648,6 +653,8 @@ export function ChatWidget({
           // than the hydrated one so a role the widget skips still advances it.
           const lastServerMessage = data.messages[data.messages.length - 1];
           cursorRef.current = lastServerMessage?.id ?? null;
+          const lastOperatorMessage = [...data.messages].reverse().find((m) => m.role === "operator");
+          if (lastOperatorMessage) setPendingReadId(lastOperatorMessage.id);
           setMessages(hydrated);
           if (data.ticket_number) setActiveTicket(data.ticket_number);
         }
@@ -765,6 +772,7 @@ export function ChatWidget({
             ...prev,
             ...operatorMessages.map((m) => createTextMessage("operator", m.content)),
           ]);
+          setPendingReadId(operatorMessages[operatorMessages.length - 1].id);
         }
       }
     } catch {
@@ -831,6 +839,43 @@ export function ChatWidget({
     sessionHydrated,
     sessionId,
   ]);
+
+  useEffect(() => {
+    if (!pendingReadId || !sessionId) return;
+    const messageId = pendingReadId;
+    let cancelled = false;
+    let inFlight = false;
+    const report = () => {
+      if (inFlight || !isOpen || document.hidden) return;
+      inFlight = true;
+      const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
+      fetch(`${apiBase}/widget/messages/read?${params}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message_id: messageId }),
+      })
+        .then((res) => {
+          // 404 is a message this conversation no longer contains (rotation);
+          // nothing to report, and nothing to keep retrying on every focus.
+          if (cancelled || !(res.ok || res.status === 404)) return;
+          setPendingReadId((current) => (current === messageId ? null : current));
+        })
+        .catch(() => {
+          // Transient: the next open, focus or reply reports again.
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    report();
+    document.addEventListener("visibilitychange", report);
+    window.addEventListener("focus", report);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", report);
+      window.removeEventListener("focus", report);
+    };
+  }, [apiBase, botId, isOpen, pendingReadId, sessionId]);
 
   /** Send a user message through /widget/chat and apply the response.
    *  Used both by the input-area send button and by the Try again retry path

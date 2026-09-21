@@ -89,6 +89,9 @@ function App() {
   const siteUrl = safeMarketingUrl(params.get("siteUrl"));
 
   const [hints, setHints] = useState<HintsState>(undefined);
+  // True until the loader says otherwise: a standalone tab or an older loader
+  // that never reports the panel behaves as it always did.
+  const [panelOpen, setPanelOpen] = useState(true);
 
   useEffect(() => {
     // Standalone tab (no embedding iframe) — resolve anonymous immediately.
@@ -124,6 +127,8 @@ function App() {
         applyHints(coerceHints((data as { userHints?: unknown }).userHints));
       } else if (data.type === "chat9:no-hints") {
         applyHints(null);
+      } else if (data.type === "chat9:panel") {
+        setPanelOpen(Boolean((data as { open?: unknown }).open));
       }
     }
     window.addEventListener("message", handleMessage);
@@ -177,6 +182,7 @@ function App() {
         botId={botId}
         locale={locale}
         hints={hints}
+        isOpen={panelOpen}
         apiBase={apiBase}
         siteUrl={siteUrl}
       />

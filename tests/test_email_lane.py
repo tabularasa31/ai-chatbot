@@ -52,6 +52,7 @@ from backend.models import (
     User,
 )
 from backend.models.base import _utcnow
+from backend.operator.unread_reply import mail_unread_operator_replies
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 _SECRET = "inbound-secret-for-tests"
@@ -481,6 +482,52 @@ def test_a_seat_holders_reply_enters_the_thread_and_reaches_the_visitor(
     assert send.call_count == 1
     assert send.call_args.args[0] == "visitor@example.com"
     assert "within 14 days" in send.call_args.args[2]
+
+    # The visitor already holds this reply in their mailbox, so the unread-
+    # reply job that the ingest scheduled must find nothing left to send.
+    assert chat.unread_reply_mailed_message_id == rows[0].id
+    with patch("backend.operator.unread_reply.send_email") as again:
+        outcome = mail_unread_operator_replies(
+            db_session, chat_id=chat.id, message_id=rows[0].id
+        )
+    assert outcome == "nothing_unread"
+    again.assert_not_called()
+
+
+def test_a_seat_holders_reply_the_forward_lost_is_mailed_by_the_job(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A failed forward is not the end of it: the grace-period job retries by mail."""
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-lost@example.com", name="Lost", seated=True
+    )
+    _colleague(db_session, tenant_id, email="lee@agency.example", seated=True)
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email", return_value=None):
+        resp = _post_inbound(
+            tenant, _brevo_item(to=address, sender="lee@agency.example")
+        )
+    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
+
+    db_session.expire_all()
+    reply = (
+        db_session.query(Message)
+        .filter(Message.chat_id == chat.id, Message.role == MessageRole.operator)
+        .one()
+    )
+    chat = db_session.query(Chat).filter(Chat.id == chat.id).one()
+    assert chat.unread_reply_mailed_message_id is None
+
+    with patch("backend.operator.unread_reply.send_email", return_value="<id>") as send:
+        outcome = mail_unread_operator_replies(
+            db_session, chat_id=chat.id, message_id=reply.id
+        )
+    assert outcome == "sent"
+    assert send.call_args.args[0] == "visitor@example.com"
 
 
 def test_a_reply_from_a_seatless_sender_is_forwarded_not_refused(

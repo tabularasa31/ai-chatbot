@@ -5,10 +5,7 @@ tests/test_answer_cache.py and tests/test_rag_pipeline.py with what those
 files were missing against the acceptance criteria:
 
 - precedence-sentence ordering for the pure "preset" and pure "custom"
-  sources (only "preset+custom", "legacy" and "none" were covered before);
-- PATCH with only the legacy ``agent_instructions`` field leaving the
-  ``custom_instructions``/``preset`` *columns* untouched (not just the
-  computed source label);
+  sources (only "preset+custom" and "none" were covered before);
 - an end-to-end run through the real chat pipeline (mocked OpenAI client,
   no handler-level patch of ``async_generate_answer``) proving the bot's
   custom text and the code preset both land in the system message actually
@@ -29,14 +26,11 @@ from backend.chat.presets import PRESET_SUPPORT_AGENT, PRESETS, effective_agent_
 from backend.chat.prompts import DISCLOSURE_HARD_LIMITS, build_rag_messages
 from backend.chat.service import process_chat_message
 from backend.models import Bot
-from tests.conftest import register_and_verify_user
 from tests.test_rag_pipeline import _FakeTrace, _create_client, _insert_single_chunk
 
 
 def test_preset_only_source_precedes_precedence_line_then_rules() -> None:
-    text, source = effective_agent_instructions(
-        agent_instructions=None, custom_instructions=None, preset="support_agent"
-    )
+    text, source = effective_agent_instructions(custom_instructions=None, preset="support_agent")
     assert source == "preset"
     system, _user = build_rag_messages("Question", ["chunk"], agent_instructions=text)
 
@@ -50,7 +44,7 @@ def test_preset_only_source_precedes_precedence_line_then_rules() -> None:
 
 def test_custom_only_source_precedes_precedence_line_then_rules() -> None:
     text, source = effective_agent_instructions(
-        agent_instructions=None, custom_instructions="Always mention the trial period.", preset=None
+        custom_instructions="Always mention the trial period.", preset=None
     )
     assert source == "custom"
     system, _user = build_rag_messages("Question", ["chunk"], agent_instructions=text)
@@ -60,41 +54,6 @@ def test_custom_only_source_precedes_precedence_line_then_rules() -> None:
     rules_idx = system.index(DISCLOSURE_HARD_LIMITS)
 
     assert custom_idx < precedence_idx < rules_idx
-
-
-def test_patch_agent_instructions_only_leaves_custom_and_preset_columns_untouched(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """Old dashboard flow: a legacy PATCH leaves ``preset`` and
-    ``custom_instructions`` untouched only when ``custom_instructions`` is
-    NULL (when it is set, it is cleared instead: last write wins). Here the
-    bot starts with ``custom_instructions`` NULL, so both columns must stay
-    exactly as they were."""
-    token = register_and_verify_user(tenant, db_session, email="legacy-only-columns@example.com")
-    tenant_resp = tenant.post(
-        "/tenants", headers={"Authorization": f"Bearer {token}"}, json={"name": "Legacy Columns Tenant"}
-    )
-    assert tenant_resp.status_code == 201
-    bot_id = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]["id"]
-
-    db_session.expire_all()
-    before = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
-    assert before.preset == "support_agent"
-    assert before.custom_instructions is None
-
-    resp = tenant.patch(
-        f"/bots/{bot_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"agent_instructions": "Speak only in rhymes."},
-    )
-    assert resp.status_code == 200
-
-    db_session.expire_all()
-    after = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
-    assert after.agent_instructions == "Speak only in rhymes."
-    # Neither column the PATCH didn't mention should have moved.
-    assert after.preset == "support_agent"
-    assert after.custom_instructions is None
 
 
 def test_chat_pipeline_system_message_contains_bot_custom_and_preset_text(

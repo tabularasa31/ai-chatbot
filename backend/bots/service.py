@@ -94,17 +94,15 @@ def create_bot(
     name: str,
     db: Session,
     *,
-    agent_instructions: str | None = None,
     custom_instructions: str | None = None,
     preset: str | None = None,
     preset_was_set: bool = False,
     link_safety_enabled: bool | None = None,
     allowed_domains: list[str] | None = None,
 ) -> Bot:
-    # No agent_instructions given: the effective prompt comes from preset/custom_instructions.
     # Default preset to "support_agent" so a bare `POST /bots` still gets a working prompt,
     # but honour an explicit `preset: null` in the request instead of overriding it.
-    if agent_instructions is None and preset is None and not preset_was_set:
+    if preset is None and not preset_was_set:
         preset = "support_agent"
     # `preset` has a DB-level server_default("support_agent"); a bare None on INSERT
     # falls back to it, so an explicit `preset: null` needs the SQL NULL sentinel.
@@ -112,7 +110,6 @@ def create_bot(
     bot = Bot(
         tenant_id=tenant_id,
         name=name,
-        agent_instructions=agent_instructions,
         custom_instructions=custom_instructions,
         preset=preset_value,
         link_safety_enabled=bool(link_safety_enabled),
@@ -150,15 +147,6 @@ def update_bot(
         bot.name = update.name  # type: ignore[assignment]
     if "is_active" in fields:
         bot.is_active = update.is_active  # type: ignore[assignment]
-    if "agent_instructions" in fields:
-        bot.agent_instructions = update.agent_instructions  # None clears the field
-        if update.agent_instructions and bot.custom_instructions is not None:
-            # Last write wins: the legacy field would otherwise be silently
-            # ignored by effective_agent_instructions while custom is set.
-            bot.custom_instructions = None
-    elif ("custom_instructions" in fields or "preset" in fields) and bot.agent_instructions:
-        # The tenant is moving off the legacy single-field prompt onto the new model.
-        bot.agent_instructions = None
     if "custom_instructions" in fields:
         bot.custom_instructions = update.custom_instructions
     if "preset" in fields:

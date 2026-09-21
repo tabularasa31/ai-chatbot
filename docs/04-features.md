@@ -689,6 +689,24 @@ dialog context) classifies the repeat as `support_complaint` and offers the hand
 
 **Cross-lingual note:** Russian / other non-English queries against English docs produce cosine similarities of 0.22–0.27 even when content is perfectly relevant. The default threshold of 0.22 is calibrated for this. Set `RELEVANCE_RETRIEVAL_THRESHOLD` env var to override.
 
+### Bot instructions: three layers
+
+Each bot's system prompt is assembled from three layers, applied in order:
+
+1. **Preset** — a support-agent persona defined in code (`backend/chat/presets.py`, `PRESETS["support_agent"]`). It ships with the deploy and reaches every bot that selects it; tenants cannot edit its text. The `{product_name}` placeholder in the preset is substituted with the product name extracted from the tenant's knowledge base at render time.
+2. **Custom instructions** — the tenant's own text (`custom_instructions`, up to 3 000 characters), appended after the preset.
+3. **Product rules** — the fixed support-agent rules built into `backend/chat/prompts.py` (grounding, citation, handoff-marker, and formatting rules). These come immediately after the preset/custom layer and take precedence over it; other stable blocks (disclosure limits, language/clarification/support-channel policy) follow after.
+
+`effective_agent_instructions` (`backend/chat/presets.py`) computes the combined preset+custom text from a bot's `preset` and `custom_instructions` fields and reports which layers contributed via a `source` value: `"preset"`, `"custom"`, `"preset+custom"`, or `"none"`.
+
+**Own-prompt-only mode:** setting `preset` to `null` drops the code preset entirely — the bot runs on `custom_instructions` alone (or with no persona layer at all if that is also empty). Product rules still apply regardless of this setting.
+
+**API surface** (`backend/bots/schemas.py`, `BotResponse`): `custom_instructions` (≤3 000 chars), `preset`, `preset_text` (the current preset body, for display), `effective_instructions` (the combined text actually sent to the model), and `instructions_source`.
+
+The global `ENABLE_AGENT_INSTRUCTIONS` setting (default on) is a kill switch: when off, none of these layers are added to the system prompt regardless of what a bot has configured.
+
+**Legacy column backfill (completed).** A one-off script, run once against production and since removed, split every bot's old single-field `agent_instructions` text into `preset` + `custom_instructions`; the column has been dropped from `bots`.
+
 ### Answer cache
 
 Repeated questions are the cheapest latency win in the pipeline: a question the bot has
@@ -702,7 +720,8 @@ is served from a two-level cache.
 
 Scope = tenant/bot + `response_language` (taken from the resolved language context, never
 from text heuristics) + a knowledge-base fingerprint over document rows, FAQ rows, the bot's
-`agent_instructions` and disclosure config. Uploading, deleting or re-indexing a document,
+effective agent instructions (see "Bot instructions: three layers" above) and disclosure
+config. Uploading, deleting or re-indexing a document,
 crawling a URL source or editing the bot moves every key, so a stale answer is never looked
 up again. `ANSWER_CACHE_TTL_SECONDS` (default 3600, `0` disables the cache) is the floor for
 state the fingerprint does not see.

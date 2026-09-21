@@ -177,7 +177,6 @@ class Bot(Base):
     disclosure_config = Column(JSON, nullable=True, default=None)
     link_safety_enabled = Column(Boolean, nullable=False, default=False)
     allowed_domains = Column(JSON, nullable=True, default=list)
-    agent_instructions = Column(Text, nullable=True)
     # Tenant's own text, appended after the code preset.
     custom_instructions = Column(Text, nullable=True)
     # NULL means the tenant's own prompt replaces the preset entirely.

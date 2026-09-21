@@ -21,10 +21,6 @@ class BotResponse(BaseModel):
     is_active: bool
     link_safety_enabled: bool = False
     allowed_domains: list[str] = Field(default_factory=list)
-    agent_instructions: str | None = Field(
-        default=None,
-        description="Deprecated. Use custom_instructions and preset instead.",
-    )
     custom_instructions: str | None = None
     preset: str | None = None
     preset_text: str | None = None
@@ -45,7 +41,6 @@ class BotResponse(BaseModel):
     @classmethod
     def from_bot(cls, bot: object) -> BotResponse:
         text, source = effective_agent_instructions(
-            agent_instructions=getattr(bot, "agent_instructions", None),
             custom_instructions=getattr(bot, "custom_instructions", None),
             preset=getattr(bot, "preset", None),
         )
@@ -67,7 +62,7 @@ def _validate_preset(value: str | None) -> str | None:
 
 def _normalize_custom_instructions(value: str | None) -> str | None:
     """Whitespace-only text is not "set" — normalise to None so
-    effective_agent_instructions and the legacy-clear check agree with it."""
+    effective_agent_instructions treats it consistently."""
     if value is not None and not value.strip():
         return None
     return value
@@ -75,7 +70,6 @@ def _normalize_custom_instructions(value: str | None) -> str | None:
 
 class BotCreate(BaseModel):
     name: str
-    agent_instructions: str | None = None
     custom_instructions: str | None = Field(default=None, max_length=_MAX_CUSTOM_INSTRUCTIONS_LENGTH)
     preset: str | None = None
     website_url: str | None = None
@@ -96,7 +90,6 @@ class BotCreate(BaseModel):
 class BotUpdate(BaseModel):
     name: str | None = None
     is_active: bool | None = None
-    agent_instructions: str | None = None
     custom_instructions: str | None = Field(default=None, max_length=_MAX_CUSTOM_INSTRUCTIONS_LENGTH)
     preset: str | None = None
     link_safety_enabled: bool | None = None

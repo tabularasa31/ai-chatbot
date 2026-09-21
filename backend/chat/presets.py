@@ -23,22 +23,17 @@ PRESETS: dict[str, str] = {"support_agent": PRESET_SUPPORT_AGENT}
 
 
 def effective_agent_instructions(
-    *, agent_instructions: str | None, custom_instructions: str | None, preset: str | None
+    *, custom_instructions: str | None, preset: str | None
 ) -> tuple[str | None, str]:
-    """Compute the tenant/agent layer from a bot's three source fields.
+    """Compute the tenant/agent layer from a bot's preset and custom fields.
 
     Pure function of its arguments and the module-level ``PRESETS`` constant —
     no per-request state — so the result stays byte-identical across turns for
     a given bot (prompt-caching contract).
 
-    Returns ``(text, source)``; ``source`` is one of "legacy", "preset",
-    "custom", "preset+custom", "none".
+    Returns ``(text, source)``; ``source`` is one of "preset", "custom",
+    "preset+custom", "none".
     """
-    if agent_instructions and custom_instructions is None:
-        legacy = agent_instructions.strip()
-        if legacy:
-            return legacy, "legacy"
-
     preset_text = PRESETS.get(preset) if preset else None
     custom = custom_instructions.strip() or None if custom_instructions else None
 

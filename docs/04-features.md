@@ -311,7 +311,7 @@ Pure vector search struggles with exact keyword matches (product names, error co
 1. **Vector candidate acquisition** — semantic similarity (`pgvector` in PostgreSQL, Python cosine in SQLite tests)
 2. **Candidate-pool BM25** — keyword ranking (`rank-bm25` library, run only over the in-memory candidate pool for the current request)
 
-The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through heuristic reranking and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
+The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through a per-tenant reranking stage (see *Reranking strategies* below) and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
 
 Vector remains the recall stage and shared candidate acquisition step. BM25 stays a lexical confirmation / precision stage over that already-built in-memory pool; even when lexical expansion is enabled, it adds repeated lexical scoring over the same shared pool rather than a second corpus-acquisition search.
 

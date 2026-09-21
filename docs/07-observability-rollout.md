@@ -57,7 +57,7 @@ Implemented in code:
 - `vector-search`
 - `bm25-search`
 - `rrf-fusion`
-- `reranking`
+- `reranking` — carries the tenant's strategy (`strategy`, `model` on input; `strategy_applied`, `fallback_reason`, `duration_ms` on output), so a semantic reranker that timed out or degraded to the heuristic is visible per turn
 - `script-boost`
 - `mmr-pass`
 - `source-overlap-check`
@@ -81,7 +81,7 @@ Implemented in code:
 Implemented as heuristic/interim behavior:
 
 - query expansion
-- reranking
+- reranking for tenants on the default `heuristic` strategy (the `llm` and `cross_encoder` strategies are model-backed; see `docs/04-features.md` → Reranking strategies)
 - script bucket detection/boost
 - MMR similarity scoring
 - cross-document overlap detection
@@ -237,8 +237,8 @@ Trace structure exists in code, but there is no integration test against the Lan
 `AC-2` Mostly covered.
 Vector-search logs chunks with previews and similarity scores.
 
-`AC-3` Partial.
-Reranking exists, but it is heuristic rather than cross-encoder based.
+`AC-3` Covered.
+Reranking is pluggable per tenant: heuristic (default), LLM judge or local cross-encoder, with strategy and fallback recorded on the `reranking` span.
 
 `AC-4` Covered in current implementation.
 MMR pass records replacements and reasons.
@@ -294,6 +294,6 @@ Since Railway auto-sets `GIT_SHA` on every deploy, `release` always resolves to 
 - production-grade cost model
 - Redis/shared-store tenant counters for multi-instance deployments
 - true quick-answer implementation
-- model-backed reranking and true contradiction detection if we decide the heuristics are insufficient
+- true contradiction detection if we decide the heuristics are insufficient (model-backed reranking now exists behind `tenants.reranker_strategy`)
 - actual production review of FI-115 evidence and a follow-up guardrail decision if multi-variant tails are too expensive
 - clarification abandonment lifecycle instrumentation outside the request path

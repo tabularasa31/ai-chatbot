@@ -99,6 +99,19 @@ pytest -q \
   -k "openai_unavailable or malformed or wrong_dimension or low_vector"
 ```
 
+## Reranker strategies
+
+```bash
+pytest -q tests/test_reranking.py
+```
+
+Covers the `Reranker` protocol in `backend/search/reranking.py`: heuristic
+baseline, LLM / cross-encoder ordering and score scale, the hard-timeout and
+error / missing-key / missing-dependency fallbacks, the non-blocking cold
+load, the `reranking` span attributes through the pipeline and the
+`PATCH /tenants/me` round-trip for `reranker_strategy`. No optional
+dependency needed — the cross-encoder is faked.
+
 ## pgvector Integration (PostgreSQL only)
 
 ```bash

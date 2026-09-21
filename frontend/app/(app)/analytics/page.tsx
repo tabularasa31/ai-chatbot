@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useMemo } from "react";
+import { Suspense, useCallback, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { AnalyticsPeriod } from "@/lib/api";
 import { useAnalyticsSummary } from "@/hooks/useApi";
@@ -69,6 +69,14 @@ function AnalyticsPageContent() {
 
   const { data, error, isLoading } = useAnalyticsSummary(period);
 
+  useEffect(() => {
+    if (periodParam !== null && !isAnalyticsPeriod(periodParam)) {
+      router.replace(`/analytics?period=${DEFAULT_PERIOD}`);
+    }
+    // Normalize an invalid `period` query param once on mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setPeriod = useCallback(
     (next: AnalyticsPeriod) => {
       router.replace(`/analytics?period=${next}`);
@@ -94,7 +102,14 @@ function AnalyticsPageContent() {
           <h1 className="text-2xl font-semibold text-slate-800">Analytics</h1>
           <p className="text-slate-500 text-sm mt-1">Traffic and outcome numbers for the selected period.</p>
         </div>
-        <PeriodSwitcher period={period} onChange={setPeriod} />
+        <div className="flex items-center gap-2">
+          {isLoading && data && (
+            <span className="text-xs text-slate-400" role="status">
+              Updating…
+            </span>
+          )}
+          <PeriodSwitcher period={period} onChange={setPeriod} />
+        </div>
       </div>
 
       {error && (

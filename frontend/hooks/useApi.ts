@@ -49,7 +49,9 @@ export function useInboxSummary(refreshInterval = 0) {
 }
 
 export function useAnalyticsSummary(period: AnalyticsPeriod) {
-  return useSWR<AnalyticsSummaryResponse>(["analytics/summary", period], () => api.analytics.summary(period));
+  return useSWR<AnalyticsSummaryResponse>(["analytics/summary", period], () => api.analytics.summary(period), {
+    keepPreviousData: true,
+  });
 }
 
 export function useThread(sessionId: string | null, refreshInterval = 0) {

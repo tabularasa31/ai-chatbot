@@ -32,35 +32,15 @@ const DISCLOSURE_OPTIONS: {
 
 const MAX_INSTRUCTIONS_LENGTH = 3000;
 
-const PRESETS: { id: string; label: string; content: string }[] = [
-  {
-    id: "support_agent",
-    label: "Support Agent",
-    content: `You are a support assistant for {product_name}. Your job is to help users get answers from the provided documentation — clearly, honestly, and in the user's language.
-
-Ground rules:
-- Base every answer strictly on the retrieved context. If something isn't there, say so directly rather than guessing.
-- When the context covers the question, be specific: name the exact setting, page, or section it describes.
-- If a single missing detail would make your answer wrong or incomplete, ask one focused clarifying question instead of speculating.
-- Stay on topic — politely decline anything unrelated to {product_name} and its docs.
-- Match the user's language in every reply. Never switch languages mid-response.
-- Lead with the answer. No opening line about how brief you are being, what you are allowed to answer from, or where the answer comes from. Expand only when the user asks for more depth.
-- Write the way a support person writes to a customer: plain sentences, no report headers, no formula repeated at the top of every reply.
-
-Formatting:
-- Use Markdown when it adds clarity (lists, code blocks, headings).
-- Only link to URLs that appear verbatim in the provided context.
-- When you can't answer, say plainly that the documentation does not cover it and point at what you can help with instead. Do not offer the support team as a substitute for an answer — the backend offers the handoff when one is warranted. When the user asks how to reach support, give the contact details from the context as usual.`,
-  },
-];
-
 export default function SettingsPage() {
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
   const [supportEmailInput, setSupportEmailInput] = useState("");
   const [escalationLanguageInput, setEscalationLanguageInput] = useState("");
   const [level, setLevel] = useState<DisclosureLevel>("standard");
   const [agentInstructions, setAgentInstructions] = useState("");
-  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
+  const [customInstructionsInput, setCustomInstructionsInput] = useState("");
+  const [ownPromptOnly, setOwnPromptOnly] = useState(false);
+  const [presetText, setPresetText] = useState<string | null>(null);
   const [keySaving, setKeySaving] = useState(false);
   const [supportSaving, setSupportSaving] = useState(false);
   const [disclosureSaving, setDisclosureSaving] = useState(false);
@@ -86,21 +66,15 @@ export default function SettingsPage() {
     initialized.current = true;
     setSupportEmailInput(support.l2_email ?? "");
     setEscalationLanguageInput(support.escalation_language ?? "");
-    const instructions = defaultBot.agent_instructions ?? "";
-    setAgentInstructions(instructions);
-    const matched = PRESETS.find((p) => instructions.trim() === p.content.trim());
-    setSelectedPreset(matched?.id ?? null);
+    setAgentInstructions(defaultBot.agent_instructions ?? "");
+    setCustomInstructionsInput(defaultBot.custom_instructions ?? "");
+    setOwnPromptOnly(defaultBot.preset === null);
+    setPresetText(defaultBot.preset_text);
     setLevel(disclosure.level);
   }, [client, support, defaultBot, disclosure]);
 
   const loading = clientLoading || botsLoading || supportLoading || disclosureLoading;
-
-  function applyPreset(presetId: string) {
-    const preset = PRESETS.find((p) => p.id === presetId);
-    if (!preset) return;
-    setSelectedPreset(presetId);
-    setAgentInstructions(preset.content);
-  }
+  const isLegacyInstructions = defaultBot?.instructions_source === "legacy";
 
   async function saveAgentInstructions() {
     if (!defaultBot) return;
@@ -111,10 +85,29 @@ export default function SettingsPage() {
       const updated = await api.bots.update(defaultBot.id, {
         agent_instructions: agentInstructions.trim() || null,
       });
-      const instructions = updated.agent_instructions ?? "";
-      setAgentInstructions(instructions);
-      const matched = PRESETS.find((p) => instructions.trim() === p.content.trim());
-      setSelectedPreset(matched?.id ?? null);
+      setAgentInstructions(updated.agent_instructions ?? "");
+      setInstructionsSavedOk(true);
+      setTimeout(() => setInstructionsSavedOk(false), 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setInstructionsSaving(false);
+    }
+  }
+
+  async function saveOwnInstructions() {
+    if (!defaultBot) return;
+    setError("");
+    setInstructionsSaving(true);
+    setInstructionsSavedOk(false);
+    try {
+      const updated = await api.bots.update(defaultBot.id, {
+        custom_instructions: customInstructionsInput.trim() || null,
+        preset: ownPromptOnly ? null : "support_agent",
+      });
+      setCustomInstructionsInput(updated.custom_instructions ?? "");
+      setOwnPromptOnly(updated.preset === null);
+      setPresetText(updated.preset_text);
       setInstructionsSavedOk(true);
       setTimeout(() => setInstructionsSavedOk(false), 2500);
     } catch (err) {
@@ -219,9 +212,6 @@ export default function SettingsPage() {
     }
   }
 
-  const activePreset = PRESETS.find((p) => p.id === selectedPreset) ?? null;
-  const isCustom = agentInstructions.trim() !== "" && !activePreset;
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -311,7 +301,7 @@ export default function SettingsPage() {
         <div>
           <h2 className="text-base font-semibold text-slate-800">Agent instructions</h2>
           <p className="text-sm text-slate-500 mt-1">
-            The system prompt your bot follows on every turn. Start from a template or write your own.
+            The system prompt your bot follows on every turn.
           </p>
         </div>
 
@@ -321,78 +311,112 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {/* Template pills */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-slate-500 mr-1">Templates:</span>
-          {PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => applyPreset(preset.id)}
-              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
-                selectedPreset === preset.id
-                  ? "bg-violet-600 border-violet-600 text-white"
-                  : "bg-white border-slate-300 text-slate-600 hover:border-violet-400 hover:text-violet-700"
+        {isLegacyInstructions ? (
+          <>
+            <p className="text-xs text-slate-500 italic">
+              This bot uses the previous instructions format; it will be moved to the new one automatically.
+            </p>
+
+            <textarea
+              rows={14}
+              placeholder={"You are a support assistant for {product_name}.\n\nYour rules here…"}
+              aria-label="Agent instructions"
+              value={agentInstructions}
+              onChange={(e) => setAgentInstructions(e.target.value)}
+              className={`w-full px-3 py-2.5 border rounded-lg text-sm text-slate-800 outline-none placeholder:text-slate-400 font-mono resize-y leading-relaxed ${
+                agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH
+                  ? "border-red-300 focus:border-red-400"
+                  : "border-slate-200 focus:border-slate-400"
               }`}
-            >
-              {preset.label}
-            </button>
-          ))}
-          {isCustom && (
-            <span className="px-3 py-1 rounded-full text-xs font-medium bg-slate-100 border border-slate-200 text-slate-500">
-              Custom
-            </span>
-          )}
-        </div>
+            />
 
-        {/* Textarea */}
-        <div className="relative">
-          <textarea
-            rows={14}
-            placeholder={"You are a support assistant for {product_name}.\n\nYour rules here…"}
-            aria-label="Agent instructions"
-            value={agentInstructions}
-            onChange={(e) => {
-              setAgentInstructions(e.target.value);
-              const matched = PRESETS.find((p) => e.target.value.trim() === p.content.trim());
-              setSelectedPreset(matched?.id ?? null);
-            }}
-            className={`w-full px-3 py-2.5 border rounded-lg text-sm text-slate-800 outline-none placeholder:text-slate-400 font-mono resize-y leading-relaxed ${
-              agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH
-                ? "border-red-300 focus:border-red-400"
-                : "border-slate-200 focus:border-slate-400"
-            }`}
-          />
-          {selectedPreset && agentInstructions.trim() !== (PRESETS.find(p => p.id === selectedPreset)?.content ?? "").trim() && (
+            <div className="flex items-start justify-between gap-4">
+              <p className="text-xs text-slate-500">
+                Use{" "}
+                <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">{"{product_name}"}</code>{" "}
+                to insert your product name. These instructions are prepended to every chat turn.
+              </p>
+              <span className={`text-xs shrink-0 tabular-nums ${agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH ? "text-red-500 font-medium" : "text-slate-400"}`}>
+                {agentInstructions.trim().length} / {MAX_INSTRUCTIONS_LENGTH}
+              </span>
+            </div>
+
             <button
               type="button"
-              onClick={() => applyPreset(selectedPreset)}
-              className="absolute bottom-3 right-3 text-xs text-slate-400 hover:text-violet-600 transition-colors"
+              onClick={saveAgentInstructions}
+              disabled={instructionsSaving || agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH}
+              className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700 transition-colors"
             >
-              Reset to template
+              {instructionsSaving ? "Saving…" : "Save instructions"}
             </button>
-          )}
-        </div>
+          </>
+        ) : (
+          <>
+            {!ownPromptOnly && presetText && (
+              <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-slate-700">
+                  Standard instructions
+                </summary>
+                <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-3 font-mono text-xs text-slate-600">
+                  {presetText}
+                </pre>
+                <p className="mt-2 text-xs text-slate-500">
+                  Updated centrally by Chat9. Product rules always apply on top of these instructions.
+                </p>
+              </details>
+            )}
 
-        <div className="flex items-start justify-between gap-4">
-          <p className="text-xs text-slate-500">
-            Use{" "}
-            <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">{"{product_name}"}</code>{" "}
-            to insert your product name. These instructions are prepended to every chat turn.
-          </p>
-          <span className={`text-xs shrink-0 tabular-nums ${agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH ? "text-red-500 font-medium" : "text-slate-400"}`}>
-            {agentInstructions.trim().length} / {MAX_INSTRUCTIONS_LENGTH}
-          </span>
-        </div>
+            <div>
+              <label htmlFor="custom-instructions" className="block text-sm font-semibold text-slate-800 mb-1">
+                Your additions
+              </label>
+              <textarea
+                id="custom-instructions"
+                rows={10}
+                placeholder="Appended after the standard instructions above."
+                aria-label="Your additions"
+                value={customInstructionsInput}
+                onChange={(e) => setCustomInstructionsInput(e.target.value)}
+                className={`w-full px-3 py-2.5 border rounded-lg text-sm text-slate-800 outline-none placeholder:text-slate-400 font-mono resize-y leading-relaxed ${
+                  customInstructionsInput.trim().length > MAX_INSTRUCTIONS_LENGTH
+                    ? "border-red-300 focus:border-red-400"
+                    : "border-slate-200 focus:border-slate-400"
+                }`}
+              />
+              <div className="flex items-start justify-end gap-4 mt-1">
+                <span className={`text-xs shrink-0 tabular-nums ${customInstructionsInput.trim().length > MAX_INSTRUCTIONS_LENGTH ? "text-red-500 font-medium" : "text-slate-400"}`}>
+                  {customInstructionsInput.trim().length} / {MAX_INSTRUCTIONS_LENGTH}
+                </span>
+              </div>
+            </div>
 
-        <button
-          type="button"
-          onClick={saveAgentInstructions}
-          disabled={instructionsSaving || agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH}
-          className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700 transition-colors"
-        >
-          {instructionsSaving ? "Saving…" : "Save instructions"}
-        </button>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={ownPromptOnly}
+                onChange={(e) => setOwnPromptOnly(e.target.checked)}
+                className="h-4 w-4"
+              />
+              Use only my own prompt
+            </label>
+
+            {ownPromptOnly && (
+              <div className="text-sm text-amber-700 bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
+                The standard instructions are not applied to this bot. Product rules still apply. You are
+                responsible for the full prompt.
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={saveOwnInstructions}
+              disabled={instructionsSaving || customInstructionsInput.trim().length > MAX_INSTRUCTIONS_LENGTH}
+              className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700 transition-colors"
+            >
+              {instructionsSaving ? "Saving…" : "Save instructions"}
+            </button>
+          </>
+        )}
       </div>
 
       {/* Response controls */}

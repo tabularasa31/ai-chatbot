@@ -51,9 +51,9 @@ def _owner_tenant_id(
 def _enrich_bot_instructions(bot_id: uuid.UUID, tenant_id: uuid.UUID, website_url: str, api_key: str) -> None:
     """Background task: extract company description and store it as custom_instructions.
 
-    Re-loads the row before writing: if the tenant set custom_instructions
-    themselves while this task was in flight, their text wins and preset is
-    left untouched.
+    Writes with a single conditional UPDATE: if the tenant set custom_instructions
+    or agent_instructions themselves while this task was in flight, the WHERE
+    clause matches no row, their text wins, and preset is left untouched.
     """
     from backend.core.db import SessionLocal
     from backend.models import Bot
@@ -63,10 +63,12 @@ def _enrich_bot_instructions(bot_id: uuid.UUID, tenant_id: uuid.UUID, website_ur
     if not description:
         return
     with SessionLocal() as db:
-        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
-        if not bot or bot.custom_instructions is not None:
-            return
-        bot.custom_instructions = description.strip()
+        db.query(Bot).filter(
+            Bot.id == bot_id,
+            Bot.tenant_id == tenant_id,
+            Bot.custom_instructions.is_(None),
+            Bot.agent_instructions.is_(None),
+        ).update({"custom_instructions": description.strip()}, synchronize_session=False)
         db.commit()
 
 

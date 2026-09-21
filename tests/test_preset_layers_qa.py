@@ -65,10 +65,11 @@ def test_custom_only_source_precedes_precedence_line_then_rules() -> None:
 def test_patch_agent_instructions_only_leaves_custom_and_preset_columns_untouched(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """Old dashboard flow: PATCHing only the deprecated field must not clear
-    or overwrite the new ``custom_instructions``/``preset`` columns, since
-    the update-fields branch in bots/service.py only reads ``agent_instructions
-    in fields`` and must not fall into the "moving off legacy" branch."""
+    """Old dashboard flow: a legacy PATCH leaves ``preset`` and
+    ``custom_instructions`` untouched only when ``custom_instructions`` is
+    NULL (when it is set, it is cleared instead: last write wins). Here the
+    bot starts with ``custom_instructions`` NULL, so both columns must stay
+    exactly as they were."""
     token = register_and_verify_user(tenant, db_session, email="legacy-only-columns@example.com")
     tenant_resp = tenant.post(
         "/tenants", headers={"Authorization": f"Bearer {token}"}, json={"name": "Legacy Columns Tenant"}

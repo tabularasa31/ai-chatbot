@@ -59,6 +59,14 @@ def _validate_preset(value: str | None) -> str | None:
     return value
 
 
+def _normalize_custom_instructions(value: str | None) -> str | None:
+    """Whitespace-only text is not "set" — normalise to None so
+    effective_agent_instructions and the legacy-clear check agree with it."""
+    if value is not None and not value.strip():
+        return None
+    return value
+
+
 class BotCreate(BaseModel):
     name: str
     agent_instructions: str | None = None
@@ -72,6 +80,11 @@ class BotCreate(BaseModel):
     @classmethod
     def _validate_preset_field(cls, value: str | None) -> str | None:
         return _validate_preset(value)
+
+    @field_validator("custom_instructions")
+    @classmethod
+    def _normalize_custom_instructions_field(cls, value: str | None) -> str | None:
+        return _normalize_custom_instructions(value)
 
 
 class BotUpdate(BaseModel):
@@ -87,6 +100,11 @@ class BotUpdate(BaseModel):
     @classmethod
     def _validate_preset_field(cls, value: str | None) -> str | None:
         return _validate_preset(value)
+
+    @field_validator("custom_instructions")
+    @classmethod
+    def _normalize_custom_instructions_field(cls, value: str | None) -> str | None:
+        return _normalize_custom_instructions(value)
 
 
 class BotList(BaseModel):

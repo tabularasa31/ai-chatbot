@@ -241,6 +241,37 @@ def test_legacy_patch_overrides_existing_custom_instructions(
     assert body["custom_instructions"] is None
 
 
+def test_empty_custom_instructions_normalized_and_legacy_overrides(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A whitespace-only custom_instructions PATCH clears the column instead of
+    being stored as a non-null empty string; a later legacy PATCH still wins."""
+    token, _ = _auth(tenant, db_session, "empty-custom@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "custom_instructions": "Custom text."},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": ""},
+    )
+    body = resp.json()
+    assert body["custom_instructions"] is None
+    assert body["instructions_source"] == "preset"
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agent_instructions": "X"},
+    )
+    body = resp.json()
+    assert body["instructions_source"] == "legacy"
+    assert body["effective_instructions"] == "X"
+
+
 def test_custom_instructions_too_long_rejected(tenant: TestClient, db_session: Session) -> None:
     token, _ = _auth(tenant, db_session, "too-long@example.com")
 
@@ -334,7 +365,7 @@ def test_enrichment_task_leaves_meanwhile_set_custom_instructions_unchanged(
     tenant.patch(
         f"/bots/{bot_id}",
         headers={"Authorization": f"Bearer {token}"},
-        json={"custom_instructions": "set by tenant"},
+        json={"custom_instructions": "set by tenant", "preset": None},
     )
 
     monkeypatch.setattr(
@@ -348,6 +379,42 @@ def test_enrichment_task_leaves_meanwhile_set_custom_instructions_unchanged(
     db_session.expire_all()
     refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
     assert refreshed.custom_instructions == "set by tenant"
+    assert refreshed.preset is None
+
+
+def test_enrichment_task_leaves_meanwhile_set_agent_instructions_unchanged(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    """If the tenant sets the legacy agent_instructions field while the task is
+    in flight, the atomic UPDATE guard must not touch custom_instructions."""
+    from backend.bots import routes as bots_routes
+    from backend.models import Bot
+
+    token, _ = _auth(tenant, db_session, "race-enrichment-legacy@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot"},
+    ).json()["id"]
+
+    tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agent_instructions": "Legacy text set mid-flight."},
+    )
+
+    monkeypatch.setattr(
+        "backend.onboarding.extractor.extract_company_description",
+        lambda url, api_key: "Acme sells widgets.",
+    )
+
+    bot = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    bots_routes._enrich_bot_instructions(bot.id, bot.tenant_id, "https://acme.example", "sk-fake")
+
+    db_session.expire_all()
+    refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    assert refreshed.custom_instructions is None
+    assert refreshed.agent_instructions == "Legacy text set mid-flight."
 
 
 def test_delete_bot_blocked_when_last(tenant: TestClient, db_session: Session) -> None:

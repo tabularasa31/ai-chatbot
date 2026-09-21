@@ -179,6 +179,11 @@ export type BotResponse = {
   link_safety_enabled: boolean;
   allowed_domains: string[];
   agent_instructions: string | null;
+  custom_instructions: string | null;
+  preset: string | null;
+  preset_text: string | null;
+  effective_instructions: string | null;
+  instructions_source: "legacy" | "preset" | "custom" | "preset+custom" | "none";
   created_at: string;
   updated_at: string;
 };
@@ -664,7 +669,7 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save disclosure settings"));
       return data as DisclosureConfigResponse;
     },
-    async update(botId: string, payload: { agent_instructions?: string | null; name?: string; is_active?: boolean; link_safety_enabled?: boolean; allowed_domains?: string[] }): Promise<BotResponse> {
+    async update(botId: string, payload: { agent_instructions?: string | null; custom_instructions?: string | null; preset?: string | null; name?: string; is_active?: boolean; link_safety_enabled?: boolean; allowed_domains?: string[] }): Promise<BotResponse> {
       const res = await apiFetch(`${BASE_URL}/bots/${botId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

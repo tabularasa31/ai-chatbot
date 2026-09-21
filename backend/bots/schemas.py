@@ -27,6 +27,7 @@ class BotResponse(BaseModel):
     )
     custom_instructions: str | None = None
     preset: str | None = None
+    preset_text: str | None = None
     effective_instructions: str | None = None
     instructions_source: str = "none"
     created_at: dt.datetime
@@ -48,8 +49,13 @@ class BotResponse(BaseModel):
             custom_instructions=getattr(bot, "custom_instructions", None),
             preset=getattr(bot, "preset", None),
         )
+        preset = getattr(bot, "preset", None)
         return cls.model_validate(bot).model_copy(
-            update={"effective_instructions": text, "instructions_source": source}
+            update={
+                "effective_instructions": text,
+                "instructions_source": source,
+                "preset_text": PRESETS.get(preset) if preset else None,
+            }
         )
 
 

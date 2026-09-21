@@ -34,6 +34,7 @@ from backend.operator.sessions import (
     open_operator_session,
     record_operator_reply,
 )
+from backend.operator.unread_reply import schedule_unread_reply_email
 
 
 class OperatorChannel(str, enum.Enum):
@@ -276,6 +277,7 @@ def ingest_from_operator(
         content=text,
         operator_user_id=actor.user_id,
     )
+    schedule_unread_reply_email(chat=chat, message=message)
     return OperatorIngestResult(message=message, claimed=claimed)
 
 

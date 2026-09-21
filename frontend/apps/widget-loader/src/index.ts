@@ -186,6 +186,15 @@ declare global {
     h.iframe.contentWindow?.postMessage(message, h.widgetOrigin);
   }
 
+  // Whether the visitor can see the chat panel. The widget-app cannot tell on
+  // its own: a collapsed bubble hides the iframe with display:none, and the
+  // iframe's own document.hidden still says "visible". It reads this to decide
+  // when a message has actually been on screen.
+  function postPanelStateToIframe(h: MountHandles, open: boolean) {
+    if (!h.widgetOrigin) return;
+    h.iframe.contentWindow?.postMessage({ type: "chat9:panel", open }, h.widgetOrigin);
+  }
+
   function start(config: StartConfig = {}) {
     if (handles) {
       console.warn("Chat9: already started — call stop() before start() to reconfigure.");
@@ -242,6 +251,7 @@ declare global {
     // the latest currentHints. The widget-app may post chat9:ready more than
     // once (e.g. on identity-driven remount), so we stay subscribed for the
     // entire mount lifetime.
+    let panelOpen = mode === "inline";
     function onMessage(event: MessageEvent) {
       if (!handles) return;
       if (event.source !== handles.iframe.contentWindow) return;
@@ -252,6 +262,7 @@ declare global {
         return;
       }
       postHintsToIframe(handles, currentHints);
+      postPanelStateToIframe(handles, panelOpen);
     }
 
     // ── INLINE MODE ──────────────────────────────────────────────────────────
@@ -404,6 +415,7 @@ declare global {
 
     function openChat() {
       isOpen = true;
+      panelOpen = true;
       if (!iframe.src) iframe.src = buildIframeSrc();
       chatWindow.style.display = "block";
       requestAnimationFrame(() => {
@@ -411,10 +423,13 @@ declare global {
         chatWindow.style.transform = "scale(1) translateY(0)";
       });
       fab.innerHTML = CLOSE_ICON;
+      if (handles) postPanelStateToIframe(handles, true);
     }
 
     function closeChat() {
       isOpen = false;
+      panelOpen = false;
+      if (handles) postPanelStateToIframe(handles, false);
       chatWindow.style.opacity = "0";
       chatWindow.style.transform = "scale(0.93) translateY(10px)";
       setTimeout(() => {

@@ -13,7 +13,7 @@ from backend.auth.middleware import (
 )
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
-from backend.models import User
+from backend.models import RerankerStrategy, User
 from backend.observability.metrics import capture_event, group_identify
 from backend.seats.service import holds_seat
 from backend.tenants.api_keys_service import (
@@ -58,9 +58,14 @@ def _tenant_to_response(tenant, db: Session | None = None) -> TenantResponse:
         api_key_hint=hint,
         public_id=tenant.public_id,
         has_openai_key=bool(tenant.openai_api_key),
+        reranker_strategy=_reranker_strategy_name(tenant.reranker_strategy),
         created_at=tenant.created_at,
         updated_at=tenant.updated_at,
     )
+
+
+def _reranker_strategy_name(value) -> str:
+    return value.value if isinstance(value, RerankerStrategy) else (value or "heuristic")
 
 
 @tenants_router.post("", response_model=CreateTenantResponse, status_code=201, include_in_schema=False)
@@ -285,6 +290,8 @@ def update_my_client(
                 detail="OpenAI API key must start with 'sk-'",
             )
         update_kwargs["openai_api_key"] = key_val
+    if "reranker_strategy" in body.model_fields_set and body.reranker_strategy is not None:
+        update_kwargs["reranker_strategy"] = RerankerStrategy(body.reranker_strategy)
     try:
         tenant = update_tenant(current_user.id, db, **update_kwargs)
     except RuntimeError as e:

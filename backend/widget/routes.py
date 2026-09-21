@@ -48,6 +48,7 @@ from backend.models import (
     OperatorState,
 )
 from backend.observability.metrics import capture_event
+from backend.operator.unread_reply import mark_visitor_read
 from backend.tenants.llm_alerts import (
     apply_clear_alert,
     apply_llm_failure,
@@ -1055,6 +1056,73 @@ async def widget_messages(
     if tail is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return tail
+
+
+class WidgetReadReceiptRequest(BaseModel):
+    message_id: uuid.UUID
+
+
+class WidgetReadReceiptResponse(BaseModel):
+    session_id: uuid.UUID
+    read_message_id: uuid.UUID | None
+
+
+@widget_router.post("/messages/read", response_model=WidgetReadReceiptResponse)
+@limiter.limit("600/minute", key_func=widget_public_rate_limit_key)
+@limiter.limit("60/minute", key_func=widget_poll_rate_limit_key)
+async def widget_messages_read(
+    request: Request,
+    body: WidgetReadReceiptRequest,
+    bot_id: Annotated[str, Query(description="Bot public ID")],
+    session_id: Annotated[str, Query(description="Chat session UUID")],
+    db: AsyncSession = Depends(get_async_db),
+) -> WidgetReadReceiptResponse:
+    """The visitor has had this message on screen (public, no auth).
+
+    Sent by the widget only while its panel is open in a visible tab — the
+    cursor poll keeps running behind a collapsed panel, so "the server handed
+    it out" is not "the visitor saw it". This is what decides whether an
+    operator's reply is mailed to the visitor after the grace period. The
+    cursor only ever advances; a receipt for an older message is accepted and
+    ignored.
+    """
+    try:
+        _bot, tenant = await run_sync(
+            db, lambda s: get_bot_and_tenant_for_widget_chat(s, bot_id)
+        )
+    except WidgetChatTenantGateError as e:
+        if e.reason == WidgetChatTenantGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Bot not found") from e
+        raise HTTPException(status_code=400, detail="Bot not available") from e
+
+    try:
+        sid = uuid.UUID(session_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Invalid session_id") from None
+
+    def _mark(s) -> WidgetReadReceiptResponse | None:
+        chat = (
+            s.query(Chat)
+            .filter(
+                Chat.tenant_id == tenant.id,
+                Chat.session_id == sid,
+                or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+            )
+            .order_by(Chat.created_at.desc())
+            .first()
+        )
+        if chat is None:
+            return None
+        if not mark_visitor_read(s, chat=chat, message_id=body.message_id):
+            raise HTTPException(status_code=404, detail="Message not found")
+        return WidgetReadReceiptResponse(
+            session_id=sid, read_message_id=chat.visitor_read_message_id
+        )
+
+    receipt = await run_sync(db, _mark)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return receipt
 
 
 @widget_router.post("/escalate", response_model=ManualEscalateResponse)

@@ -235,6 +235,15 @@ class Chat(Base):
     )
     operator_joined_at = Column(DateTime, nullable=True)
     operator_released_at = Column(DateTime, nullable=True)
+    # The newest message the visitor has actually had on screen: the widget
+    # reports it only while its panel is open in a visible tab. Message ids
+    # rather than timestamps, resolved by position in the conversation, for
+    # the same reason the cursor poll uses them. Only ever moves forward.
+    visitor_read_message_id = Column(PG_UUID(as_uuid=True), nullable=True)
+    # The newest operator reply the visitor was mailed because it went unread.
+    # Both the once-only guard and the floor for the next mailing: everything
+    # after it is a reply the visitor has neither seen nor been sent.
+    unread_reply_mailed_message_id = Column(PG_UUID(as_uuid=True), nullable=True)
 
     last_response_language = Column(String(16), nullable=True)
     # Last reliable per-turn detected_language in this chat. Observability

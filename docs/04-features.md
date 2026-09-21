@@ -978,6 +978,12 @@ waiting visitor): firing an email on the shorter one would re-notify every
 time an operator stepped away to check something. An operator who *did* reply
 and then went quiet does not bounce — the visitor got an answer.
 
+### Unread operator replies are mailed to the visitor
+
+An operator's reply the visitor never sees is a wasted answer: the tab is closed or the bubble collapsed, and the reply sits in a widget nobody is looking at. Every operator reply — from the console or from a seated member's e-mail — enqueues a deferred ARQ job (`mail_unread_operator_reply`, `backend/operator/unread_reply.py`) that fires after `UNREAD_REPLY_GRACE_SECONDS` (five minutes, a code constant). It mails whatever the visitor still has not read, as written and with nothing of ours wrapped around it, to the address from the escalation ticket or, failing that, from the widget's identity hints; `Reply-To` is the tenant's support inbox. A visitor with no valid address is not mailed.
+
+"Read" is a signal from the widget, not an inference from the poll. The cursor poll keeps running behind a collapsed bubble (the loader hides the iframe with `display:none`, and `document.hidden` inside it still reports visible), so the loader now tells the widget-app when its panel opens and closes (`chat9:panel`) and the widget reports the newest operator reply it rendered while open in a visible tab — `POST /widget/messages/read`, stored as `chats.visitor_read_message_id`, forward-only. A visitor message written after the reply counts as having read it too. `chats.unread_reply_mailed_message_id` records how far the last mail got: several replies in a row go out as one message, and the jobs behind the later ones find nothing left. A reply forwarded to the visitor by the e-mail lane (a seatless sender) never enters the conversation and is not mailed twice. Without Redis the job is not scheduled and a warning is logged.
+
 ### Operator handoff analytics
 
 `chat_session_ended` describes a whole chat, from `created_at`, and is emitted

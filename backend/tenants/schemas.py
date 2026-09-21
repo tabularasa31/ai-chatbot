@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
+RerankerStrategyName = Literal["heuristic", "llm", "cross_encoder"]
+
 #: What the API REPORTS. Deliberately open where the request type is closed.
 #: ``users.role`` is a plain ``String(32)`` precisely so a third role needs no
 #: data migration — but a closed response type turns the first row holding one
@@ -98,6 +100,7 @@ class TenantResponse(BaseModel):
     api_key_hint: str | None = None
     public_id: str
     has_openai_key: bool
+    reranker_strategy: RerankerStrategyName = "heuristic"
     created_at: datetime
     updated_at: datetime
 
@@ -158,6 +161,7 @@ class UpdateTenantRequest(BaseModel):
 
     name: str | None = None
     openai_api_key: str | None = None  # None = remove key
+    reranker_strategy: RerankerStrategyName | None = None
 
 
 class TenantListResponse(BaseModel):

@@ -1258,6 +1258,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 | **Knowledge** (`/knowledge`) | Upload files, add URL sources, trigger embeddings/crawls, health indicators, delete; unified indexed sources table (replaces legacy `/documents`) |
 | **Agents** (`/settings`) | Per-client **OpenAI API key** (encrypted), save/update/remove |
 | **Inbox** (`/inbox`) | Every conversation; queue of visitors waiting for a person; reply, take, return to bot, mark resolved (seat holders) |
+| **Analytics** (`/analytics`) | Messages, Conversations, Deflection Rate, Answered Rate, Filtered for a 7d / 30d / 90d period (default 30d), from `GET /analytics/summary` |
 | **Debug** (`/debug`) | Run RAG debug; answer + retrieval table with chunk previews and scores (code blocks use inline copy) |
 | **Response controls** (`/settings/disclosure`) | Disclosure level (Detailed / Standard / Corporate) |
 | **Widget settings** (`/widget-settings`) | Bot ID copy + Link Safety configuration (allowed domains for external link guard) |

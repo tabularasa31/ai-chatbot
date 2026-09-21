@@ -188,6 +188,19 @@ export type BotResponse = {
   updated_at: string;
 };
 
+export type AnalyticsPeriod = "7d" | "30d" | "90d";
+
+export type AnalyticsSummaryResponse = {
+  period: AnalyticsPeriod;
+  from: string;
+  to: string;
+  messages: number;
+  conversations: number;
+  deflection_rate: number | null;
+  answered_rate: number | null;
+  filtered: number;
+};
+
 export type AdminMetricsSummary = {
   total_users: number;
   total_tenants: number;
@@ -1294,6 +1307,14 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to mark the chat resolved"));
       return data as { chat: OperatorChatState; resolved_ticket_numbers: string[] };
+    },
+  },
+  analytics: {
+    async summary(period: AnalyticsPeriod): Promise<AnalyticsSummaryResponse> {
+      const res = await apiFetch(`${BASE_URL}/analytics/summary?period=${encodeURIComponent(period)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load analytics summary"));
+      return data as AnalyticsSummaryResponse;
     },
   },
   admin: {

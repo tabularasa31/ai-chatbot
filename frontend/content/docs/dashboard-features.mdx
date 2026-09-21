@@ -116,7 +116,7 @@ A ticket is created automatically whenever a conversation is escalated. Tickets 
 
 **What happens when a ticket is created:**
 
-- The visitor's chat stays open — they can keep talking to the bot while your team works the ticket. It closes (`chat_ended`) only once the visitor confirms they need nothing further, and the widget then shows a "Start new chat" button.
+- The visitor's chat stays open — they can keep talking to the bot while your team works the ticket. Nothing closes it, not even the visitor saying they need nothing further; the conversation only rolls over into a new one after a week of silence.
 - An email notification is sent to the support email configured in Settings. When the workspace holds a seat, the e-mail also links straight to the conversation in the Inbox, and replying to it from a seat holder's mailbox lands the reply in the thread.
 - The conversation appears under **Inbox → Needs attention** with a sequential ticket number (e.g. `ESC-42`).
 - Tickets whose conversation has gone quiet are closed automatically. That only clears the queue; it does not mean anyone answered.

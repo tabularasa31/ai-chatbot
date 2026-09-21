@@ -260,8 +260,9 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
 ### Chat output contract (v1)
 
 `POST /chat` returns a JSON object with a canonical `text` field,
-`session_id`, `chat_ended`, optional `ticket_number`, and (for trace
-use) `source_documents` and `tokens_used`. `POST /widget/chat`
+`session_id`, optional `ticket_number`, `chat_ended` (always `false`;
+kept for older integrations), and (for trace use) `source_documents`
+and `tokens_used`. `POST /widget/chat`
 **streams** the same logical answer as Server-Sent Events
 (`Content-Type: text/event-stream`): `status` frames signalling
 progress (e.g. `"thinking"`), `chunk` frames with incremental `text`,

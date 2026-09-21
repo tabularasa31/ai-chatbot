@@ -259,14 +259,21 @@ def test_empty_chat_reaped_on_short_window_message_chat_kept(
     assert conversation.session_ended_event_at is None
 
 
-def test_visitor_closed_chat_is_skipped(
+def test_legacy_ended_at_chat_is_swept_like_any_other(
     db_session: Session, monkeypatch
 ) -> None:
-    # Chats the visitor closed (ended_at set) already emit their own event;
-    # the sweeper must not emit a second "timeout" event for them.
+    # The sweeper ignores ``ended_at``. Rows closed before the closed-chat
+    # state was removed already carry the marker (backfilled by
+    # ``legacy_closed_chats_marker_v1``), so in practice this only reaches
+    # a legacy row the backfill never saw.
     tenant = _make_tenant(db_session)
     chat = _make_chat(db_session, tenant, age_minutes=90)
-    chat.ended_at = chat.updated_at
+    # Query-level update: a plain ORM commit would fire updated_at's onupdate
+    # and make the idle chat look fresh.
+    db_session.query(Chat).filter(Chat.id == chat.id).update(
+        {"ended_at": chat.updated_at, "updated_at": chat.updated_at},
+        synchronize_session=False,
+    )
     db_session.commit()
 
     captured: list[dict] = []
@@ -278,10 +285,10 @@ def test_visitor_closed_chat_is_skipped(
 
     count = sweep_inactive_chats(db_session)
 
-    assert count == 0
-    assert captured == []
+    assert count == 1
+    assert len(captured) == 1
     db_session.refresh(chat)
-    assert chat.session_ended_event_at is None
+    assert chat.session_ended_event_at is not None
 
 
 def test_sweep_preserves_updated_at(db_session: Session, monkeypatch) -> None:
@@ -361,15 +368,12 @@ def test_ticket_on_active_conversation_is_left_open(db_session: Session) -> None
     assert ticket.status == EscalationStatus.open
 
 
-def test_auto_close_covers_visitor_closed_chats(db_session: Session) -> None:
-    """``sweep_inactive_chats`` skips chats with ``ended_at`` set; their tickets
-    must still age out, so the ticket pass is deliberately independent of it."""
+def test_auto_close_covers_legacy_ended_at_chats(db_session: Session) -> None:
+    """Tickets on legacy closed rows age out on the same idle rule."""
     tenant = _make_tenant(db_session)
     chat = _make_chat(db_session, tenant, age_minutes=90)
     # Query-level update with an explicit updated_at: a plain ORM commit would
-    # fire the column's onupdate and make the idle chat look fresh. In
-    # production ended_at is set during a real turn, so the chat legitimately
-    # ages from the moment it closed.
+    # fire the column's onupdate and make the idle chat look fresh.
     db_session.query(Chat).filter(Chat.id == chat.id).update(
         {"ended_at": chat.updated_at, "updated_at": chat.updated_at},
         synchronize_session=False,

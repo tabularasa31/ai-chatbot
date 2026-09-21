@@ -80,7 +80,7 @@ escalation:
 		tests/test_chat_api.py \
 		tests/test_chat_escalation.py \
 		tests/test_escalation.py \
-		-k "awaiting_email or followup or already_closed or manual_escalate or perform_manual_escalation"
+		-k "awaiting_email or followup or legacy_ended_at or manual_escalate or perform_manual_escalation"
 
 rag-edge:
 	PYTHONPATH=. pytest -q \

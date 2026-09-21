@@ -1,9 +1,9 @@
 """Live operator handoff, phase 0.
 
-Covers the four behaviours the feature stands on — the bot going silent while
-a human holds the chat, control coming back on its own when that human goes
-quiet, exactly one winner for a contested conversation, and an operator reply
-reopening a chat the visitor had closed — plus all three sweeper passes
+Covers the behaviours the feature stands on — the bot going silent while a
+human holds the chat, control coming back on its own when that human goes
+quiet, and exactly one winner for a contested conversation — plus all three
+sweeper passes
 (neither of the two that skip live chats may touch one; the third releases a
 chat whose operator vanished), the rotation guard that keeps a live chat from
 forking, and tenant isolation on every operator route.
@@ -128,7 +128,6 @@ def _make_chat(
     operator_state: OperatorState = OperatorState.bot,
     assigned_operator_id: uuid.UUID | None = None,
     operator_joined_at=None,
-    ended_at=None,
 ) -> Chat:
     chat = Chat(
         tenant_id=tenant_id,
@@ -136,7 +135,6 @@ def _make_chat(
         operator_state=operator_state,
         assigned_operator_id=assigned_operator_id,
         operator_joined_at=operator_joined_at,
-        ended_at=ended_at,
     )
     db.add(chat)
     db.commit()
@@ -499,12 +497,11 @@ def test_a_bootstrap_turn_records_nothing(
     assert _await_guard_events(db_session, chat.id, timeout=1.5) == []
 
 
-def test_live_chat_outranks_a_closed_chat_in_the_router() -> None:
+def test_live_chat_outranks_the_escalation_fsm_in_the_router() -> None:
     """OperatorHandler must sit ahead of EscalationStateMachine.
 
-    Otherwise a chat that is both closed and live routes into the
-    "chat already closed" path and the visitor is told the conversation is
-    over while a human is answering them.
+    Otherwise a live chat with escalation flags still set routes into the
+    bot's escalation automaton while a human is answering.
     """
     from backend.chat.handlers.escalation import EscalationStateMachine
     from backend.chat.handlers.operator import OperatorHandler
@@ -705,7 +702,6 @@ def test_operator_message_is_stored_with_its_author(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["chat"]["operator_state"] == "live"
-    assert body["chat_reopened"] is False
 
     db_session.expire_all()
     stored = db_session.get(Message, uuid.UUID(body["message_id"]))
@@ -716,41 +712,11 @@ def test_operator_message_is_stored_with_its_author(
     assert db_session.get(Chat, chat.id).assigned_operator_id == stored.operator_user_id
 
 
-def test_operator_message_reopens_a_chat_the_visitor_closed(
+def test_taking_over_keeps_the_session_ended_marker(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """The visitor said "no, that's all" before the operator got there.
-
-    A person has now answered, so the conversation is evidently not over — and
-    the visitor must be able to reply, which requires ``ended_at`` cleared.
-    """
-    ws = _make_workspace(tenant, db_session, email="reopen@example.com", name="Reopen Co")
-    chat = _make_chat(
-        db_session,
-        ws.tenant_id,
-        ended_at=_utcnow() - timedelta(minutes=20),
-    )
-
-    resp = tenant.post(
-        f"/operator/chats/{chat.id}/messages",
-        headers=ws.auth,
-        json={"text": "Sorry for the delay — here is the answer."},
-    )
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["chat_reopened"] is True
-    db_session.expire_all()
-    refreshed = db_session.get(Chat, chat.id)
-    assert refreshed.ended_at is None
-    assert refreshed.operator_state is OperatorState.live
-
-
-def test_reopening_a_chat_keeps_the_session_ended_marker(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """Reopening must not re-arm ``chat_session_ended`` for this chat.
+    """Taking over must not re-arm ``chat_session_ended`` for this chat.
 
     The event measures ``duration_ms`` from ``chat.created_at``, so a second
     emission would not describe the operator-served stretch — it would restate
@@ -761,11 +727,7 @@ def test_reopening_a_chat_keeps_the_session_ended_marker(
     """
     ws = _make_workspace(tenant, db_session, email="marker@example.com", name="Marker Co")
     reported_at = _utcnow() - timedelta(minutes=30)
-    chat = _make_chat(
-        db_session,
-        ws.tenant_id,
-        ended_at=_utcnow() - timedelta(minutes=20),
-    )
+    chat = _make_chat(db_session, ws.tenant_id)
     chat.session_ended_event_at = reported_at
     db_session.commit()
 
@@ -778,7 +740,6 @@ def test_reopening_a_chat_keeps_the_session_ended_marker(
     assert resp.status_code == 200, resp.text
     db_session.expire_all()
     refreshed = db_session.get(Chat, chat.id)
-    assert refreshed.ended_at is None
     assert refreshed.session_ended_event_at == reported_at
 
 

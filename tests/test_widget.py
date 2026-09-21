@@ -493,10 +493,13 @@ def test_widget_chat_same_tenant_other_bot_session_returns_not_found(
     assert r.json()["detail"]["code"] == "session_not_found"
 
 
-def test_widget_chat_closed_session_returns_controlled_error(
+def test_widget_chat_legacy_ended_at_chat_still_answers(
     tenant: TestClient,
     db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Rows closed before the closed-chat state was removed still exist in
+    # prod; they behave like any open conversation.
     from datetime import datetime, timezone
 
     token = register_and_verify_user(tenant, db_session, email="widget-closed-session@example.com")
@@ -510,21 +513,34 @@ def test_widget_chat_closed_session_returns_controlled_error(
 
     client_uuid = uuid.UUID(cl_resp.json()["id"])
     bot_public_id = _create_bot(tenant, token)
-    closed_chat = Chat(
+    legacy_chat = Chat(
         tenant_id=client_uuid,
         session_id=uuid.uuid4(),
         user_context={},
         ended_at=datetime.now(timezone.utc),
     )
-    db_session.add(closed_chat)
+    db_session.add(legacy_chat)
     db_session.commit()
 
-    r = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id}&session_id={closed_chat.session_id}",
-        json={"message": "hello"},
+    async def _fake_async_process(*args, **kwargs):
+        return ChatTurnOutcome(
+            text="Still here",
+            document_ids=[],
+            tokens_used=0,
+            chat_ended=False,
+        )
+
+    monkeypatch.setattr(
+        "backend.widget.routes.async_process_chat_message",
+        _fake_async_process,
     )
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "session_closed"
+
+    r = _post_widget_chat(
+        tenant, bot_public_id, message="hello", session_id=str(legacy_chat.session_id)
+    )
+    assert r.status_code == 200
+    assert r.json()["text"] == "Still here"
+    assert r.json()["chat_ended"] is False
 
 
 def test_widget_chat_hints_session_increments_user_session_turns(
@@ -616,7 +632,7 @@ def test_widget_session_init_resumes_open_session_for_identified_user(
     assert second.json()["session_id"] == first_session
 
 
-def test_widget_session_init_new_session_when_last_ended(
+def test_widget_session_init_resumes_despite_legacy_ended_at(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -639,8 +655,8 @@ def test_widget_session_init_new_session_when_last_ended(
         json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-ended"}},
     )
     assert second.status_code == 200
-    assert second.json()["resumed"] is False
-    assert second.json()["session_id"] != first_session
+    assert second.json()["resumed"] is True
+    assert second.json()["session_id"] == first_session
 
 
 def test_widget_session_init_anonymous_always_new(
@@ -1036,11 +1052,11 @@ def test_widget_history_greeting_only_idle_chat_does_not_flag_rotation(
     assert [m["content"] for m in data["messages"]] == ["Hi, how can I help?"]
 
 
-def test_widget_history_rotated_closed_chat_is_not_ended(
+def test_widget_history_legacy_ended_at_chat_is_not_ended(
     tenant: TestClient, db_session: Session
 ) -> None:
-    # A closed conversation past the idle window must not lock the widget
-    # input: the visitor is about to start a fresh conversation.
+    # A legacy closed row within the idle window is an open conversation:
+    # the widget must not lock its input.
     from backend.models.base import _utcnow
 
     tenant_uuid, bot_public_id = _setup_rotation_tenant(
@@ -1051,7 +1067,7 @@ def test_widget_history_rotated_closed_chat_is_not_ended(
         db_session,
         tenant_uuid,
         session_id=session_id,
-        idle_minutes=45,
+        idle_minutes=5,
         messages=[("user", "old question")],
         ended_at=_utcnow(),
     )
@@ -1060,7 +1076,7 @@ def test_widget_history_rotated_closed_chat_is_not_ended(
 
     assert r.status_code == 200
     data = r.json()
-    assert data["conversation_rotated"] is True
+    assert data["conversation_rotated"] is False
     assert data["chat_ended"] is False
 
 
@@ -1101,12 +1117,10 @@ def test_widget_chat_empty_message_allowed_when_rotation_pending(
     assert r.json()["text"] == "Fresh greeting"
 
 
-def test_widget_chat_closed_session_answers_when_rotation_pending(
+def test_widget_chat_legacy_ended_at_chat_rotates_when_idle(
     tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Within the window a closed chat returns 409 session_closed (see
-    # test_widget_chat_closed_session_returns_controlled_error); past the
-    # idle threshold the same POST opens a fresh conversation instead.
+    # Past the idle threshold a legacy closed row rotates like any other.
     from backend.models.base import _utcnow
 
     tenant_uuid, bot_public_id = _setup_rotation_tenant(

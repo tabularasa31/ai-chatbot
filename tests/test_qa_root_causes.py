@@ -282,7 +282,6 @@ class TestTicketNumberNotSurfaced:
             out=fake_out,
             trace=fake_trace,
             trace_source="escalation_email_capture",
-            chat_ended=False,
             escalated=True,
             ticket_number=ticket.ticket_number,
         )

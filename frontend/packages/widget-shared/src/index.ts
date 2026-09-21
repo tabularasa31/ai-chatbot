@@ -29,7 +29,7 @@ export type ChatWidgetMessage =
   | {
       id: string;
       type: "system";
-      subtype: "conversation_ended" | "new_conversation";
+      subtype: "new_conversation";
     }
   | {
       id: string;
@@ -77,9 +77,7 @@ export function createLlmUnavailableMessage(args: {
   };
 }
 
-export function createSystemMessage(
-  subtype: "conversation_ended" | "new_conversation",
-): ChatWidgetMessage {
+export function createSystemMessage(subtype: "new_conversation"): ChatWidgetMessage {
   return {
     id: createMessageId(),
     type: "system",
@@ -89,22 +87,7 @@ export function createSystemMessage(
 
 export function appendSystemMarker(
   messages: ChatWidgetMessage[],
-  subtype: "conversation_ended" | "new_conversation",
+  subtype: "new_conversation",
 ): ChatWidgetMessage[] {
-  if (subtype === "conversation_ended") {
-    const last = messages[messages.length - 1];
-    if (last?.type === "system" && last.subtype === "conversation_ended") {
-      return messages;
-    }
-  }
   return [...messages, createSystemMessage(subtype)];
-}
-
-export function getLastEndedMarkerIndex(messages: ChatWidgetMessage[]): number {
-  return messages.reduce((lastIndex, item, index) => {
-    if (item.type === "system" && item.subtype === "conversation_ended") {
-      return index;
-    }
-    return lastIndex;
-  }, -1);
 }

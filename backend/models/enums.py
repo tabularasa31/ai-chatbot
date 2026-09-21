@@ -157,4 +157,3 @@ class EscalationPhase(str, enum.Enum):
     handoff_ask_email = "handoff_ask_email"
     email_parse_failed = "email_parse_failed"
     followup_awaiting_yes_no = "followup_awaiting_yes_no"
-    chat_already_closed = "chat_already_closed"

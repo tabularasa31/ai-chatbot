@@ -94,10 +94,9 @@ server emits two kinds of events while it works:
   the model streams. Concatenate `text` from successive chunks to
   display the answer as it arrives.
 - `data: {"type":"done","text":"<full reply>","session_id":"...","chat_ended":false}` —
-  emitted exactly once at the end with the complete reply, the
-  `session_id` (so you can store it), and a `chat_ended` flag that's
-  `true` when the bot decided to close the chat (e.g. after a manual
-  escalation).
+  emitted exactly once at the end with the complete reply and the
+  `session_id` (so you can store it). `chat_ended` is always `false`
+  (conversations never close) and is kept only for older integrations.
 
 If something goes wrong server-side you may instead get one
 `{"type":"error","code":...,"message":"..."}` event before the stream

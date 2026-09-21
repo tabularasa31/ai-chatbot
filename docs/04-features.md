@@ -363,7 +363,8 @@ The chat pipeline routes every turn through a single decision engine
 `escalate`, `reject`). The full block-rules contract is documented in the
 **Clarification** subsection below. The chat reply is a JSON object
 whose message content lives in a single `text` field (alongside
-`session_id`, `chat_ended` and an optional `ticket_number`); there is no
+`session_id`, an optional `ticket_number`, and `chat_ended`, which is
+always `false` and kept only for older integrations); there is no
 structured `message_type` discriminator and no quick-reply payload in v1.
 
 ---
@@ -433,17 +434,16 @@ Every chat turn is routed by a single authoritative `decide(turn: TurnContext) -
 
 1. Guard failure → `reject`
 2. Explicit human-agent request → `escalate(explicit_human_request)`
-3. Session closed → `acknowledge_closed_or_start_new`
-4. Active escalation ticket → `forward_to_active_ticket`
-5. Clarification budget exhausted (see below) → `answer_with_caveat` or `escalate(clarify_loop_limit)`
-6. FAQ direct hit → `answer_from_faq`
-7. Medium-confidence KB + partial answer → `answer_with_caveat_and_inline_clarify` (budget-free)
+3. Active escalation ticket → `forward_to_active_ticket`
+4. Clarification budget exhausted (see below) → `answer_with_caveat` or `escalate(clarify_loop_limit)`
+5. FAQ direct hit → `answer_from_faq`
+6. Medium-confidence KB + partial answer → `answer_with_caveat_and_inline_clarify` (budget-free)
 
 After these: high-confidence KB → `answer_with_citations`; remaining low-confidence → `clarify(blocking)` or `escalate(low_confidence_no_path)`.
 
 **Clarification budget**
 
-- Maximum **1 blocking clarifying question per conversation** (`CLARIFICATION_TURN_LIMIT`, default 1, configurable via env var). The budget resets when conversation rotation opens a new Chat row (see "Sessions, conversations, and history") — i.e. only after a long idle gap (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, 7 days) or `Start new chat`, not on a return within the widget session.
+- Maximum **1 blocking clarifying question per conversation** (`CLARIFICATION_TURN_LIMIT`, default 1, configurable via env var). The budget resets when conversation rotation opens a new Chat row (see "Sessions, conversations, and history") — i.e. only after a long idle gap (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, 7 days), not on a return within the widget session.
 - `chats.clarification_count` tracks how many blocking clarifications have been issued in the conversation.
 - Counter increments only on `Decision.clarify(type=blocking)` whose reply actually ends in a question, atomically in the same DB transaction as the assistant message. The decision is made after generation, so a clarify turn the model answered instead of asking costs nothing — otherwise the budget ran out on questions the user was never asked.
 - Inline clarifications (`type=inline`, appended after a partial answer) are budget-free and never increment the counter.
@@ -461,7 +461,7 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 
 Public response contracts:
 
-- `POST /chat` returns a JSON body with a canonical `text` field (plus `session_id`, `chat_ended`, optional `ticket_number`, and trace fields)
+- `POST /chat` returns a JSON body with a canonical `text` field (plus `session_id`, optional `ticket_number`, trace fields, and `chat_ended` — always `false`, kept for older integrations)
 - `POST /widget/chat` streams Server-Sent Events: `status` → `chunk`* → exactly one terminal `done` frame whose payload carries the same `text` / `session_id` / `chat_ended` / optional `ticket_number` / optional `sources`
 - both channels may return the localized default greeting as a normal `text` reply when a brand-new empty conversation starts
 
@@ -694,7 +694,7 @@ state the fingerprint does not see.
 The cache is consulted and written only on the visitor's first question of a chat (a
 widget greeting does not count as a turn), and never when the prompt carries `userHints`
 context, when the question went through PII redaction, or when the chat is in any session
-state (operator takeover, escalation / pre-confirm / follow-up, closed). Stored answers are
+state (operator takeover, escalation / pre-confirm / follow-up). Stored answers are
 only confident ones: strong retrieval, no escalation recommendation, no offer / handoff /
 clarification marker from the model, and no echo of a visitor-specific detail (a name or
 an order number typed into the question) that the documents do not contain; the entry is
@@ -764,7 +764,7 @@ Once a chat has settled on a language, it stops re-detecting and stays in that l
 
 After lock, `resolve_language_context` returns the stored `last_response_language` with `response_language_resolution_reason = "locked"` and skips the detector entirely. This is implemented in `_resolve_language_context_inner` (locked fast path) and `_decide_language_lock` in `backend/chat/language.py`. Stored on `Chat.language_locked` (boolean, default False); set once and never reset on existing chats.
 
-A visitor cannot switch languages mid-conversation: the lock holds until the conversation ends. Language is resolved afresh only in a new conversation, which opens after the idle timeout or when the chat was closed after an escalation and the visitor pressed `Start new chat` (that button exists only in a closed chat; a tenant integration can also open a new session via the API). This is a deliberate trade-off: real bilingual switches mid-conversation are rare in B2B support, and locking eliminates flip-flopping when one off-language turn would otherwise change the bot's reply language.
+A conversation is endless from the visitor's side — there is no "start new chat" control and no closed state — so the lock holds until conversation rotation opens a new conversation after the idle timeout (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, 7 days). A visitor cannot switch the bot's language inside a live conversation. This is a deliberate trade-off: real bilingual switches mid-conversation are rare in B2B support, and locking eliminates flip-flopping when one off-language turn would otherwise change the bot's reply language.
 
 ### Default greeting
 
@@ -777,7 +777,7 @@ Behavior details:
 - the canonical greeting is stored in English
 - it is localized using the pre-question locale chain above
 - `<product_name>` comes from `TenantProfile.product_name` when available, otherwise from the client name
-- the stock widget shows this greeting for every **new conversation**: a truly new session, a session resumed after the conversation idle timeout (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, see "Sessions, conversations, and history"), or after `Start new chat`
+- the stock widget shows this greeting for every **new conversation**: a truly new session, or a session resumed after the conversation idle timeout (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, see "Sessions, conversations, and history")
 - resuming within the idle window does not repeat the greeting
 - empty follow-up turns inside an active conversation still return `422 Question is required`; an empty message on a rotation-pending session is the bootstrap for the new conversation's greeting
 
@@ -798,11 +798,11 @@ Two distinct notions:
 - A **session** (`session_id`, UUID) identifies the *visitor in a browser*. The stock widget stores it in localStorage per bot (and per identified user) with a **sliding 24-hour TTL** — the visitor-identity lifetime. Sessions are scoped to a client — no cross-client leakage.
 - A **conversation** (`Chat` row) is one continuous exchange. Messages within a conversation are stored and passed as history in subsequent turns (last N messages, `CHAT_HISTORY_TURNS`).
 
-**Conversation rotation.** A session spans multiple conversations over time. When a message arrives and the session's latest conversation has been idle longer than `CONVERSATION_IDLE_TIMEOUT_SECONDS` (default 604800 = 7 days, measured on the chat's last activity), the backend lazily opens a **new Chat row under the same session_id**. The window is deliberately long — longer than the widget's own 24-hour session TTL — so a visitor returning within their widget session **continues the same conversation and is not re-greeted**; a fresh conversation (with a greeting) starts only after a genuinely long gap or `Start new chat`. The same threshold drives the `chat_session_ended` analytics sweeper for conversations that carry real messages, so behavior and metrics share one definition of an ended conversation; raising it likewise defers `chat_session_ended` for abandoned conversations to the same window.
+**Conversation rotation.** A session spans multiple conversations over time. When a message arrives and the session's latest conversation has been idle longer than `CONVERSATION_IDLE_TIMEOUT_SECONDS` (default 604800 = 7 days, measured on the chat's last activity), the backend lazily opens a **new Chat row under the same session_id**. The window is deliberately long — longer than the widget's own 24-hour session TTL — so a visitor returning within their widget session **continues the same conversation and is not re-greeted**; a fresh conversation (with a greeting) starts only after a genuinely long gap. Idle rotation is the **only** conversation boundary: there is no closed state and no visitor-initiated "start new chat" — escalation, tickets, the post-ticket "anything else?" follow-up and operator handoffs all leave the conversation open. The same threshold drives the `chat_session_ended` analytics sweeper for conversations that carry real messages, so behavior and metrics share one definition of an ended conversation; raising it likewise defers `chat_session_ended` for abandoned conversations to the same window.
 
 Message-less mount chats (`/widget/session/init` creates a `Chat` when the widget app loads, before the visitor types; in bubble mode the loader defers loading the iframe until the visitor first opens the widget, so a page view alone creates nothing) are reaped on a **separate short window**, `EMPTY_CHAT_IDLE_TIMEOUT_SECONDS` (default 1800 = 30 min). They never emit `chat_session_ended`, so this only controls how quickly they drop out of the `ix_chats_sweeper_pending` partial index — decoupled from the conversation window so raising the latter does not let empty mount chats pile up in that index for days.
 
-What resets when a *new* conversation opens (after the window, or `Start new chat`) — not on an in-window return, which keeps all of it:
+What resets when a *new* conversation opens (after the window) — not on an in-window return, which keeps all of it:
 
 - prompt history (the LLM no longer sees yesterday's turns)
 - clarification budget (`clarification_count`)
@@ -817,7 +817,7 @@ What survives rotation:
 - an **active escalation ticket still collecting the user's email** — one of two cases that *block* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
 - a **live operator handoff** (`operator_state = live`) — the other blocker. Rotating would open a fresh conversation with the bot answering while a human is mid-conversation on the old one, and the operator's thread would be orphaned. A handoff whose operator has really gone is released back to the bot by the sweeper first, so the block only ever holds a conversation someone is actually in.
 
-A conversation the visitor closed (`ended_at` set — they answered "no" to the post-escalation "anything else?" follow-up) also rotates once idle: a visitor returning past the window starts fresh instead of hitting the "session is closed" reply.
+`Chat.ended_at` is a legacy column from the removed closed-chat state: old rows still carry a value, nothing reads it, and such a chat behaves like any open conversation. Their `chat_session_ended` event was already emitted at close time, so `legacy_closed_chats_marker_v1` backfilled `session_ended_event_at` for them (and rebuilt `ix_chats_sweeper_pending` on the marker alone) to keep the event at-most-once. Dropping the column is a separate migration.
 
 Widget protocol: `GET /widget/history` returns the last two conversations flattened, `boundary_indices` (positions where a newer conversation starts) and `conversation_rotated` (true when the next message will open a new conversation — the widget renders a separator and requests a fresh greeting by POSTing an empty message with the existing `session_id`).
 
@@ -947,7 +947,7 @@ The bot-detected triggers — `low_similarity` (T-1), both `no_documents` paths 
 3. **User declines (no):** Pre-confirm state is cleared; the chat continues normally.
 4. **Unclear reply:** The bot asks once more for clarification; a second unclear response defaults to "yes".
 
-The chat session is **not** immediately closed after escalation — the user can continue exchanging messages in the same session while the ticket is open.
+The conversation is never closed by escalation. The user keeps exchanging messages in the same conversation while the ticket is open. After the handoff the bot asks whether it can help with anything else: a new question is answered normally, extra details are forwarded to the ticket thread, and a "no" gets a short goodbye — the conversation stays open and the next message is answered as usual.
 
 ### Ticket inbox (dashboard)
 
@@ -1039,7 +1039,7 @@ cannot produce two rows, and hence two events, for one human-served stretch.
 ### Widget UX
 
 - A ticket banner shows the ticket number
-- Input stays enabled: escalation does not close the chat. The visitor keeps talking to the bot while the ticket is open, and `ended_at` is set only when they confirm they need nothing further (see § 6 above)
+- Input stays enabled: nothing closes the chat. The visitor keeps talking to the bot while the ticket is open, and declining the post-ticket "anything else?" follow-up only gets a goodbye
 - The widget offers an explicit escalate button only on an `llm_unavailable` failure bubble (gated by `can_escalate`) — not as a standing "talk to support" control
 - `POST /widget/escalate` is a public endpoint (no auth required) — the widget can escalate without a JWT
 

@@ -212,7 +212,7 @@ def test_a_rotated_session_is_one_row_pointing_at_its_newest_chat(
 ) -> None:
     ws = _workspace(tenant, db_session, email="rot@example.com", name="Rot Co")
     session_id = uuid.uuid4()
-    first = _chat(db_session, ws.tenant_id, session_id=session_id, ended_at=_utcnow())
+    first = _chat(db_session, ws.tenant_id, session_id=session_id)
     _say(db_session, first, MessageRole.user, "yesterday")
     second = _chat(db_session, ws.tenant_id, session_id=session_id)
     _say(db_session, second, MessageRole.user, "today")
@@ -255,7 +255,7 @@ def test_the_thread_spans_the_session_and_signs_operator_turns(
     ws = _workspace(tenant, db_session, email="thread@example.com", name="Thread Co")
     colleague = _colleague(db_session, ws.tenant_id, email="ann@thread.example")
     session_id = uuid.uuid4()
-    first = _chat(db_session, ws.tenant_id, session_id=session_id, ended_at=_utcnow())
+    first = _chat(db_session, ws.tenant_id, session_id=session_id)
     _say(db_session, first, MessageRole.user, "hello")
     _say(db_session, first, MessageRole.assistant, "hi")
     second = _chat(
@@ -477,7 +477,7 @@ def test_a_ticket_on_an_older_chat_of_the_session_still_counts(
     """Rotation must not strand a request: queue, thread and resolve agree."""
     ws = _workspace(tenant, db_session, email="strand@example.com", name="Strand Co")
     session_id = uuid.uuid4()
-    older = _chat(db_session, ws.tenant_id, session_id=session_id, ended_at=_utcnow())
+    older = _chat(db_session, ws.tenant_id, session_id=session_id)
     ticket = _ticket(db_session, older, created_ago=timedelta(hours=2))
     newer = _chat(db_session, ws.tenant_id, session_id=session_id)
     _say(db_session, newer, MessageRole.user, "I'm back, any news?")
@@ -557,7 +557,7 @@ def test_an_answer_in_a_newer_chat_of_the_session_counts_for_an_older_ticket(
 ) -> None:
     ws = _workspace(tenant, db_session, email="rotated@example.com", name="Rotated Co")
     session_id = uuid.uuid4()
-    older = _chat(db_session, ws.tenant_id, session_id=session_id, ended_at=_utcnow())
+    older = _chat(db_session, ws.tenant_id, session_id=session_id)
     _ticket(db_session, older, created_ago=timedelta(hours=2))
     newer = _chat(db_session, ws.tenant_id, session_id=session_id)
     _say(db_session, newer, MessageRole.user, "I'm back, any news?")

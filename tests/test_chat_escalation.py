@@ -133,12 +133,24 @@ def test_chat_awaiting_email_invalid_keeps_waiting_ticket(
     assert ticket.user_email is None
 
 
-def test_chat_followup_no_ends_chat(
+def test_chat_followup_no_keeps_chat_open(
+    mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
+    """"No, that's all" is a goodbye, not a close: the next question gets an
+    ordinary answer in the same conversation."""
+    from backend.models import (
+        Chat,
+        Document,
+        DocumentStatus,
+        DocumentType,
+        Embedding,
+        EscalationStatus,
+        EscalationTicket,
+        EscalationTrigger,
+    )
 
     token = register_and_verify_user(tenant, db_session, email="follow-no@example.com")
     cl_resp = tenant.post(
@@ -176,7 +188,7 @@ def test_chat_followup_no_ends_chat(
         "backend.chat.service.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(
-                message_to_user="Understood, closing chat.",
+                message_to_user="Glad to help. Write here anytime.",
                 followup_decision="no",
                 tokens_used=3,
             )
@@ -189,13 +201,53 @@ def test_chat_followup_no_ends_chat(
         json={"session_id": str(chat.session_id), "question": "no thanks"},
     )
     assert response.status_code == 200
-    assert response.json()["chat_ended"] is True
+    assert response.json()["chat_ended"] is False
     db_session.refresh(chat)
     assert chat.escalation_followup_pending is False
-    assert chat.ended_at is not None
+    assert chat.ended_at is None
+
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="wildcards.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="Wildcard domains are supported on all plans",
+            vector=None,
+            metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+        )
+    )
+    db_session.commit()
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "Yes, wildcard domains are supported."
+    )
+
+    async def _fail_escalation_turn(**kwargs):
+        raise AssertionError("a question after the goodbye must reach RAG, not the escalation FSM")
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn", _fail_escalation_turn
+    )
+
+    followup = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "do you support wildcard domains?"},
+    )
+    assert followup.status_code == 200
+    assert followup.json()["text"] == "Yes, wildcard domains are supported."
+    assert followup.json()["chat_ended"] is False
 
 
-def test_chat_followup_no_closes_active_user_session(
+def test_chat_followup_no_keeps_active_user_session_open(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -247,7 +299,7 @@ def test_chat_followup_no_closes_active_user_session(
         "backend.chat.service.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(
-                message_to_user="Understood, closing chat.",
+                message_to_user="Glad to help. Write here anytime.",
                 followup_decision="no",
                 tokens_used=3,
             )
@@ -260,11 +312,11 @@ def test_chat_followup_no_closes_active_user_session(
         json={"session_id": str(chat.session_id), "question": "no thanks"},
     )
     assert response.status_code == 200
-    assert response.json()["chat_ended"] is True
+    assert response.json()["chat_ended"] is False
 
     db_session.refresh(row)
     assert row.conversation_turns == 1
-    assert row.session_ended_at is not None
+    assert row.session_ended_at is None
 
 
 def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
@@ -530,12 +582,15 @@ def test_chat_followup_new_question_gets_rag_answer_same_turn(
     assert chat.ended_at is None
 
 
-def test_chat_when_already_closed_uses_closed_phase(
+def test_chat_legacy_ended_at_chat_is_answered_normally(
+    mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.models import Chat
+    """Rows closed before the closed-chat state was removed behave like open
+    conversations: no "already closed" reply, the question reaches RAG."""
+    from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding
 
     token = register_and_verify_user(tenant, db_session, email="closed@example.com")
     cl_resp = tenant.post(
@@ -557,15 +612,35 @@ def test_chat_when_already_closed_uses_closed_phase(
     db_session.commit()
     db_session.refresh(chat)
 
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="legacy.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="Legacy answer",
+            vector=None,
+            metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+        )
+    )
+    db_session.commit()
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "Legacy answer"
+    )
+
+    async def _fail_escalation_turn(**kwargs):
+        raise AssertionError("a legacy ended_at chat must not enter the escalation FSM")
+
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
-        _async_esc_stub(
-            Mock(
-                message_to_user="Chat already ended.",
-                followup_decision=None,
-                tokens_used=1,
-            )
-        ),
+        "backend.chat.service.complete_escalation_openai_turn", _fail_escalation_turn
     )
 
     response = tenant.post(
@@ -574,16 +649,8 @@ def test_chat_when_already_closed_uses_closed_phase(
         json={"session_id": str(chat.session_id), "question": "hello again"},
     )
     assert response.status_code == 200
-    assert response.json()["chat_ended"] is True
-    assert "Chat already ended" in response.json()["text"]
-    rows = (
-        db_session.query(ContactSession)
-        .filter(ContactSession.tenant_id == tenant_id, ContactSession.contact_id == "u-closed")
-        .all()
-    )
-    assert rows == []
-
-
+    assert response.json()["chat_ended"] is False
+    assert response.json()["text"] == "Legacy answer"
 def test_anonymous_chat_does_not_create_contact_sessions(
     mock_openai_client: Mock,
     tenant: TestClient,

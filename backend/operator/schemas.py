@@ -38,10 +38,6 @@ class OperatorMessageResponse(BaseModel):
     message_id: uuid.UUID
     created_at: datetime
     chat: OperatorChatStateResponse
-    # True when this message reopened a conversation the visitor had closed
-    # ("no, that's all") before the operator got to it. The visitor's input is
-    # unlocked again, so they can answer the human who just wrote to them.
-    chat_reopened: bool = False
 
 
 class OperatorResolveRequest(BaseModel):
@@ -112,7 +108,6 @@ class ThreadResponse(BaseModel):
     session_id: uuid.UUID
     chat: OperatorChatStateResponse
     handoff_state: HandoffStateValue
-    chat_ended: bool
     ticket: InboxTicket | None = None
     visitor_email: str | None = None
     visitor_name: str | None = None

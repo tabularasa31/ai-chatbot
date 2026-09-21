@@ -55,8 +55,9 @@ The stream emits three event kinds while it works:
 - `{"type":"chunk","text":"..."}` — partial reply text. Concatenate
   successive chunks to render the answer as it arrives.
 - `{"type":"done","text":"<full reply>","session_id":"...","chat_ended":false}` —
-  emitted exactly once at the end with the complete reply, the
-  `session_id`, and a `chat_ended` flag. May also include
+  emitted exactly once at the end with the complete reply and the
+  `session_id`. `chat_ended` is always `false` (conversations never
+  close) and is kept only for older integrations. May also include
   `ticket_number` (turn opened a support ticket) and `sources` (URL-backed
   citations).
 

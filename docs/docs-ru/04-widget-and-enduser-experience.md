@@ -75,7 +75,7 @@
    - Ответ возвращается виджету как обычное текстовое сообщение.
 
 Важно:
-- ответ виджету — это поток Server-Sent Events (`Content-Type: text/event-stream`): сначала фреймы `status` (например `"thinking"`), затем `chunk`-фреймы с инкрементальным `text`, и ровно один финальный `done`-фрейм с полями `text`, `session_id`, `chat_ended` и опциональными `ticket_number` / `sources`. Никакого `message_type`-дискриминатора и structured clarification payload в v1 нет;
+- ответ виджету — это поток Server-Sent Events (`Content-Type: text/event-stream`): сначала фреймы `status` (например `"thinking"`), затем `chunk`-фреймы с инкрементальным `text`, и ровно один финальный `done`-фрейм с полями `text`, `session_id`, опциональными `ticket_number` / `sources` и `chat_ended` (всегда `false`, оставлен для совместимости). Никакого `message_type`-дискриминатора и structured clarification payload в v1 нет;
 - если бот решил уточнить деталь, вопрос встроен прямо в текст ответа;
 - метаданные решения (`decision`, `decision_reason`, `clarify_type`,
   `budget_blocked` и т. д.) уезжают в Langfuse-трейсы и PostHog `chat.turn`,

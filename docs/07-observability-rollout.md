@@ -200,8 +200,7 @@ into the root chat trace metadata in `backend/chat/handlers/rag.py`:
 
 - `decision` — one of `answer_from_faq`, `answer_with_citations`,
   `answer_with_caveat`, `answer_with_caveat_and_inline_clarify`,
-  `clarify`, `escalate`, `reject`, `acknowledge_closed_or_start_new`,
-  `forward_to_active_ticket`
+  `clarify`, `escalate`, `reject`, `forward_to_active_ticket`
 - `decision_reason` — clarify reason, escalate reason, or `n/a`
 - `clarify_type` — `blocking`, `inline`, `safety_confirm` or `n/a`
 - `clarification_count_before` — counter value at the start of the turn

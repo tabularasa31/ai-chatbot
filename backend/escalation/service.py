@@ -1169,9 +1169,6 @@ def _notify_tenant_ticket_update(
         return False
 
     chat: Chat | None = ticket.chat
-    if chat is not None and chat.ended_at is not None:
-        return False
-
     tenant = ticket.tenant
     if tenant is None:
         return False

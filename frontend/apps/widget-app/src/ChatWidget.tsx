@@ -14,7 +14,6 @@ import {
   createLlmUnavailableMessage,
   createSystemMessage,
   createTextMessage,
-  getLastEndedMarkerIndex,
   type ChatWidgetMessage,
   type LlmFailureState,
   type WidgetSource,
@@ -142,7 +141,6 @@ const RETRYABLE_SESSION_ERROR_CODES = new Set([
   "session_invalid",
   "session_not_found",
   "session_forbidden",
-  "session_closed",
 ]);
 
 function sessionStorageKey(botId: string, userId?: string | null): string {
@@ -283,7 +281,6 @@ export function ChatWidget({
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
   // Who is answering, as the server sees it: "bot" (nobody has escalated),
   // "waiting" (an open request nobody has picked up) or "live" (a human is in
@@ -298,10 +295,8 @@ export function ChatWidget({
   // re-render per poll would be pure churn.
   const cursorRef = useRef<string | null>(null);
   const pollInFlightRef = useRef(false);
-  // Mirrors of the two values that decide whether a conversation is still
-  // waiting on a human. Callbacks read them without taking them as
-  // dependencies, which would rebuild those callbacks on every poll.
-  const handoffStateRef = useRef<"bot" | "waiting" | "live">("bot");
+  // Mirror of the ticket the poll was dispatched for. Callbacks read it
+  // without taking it as a dependency, which would rebuild them on every poll.
   const activeTicketRef = useRef<string | null>(null);
   const [streamingText, setStreamingText] = useState<string>("");
   const [statusStage, setStatusStage] = useState<string | null>(null);
@@ -314,7 +309,7 @@ export function ChatWidget({
 
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
   const trimmedInput = input.trim();
-  const canSend = Boolean(trimmedInput) && !loading && !chatClosed;
+  const canSend = Boolean(trimmedInput) && !loading;
 
   const linkSafetyLabels = widgetConfig?.link_safety_labels ?? {
     title: "Open external link?",
@@ -373,7 +368,6 @@ export function ChatWidget({
 
     setSessionHydrated(false);
     setHistoryLoaded(false);
-    setChatClosed(false);
     setActiveTicket(null);
     setHandoffState("bot");
     cursorRef.current = null;
@@ -436,42 +430,13 @@ export function ChatWidget({
     el.scrollTop = el.scrollHeight;
   }, [messages, loading, isOpen]);
 
-  const appendSystemMessage = useCallback((subtype: "conversation_ended" | "new_conversation") => {
-    setMessages((prev) => {
-      return appendSystemMarker(prev, subtype);
-    });
-  }, []);
-
-  useEffect(() => {
-    handoffStateRef.current = handoffState;
-  }, [handoffState]);
   useEffect(() => {
     activeTicketRef.current = activeTicket;
   }, [activeTicket]);
 
-  const handleChatEnded = useCallback(() => {
-    setChatClosed(true);
-    appendSystemMessage("conversation_ended");
-    // The visitor saying "no, that is all" closes the conversation, but it
-    // does not close the request they raised — an operator reading this
-    // morning's notification may still be writing. Dropping the session here
-    // was what actually stopped the poll (`shouldPoll` requires it), and
-    // clearing it from storage meant even a reload could not recover it: the
-    // operator's reply reached the thread and the visitor never saw it.
-    //
-    // So the session is kept for as long as somebody might still answer. The
-    // server rotates a closed conversation on the visitor's next message
-    // anyway, so nothing here depends on forgetting it.
-    if (activeTicketRef.current === null && handoffStateRef.current === "bot") {
-      setSessionId(null);
-      clearStoredSession(botId, userIdRef.current);
-    }
-  }, [appendSystemMessage, botId]);
-
   const applyAssistantMessage = useCallback((
     payload: {
       text: string;
-      chat_ended?: boolean;
       ticket_number?: string | null;
       sources?: { title: string; url: string }[];
     },
@@ -481,10 +446,7 @@ export function ChatWidget({
       ...prev,
       createTextMessage("assistant", payload.text, payload.sources),
     ]);
-    if (payload.chat_ended === true) {
-      handleChatEnded();
-    }
-  }, [handleChatEnded]);
+  }, []);
 
   const requestWidgetTurn = useCallback(async ({
     message,
@@ -516,7 +478,6 @@ export function ChatWidget({
         detail?: unknown;
         text?: string;
         session_id?: string;
-        chat_ended?: boolean;
         ticket_number?: string | null;
         sources?: { title: string; url: string }[];
         outcome?: string | null;
@@ -533,7 +494,6 @@ export function ChatWidget({
       detail?: unknown;
       text?: string;
       session_id?: string;
-      chat_ended?: boolean;
       ticket_number?: string | null;
       sources?: { title: string; url: string }[];
       outcome?: string | null;
@@ -548,7 +508,6 @@ export function ChatWidget({
         text?: string;
         stage?: string;
         session_id?: string;
-        chat_ended?: boolean;
         ticket_number?: string;
         message?: string;
         code?: number;
@@ -569,7 +528,6 @@ export function ChatWidget({
       } else if (parsed.type === "done") {
         payload.text = typeof parsed.text === "string" ? parsed.text : fullText;
         payload.session_id = parsed.session_id;
-        payload.chat_ended = parsed.chat_ended;
         payload.ticket_number = parsed.ticket_number ?? null;
         payload.sources = parsed.sources ?? [];
         payload.outcome = parsed.outcome ?? null;
@@ -632,15 +590,12 @@ export function ChatWidget({
     const data = payload as {
       text: string;
       session_id: string;
-      chat_ended?: boolean;
       ticket_number?: string | null;
       sources?: { title: string; url: string }[];
     };
     applyAssistantMessage(data);
-    if (data.chat_ended !== true) {
-      setSessionId(data.session_id);
-      persistSession(botId, data.session_id, userIdRef.current);
-    }
+    setSessionId(data.session_id);
+    persistSession(botId, data.session_id, userIdRef.current);
   }, [applyAssistantMessage, botId, requestWidgetTurn]);
 
   useEffect(() => {
@@ -664,7 +619,6 @@ export function ChatWidget({
         }
         return r.json() as Promise<{
           messages: { id: string; role: string; content: string }[];
-          chat_ended: boolean;
           ticket_number?: string | null;
           boundary_indices?: number[];
           conversation_rotated?: boolean;
@@ -696,10 +650,6 @@ export function ChatWidget({
           cursorRef.current = lastServerMessage?.id ?? null;
           setMessages(hydrated);
           if (data.ticket_number) setActiveTicket(data.ticket_number);
-          if (data.chat_ended) {
-            setChatClosed(true);
-            setMessages((prev) => appendSystemMarker(prev, "conversation_ended"));
-          }
         }
         if (data.conversation_rotated) {
           // Returning visitor past the idle threshold: keep the old messages
@@ -729,7 +679,7 @@ export function ChatWidget({
   useEffect(() => {
     // Wait for history fetch to complete (or determine there's no stored session)
     const needsHistoryFetch = sessionHydrated && sessionId && !historyLoaded;
-    if (!sessionHydrated || needsHistoryFetch || sessionId || messages.length > 0 || loading || chatClosed) return;
+    if (!sessionHydrated || needsHistoryFetch || sessionId || messages.length > 0 || loading) return;
     let cancelled = false;
     setLoading(true);
     void fetchGreeting()
@@ -754,7 +704,7 @@ export function ChatWidget({
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatClosed, fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
+  }, [fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
 
   // How often to ask whether a human has written. The ladder is the whole
   // point: a conversation the bot is handling is not polled at all, one
@@ -777,7 +727,6 @@ export function ChatWidget({
         messages?: { id: string; role: string; content: string }[];
         handoff_state?: "bot" | "waiting" | "live";
         operator_label?: string;
-        chat_ended?: boolean;
         cursor_stale?: boolean;
       };
       if (data.cursor_stale) {
@@ -818,15 +767,6 @@ export function ChatWidget({
           ]);
         }
       }
-      if (data.chat_ended === true) {
-        setChatClosed(true);
-      } else if (data.handoff_state === "live") {
-        // A human has picked the conversation back up, and taking it over
-        // clears `ended_at` server-side. Without this the flag was one-way:
-        // the visitor watched the operator's answer arrive with the composer
-        // still disabled and no way to respond to it.
-        setChatClosed(false);
-      }
     } catch {
       // Transient: the next tick tries again, and the cursor has not moved.
     } finally {
@@ -837,15 +777,9 @@ export function ChatWidget({
   useEffect(() => {
     // An open request is enough to start polling even before the server has
     // reported a state: the escalation that just happened is exactly when a
-    // human might appear.
-    // Deliberately not gated on `chatClosed`. The visitor answering "no, that
-    // is all" ends the conversation and locks the composer, but it does not
-    // end the request they raised — an operator reading this morning's
-    // notification may still be writing. Stopping the poll there meant their
-    // reply landed in the thread and the visitor, sitting in front of the
-    // widget, never saw it. What bounds the polling is the handoff itself:
-    // once the ticket is resolved the server reports `bot` and this goes
-    // quiet on its own.
+    // human might appear. What bounds the polling is the handoff itself: once
+    // the ticket is resolved the server reports `bot` and this goes quiet on
+    // its own.
     const shouldPoll =
       sessionHydrated &&
       Boolean(sessionId) &&
@@ -891,44 +825,12 @@ export function ChatWidget({
     };
   }, [
     activeTicket,
-    chatClosed,
     handoffState,
     historyLoaded,
     pollForOperatorMessages,
     sessionHydrated,
     sessionId,
   ]);
-
-  const handleStartNewChat = useCallback(() => {
-    setInput("");
-    setSessionId(null);
-    setChatClosed(false);
-    setActiveTicket(null);
-    setHandoffState("bot");
-    cursorRef.current = null;
-    appendSystemMessage("new_conversation");
-    clearStoredSession(botId, userIdRef.current);
-    inputRef.current?.focus();
-    setLoading(true);
-    void fetchGreeting()
-      .catch((error) => {
-        setMessages((prev) => [
-          ...prev,
-          createTextMessage(
-            "error",
-            error instanceof Error ? error.message : "Failed to load greeting",
-          ),
-        ]);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [appendSystemMessage, botId, fetchGreeting]);
-
-  const lastEndedMarkerIndex = useMemo(
-    () => getLastEndedMarkerIndex(messages),
-    [messages],
-  );
 
   /** Send a user message through /widget/chat and apply the response.
    *  Used both by the input-area send button and by the Try again retry path
@@ -1000,15 +902,12 @@ export function ChatWidget({
       const data = payload as {
         text: string;
         session_id: string;
-        chat_ended?: boolean;
         sources?: { title: string; url: string }[];
       };
 
       applyAssistantMessage(data);
-      if (data.chat_ended !== true) {
-        setSessionId(data.session_id);
-        persistSession(botId, data.session_id, userIdRef.current);
-      }
+      setSessionId(data.session_id);
+      persistSession(botId, data.session_id, userIdRef.current);
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -1026,7 +925,7 @@ export function ChatWidget({
 
   const handleSend = async () => {
     const userMessage = trimmedInput;
-    if (!userMessage || !canSend || chatClosed) return;
+    if (!userMessage || !canSend) return;
     setInput("");
     await sendUserMessage(userMessage, { appendUserBubble: true });
   };
@@ -1174,22 +1073,9 @@ export function ChatWidget({
           <div className={cn("space-y-5", compact ? "text-[13px]" : "text-sm")}>
             {messages.map((msg, i) => {
                 if (msg.type === "system") {
-                  const isEnded = msg.subtype === "conversation_ended";
-                  const isLastEndedMarker = isEnded && i === lastEndedMarkerIndex;
                   return (
                     <div key={msg.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
-                      <p className="font-medium text-slate-800">
-                        {isEnded ? "This conversation has ended." : "New conversation"}
-                      </p>
-                      {isEnded && isLastEndedMarker && chatClosed ? (
-                        <button
-                          type="button"
-                          onClick={handleStartNewChat}
-                          className="mt-3 inline-flex items-center rounded-lg bg-violet-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-600"
-                        >
-                          Start new chat
-                        </button>
-                      ) : null}
+                      <p className="font-medium text-slate-800">New conversation</p>
                     </div>
                   );
                 }
@@ -1383,8 +1269,8 @@ export function ChatWidget({
                 handleSend();
               }
             }}
-            placeholder={chatClosed ? "Start a new chat to ask another question" : "Type a message..."}
-            disabled={loading || chatClosed}
+            placeholder="Type a message..."
+            disabled={loading}
             className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:cursor-not-allowed disabled:text-gray-400"
           />
           <button

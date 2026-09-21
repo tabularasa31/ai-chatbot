@@ -148,7 +148,6 @@ function ThreadHeader({ thread }: { thread: Thread }) {
         {thread.chat.assigned_operator_email && (
           <span className="text-xs text-slate-500">held by {thread.chat.assigned_operator_email}</span>
         )}
-        {thread.chat_ended && <span className="text-xs text-slate-400">visitor closed the chat</span>}
       </div>
       {ticket ? (
         <p className="text-xs text-slate-500">

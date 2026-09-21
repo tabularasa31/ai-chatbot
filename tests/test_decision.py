@@ -45,7 +45,6 @@ from backend.chat.decision import (
 
 def _ctx(
     *,
-    session_closed: bool = False,
     active_escalation: bool = False,
     clarification_count: int = 0,
     max_clarifications: int = MAX_CLARIFICATIONS_PER_SESSION,
@@ -66,7 +65,6 @@ def _ctx(
     loop_question_similarity: float | None = None,
 ) -> TurnContext:
     return TurnContext(
-        session_closed=session_closed,
         active_escalation=active_escalation,
         clarification_count=clarification_count,
         max_clarifications=max_clarifications,
@@ -113,29 +111,8 @@ def test_explicit_human_request_escalates() -> None:
     assert d.escalate_reason == "explicit_human_request"
 
 
-def test_human_request_beats_closed_session() -> None:
-    """Human request is checked before closed-session (block rule 2 < rule 3)."""
-    d = decide(_ctx(explicit_human_request=True, session_closed=True))
-    assert d.kind == DecisionKind.escalate
-    assert d.escalate_reason == "explicit_human_request"
-
-
 # ---------------------------------------------------------------------------
-# Block rule 3: Closed session → acknowledge_closed_or_start_new; no clarify
-# ---------------------------------------------------------------------------
-
-def test_closed_session_returns_acknowledge() -> None:
-    d = decide(_ctx(session_closed=True))
-    assert d.kind == DecisionKind.acknowledge_closed_or_start_new
-
-
-def test_closed_session_no_clarification_even_with_low_confidence() -> None:
-    d = decide(_ctx(session_closed=True, kb_confidence="low"))
-    assert d.kind != DecisionKind.clarify
-
-
-# ---------------------------------------------------------------------------
-# Block rule 4: Active escalation → forward_to_active_ticket; no clarify
+# Block rule 3: Active escalation → forward_to_active_ticket; no clarify
 # ---------------------------------------------------------------------------
 
 def test_active_escalation_forwards_to_ticket() -> None:
@@ -149,7 +126,7 @@ def test_active_escalation_beats_faq_hit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Block rule 5: Clarification budget exhausted → answer_with_caveat or escalate
+# Block rule 4: Clarification budget exhausted → answer_with_caveat or escalate
 # ---------------------------------------------------------------------------
 
 def test_budget_exhausted_with_partial_answer_returns_caveat() -> None:
@@ -197,7 +174,7 @@ def test_budget_not_yet_exhausted_allows_clarify() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Block rule 6: FAQ direct hit → answer_from_faq; no clarify
+# Block rule 5: FAQ direct hit → answer_from_faq; no clarify
 # ---------------------------------------------------------------------------
 
 def test_faq_direct_hit_returns_answer_from_faq() -> None:
@@ -219,7 +196,7 @@ def test_faq_direct_hit_not_blocked_by_budget() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Block rule 7: Partial answer + non-critical slot → inline clarify (budget-free)
+# Block rule 6: Partial answer + non-critical slot → inline clarify (budget-free)
 # ---------------------------------------------------------------------------
 
 def test_partial_answer_with_medium_confidence_returns_inline_clarify() -> None:
@@ -365,7 +342,7 @@ def test_is_blocking_clarify_false_for_escalate() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Loop detection (block rule 6b)
+# Loop detection (block rule 5b)
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +362,7 @@ def test_loop_detected_escalates_even_with_high_kb_confidence() -> None:
 
 
 def test_loop_detected_does_not_override_active_escalation() -> None:
-    """Block rule 4 (active escalation) is checked before loop — an existing
+    """Block rule 3 (active escalation) is checked before loop — an existing
     ticket flow must not be hijacked by a loop signal."""
     d = decide(
         _ctx(

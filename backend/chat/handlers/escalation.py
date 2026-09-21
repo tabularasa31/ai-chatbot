@@ -1,9 +1,8 @@
 """Escalation state machine — handles the FI-ESC pre-RAG paths.
 
-Encapsulates four escalation states that previously lived inline in
+Encapsulates the escalation states that previously lived inline in
 ``service.process_chat_message``:
 
-  * ``chat.ended_at is not None``        → chat already closed
   * ``chat.escalation_awaiting_ticket_id`` → awaiting contact email
   * ``chat.escalation_followup_pending``    → follow-up yes/no
   * explicit human request (T-3 trigger) before RAG runs
@@ -48,7 +47,6 @@ from backend.models import (
     EscalationTicket,
     EscalationTrigger,
 )
-from backend.models.base import _utcnow
 
 # Canonical (English) copy shown when the user asks for a human but has not yet
 # stated a forwardable problem. Localized to the user's language at runtime via
@@ -79,10 +77,10 @@ class EscalationStateMachine(PipelineHandler):
     """Pre-RAG escalation FSM.
 
     ``can_handle`` is True when the chat is already in any escalation state
-    (closed / awaiting email / pending follow-up) or when the user explicitly
-    asks for a human in this turn. ``handle`` dispatches to the right internal
-    method by checking flags in the same priority order the legacy inline code
-    used: closed > awaiting-email > follow-up > explicit-request. It returns
+    (awaiting email / pending follow-up) or when the user explicitly asks for
+    a human in this turn. ``handle`` dispatches to the right internal method
+    by checking flags in the same priority order the legacy inline code used:
+    awaiting-email > follow-up > explicit-request. It returns
     ``None`` — falling through to RagHandler — when no branch claims the turn,
     including when the human request was inferred rather than asked for
     outright.
@@ -90,8 +88,6 @@ class EscalationStateMachine(PipelineHandler):
 
     def can_handle(self, ctx: HandlerContext) -> bool:
         chat = ctx.chat
-        if chat.ended_at is not None:
-            return True
         if chat.escalation_awaiting_ticket_id:
             return True
         if chat.escalation_pre_confirm_pending:
@@ -114,8 +110,6 @@ class EscalationStateMachine(PipelineHandler):
     def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome | None:
         ctx.db = sync_db
         chat = ctx.chat
-        if chat.ended_at is not None:
-            return self._handle_chat_closed(ctx)
         if chat.escalation_awaiting_ticket_id:
             outcome = self._handle_awaiting_email(ctx)
             if outcome is not None:
@@ -182,39 +176,6 @@ class EscalationStateMachine(PipelineHandler):
     # ``process_chat_message`` so the byte-level behaviour is preserved.
     # ------------------------------------------------------------------
 
-    def _handle_chat_closed(self, ctx: HandlerContext) -> ChatTurnOutcome:
-        _svc = _svc_lookup()
-        msgs = _svc.build_chat_messages_for_openai(
-            ctx.chat, ctx.redacted_question
-        )
-        if ctx.trace is not None:
-            ctx.trace.span(
-                name="chat-state-check",
-                input={"state": "closed"},
-            ).end(output={"chat_ended": True})
-        out = await_only(
-            _svc.complete_escalation_openai_turn(
-                phase=EscalationPhase.chat_already_closed,
-                chat_messages=msgs,
-                fact_json={},
-                latest_user_text=ctx.redacted_question,
-                api_key=ctx.api_key,
-                response_language=ctx.language_context.response_language,
-            )
-        )
-        return _svc._escalation_turn_response(
-            db=ctx.db,
-            chat=ctx.chat,
-            tenant_id=ctx.tenant_id,
-            language_context=ctx.language_context,
-            question=ctx.question,
-            out=out,
-            trace=ctx.trace,
-            trace_source="chat_closed",
-            chat_ended=True,
-            escalated=False,
-        )
-
     def _handle_awaiting_email(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         """Returns None if the awaited ticket vanished — caller should fall through."""
         _svc = _svc_lookup()
@@ -276,7 +237,6 @@ class EscalationStateMachine(PipelineHandler):
                     out=out,
                     trace=ctx.trace,
                     trace_source="escalation_email_capture",
-                    chat_ended=False,
                     escalated=True,
                     ticket_number=ticket.ticket_number,
                 )
@@ -322,7 +282,6 @@ class EscalationStateMachine(PipelineHandler):
                 out=out,
                 trace=ctx.trace,
                 trace_source="escalation_email_retry",
-                chat_ended=False,
                 escalated=True,
             )
         except Exception as exc:
@@ -414,22 +373,17 @@ class EscalationStateMachine(PipelineHandler):
                     out=out,
                     trace=ctx.trace,
                     trace_source="escalation_followup",
-                    chat_ended=False,
                     escalated=True,
                 )
             if decision == "no":
+                # Goodbye, but the conversation stays open: idle rotation is
+                # the only boundary, and the sweeper reports the session end.
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
-                # ``Chat.ended_at`` is ``DateTime`` (naive). asyncpg refuses
-                # to coerce aware values into ``TIMESTAMP WITHOUT TIME ZONE``
-                # and raises ``DataError`` → ``PendingRollbackError`` on the
-                # next attribute access. See ``models/base._utcnow`` for the
-                # rationale.
-                chat.ended_at = _utcnow()
                 ctx.db.add(chat)
                 if followup_span is not None:
-                    followup_span.end(output={"decision": decision, "chat_ended": True})
-                outcome = _svc._escalation_turn_response(
+                    followup_span.end(output={"decision": decision, "chat_ended": False})
+                return _svc._escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
                     tenant_id=ctx.tenant_id,
@@ -438,18 +392,8 @@ class EscalationStateMachine(PipelineHandler):
                     out=out,
                     trace=ctx.trace,
                     trace_source="escalation_followup",
-                    chat_ended=True,
                     escalated=True,
                 )
-                _svc._emit_chat_session_ended_event(
-                    tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-                    bot_public_id=ctx.bot_public_id,
-                    chat_id=str(chat.id),
-                    session_id=str(chat.session_id) if chat.session_id else None,
-                    duration_ms=_svc._session_duration_ms(chat.created_at, chat.ended_at),
-                    outcome="resolved",
-                )
-                return outcome
             # Unclear means the user wrote something other than a bare yes/no —
             # i.e. additional context for the ticket. Forward it to support as
             # a threaded follow-up email. Bare yes/no above is administrative
@@ -468,7 +412,6 @@ class EscalationStateMachine(PipelineHandler):
                 out=out,
                 trace=ctx.trace,
                 trace_source="escalation_followup",
-                chat_ended=False,
                 escalated=True,
             )
             try:
@@ -637,7 +580,6 @@ class EscalationStateMachine(PipelineHandler):
             out=out_handoff,
             trace=ctx.trace,
             trace_source=trace_source,
-            chat_ended=False,
             escalated=True,
             ticket_number=ticket.ticket_number,
         )
@@ -913,7 +855,6 @@ class EscalationStateMachine(PipelineHandler):
                     out=out_declined,
                     trace=ctx.trace,
                     trace_source="escalation_pre_confirm_declined",
-                    chat_ended=False,
                     escalated=False,
                 )
 
@@ -970,7 +911,6 @@ class EscalationStateMachine(PipelineHandler):
                 out=out_clarify,
                 trace=ctx.trace,
                 trace_source="escalation_pre_confirm_unclear",
-                chat_ended=False,
                 escalated=False,
             )
         except Exception as exc:

@@ -188,9 +188,8 @@ def test_stale_offers_without_ticket_do_not_block_rotation(
     assert should_rotate(chat) is True
 
 
-def test_closed_idle_chat_rotates(db_session: Session) -> None:
-    # ended_at chats rotate too: a visitor returning past the window starts
-    # fresh instead of hitting the "session closed" dead end.
+def test_legacy_ended_at_idle_chat_rotates(db_session: Session) -> None:
+    # Legacy closed rows rotate on the idle rule like any other chat.
     tenant = _make_tenant(db_session)
     chat = _make_chat(db_session, tenant, idle_minutes=45, ended_at=_utcnow())
     assert should_rotate(chat) is True

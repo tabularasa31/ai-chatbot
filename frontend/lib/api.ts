@@ -164,7 +164,6 @@ export type Thread = {
   session_id: string;
   chat: OperatorChatState;
   handoff_state: HandoffState;
-  chat_ended: boolean;
   ticket: InboxTicket | null;
   visitor_email: string | null;
   visitor_name: string | null;
@@ -1273,7 +1272,7 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send the reply"));
-      return data as { message_id: string; created_at: string; chat: OperatorChatState; chat_reopened: boolean };
+      return data as { message_id: string; created_at: string; chat: OperatorChatState };
     },
     async release(chatId: string): Promise<OperatorChatState> {
       const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/release`, { method: "POST" });

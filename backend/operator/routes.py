@@ -119,7 +119,6 @@ def _thread(thread: Thread) -> ThreadResponse:
         session_id=thread.session_id,
         chat=_state(thread.chat, assigned_operator_email=thread.assigned_operator_email),
         handoff_state=thread.handoff_state,
-        chat_ended=thread.chat.ended_at is not None,
         ticket=_ticket(thread.ticket),
         visitor_email=thread.visitor.email,
         visitor_name=thread.visitor.name,
@@ -280,7 +279,6 @@ async def send_operator_message(
             message_id=result.message.id,
             created_at=result.message.created_at,
             chat=_state(chat),
-            chat_reopened=result.chat_reopened,
         )
 
     return await run_sync(db, _work)

@@ -8,12 +8,11 @@ must not produce their own competing clarify / answer / escalate decisions.
 Block rules (evaluated in order, first match wins):
   1. Guard failure           → reject
   2. Explicit human request  → escalate(explicit_human_request)
-  3. Closed session          → acknowledge_closed_or_start_new
-  4. Active escalation       → forward_to_active_ticket
-  5. Budget exhausted        → answer_with_caveat or escalate(clarify_loop_limit)
+  3. Active escalation       → forward_to_active_ticket
+  4. Budget exhausted        → answer_with_caveat or escalate(clarify_loop_limit)
      (only matters when the turn would otherwise produce clarify)
-  6. FAQ direct hit          → answer_from_faq
-  7. Partial answer possible → answer_with_caveat_and_inline_clarify (free, no budget)
+  5. FAQ direct hit          → answer_from_faq
+  6. Partial answer possible → answer_with_caveat_and_inline_clarify (free, no budget)
 
 v1 limitations (intentional, documented):
   - No intent classifier: ambiguous_intent and missing_critical_slot reasons
@@ -109,7 +108,6 @@ class DecisionKind(str, Enum):
     diagnose = "diagnose"
     escalate = "escalate"
     reject = "reject"
-    acknowledge_closed_or_start_new = "acknowledge_closed_or_start_new"
     forward_to_active_ticket = "forward_to_active_ticket"
 
 
@@ -122,7 +120,6 @@ class TurnContext:
     """
 
     # Session state
-    session_closed: bool
     active_escalation: bool
     clarification_count: int
     max_clarifications: int
@@ -309,19 +306,15 @@ def decide(turn: TurnContext) -> Decision:
     if turn.explicit_human_request:
         return Decision(kind=DecisionKind.escalate, escalate_reason="explicit_human_request")
 
-    # Block rule 3: Closed session
-    if turn.session_closed:
-        return Decision(kind=DecisionKind.acknowledge_closed_or_start_new)
-
-    # Block rule 4: Active escalation
+    # Block rule 3: Active escalation
     if turn.active_escalation:
         return Decision(kind=DecisionKind.forward_to_active_ticket)
 
-    # Block rule 6: FAQ direct hit (checked before budget — FAQ never clarifies)
+    # Block rule 5: FAQ direct hit (checked before budget — FAQ never clarifies)
     if turn.faq_direct_hit:
         return Decision(kind=DecisionKind.answer_from_faq)
 
-    # Block rule 6b: Loop detected — the last N assistant turns drew on the
+    # Block rule 5b: Loop detected — the last N assistant turns drew on the
     # same source documents AND the user is repeating the same question, so
     # re-answering won't help. Force escalation through the existing
     # pre-confirm flow rather than emit yet another rephrased answer.
@@ -338,7 +331,7 @@ def decide(turn: TurnContext) -> Decision:
 
     if turn.kb_confidence == "medium":
         if turn.kb_has_partial_answer:
-            # Block rule 7: partial answer possible → inline clarify (free, no budget)
+            # Block rule 6: partial answer possible → inline clarify (free, no budget)
             return Decision(
                 kind=DecisionKind.answer_with_caveat_and_inline_clarify,
                 clarify_type="inline",
@@ -348,7 +341,7 @@ def decide(turn: TurnContext) -> Decision:
     # Low confidence path
     reason = _allowed_clarify_reason(turn)
     if reason is not None:
-        # Block rule 5: budget exhausted — fall through instead of clarifying
+        # Block rule 4: budget exhausted — fall through instead of clarifying
         if turn.clarification_count >= turn.max_clarifications:
             if turn.kb_has_partial_answer:
                 return Decision(

@@ -536,7 +536,6 @@ class RagHandler(PipelineHandler):
             min_question_similarity=settings.loop_detection_min_question_similarity,
         )
         _turn_ctx = DecisionTurnContext(
-            session_closed=(chat.ended_at is not None),
             active_escalation=(
                 chat.escalation_awaiting_ticket_id is not None
                 or chat.escalation_pre_confirm_pending
@@ -952,7 +951,7 @@ class RagHandler(PipelineHandler):
             ctx.trace.update(
                 output={"answer": answer},
                 metadata={
-                    "chat_ended": bool(chat.ended_at),
+                    "chat_ended": False,
                     "escalated": bool(escalate),
                     "escalation_trigger": esc_trigger.value if esc_trigger else None,
                     "response_language": ctx.language_context.response_language,
@@ -1061,7 +1060,7 @@ class RagHandler(PipelineHandler):
             text=answer,
             document_ids=document_ids,
             tokens_used=tokens_used,
-            chat_ended=bool(chat.ended_at),
+            chat_ended=False,
             ticket_number=created_ticket_number,
             chat_id=str(chat.id) if chat is not None else None,
             escalation_offered=bool(chat.escalation_pre_confirm_pending),

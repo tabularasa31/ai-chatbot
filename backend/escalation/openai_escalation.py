@@ -402,7 +402,7 @@ _FOLLOWUP_CLASSIFIER_SYSTEM = (
     '  - "yes"     — a bare affirmative ("yes", "sure", "I have another '
     'question") that contains no actual question content yet.\n'
     '  - "no"      — the user declines, says goodbye, or thanks the '
-    "assistant and closes the conversation.\n"
+    "assistant and wants nothing further.\n"
     '  - "unclear" — the message only adds details, corrections, or context '
     "to the request that was already forwarded to support, or hesitates / "
     "asks a meta-question about the handoff itself.\n"
@@ -459,8 +459,8 @@ async def classify_followup_reply(
     except Exception as exc:
         logger.warning("classify_followup_reply failed: %s", exc)
         # Fail safe to the existing follow-up flow: never let a transient
-        # outage drop the gate (which would skip closing the chat on a real
-        # "no" or lose the ticket-context forwarding on real clarifications).
+        # outage drop the gate (which would lose the ticket-context forwarding
+        # on real clarifications).
         return "unclear", 0
 
 
@@ -486,6 +486,10 @@ question is asked fresh.
 When phase is "followup_awaiting_yes_no" or "pre_confirm": you MUST attempt to set
 followup_decision from the user's latest message ("yes", "no", or "unclear").
 For all other phases, set followup_decision to null.
+
+When phase is "followup_awaiting_yes_no" and followup_decision is "no": thank the user
+briefly and say they are welcome to write here again anytime. The conversation stays
+open — never say the chat is closed, ended, or finished.
 """
 
 

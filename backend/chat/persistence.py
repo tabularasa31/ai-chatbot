@@ -118,7 +118,6 @@ def _finalize_persisted_messages(
                 db,
                 tenant_id=tenant_id,
                 user_context=chat.user_context,
-                ended_at=chat.ended_at,
                 count_turn=count_user_turn,
             )
     except Exception:

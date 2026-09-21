@@ -159,15 +159,21 @@ def test_can_handle_returns_false_when_no_state_and_no_human_request(
     assert EscalationStateMachine().can_handle(ctx) is False
 
 
-def test_can_handle_returns_true_when_chat_ended(db_session: Session) -> None:
+def test_can_handle_ignores_legacy_ended_at(db_session: Session) -> None:
     from datetime import UTC, datetime
 
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
     chat.ended_at = datetime.now(UTC)
     db_session.flush()
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
-    assert EscalationStateMachine().can_handle(ctx) is True
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="what is your price",
+        explicit_human_request=False,
+    )
+    assert EscalationStateMachine().can_handle(ctx) is False
 
 
 def test_can_handle_returns_true_when_awaiting_ticket_id(db_session: Session) -> None:

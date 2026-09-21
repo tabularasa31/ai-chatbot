@@ -197,7 +197,6 @@ def record_user_session_turn(
     *,
     tenant_id: uuid.UUID,
     user_context: dict[str, Any] | None,
-    ended_at: datetime | None = None,
     count_turn: bool = True,
 ) -> ContactSession | None:
     """Touch the contact's session for this turn, and count it.
@@ -211,19 +210,11 @@ def record_user_session_turn(
     contact_id = _extract_contact_id(user_context)
     if not contact_id:
         return None
-    if ended_at is not None:
-        row = get_active_user_session(db, tenant_id=tenant_id, contact_id=contact_id)
-        if row is None:
-            return None
-        _apply_identity_fields(row, user_context or {})
-    else:
-        row = touch_user_session(db, tenant_id=tenant_id, user_context=user_context)
+    row = touch_user_session(db, tenant_id=tenant_id, user_context=user_context)
     if row is None:
         return None
     if count_turn:
         row.conversation_turns = int(row.conversation_turns or 0) + 1
-    if ended_at is not None:
-        row.session_ended_at = ended_at
     db.add(row)
     db.flush()
     return row

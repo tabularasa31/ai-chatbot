@@ -66,7 +66,6 @@ class OperatorActor:
 @dataclass(frozen=True)
 class OperatorIngestResult:
     message: Message
-    chat_reopened: bool
     claimed: bool
 
 
@@ -82,10 +81,7 @@ def taken_over_values() -> dict[str, object]:
     Both entry points — ``/take`` (a conditional bulk UPDATE) and
     ``/messages`` (ORM writes in :func:`ingest_from_operator`) — apply this,
     so an operator who clicks *take* and one who just starts typing leave the
-    row in the same shape. They used to disagree about ``ended_at``, which
-    left a claimed-but-closed chat rendering ``chat_ended: true`` in
-    ``/widget/history`` with the widget input locked, so the visitor could not
-    reply to the human who had just claimed them.
+    row in the same shape.
 
     **The escalation FSM flags are cleared.** A human has taken the request,
     so the bot's escalation automaton — ask for an e-mail, pre-confirm,
@@ -103,7 +99,6 @@ def taken_over_values() -> dict[str, object]:
     :func:`ingest_from_operator`.
     """
     return {
-        "ended_at": None,
         "escalation_awaiting_ticket_id": None,
         "escalation_pre_confirm_pending": False,
         "escalation_pre_confirm_context": None,
@@ -217,17 +212,13 @@ def ingest_from_operator(
 ) -> OperatorIngestResult:
     """Record a human reply in the chat thread and put the chat in ``live``.
 
-    Four side effects beyond persisting the message, all of them consequences
-    of "a person has just answered this visitor":
+    Side effects beyond persisting the message, all of them consequences of
+    "a person has just answered this visitor":
 
     * The chat goes ``live``, muting the bot for subsequent visitor turns.
     * An unclaimed chat is claimed by the actor. A chat already claimed by
       someone else is *not* reassigned — assignment is advisory, and a shared
       support inbox means two people can legitimately answer the same thread.
-    * A chat the visitor had closed is reopened. Otherwise the answer would
-      land in a transcript the visitor can read but cannot reply to, and
-      session resume would skip the chat entirely (the widget only reattaches
-      to chats with ``ended_at IS NULL``).
     * The escalation FSM flags are cleared — see :func:`taken_over_values`
       for why, and for why the ticket *row* is not deleted or resolved.
     * The chat's open escalation ticket moves to ``in_progress``, so the
@@ -236,10 +227,8 @@ def ingest_from_operator(
     """
     from backend.chat.service import _persist_operator_message
 
-    chat_reopened = chat.ended_at is not None
-    # ``taken_over_values`` clears ``ended_at`` (reopening the chat) along with
-    # the escalation FSM flags. ``session_ended_event_at`` is deliberately not
-    # in it: re-arming that marker would make the sweeper emit a second
+    # ``session_ended_event_at`` is deliberately not in ``taken_over_values``:
+    # re-arming that marker would make the sweeper emit a second
     # ``chat_session_ended`` for this chat, and that event measures
     # ``duration_ms`` from ``chat.created_at`` — so the repeat would not
     # describe the operator-served stretch, it would restate the first event
@@ -287,9 +276,7 @@ def ingest_from_operator(
         content=text,
         operator_user_id=actor.user_id,
     )
-    return OperatorIngestResult(
-        message=message, chat_reopened=chat_reopened, claimed=claimed
-    )
+    return OperatorIngestResult(message=message, claimed=claimed)
 
 
 def resolve_from_operator(

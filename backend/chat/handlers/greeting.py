@@ -107,12 +107,11 @@ class GreetingHandler(PipelineHandler):
         # / RAG, which continue the thread with full history.
         if chat.has_substantive_content:
             return False
-        # Defer to the EscalationStateMachine for any active escalation / closed
-        # state — a short confirmation reply there carries no request content
-        # but is not small talk.
+        # Defer to the EscalationStateMachine for any active escalation state —
+        # a short confirmation reply there carries no request content but is
+        # not small talk.
         if (
-            chat.ended_at is not None
-            or chat.escalation_pre_confirm_pending
+            chat.escalation_pre_confirm_pending
             or chat.escalation_awaiting_ticket_id is not None
             or chat.escalation_followup_pending
             or chat.escalation_awaiting_request

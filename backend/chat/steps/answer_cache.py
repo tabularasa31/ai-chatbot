@@ -61,7 +61,6 @@ async def resolve_scope_for_turn(
     chat = ctx.chat
     session_bound = (
         chat.operator_state is OperatorState.live
-        or chat.ended_at is not None
         or bool(chat.escalation_awaiting_ticket_id)
         or bool(chat.escalation_pre_confirm_pending)
         or bool(chat.escalation_awaiting_request)

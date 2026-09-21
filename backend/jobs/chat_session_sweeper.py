@@ -35,11 +35,9 @@ Widget chats are stateless per-turn HTTP with no explicit "close" signal, so
 the end of a session is detected by inactivity: a chat whose ``updated_at``
 (last activity) is older than the threshold is reported to PostHog once.
 
-Idempotency uses ``Chat.session_ended_event_at`` (an analytics-only marker),
-NOT ``Chat.ended_at``. ``ended_at`` closes the conversation and routes later
-turns to the escalation "chat already closed" handler, so a returning user
-would be told the chat is closed. Reporting a session as ended for analytics
-must leave the chat resumable, hence the dedicated marker.
+Idempotency uses ``Chat.session_ended_event_at``, an analytics-only marker:
+reporting a session as ended must leave the chat resumable, so the marker
+never gates a turn.
 
 Runs as a :class:`~backend.jobs._periodic.PeriodicJob` daemon thread. Across
 workers a Redis distributed lock gates each tick so only one worker sweeps per
@@ -100,10 +98,6 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     excluded from the next pass; otherwise the empty-chat backlog would
     accumulate in the index unbounded as widget impressions add up.
 
-    Chats the visitor already closed (``ended_at`` set — they answered "no"
-    to the post-escalation "anything else?" follow-up; escalation on its own
-    does not set it) are skipped: that path emits its own event.
-
     Chats a human operator currently holds (``OperatorState.live``) are
     skipped for the same reason ``auto_close_stale_tickets`` skips them:
     ``updated_at`` tracks visitor turns only, so a handoff being actively
@@ -140,7 +134,6 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
         .options(joinedload(Chat.tenant), joinedload(Chat.bot))
         .filter(
             Chat.session_ended_event_at.is_(None),
-            Chat.ended_at.is_(None),
             Chat.operator_state != OperatorState.live,
             or_(
                 and_(has_messages_exists, Chat.updated_at < long_cutoff),
@@ -409,8 +402,8 @@ def auto_close_stale_tickets(db: Session, *, now: datetime | None = None) -> int
     ``conversation_idle_timeout_seconds`` — the same window lazy rotation and
     the session sweeper use, so "the conversation is over" keeps one definition
     system-wide. Deliberately independent of the ``chat_session_ended`` pass
-    above, which skips chats the visitor already closed (``ended_at`` set);
-    those carry tickets too and must age out on the same rule.
+    above: tickets age out on the same rule whether or not the session event
+    has already been reported.
 
     Tickets with no ``chat_id`` (direct API creations) are left alone — there is
     no conversation to age them against.

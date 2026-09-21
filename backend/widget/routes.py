@@ -58,7 +58,6 @@ from backend.tenants.widget_chat_gate import (
     get_bot_and_tenant_for_widget_session,
 )
 from backend.widget.service import (
-    SESSION_CLOSED_CODE,
     SESSION_INVALID_CODE,
     SESSION_NOT_FOUND_CODE,
     apply_identity_context_patch,
@@ -257,8 +256,8 @@ async def widget_session_init(
     if user_context is None and locale is not None:
         user_context = {"browser_locale": locale}
 
-    # Identified users resume their most recent still-open session so history
-    # survives cleared localStorage and follows them across devices.
+    # Identified users resume their most recent session so history survives
+    # cleared localStorage and follows them across devices.
     if resume_eligible and user_context and user_context.get("user_id"):
 
         def _resume_existing(s):
@@ -267,7 +266,6 @@ async def widget_session_init(
                 .filter(
                     Chat.tenant_id == tenant.id,
                     Chat.bot_id == _bot.id,
-                    Chat.ended_at.is_(None),
                     Chat.user_context["user_id"].as_string()
                     == user_context["user_id"],
                 )
@@ -411,27 +409,15 @@ async def widget_chat(
                 existing_chat.bot_id = _bot.id
                 s.add(existing_chat)
                 s.commit()
-            return rotation_pending, existing_chat.ended_at is not None
+            return rotation_pending
 
-        chat_state = await run_sync(db, _lookup_existing_chat)
-        if chat_state is None:
+        rotation_pending = await run_sync(db, _lookup_existing_chat)
+        if rotation_pending is None:
             raise HTTPException(
                 status_code=409,
                 detail=widget_session_error_detail(
                     SESSION_NOT_FOUND_CODE,
                     "Session not found",
-                ),
-            )
-        rotation_pending, chat_ended = chat_state
-        if chat_ended and not rotation_pending:
-            # Within the idle window a closed chat still answers with the
-            # "already closed" acknowledgement; past it, the turn falls
-            # through and rotation opens a fresh conversation instead.
-            raise HTTPException(
-                status_code=409,
-                detail=widget_session_error_detail(
-                    SESSION_CLOSED_CODE,
-                    "Session is closed",
                 ),
             )
     else:
@@ -819,7 +805,9 @@ def _handoff_state(s, chat: Chat) -> str:
 class WidgetHistoryResponse(BaseModel):
     session_id: uuid.UUID
     messages: list[WidgetHistoryMessage]
-    chat_ended: bool
+    #: Always ``False``: conversations never close. Kept for older widgets
+    #: that still read it; drop in the next major.
+    chat_ended: bool = False
     ticket_number: str | None = None
     #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
     handoff_state: str = "bot"
@@ -909,15 +897,13 @@ async def widget_history(
             if ticket is not None:
                 ticket_number = ticket.ticket_number
 
-        # A rotated-away closed chat must not lock the widget input — the
-        # visitor is about to start a fresh conversation.
         return WidgetHistoryResponse(
             session_id=sid,
             messages=[
                 WidgetHistoryMessage(id=m.id, role=m.role.value, content=m.content)
                 for m in messages
             ],
-            chat_ended=latest.ended_at is not None and not conversation_rotated,
+            chat_ended=False,
             ticket_number=ticket_number,
             boundary_indices=boundary_indices,
             conversation_rotated=conversation_rotated,
@@ -1032,11 +1018,6 @@ async def widget_messages(
             .all()
         )
 
-        # Captured before the cursor slice: ``/history`` decides "ended" from
-        # the whole conversation, and reading it off a tail would answer
-        # differently on every poll.
-        has_user_turn = any(m.role == MessageRole.user for m in rows)
-
         cursor_stale = False
         if cursor is not None:
             index = next(
@@ -1066,15 +1047,7 @@ async def widget_messages(
                 for m in page
             ],
             handoff_state=_handoff_state(s, chat),
-            # Same expression as ``/history``, deliberately. A closed chat that
-            # has gone idle past the rotation threshold is about to be replaced
-            # by a fresh one, so neither endpoint calls it ended -- and the two
-            # disagreeing would flip the widget between locked and unlocked as
-            # the bootstrap and the poll took turns answering.
-            chat_ended=(
-                chat.ended_at is not None
-                and not (should_rotate(chat) and has_user_turn)
-            ),
+            chat_ended=False,
             cursor_stale=cursor_stale,
         )
 

@@ -24,7 +24,6 @@ _BCP47_RE = re.compile(
 
 SESSION_INVALID_CODE = "session_invalid"
 SESSION_NOT_FOUND_CODE = "session_not_found"
-SESSION_CLOSED_CODE = "session_closed"
 
 
 def _now_utc() -> datetime:

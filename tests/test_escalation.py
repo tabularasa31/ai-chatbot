@@ -2009,26 +2009,6 @@ def test_notify_ticket_update_skips_when_ticket_resolved(
     send_email_mock.assert_not_called()
 
 
-def test_notify_ticket_update_skips_when_chat_ended(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    from datetime import UTC, datetime
-
-    _, chat, ticket = _setup_followup_fixture(
-        tenant, db_session, owner_email="ended-owner@example.com"
-    )
-    chat.ended_at = datetime.now(UTC)
-    db_session.add(chat)
-    db_session.commit()
-    _persist_user_message(db_session, chat, "post-end message")
-
-    with patch("backend.escalation.service.send_email") as send_email_mock:
-        _notify_tenant_ticket_update(ticket, db_session)
-
-    send_email_mock.assert_not_called()
-
-
 def test_notify_ticket_update_noop_when_no_new_turns(
     tenant: TestClient,
     db_session: Session,

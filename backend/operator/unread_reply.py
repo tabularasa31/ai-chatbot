@@ -17,7 +17,9 @@ composer they typed into.
 One mail covers every unread reply at the time it fires, and
 ``Chat.unread_reply_mailed_message_id`` remembers how far it got, so three
 replies in a row produce one message and the jobs behind the second and third
-find nothing left to send.
+find nothing left to send. The e-mail lane stamps the same marker when it
+forwards a seated member's mailed reply to the visitor, so that reply is not
+sent twice.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from arq import Retry
-from sqlalchemy.exc import MissingGreenlet
+from sqlalchemy.exc import DBAPIError, MissingGreenlet, OperationalError
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
@@ -42,7 +44,7 @@ logger = logging.getLogger(__name__)
 UNREAD_REPLY_GRACE_SECONDS = 300
 _JOB_NAME = "mail_unread_operator_reply"
 _MAX_ATTEMPTS = 3
-_SEND_RETRY_SECONDS = 120
+_RETRY_SECONDS = 120
 _ENQUEUE_WAIT_SECONDS = 5
 _SUBJECT_PREVIEW_CHARS = 60
 
@@ -51,6 +53,32 @@ Position = tuple[Any, uuid.UUID]
 
 def _position(message: Message) -> Position:
     return (message.created_at, message.id)
+
+
+def _lock_chat(db: Session, chat_id: uuid.UUID) -> Chat | None:
+    """The chat row, locked for this transaction.
+
+    Every writer of the two cursors goes through here, so a receipt racing a
+    receipt, or a job racing a job for the next reply, serialises on the row
+    instead of both reading the same state and both acting on it.
+    """
+    return (
+        db.query(Chat)
+        .filter(Chat.id == chat_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+
+
+def _message_in_chat(db: Session, chat_id: uuid.UUID, message_id: uuid.UUID | None) -> Message | None:
+    if message_id is None:
+        return None
+    return (
+        db.query(Message)
+        .filter(Message.chat_id == chat_id, Message.id == message_id)
+        .first()
+    )
 
 
 def _thread(db: Session, chat_id: uuid.UUID) -> list[Message]:
@@ -62,28 +90,36 @@ def _thread(db: Session, chat_id: uuid.UUID) -> list[Message]:
     )
 
 
-def _position_of(thread: list[Message], message_id: uuid.UUID | None) -> Position | None:
-    if message_id is None:
-        return None
-    return next((_position(m) for m in thread if m.id == message_id), None)
-
-
 def mark_visitor_read(db: Session, *, chat: Chat, message_id: uuid.UUID) -> bool:
     """Advance the visitor's read cursor. ``False`` if the message is not in this chat.
 
     Never moves backwards: a stale receipt from a widget that was showing an
     older tail must not un-read what a fresher one already reported.
     """
-    thread = _thread(db, chat.id)
-    target = _position_of(thread, message_id)
+    target = _message_in_chat(db, chat.id, message_id)
     if target is None:
         return False
-    current = _position_of(thread, chat.visitor_read_message_id)
-    if current is None or target > current:
-        chat.visitor_read_message_id = message_id
-        db.add(chat)
-        db.commit()
+    locked = _lock_chat(db, chat.id)
+    if locked is None:
+        return False
+    current = _message_in_chat(db, chat.id, locked.visitor_read_message_id)
+    if current is None or _position(target) > _position(current):
+        locked.visitor_read_message_id = message_id
+        db.add(locked)
+    db.commit()
     return True
+
+
+def mark_reply_mailed(db: Session, *, chat: Chat, message: Message) -> None:
+    """Record that the visitor already holds this reply in their mailbox."""
+    locked = _lock_chat(db, chat.id)
+    if locked is None:
+        return
+    current = _message_in_chat(db, chat.id, locked.unread_reply_mailed_message_id)
+    if current is None or _position(message) > _position(current):
+        locked.unread_reply_mailed_message_id = message.id
+        db.add(locked)
+    db.commit()
 
 
 def unread_operator_replies(
@@ -99,9 +135,10 @@ def unread_operator_replies(
     target = next((m for m in thread if m.id == message_id), None)
     if target is None or target.role is not MessageRole.operator:
         return []
+    by_id = {m.id: _position(m) for m in thread}
     floors = [
-        _position_of(thread, chat.visitor_read_message_id),
-        _position_of(thread, chat.unread_reply_mailed_message_id),
+        by_id.get(chat.visitor_read_message_id),
+        by_id.get(chat.unread_reply_mailed_message_id),
         next(
             (_position(m) for m in reversed(thread) if m.role is MessageRole.user),
             None,
@@ -145,7 +182,9 @@ def _subject(chat: Chat, ticket: EscalationTicket | None) -> str:
     if ticket is not None:
         preview = _safe_ticket_question(ticket).replace("\n", " ").strip()
         return f"[{ticket.ticket_number}] {preview[:_SUBJECT_PREVIEW_CHARS]}".rstrip(" —-")
-    return chat.bot.name if chat.bot is not None else "Re:"
+    if chat.bot is not None and chat.bot.name:
+        return chat.bot.name
+    return chat.tenant.name
 
 
 def _body(replies: list[Message]) -> str:
@@ -156,18 +195,24 @@ def _body(replies: list[Message]) -> str:
 def mail_unread_operator_replies(
     db: Session, *, chat_id: uuid.UUID, message_id: uuid.UUID
 ) -> str:
-    """Mail the visitor what they have not read. Returns the outcome for logs."""
+    """Mail the visitor what they have not read. Returns the outcome for logs.
+
+    The chat row stays locked across the send so two jobs for replies typed
+    seconds apart cannot both find the same unread tail and both mail it.
+    """
     from backend.escalation.service import _support_inbox_recipient
 
-    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    chat = _lock_chat(db, chat_id)
     if chat is None:
         return "no_chat"
     replies = unread_operator_replies(db, chat=chat, message_id=message_id)
     if not replies:
+        db.rollback()
         return "nothing_unread"
     ticket = _latest_ticket(db, chat.id)
     recipient = _recipient(chat, ticket)
     if recipient is None:
+        db.rollback()
         logger.info("unread_reply_mail_skipped_no_recipient chat_id=%s", chat.id)
         return "no_recipient"
 
@@ -179,6 +224,7 @@ def mail_unread_operator_replies(
         reply_to=reply_to,
     )
     if sent is None:
+        db.rollback()
         logger.warning("unread_reply_mail_send_failed chat_id=%s", chat.id)
         return "send_failed"
 
@@ -206,11 +252,15 @@ def _mail_in_thread(chat_id: uuid.UUID, message_id: uuid.UUID) -> str:
 
 @register_job(name=_JOB_NAME, max_attempts=_MAX_ATTEMPTS)
 async def mail_unread_operator_reply(ctx: dict[str, Any], chat_id: str, message_id: str) -> str:
-    outcome = await asyncio.to_thread(
-        _mail_in_thread, uuid.UUID(chat_id), uuid.UUID(message_id)
-    )
+    try:
+        outcome = await asyncio.to_thread(
+            _mail_in_thread, uuid.UUID(chat_id), uuid.UUID(message_id)
+        )
+    except (OperationalError, DBAPIError) as exc:
+        logger.warning("unread_reply_job_db_error chat_id=%s: %s", chat_id, exc)
+        raise Retry(defer=_RETRY_SECONDS) from exc
     if outcome == "send_failed":
-        raise Retry(defer=_SEND_RETRY_SECONDS)
+        raise Retry(defer=_RETRY_SECONDS)
     return outcome
 
 
@@ -219,7 +269,9 @@ def _bridge_to_loop(make: Callable[[], Awaitable[str | None]]) -> str | None:
 
     Inside a ``run_sync`` greenlet on the event-loop thread ``await_only``
     is the bridge; from a thread-pool handler the coroutine is submitted to
-    the main loop instead. Either way the caller gets the job id or ``None``.
+    the main loop instead. ``await_only`` closes the coroutine it was handed
+    before raising ``MissingGreenlet``, hence a factory rather than a
+    coroutine.
     """
     try:
         return await_only(make())

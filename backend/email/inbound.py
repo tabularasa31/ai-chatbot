@@ -44,9 +44,10 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.email.reply_lane import token_from_recipients, user_by_email
-from backend.models import Chat, EscalationTicket
+from backend.models import Chat, EscalationTicket, Message
 from backend.models.base import _utcnow
 from backend.observability.metrics import capture_event
+from backend.operator.unread_reply import mark_reply_mailed
 from backend.seats.service import user_holds_seat
 
 logger = logging.getLogger(__name__)
@@ -478,7 +479,7 @@ def _ingest(
     chat: Chat,
     user_id: uuid.UUID,
     db: Session,
-) -> None:
+) -> Message:
     """Write the answer into the chat thread through the one operator seam."""
     from backend.operator.service import (
         OperatorActor,
@@ -486,7 +487,7 @@ def _ingest(
         ingest_from_operator,
     )
 
-    ingest_from_operator(
+    return ingest_from_operator(
         db,
         chat=chat,
         tenant_id=ticket.tenant_id,
@@ -495,7 +496,7 @@ def _ingest(
         # is noise the visitor did not ask for. The forwarded e-mail keeps it.
         text=reply.text,
         actor=OperatorActor(channel=OperatorChannel.email, user_id=user_id),
-    )
+    ).message
 
 
 def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
@@ -544,13 +545,18 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
     # seat, no account, a closed request, a chat that has been deleted — takes
     # the forward path, which answers the customer just the same.
     if seated and chat is not None and live_request:
-        _ingest(reply, ticket, chat, user.id, db)
+        message = _ingest(reply, ticket, chat, user.id, db)
         # Mandatory, not best-effort in intent: this is what replaces the
         # direct operator → visitor path that ``Reply-To`` used to provide.
         # It is best-effort in *consequence* only — the answer is already in
         # the thread and visible in the widget, so a failed send must not undo
-        # it or ask for a retry that would write the message twice.
-        if not _forward_to_visitor(reply, ticket, db):
+        # it or ask for a retry that would write the message twice. The
+        # unread-reply job scheduled by the ingest is the retry: it mails the
+        # reply after the grace period unless this forward is stamped as
+        # already delivered.
+        if _forward_to_visitor(reply, ticket, db):
+            mark_reply_mailed(db, chat=chat, message=message)
+        else:
             logger.warning(
                 "email_lane_forward_failed_after_ingest ticket=%s", ticket.ticket_number
             )

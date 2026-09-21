@@ -855,7 +855,9 @@ export function ChatWidget({
         body: JSON.stringify({ message_id: messageId }),
       })
         .then((res) => {
-          if (cancelled || !res.ok) return;
+          // 404 is a message this conversation no longer contains (rotation);
+          // nothing to report, and nothing to keep retrying on every focus.
+          if (cancelled || !(res.ok || res.status === 404)) return;
           setPendingReadId((current) => (current === messageId ? null : current));
         })
         .catch(() => {

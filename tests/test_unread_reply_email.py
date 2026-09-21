@@ -12,6 +12,10 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from arq import Retry
+from sqlalchemy.exc import OperationalError
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -27,6 +31,7 @@ from backend.models import (
 from backend.models.base import _utcnow
 from backend.operator.unread_reply import (
     UNREAD_REPLY_GRACE_SECONDS,
+    mail_unread_operator_reply,
     mail_unread_operator_replies,
     mark_visitor_read,
 )
@@ -280,6 +285,7 @@ def test_the_site_hint_address_is_used_when_there_is_no_ticket(
 
     assert outcome == "sent"
     assert send.call_args.args[0] == "known@example.com"
+    assert send.call_args.args[1] == "Hint Co"
 
 
 def test_a_failed_send_leaves_the_marker_for_a_retry(
@@ -297,6 +303,25 @@ def test_a_failed_send_leaves_the_marker_for_a_retry(
     assert outcome == "send_failed"
     db_session.refresh(chat)
     assert chat.unread_reply_mailed_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_a_transient_database_error_asks_the_queue_to_retry() -> None:
+    boom = OperationalError("SELECT 1", {}, Exception("connection reset"))
+    with patch("backend.operator.unread_reply._mail_in_thread", side_effect=boom):
+        with pytest.raises(Retry):
+            await mail_unread_operator_reply(
+                {"job_id": "j", "job_try": 1}, str(uuid.uuid4()), str(uuid.uuid4())
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_send_asks_the_queue_to_retry() -> None:
+    with patch("backend.operator.unread_reply._mail_in_thread", return_value="send_failed"):
+        with pytest.raises(Retry):
+            await mail_unread_operator_reply(
+                {"job_id": "j", "job_try": 1}, str(uuid.uuid4()), str(uuid.uuid4())
+            )
 
 
 # --------------------------------------------------------------------------

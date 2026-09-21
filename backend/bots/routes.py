@@ -49,20 +49,25 @@ def _owner_tenant_id(
 
 
 def _enrich_bot_instructions(bot_id: uuid.UUID, tenant_id: uuid.UUID, website_url: str, api_key: str) -> None:
-    """Background task: extract company description and store it as custom_instructions."""
+    """Background task: extract company description and store it as custom_instructions.
+
+    Re-loads the row before writing: if the tenant set custom_instructions
+    themselves while this task was in flight, their text wins and preset is
+    left untouched.
+    """
     from backend.core.db import SessionLocal
+    from backend.models import Bot
     from backend.onboarding.extractor import extract_company_description
 
     description = extract_company_description(website_url, api_key)
     if not description:
         return
     with SessionLocal() as db:
-        bots_service.update_bot(
-            bot_id,
-            tenant_id,
-            db,
-            BotUpdate(custom_instructions=description.strip(), preset="support_agent"),
-        )
+        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
+        if not bot or bot.custom_instructions is not None:
+            return
+        bot.custom_instructions = description.strip()
+        db.commit()
 
 
 @bots_router.get("", response_model=BotList)
@@ -105,7 +110,7 @@ def create_bot(
     except Exception:
         pass
 
-    if body.website_url and body.agent_instructions is None:
+    if body.website_url and body.agent_instructions is None and body.custom_instructions is None:
         if tenant and tenant.openai_api_key:
             try:
                 api_key = decrypt_value(tenant.openai_api_key)

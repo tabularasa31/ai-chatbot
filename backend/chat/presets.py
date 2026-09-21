@@ -35,7 +35,9 @@ def effective_agent_instructions(
     "custom", "preset+custom", "none".
     """
     if agent_instructions and custom_instructions is None:
-        return agent_instructions, "legacy"
+        legacy = agent_instructions.strip()
+        if legacy:
+            return legacy, "legacy"
 
     preset_text = PRESETS.get(preset) if preset else None
     custom = custom_instructions.strip() or None if custom_instructions else None

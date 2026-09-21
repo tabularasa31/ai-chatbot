@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from arq import Retry
-from sqlalchemy.exc import DBAPIError, MissingGreenlet, OperationalError
+from sqlalchemy.exc import DBAPIError, MissingGreenlet
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
@@ -201,7 +201,12 @@ def mail_unread_operator_replies(
     so two jobs for replies typed seconds apart cannot both find the same
     unread tail, and the lock is not held across a ten-second provider call
     that a visitor's turn on the same chat would otherwise wait behind. A
-    failed send hands the marker back so the retry finds the replies again.
+    failed send hands the marker back so the retry finds the replies again —
+    unless a later job has already moved it on, in which case those earlier
+    replies stay claimed rather than re-mailing the later job's tail. At most
+    once by design: a worker killed between the claim and the provider's
+    answer leaves the claim standing, and the reply is still on screen in the
+    widget.
     """
     from backend.escalation.service import _support_inbox_recipient
 
@@ -219,19 +224,17 @@ def mail_unread_operator_replies(
         logger.info("unread_reply_mail_skipped_no_recipient chat_id=%s", chat.id)
         return "no_recipient"
 
+    subject = _subject(chat, ticket)
+    body = _body(replies)
+    reply_to = _support_inbox_recipient(chat.tenant, db) if chat.tenant is not None else None
     previous_marker = chat.unread_reply_mailed_message_id
     claimed = replies[-1].id
     chat.unread_reply_mailed_message_id = claimed
     db.add(chat)
     db.commit()
+    logger.info("unread_reply_claimed chat_id=%s through=%s", chat_id, claimed)
 
-    reply_to = _support_inbox_recipient(chat.tenant, db) if chat.tenant is not None else None
-    sent = send_email(
-        recipient,
-        _subject(chat, ticket),
-        _body(replies),
-        reply_to=reply_to,
-    )
+    sent = send_email(recipient, subject, body, reply_to=reply_to)
     if sent is None:
         locked = _lock_chat(db, chat_id)
         if locked is not None and locked.unread_reply_mailed_message_id == claimed:
@@ -243,7 +246,7 @@ def mail_unread_operator_replies(
 
     logger.info(
         "unread_reply_mailed chat_id=%s replies=%d ticket=%s",
-        chat.id,
+        chat_id,
         len(replies),
         ticket.ticket_number if ticket else None,
     )
@@ -266,7 +269,7 @@ async def mail_unread_operator_reply(ctx: dict[str, Any], chat_id: str, message_
         outcome = await asyncio.to_thread(
             _mail_in_thread, uuid.UUID(chat_id), uuid.UUID(message_id)
         )
-    except (OperationalError, DBAPIError) as exc:
+    except DBAPIError as exc:
         logger.warning("unread_reply_job_db_error chat_id=%s: %s", chat_id, exc)
         raise Retry(defer=_RETRY_SECONDS) from exc
     if outcome == "send_failed":

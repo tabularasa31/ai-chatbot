@@ -555,7 +555,19 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
         # reply after the grace period unless this forward is stamped as
         # already delivered.
         if _forward_to_visitor(reply, ticket, db):
-            mark_reply_mailed(db, chat=chat, message=message)
+            # Guarded like ``_stamp_forwarded``: a failure here must not 500
+            # the webhook, or Brevo redelivers and the reply is ingested and
+            # forwarded twice. The cost of a lost stamp is one possible
+            # duplicate e-mail from the job, never a duplicate thread message.
+            try:
+                mark_reply_mailed(db, chat=chat, message=message)
+            except Exception:
+                db.rollback()
+                logger.warning(
+                    "email_lane_mailed_stamp_failed ticket=%s",
+                    ticket.ticket_number,
+                    exc_info=True,
+                )
         else:
             logger.warning(
                 "email_lane_forward_failed_after_ingest ticket=%s", ticket.ticket_number

@@ -99,8 +99,8 @@ class HandlerContext:
     # Used by RagHandler only
     bot_id: uuid.UUID | None = None
     bot: Bot | None = None
-    # Effective tenant/agent layer — legacy agent_instructions, or the code
-    # preset plus custom_instructions per backend.chat.presets.effective_agent_instructions.
+    # Effective tenant/agent layer — the code preset plus custom_instructions
+    # per backend.chat.presets.effective_agent_instructions.
     bot_agent_instructions: str | None = None
     disclosure_config: dict[str, Any] | None = None
     allow_clarification: bool = True

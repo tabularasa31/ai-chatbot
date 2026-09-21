@@ -255,7 +255,6 @@ def test_create_bot_without_instructions_defaults_to_support_agent_preset(
         json={"name": "Preset Bot"},
     ).json()
 
-    assert bot["agent_instructions"] is None
     assert bot["preset"] == "support_agent"
     assert bot["custom_instructions"] is None
     assert bot["instructions_source"] == "preset"
@@ -313,76 +312,11 @@ def test_update_bot_instructions_layering(tenant: TestClient, db_session: Sessio
     assert resp.json()["instructions_source"] == "preset"
 
 
-def test_update_bot_custom_instructions_clears_legacy_agent_instructions(
-    tenant: TestClient, db_session: Session
-) -> None:
-    token, _ = _auth(tenant, db_session, "legacy-clear@example.com")
-    bot_id = tenant.post(
-        "/bots",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Legacy Bot", "agent_instructions": "Always answer in haiku."},
-    ).json()["id"]
-
-    resp = tenant.patch(
-        f"/bots/{bot_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"custom_instructions": "New text"},
-    )
-    body = resp.json()
-    assert body["agent_instructions"] is None
-    # preset carries its server_default ("support_agent") for existing rows,
-    # so clearing the legacy field falls back to preset+custom, not bare custom.
-    assert body["instructions_source"] == "preset+custom"
-
-
-def test_update_bot_agent_instructions_only_still_works(tenant: TestClient, db_session: Session) -> None:
-    """Patching only the deprecated field keeps behaving as before."""
-    token, _ = _auth(tenant, db_session, "legacy-only@example.com")
-    bot_id = tenant.post(
-        "/bots",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Bot"},
-    ).json()["id"]
-
-    resp = tenant.patch(
-        f"/bots/{bot_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"agent_instructions": "Custom legacy text."},
-    )
-    body = resp.json()
-    assert body["agent_instructions"] == "Custom legacy text."
-    assert body["instructions_source"] == "legacy"
-    assert body["effective_instructions"] == "Custom legacy text."
-
-
-def test_legacy_patch_overrides_existing_custom_instructions(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """Last write wins: a legacy PATCH on a bot that already has custom text
-    must not be silently ignored by effective_agent_instructions."""
-    token, _ = _auth(tenant, db_session, "legacy-overrides-custom@example.com")
-    bot_id = tenant.post(
-        "/bots",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Bot", "custom_instructions": "Custom text."},
-    ).json()["id"]
-
-    resp = tenant.patch(
-        f"/bots/{bot_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"agent_instructions": "X"},
-    )
-    body = resp.json()
-    assert body["instructions_source"] == "legacy"
-    assert body["effective_instructions"] == "X"
-    assert body["custom_instructions"] is None
-
-
-def test_empty_custom_instructions_normalized_and_legacy_overrides(
+def test_empty_custom_instructions_normalized(
     tenant: TestClient, db_session: Session
 ) -> None:
     """A whitespace-only custom_instructions PATCH clears the column instead of
-    being stored as a non-null empty string; a later legacy PATCH still wins."""
+    being stored as a non-null empty string."""
     token, _ = _auth(tenant, db_session, "empty-custom@example.com")
     bot_id = tenant.post(
         "/bots",
@@ -398,15 +332,6 @@ def test_empty_custom_instructions_normalized_and_legacy_overrides(
     body = resp.json()
     assert body["custom_instructions"] is None
     assert body["instructions_source"] == "preset"
-
-    resp = tenant.patch(
-        f"/bots/{bot_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"agent_instructions": "X"},
-    )
-    body = resp.json()
-    assert body["instructions_source"] == "legacy"
-    assert body["effective_instructions"] == "X"
 
 
 def test_custom_instructions_too_long_rejected(tenant: TestClient, db_session: Session) -> None:
@@ -456,7 +381,6 @@ def test_onboarding_enrichment_stores_custom_instructions_not_preset_snapshot(
     refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
     assert refreshed.custom_instructions == "Acme sells widgets."
     assert refreshed.preset == "support_agent"
-    assert refreshed.agent_instructions is None
 
 
 def test_create_with_custom_instructions_and_website_url_skips_enrichment(
@@ -517,41 +441,6 @@ def test_enrichment_task_leaves_meanwhile_set_custom_instructions_unchanged(
     refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
     assert refreshed.custom_instructions == "set by tenant"
     assert refreshed.preset is None
-
-
-def test_enrichment_task_leaves_meanwhile_set_agent_instructions_unchanged(
-    tenant: TestClient, db_session: Session, monkeypatch
-) -> None:
-    """If the tenant sets the legacy agent_instructions field while the task is
-    in flight, the atomic UPDATE guard must not touch custom_instructions."""
-    from backend.bots import routes as bots_routes
-    from backend.models import Bot
-
-    token, _ = _auth(tenant, db_session, "race-enrichment-legacy@example.com")
-    bot_id = tenant.post(
-        "/bots",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Bot"},
-    ).json()["id"]
-
-    tenant.patch(
-        f"/bots/{bot_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"agent_instructions": "Legacy text set mid-flight."},
-    )
-
-    monkeypatch.setattr(
-        "backend.onboarding.extractor.extract_company_description",
-        lambda url, api_key: "Acme sells widgets.",
-    )
-
-    bot = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
-    bots_routes._enrich_bot_instructions(bot.id, bot.tenant_id, "https://acme.example", "sk-fake")
-
-    db_session.expire_all()
-    refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
-    assert refreshed.custom_instructions is None
-    assert refreshed.agent_instructions == "Legacy text set mid-flight."
 
 
 def test_delete_bot_blocked_when_last(tenant: TestClient, db_session: Session) -> None:
@@ -650,101 +539,6 @@ def test_bot_public_id_is_unique(tenant: TestClient, db_session: Session) -> Non
         ids.add(bot["public_id"])
 
     assert len(ids) == 5
-
-
-def _instructions_bot(session_local, instructions: str | None) -> uuid.UUID:
-    from backend.models import Bot, Tenant
-
-    with session_local() as db:
-        tenant = Tenant(name="Refresh Tenant")
-        db.add(tenant)
-        db.flush()
-        bot = Bot(tenant_id=tenant.id, name="Refresh Bot", agent_instructions=instructions)
-        db.add(bot)
-        db.commit()
-        return bot.id
-
-
-def test_refresh_keeps_text_written_around_the_preset_block() -> None:
-    from backend.chat.presets import PRESET_SUPPORT_AGENT
-    from scripts.refresh_bot_instructions import REFRESHED, _PRESET_GEN_2, plan_refresh
-
-    description = "Acme ships industrial widgets to 40 countries."
-    owner_rules = "Refund window is 14 days. Never mention competitors."
-    stored = f"{description}\n\n{_PRESET_GEN_2.strip()}\n\n{owner_rules}"
-
-    value, outcome = plan_refresh(stored, force=False)
-
-    assert outcome == REFRESHED
-    assert value == f"{description}\n\n{PRESET_SUPPORT_AGENT.strip()}\n\n{owner_rules}"
-
-
-def test_refresh_replaces_the_oldest_preset_generation_whole() -> None:
-    from scripts.refresh_bot_instructions import REFRESHED, _PRESET_GEN_1, plan_refresh
-
-    value, outcome = plan_refresh(_PRESET_GEN_1, force=False)
-
-    assert outcome == REFRESHED
-    assert "Follow the internal reasoning steps" not in value
-    assert "Keep it concise" not in value
-
-
-def test_refresh_leaves_cleared_and_customized_instructions_alone() -> None:
-    from backend.chat.presets import PRESET_SUPPORT_AGENT
-    from scripts.refresh_bot_instructions import CLEARED, CURRENT, CUSTOMIZED, plan_refresh
-
-    assert plan_refresh(None, force=False) == (None, CLEARED)
-    assert plan_refresh("   ", force=False) == (None, CLEARED)
-    assert plan_refresh("Always answer in haiku.", force=False) == (None, CUSTOMIZED)
-    assert plan_refresh(PRESET_SUPPORT_AGENT, force=False) == (None, CURRENT)
-
-
-def test_force_rewrites_an_edited_preset_but_keeps_the_description() -> None:
-    from backend.chat.presets import PRESET_SUPPORT_AGENT
-    from scripts.refresh_bot_instructions import OVERWRITTEN, plan_refresh
-
-    description = "Acme ships industrial widgets to 40 countries."
-    edited = f"{description}\n\nYou are a support assistant for {{product_name}}. Reworded by the owner."
-
-    value, outcome = plan_refresh(edited, force=True)
-
-    assert outcome == OVERWRITTEN
-    assert value == f"{description}\n\n{PRESET_SUPPORT_AGENT.strip()}"
-
-
-def test_run_refresh_dry_run_reports_without_writing(engine) -> None:
-    from sqlalchemy.orm import sessionmaker
-
-    from backend.models import Bot
-    from scripts.refresh_bot_instructions import _PRESET_GEN_2, run_refresh
-
-    session_local = sessionmaker(bind=engine, class_=Session, future=True)
-    bot_id = _instructions_bot(session_local, _PRESET_GEN_2)
-
-    stats = run_refresh(dry_run=True, session_factory=session_local)
-
-    assert stats.refreshed == 1
-    with session_local() as verify:
-        assert verify.get(Bot, bot_id).agent_instructions == _PRESET_GEN_2
-
-
-def test_run_refresh_writes_once_and_then_reports_current(engine) -> None:
-    from sqlalchemy.orm import sessionmaker
-
-    from backend.chat.presets import PRESET_SUPPORT_AGENT
-    from backend.models import Bot
-    from scripts.refresh_bot_instructions import _PRESET_GEN_2, run_refresh
-
-    session_local = sessionmaker(bind=engine, class_=Session, future=True)
-    bot_id = _instructions_bot(session_local, _PRESET_GEN_2)
-
-    first = run_refresh(dry_run=False, session_factory=session_local)
-    second = run_refresh(dry_run=False, session_factory=session_local)
-
-    assert (first.refreshed, second.refreshed) == (1, 0)
-    assert second.current == 1
-    with session_local() as verify:
-        assert verify.get(Bot, bot_id).agent_instructions == PRESET_SUPPORT_AGENT
 
 
 def test_preset_text_reflects_bot_preset(tenant: TestClient, db_session: Session) -> None:

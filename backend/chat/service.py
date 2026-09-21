@@ -631,7 +631,6 @@ async def _build_handler_context_async(
         bot=resolved_bot,
         bot_agent_instructions=(
             effective_agent_instructions(
-                agent_instructions=resolved_bot.agent_instructions,
                 custom_instructions=resolved_bot.custom_instructions,
                 preset=resolved_bot.preset,
             )[0]

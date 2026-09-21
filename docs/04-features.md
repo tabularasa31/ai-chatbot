@@ -695,17 +695,17 @@ Each bot's system prompt is assembled from three layers, applied in order:
 
 1. **Preset** — a support-agent persona defined in code (`backend/chat/presets.py`, `PRESETS["support_agent"]`). It ships with the deploy and reaches every bot that selects it; tenants cannot edit its text. The `{product_name}` placeholder in the preset is substituted with the product name extracted from the tenant's knowledge base at render time.
 2. **Custom instructions** — the tenant's own text (`custom_instructions`, up to 3 000 characters), appended after the preset.
-3. **Product rules** — the fixed support-agent rules built into `backend/chat/prompts.py` (grounding, citation, handoff-marker, and formatting rules). These always come last in the system message and take precedence over anything in the preset or custom layers above them.
+3. **Product rules** — the fixed support-agent rules built into `backend/chat/prompts.py` (grounding, citation, handoff-marker, and formatting rules). These come immediately after the preset/custom layer and take precedence over it; other stable blocks (disclosure limits, language/clarification/support-channel policy) follow after.
 
-`effective_agent_instructions` (`backend/chat/presets.py`) computes the combined preset+custom text from a bot's `preset` and `custom_instructions` fields and reports which layers contributed via a `source` value: `"preset"`, `"custom"`, `"preset+custom"`, `"legacy"` (pre-migration bots still on the raw `agent_instructions` column), or `"none"`.
+`effective_agent_instructions` (`backend/chat/presets.py`) computes the combined preset+custom text from a bot's `preset` and `custom_instructions` fields and reports which layers contributed via a `source` value: `"preset"`, `"custom"`, `"preset+custom"`, or `"none"`.
 
 **Own-prompt-only mode:** setting `preset` to `null` drops the code preset entirely — the bot runs on `custom_instructions` alone (or with no persona layer at all if that is also empty). Product rules still apply regardless of this setting.
 
-**API surface** (`backend/bots/schemas.py`, `BotResponse`): `custom_instructions` (≤3 000 chars), `preset`, `preset_text` (the current preset body, for display), `effective_instructions` (the combined text actually sent to the model), and `instructions_source`. The `agent_instructions` field is deprecated — kept for backward compatibility only.
+**API surface** (`backend/bots/schemas.py`, `BotResponse`): `custom_instructions` (≤3 000 chars), `preset`, `preset_text` (the current preset body, for display), `effective_instructions` (the combined text actually sent to the model), and `instructions_source`.
 
 The global `ENABLE_AGENT_INSTRUCTIONS` setting (default on) is a kill switch: when off, none of these layers are added to the system prompt regardless of what a bot has configured.
 
-**Legacy column backfill.** `bots.agent_instructions` is transitional: existing bots that predate the preset/custom split still carry their old text there. `scripts/backfill_bot_instructions.py` is a one-off CLI that splits that legacy text into `preset` + `custom_instructions` for each bot, dry-run by default (pass `--apply` to write), with `--bot-id` / `--exclude-id` to scope or skip specific bots. It buckets every bot into one of: `skip` (nothing to migrate), `excluded` (explicitly excluded via `--exclude-id`), `preset_only` (legacy text matches a known preset verbatim), `split` (legacy text recognized as preset + tenant addition, split accordingly), or `unrecognized` (left untouched, needs a human look). The `agent_instructions` column itself is dropped only after this backfill has run against production.
+**Legacy column backfill (completed).** `scripts/backfill_bot_instructions.py` was a one-off CLI, run once against production, that split every bot's old single-field `agent_instructions` text into `preset` + `custom_instructions`; the column is now `NULL` on every bot.
 
 ### Answer cache
 

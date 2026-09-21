@@ -52,8 +52,8 @@ def _enrich_bot_instructions(bot_id: uuid.UUID, tenant_id: uuid.UUID, website_ur
     """Background task: extract company description and store it as custom_instructions.
 
     Writes with a single conditional UPDATE: if the tenant set custom_instructions
-    or agent_instructions themselves while this task was in flight, the WHERE
-    clause matches no row, their text wins, and preset is left untouched.
+    themselves while this task was in flight, the WHERE clause matches no row,
+    their text wins, and preset is left untouched.
     """
     from backend.core.db import SessionLocal
     from backend.models import Bot
@@ -67,7 +67,6 @@ def _enrich_bot_instructions(bot_id: uuid.UUID, tenant_id: uuid.UUID, website_ur
             Bot.id == bot_id,
             Bot.tenant_id == tenant_id,
             Bot.custom_instructions.is_(None),
-            Bot.agent_instructions.is_(None),
         ).update({"custom_instructions": description.strip()}, synchronize_session=False)
         db.commit()
 
@@ -93,7 +92,6 @@ def create_bot(
         tenant_id,
         body.name,
         db,
-        agent_instructions=body.agent_instructions,
         custom_instructions=body.custom_instructions,
         preset=body.preset,
         preset_was_set="preset" in body.model_fields_set,
@@ -103,7 +101,7 @@ def create_bot(
 
     tenant = db.get(Tenant, tenant_id)
 
-    if body.website_url and body.agent_instructions is None and body.custom_instructions is None:
+    if body.website_url and body.custom_instructions is None:
         if tenant and tenant.openai_api_key:
             try:
                 api_key = decrypt_value(tenant.openai_api_key)

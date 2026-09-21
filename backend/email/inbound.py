@@ -36,6 +36,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from email.utils import parseaddr
 from html import unescape
 from typing import Any
@@ -597,11 +598,12 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
         return InboundResult(
             InboundOutcome.forward_failed, ticket.ticket_number, ticket.id, thread_match
         )
-    _stamp_forwarded(reply, ticket, db)
+    forwarded_at = _stamp_forwarded(reply, ticket, db)
     _capture(
         "email_lane.reply_forwarded",
         ticket,
         properties={
+            "response_ms": _forward_response_ms(ticket, forwarded_at),
             # The actual reason, not the first plausible one. The earlier
             # expression reported "not_live" for a seated operator whose chat
             # had been deleted, which is a different failure with a different
@@ -615,7 +617,9 @@ def handle_inbound_reply(reply: InboundReply, db: Session) -> InboundResult:
     )
 
 
-def _stamp_forwarded(reply: InboundReply, ticket: EscalationTicket, db: Session) -> None:
+def _stamp_forwarded(
+    reply: InboundReply, ticket: EscalationTicket, db: Session
+) -> datetime | None:
     """Leave the fact of the forward on the ticket — sender and time, no body.
 
     The answer reached the visitor outside the product, and without this the
@@ -623,14 +627,17 @@ def _stamp_forwarded(reply: InboundReply, ticket: EscalationTicket, db: Session)
     it again. The text stays out on purpose: a reply from an address holding
     no seat is not a message of this conversation and must not be stored as
     one. Only ever the newest forward — the inbox needs the latest fact.
+    Returns the stamped time, or ``None`` when the stamp did not land.
     """
     try:
-        ticket.forwarded_reply_at = _utcnow()
+        stamped_at = _utcnow()
+        ticket.forwarded_reply_at = stamped_at
         ticket.forwarded_reply_from = reply.from_email[:255]
         db.add(ticket)
         # Committed here rather than left to the receipt, which commits only
         # when the payload carried a message id.
         db.commit()
+        return stamped_at
     except Exception:
         # The answer has already reached the visitor. Failing now would make
         # Brevo redeliver the batch and forward it a second time, which is a
@@ -639,6 +646,25 @@ def _stamp_forwarded(reply: InboundReply, ticket: EscalationTicket, db: Session)
         logger.warning(
             "email_lane_forward_stamp_failed ticket=%s", ticket.ticket_number, exc_info=True
         )
+        return None
+
+
+def _forward_response_ms(ticket: EscalationTicket, forwarded_at: datetime | None) -> int | None:
+    """Request raised → forward, on the forward's own clock; never ``first_response_ms``."""
+    from backend.chat.events import _session_duration_ms
+    from backend.escalation.service import request_raised_at
+
+    if forwarded_at is None:
+        return None
+    try:
+        return _session_duration_ms(request_raised_at(ticket), forwarded_at)
+    except Exception:
+        # Evaluated before ``_capture``'s own guard, after the visitor already
+        # has the mail: raising here would make Brevo redeliver and forward twice.
+        logger.warning(
+            "email_lane_response_clock_failed ticket=%s", ticket.ticket_number, exc_info=True
+        )
+        return None
 
 
 def _forward_reason(*, seated: bool, chat: Chat | None, live: bool) -> str:

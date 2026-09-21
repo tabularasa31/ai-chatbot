@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_owner, require_verified_user
 from backend.bots import service as bots_service
+from backend.bots.events import changed_fields, emit_bot_settings_updated
 from backend.bots.schemas import (
     BotCreate,
     BotList,
@@ -20,7 +21,6 @@ from backend.bots.schemas import (
 from backend.core.crypto import decrypt_value
 from backend.core.db import get_db
 from backend.models import Tenant, User
-from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
 bots_router = APIRouter(prefix="/bots", tags=["bots"])
@@ -94,15 +94,6 @@ def create_bot(
     )
 
     tenant = db.get(Tenant, tenant_id)
-    try:
-        capture_event(
-            "bot.created",
-            distinct_id=str(bot.public_id),
-            tenant_id=str(tenant.public_id) if tenant else None,
-            bot_id=str(bot.public_id),
-        )
-    except Exception:
-        pass
 
     if body.website_url and body.agent_instructions is None:
         if tenant and tenant.openai_api_key:
@@ -133,7 +124,13 @@ def update_bot(
     tenant_id: Annotated[uuid.UUID, Depends(_owner_tenant_id)],
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
-    return bots_service.update_bot(bot_id, tenant_id, db, body)
+    bot_before = bots_service.get_bot_by_id(bot_id, tenant_id, db)
+    changed = changed_fields(bot_before, body)
+    bot = bots_service.update_bot(bot_id, tenant_id, db, body)
+    tenant = db.get(Tenant, tenant_id)
+    if tenant:
+        emit_bot_settings_updated(bot, str(tenant.public_id), changed)
+    return bot
 
 
 @bots_router.delete("/{bot_id}", status_code=204, response_model=None)
@@ -162,5 +159,11 @@ def put_bot_disclosure(
     tenant_id: Annotated[uuid.UUID, Depends(_owner_tenant_id)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DisclosureConfigResponse:
+    before = bots_service.get_bot_disclosure_config(bot_id, tenant_id, db)
     data = bots_service.update_bot_disclosure_config(bot_id, tenant_id, body.level, db)
+    if before.get("level") != data.get("level"):
+        bot = bots_service.get_bot_by_id(bot_id, tenant_id, db)
+        tenant = db.get(Tenant, tenant_id)
+        if tenant:
+            emit_bot_settings_updated(bot, str(tenant.public_id), ["disclosure_level"])
     return DisclosureConfigResponse(**data)

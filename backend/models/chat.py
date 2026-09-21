@@ -468,6 +468,9 @@ class Message(Base):
     # still exists: read the author through the FK, and fall back to this
     # once it is gone. See ``tenants/members_service.remove_member``.
     operator_label = Column(String(255), nullable=True)
+    # How this turn resolved (``TurnOutcome``), for analytics reporting.
+    # NULL for every row written before this column existed.
+    turn_outcome = Column(String(32), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

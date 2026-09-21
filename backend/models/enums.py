@@ -55,6 +55,19 @@ class MessageRole(str, enum.Enum):
     operator = "operator"
 
 
+class TurnOutcome(str, enum.Enum):
+    """How a bot-answered chat turn resolved, for analytics reporting.
+
+    NULL on ``messages.turn_outcome`` means a legacy row predating this
+    column, not any of these four states.
+    """
+
+    answered = "answered"
+    unanswered = "unanswered"
+    filtered = "filtered"
+    escalation = "escalation"
+
+
 class OperatorState(str, enum.Enum):
     """Who is answering the visitor in a chat.
 

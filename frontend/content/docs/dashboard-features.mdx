@@ -62,11 +62,10 @@ Gap Analyzer is the operator backlog for things your documentation may be missin
 
 - **OpenAI API key** — per-client key, encrypted at rest; required for embeddings, chat, and document health checks. Save, update, or remove the key from this page.
 
-- **Agent instructions** — the system prompt that shapes how your bot communicates: its persona, tone, ground rules, and formatting preferences. Edited in a textarea (max 3 000 characters) with a character counter.
-  - A **Support Agent** preset is available — click it to fill in the standard customer-support persona. If you modify a preset and want to start over, re-apply it from the preset button.
-  - The placeholder `{product_name}` is replaced at runtime with the product name extracted from your knowledge base.
-  - Clearing the field (saving empty) resets to the default Support Agent preset.
-  - When you create a bot and provide a **website URL** at signup, Chat9 auto-extracts a short company description from that page and prepends it to the preset instructions in the background.
+- **Agent instructions** — shown as two parts. The standard instructions are read-only and maintained by Chat9 — they set your bot's baseline support-agent persona, tone, and ground rules, and are updated centrally as Chat9 improves them. **Your additions** is a textarea (up to 3 000 characters, with a character counter) where you add anything specific to your product on top of the standard instructions. The placeholder `{product_name}` is replaced at runtime with the product name extracted from your knowledge base.
+  - A **"Use only my own prompt"** toggle lets you drop the standard instructions entirely and run on your own text alone — use it if you want full control over your bot's persona instead of building on the Chat9 default.
+  - Either way, Chat9's core product rules (grounding answers in your documentation, escalation behavior, formatting) always apply on top and cannot be overridden.
+  - When you create a bot and provide a **website URL** at signup, Chat9 auto-extracts a short company description from that page and adds it to your instructions in the background.
 
 - **Response detail level** — Detailed / Standard / Corporate. Controls how much technical depth the bot includes in answers. This setting also lives on this page; see the description of each level when selecting it.
 

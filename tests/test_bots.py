@@ -7,7 +7,7 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from tests.conftest import register_and_verify_user
+from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 def _auth(client: TestClient, db: Session, email: str = "bot-owner@example.com") -> tuple[str, uuid.UUID]:
@@ -103,6 +103,455 @@ def test_update_bot_link_safety_normalizes_allowed_domains(
     updated = patch_resp.json()
     assert updated["link_safety_enabled"] is True
     assert updated["allowed_domains"] == ["example.com", "help.example.com"]
+
+
+def test_update_bot_emits_settings_updated_for_changed_fields_only(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    events: list[dict] = []
+    monkeypatch.setattr(
+        "backend.bots.events.capture_event",
+        lambda event, **kwargs: events.append({"event": event, **kwargs}),
+    )
+
+    token, _ = _auth(tenant, db_session, "settings-updated@example.com")
+    bot = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]
+    bot_id = bot["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "Renamed Bot",
+            "link_safety_enabled": True,
+            "is_active": bot["is_active"],
+        },
+    )
+    assert resp.status_code == 200
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["event"] == "bot.settings_updated"
+    assert event["distinct_id"] == bot["public_id"]
+    assert event["bot_id"] == bot["public_id"]
+    assert event["properties"] == {
+        "changed_fields": ["link_safety_enabled", "name"],
+        "changed_count": 2,
+    }
+
+    properties_text = str(event["properties"])
+    assert "Renamed Bot" not in properties_text
+
+
+def test_update_bot_emits_nothing_when_nothing_changes(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    events: list[dict] = []
+    monkeypatch.setattr(
+        "backend.bots.events.capture_event",
+        lambda event, **kwargs: events.append({"event": event, **kwargs}),
+    )
+
+    token, _ = _auth(tenant, db_session, "settings-unchanged@example.com")
+    bot = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]
+    bot_id = bot["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": bot["name"], "is_active": bot["is_active"]},
+    )
+    assert resp.status_code == 200
+    assert events == []
+
+
+def test_put_bot_disclosure_emits_settings_updated_for_changed_level(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    events: list[dict] = []
+    monkeypatch.setattr(
+        "backend.bots.events.capture_event",
+        lambda event, **kwargs: events.append({"event": event, **kwargs}),
+    )
+
+    token = register_and_verify_user(tenant, db_session, email="disclosure-event@example.com")
+    tenant_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Disclosure Event Tenant"},
+    )
+    assert tenant_resp.status_code == 201
+    tenant_public_id = tenant_resp.json()["public_id"]
+
+    bot = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]
+
+    resp = tenant.put(
+        f"/bots/{bot['id']}/disclosure",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"level": "corporate"},
+    )
+    assert resp.status_code == 200
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["event"] == "bot.settings_updated"
+    assert event["distinct_id"] == bot["public_id"]
+    assert event["tenant_id"] == tenant_public_id
+    assert event["bot_id"] == bot["public_id"]
+    assert event["groups"] == {"tenant": tenant_public_id}
+    assert event["properties"] == {
+        "changed_fields": ["disclosure_level"],
+        "changed_count": 1,
+    }
+
+    events.clear()
+    resp2 = tenant.put(
+        f"/bots/{bot['id']}/disclosure",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"level": "corporate"},
+    )
+    assert resp2.status_code == 200
+    assert events == []
+
+
+def test_create_bot_emits_no_bot_created_event(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    events: list[dict] = []
+    monkeypatch.setattr(
+        "backend.bots.events.capture_event",
+        lambda event, **kwargs: events.append({"event": event, **kwargs}),
+    )
+
+    token, _ = _auth(tenant, db_session, "create-no-event@example.com")
+
+    resp = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "New Bot"},
+    )
+    assert resp.status_code == 201
+    assert events == []
+
+
+def test_create_bot_without_instructions_defaults_to_support_agent_preset(
+    tenant: TestClient, db_session: Session
+) -> None:
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+
+    token, _ = _auth(tenant, db_session, "create-preset@example.com")
+
+    bot = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Preset Bot"},
+    ).json()
+
+    assert bot["agent_instructions"] is None
+    assert bot["preset"] == "support_agent"
+    assert bot["custom_instructions"] is None
+    assert bot["instructions_source"] == "preset"
+    assert bot["effective_instructions"] == PRESET_SUPPORT_AGENT
+
+
+def test_create_bot_with_explicit_null_preset_stays_unset(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, _ = _auth(tenant, db_session, "create-null-preset@example.com")
+
+    bot = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "No Preset Bot", "preset": None},
+    ).json()
+
+    assert bot["preset"] is None
+    assert bot["custom_instructions"] is None
+    assert bot["instructions_source"] == "none"
+
+
+def test_update_bot_instructions_layering(tenant: TestClient, db_session: Session) -> None:
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+
+    token, _ = _auth(tenant, db_session, "layering-bot@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Layered Bot"},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": "X"},
+    )
+    body = resp.json()
+    assert body["instructions_source"] == "preset+custom"
+    assert body["effective_instructions"].endswith("X")
+    assert body["effective_instructions"].startswith(PRESET_SUPPORT_AGENT.split("\n")[0])
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"preset": None},
+    )
+    assert resp.json()["instructions_source"] == "custom"
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": None, "preset": "support_agent"},
+    )
+    assert resp.json()["instructions_source"] == "preset"
+
+
+def test_update_bot_custom_instructions_clears_legacy_agent_instructions(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, _ = _auth(tenant, db_session, "legacy-clear@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Legacy Bot", "agent_instructions": "Always answer in haiku."},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": "New text"},
+    )
+    body = resp.json()
+    assert body["agent_instructions"] is None
+    # preset carries its server_default ("support_agent") for existing rows,
+    # so clearing the legacy field falls back to preset+custom, not bare custom.
+    assert body["instructions_source"] == "preset+custom"
+
+
+def test_update_bot_agent_instructions_only_still_works(tenant: TestClient, db_session: Session) -> None:
+    """Patching only the deprecated field keeps behaving as before."""
+    token, _ = _auth(tenant, db_session, "legacy-only@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot"},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agent_instructions": "Custom legacy text."},
+    )
+    body = resp.json()
+    assert body["agent_instructions"] == "Custom legacy text."
+    assert body["instructions_source"] == "legacy"
+    assert body["effective_instructions"] == "Custom legacy text."
+
+
+def test_legacy_patch_overrides_existing_custom_instructions(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Last write wins: a legacy PATCH on a bot that already has custom text
+    must not be silently ignored by effective_agent_instructions."""
+    token, _ = _auth(tenant, db_session, "legacy-overrides-custom@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "custom_instructions": "Custom text."},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agent_instructions": "X"},
+    )
+    body = resp.json()
+    assert body["instructions_source"] == "legacy"
+    assert body["effective_instructions"] == "X"
+    assert body["custom_instructions"] is None
+
+
+def test_empty_custom_instructions_normalized_and_legacy_overrides(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A whitespace-only custom_instructions PATCH clears the column instead of
+    being stored as a non-null empty string; a later legacy PATCH still wins."""
+    token, _ = _auth(tenant, db_session, "empty-custom@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "custom_instructions": "Custom text."},
+    ).json()["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": ""},
+    )
+    body = resp.json()
+    assert body["custom_instructions"] is None
+    assert body["instructions_source"] == "preset"
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agent_instructions": "X"},
+    )
+    body = resp.json()
+    assert body["instructions_source"] == "legacy"
+    assert body["effective_instructions"] == "X"
+
+
+def test_custom_instructions_too_long_rejected(tenant: TestClient, db_session: Session) -> None:
+    token, _ = _auth(tenant, db_session, "too-long@example.com")
+
+    resp = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "custom_instructions": "x" * 3001},
+    )
+    assert resp.status_code == 422
+
+
+def test_unknown_preset_rejected(tenant: TestClient, db_session: Session) -> None:
+    token, _ = _auth(tenant, db_session, "bad-preset@example.com")
+
+    resp = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "preset": "not_a_real_preset"},
+    )
+    assert resp.status_code == 422
+
+
+def test_onboarding_enrichment_stores_custom_instructions_not_preset_snapshot(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    from backend.bots import routes as bots_routes
+    from backend.models import Bot
+
+    token, _ = _auth(tenant, db_session, "onboarding-bot@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Onboarded Bot"},
+    ).json()["id"]
+
+    monkeypatch.setattr(
+        "backend.onboarding.extractor.extract_company_description",
+        lambda url, api_key: "Acme sells widgets.",
+    )
+
+    bot = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    bots_routes._enrich_bot_instructions(bot.id, bot.tenant_id, "https://acme.example", "sk-fake")
+
+    db_session.expire_all()
+    refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    assert refreshed.custom_instructions == "Acme sells widgets."
+    assert refreshed.preset == "support_agent"
+    assert refreshed.agent_instructions is None
+
+
+def test_create_with_custom_instructions_and_website_url_skips_enrichment(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    """A create carrying its own custom_instructions must not be overwritten
+    by the onboarding-enrichment background task."""
+    from backend.bots import routes as bots_routes
+
+    token, _ = _auth(tenant, db_session, "skip-enrichment@example.com")
+    set_client_openai_key(tenant, token)
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        bots_routes, "_enrich_bot_instructions", lambda *a, **kw: calls.append(a)
+    )
+
+    bot = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot", "custom_instructions": "mine", "website_url": "https://acme.example"},
+    ).json()
+
+    assert calls == []
+    assert bot["custom_instructions"] == "mine"
+
+
+def test_enrichment_task_leaves_meanwhile_set_custom_instructions_unchanged(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    """If the tenant sets custom_instructions after the task was scheduled but
+    before it runs, the task must not clobber it."""
+    from backend.bots import routes as bots_routes
+    from backend.models import Bot
+
+    token, _ = _auth(tenant, db_session, "race-enrichment@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot"},
+    ).json()["id"]
+
+    tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": "set by tenant", "preset": None},
+    )
+
+    monkeypatch.setattr(
+        "backend.onboarding.extractor.extract_company_description",
+        lambda url, api_key: "Acme sells widgets.",
+    )
+
+    bot = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    bots_routes._enrich_bot_instructions(bot.id, bot.tenant_id, "https://acme.example", "sk-fake")
+
+    db_session.expire_all()
+    refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    assert refreshed.custom_instructions == "set by tenant"
+    assert refreshed.preset is None
+
+
+def test_enrichment_task_leaves_meanwhile_set_agent_instructions_unchanged(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    """If the tenant sets the legacy agent_instructions field while the task is
+    in flight, the atomic UPDATE guard must not touch custom_instructions."""
+    from backend.bots import routes as bots_routes
+    from backend.models import Bot
+
+    token, _ = _auth(tenant, db_session, "race-enrichment-legacy@example.com")
+    bot_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot"},
+    ).json()["id"]
+
+    tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"agent_instructions": "Legacy text set mid-flight."},
+    )
+
+    monkeypatch.setattr(
+        "backend.onboarding.extractor.extract_company_description",
+        lambda url, api_key: "Acme sells widgets.",
+    )
+
+    bot = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    bots_routes._enrich_bot_instructions(bot.id, bot.tenant_id, "https://acme.example", "sk-fake")
+
+    db_session.expire_all()
+    refreshed = db_session.query(Bot).filter(Bot.id == uuid.UUID(bot_id)).first()
+    assert refreshed.custom_instructions is None
+    assert refreshed.agent_instructions == "Legacy text set mid-flight."
 
 
 def test_delete_bot_blocked_when_last(tenant: TestClient, db_session: Session) -> None:
@@ -298,15 +747,24 @@ def test_run_refresh_writes_once_and_then_reports_current(engine) -> None:
         assert verify.get(Bot, bot_id).agent_instructions == PRESET_SUPPORT_AGENT
 
 
-def test_dashboard_preset_matches_the_backend_preset() -> None:
-    """The settings page ships its own copy; a drifted copy writes the old text back."""
-    from pathlib import Path
-
+def test_preset_text_reflects_bot_preset(tenant: TestClient, db_session: Session) -> None:
     from backend.chat.presets import PRESET_SUPPORT_AGENT
 
-    repo_root = Path(__file__).resolve().parents[1]
-    page = (repo_root / "frontend/app/(app)/settings/page.tsx").read_text(encoding="utf-8")
-    start = page.index("content: `") + len("content: `")
-    shipped = page[start : page.index("`,", start)]
+    token, _ = _auth(tenant, db_session, "preset-text@example.com")
+    resp = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot"},
+    )
+    assert resp.status_code == 201
+    bot = resp.json()
+    assert bot["preset"] == "support_agent"
+    assert bot["preset_text"] == PRESET_SUPPORT_AGENT
 
-    assert shipped == PRESET_SUPPORT_AGENT.strip()
+    resp = tenant.patch(
+        f"/bots/{bot['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"preset": None},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["preset_text"] is None

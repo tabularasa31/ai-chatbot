@@ -17,6 +17,7 @@
     "@chat9/widget-shared": "workspace:*",
     "@radix-ui/react-slot": "^1",
     "@tailwindcss/typography": "^0.5.19",
+    "@vercel/analytics": "^2.0.1",
     "class-variance-authority": "^0.7",
     "clsx": "^2",
     "framer-motion": "^11",

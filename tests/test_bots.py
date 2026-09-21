@@ -125,6 +125,22 @@ def test_create_bot_without_instructions_defaults_to_support_agent_preset(
     assert bot["effective_instructions"] == PRESET_SUPPORT_AGENT
 
 
+def test_create_bot_with_explicit_null_preset_stays_unset(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, _ = _auth(tenant, db_session, "create-null-preset@example.com")
+
+    bot = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "No Preset Bot", "preset": None},
+    ).json()
+
+    assert bot["preset"] is None
+    assert bot["custom_instructions"] is None
+    assert bot["instructions_source"] == "none"
+
+
 def test_update_bot_instructions_layering(tenant: TestClient, db_session: Session) -> None:
     from backend.chat.presets import PRESET_SUPPORT_AGENT
 

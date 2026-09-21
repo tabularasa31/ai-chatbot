@@ -89,6 +89,7 @@ def create_bot(
         agent_instructions=body.agent_instructions,
         custom_instructions=body.custom_instructions,
         preset=body.preset,
+        preset_was_set="preset" in body.model_fields_set,
         link_safety_enabled=body.link_safety_enabled,
         allowed_domains=body.allowed_domains,
     )

@@ -96,12 +96,14 @@ def create_bot(
     agent_instructions: str | None = None,
     custom_instructions: str | None = None,
     preset: str | None = None,
+    preset_was_set: bool = False,
     link_safety_enabled: bool | None = None,
     allowed_domains: list[str] | None = None,
 ) -> Bot:
     # No agent_instructions given: the effective prompt comes from preset/custom_instructions.
-    # Default preset to "support_agent" so a bare `POST /bots` still gets a working prompt.
-    if agent_instructions is None and preset is None:
+    # Default preset to "support_agent" so a bare `POST /bots` still gets a working prompt,
+    # but honour an explicit `preset: null` in the request instead of overriding it.
+    if agent_instructions is None and preset is None and not preset_was_set:
         preset = "support_agent"
     bot = Bot(
         tenant_id=tenant_id,

@@ -37,7 +37,6 @@ export default function SettingsPage() {
   const [supportEmailInput, setSupportEmailInput] = useState("");
   const [escalationLanguageInput, setEscalationLanguageInput] = useState("");
   const [level, setLevel] = useState<DisclosureLevel>("standard");
-  const [agentInstructions, setAgentInstructions] = useState("");
   const [customInstructionsInput, setCustomInstructionsInput] = useState("");
   const [ownPromptOnly, setOwnPromptOnly] = useState(false);
   const [presetText, setPresetText] = useState<string | null>(null);
@@ -66,7 +65,6 @@ export default function SettingsPage() {
     initialized.current = true;
     setSupportEmailInput(support.l2_email ?? "");
     setEscalationLanguageInput(support.escalation_language ?? "");
-    setAgentInstructions(defaultBot.agent_instructions ?? "");
     setCustomInstructionsInput(defaultBot.custom_instructions ?? "");
     setOwnPromptOnly(defaultBot.preset === null);
     setPresetText(defaultBot.preset_text);
@@ -74,27 +72,6 @@ export default function SettingsPage() {
   }, [client, support, defaultBot, disclosure]);
 
   const loading = clientLoading || botsLoading || supportLoading || disclosureLoading;
-  const isLegacyInstructions = defaultBot?.instructions_source === "legacy";
-
-  async function saveAgentInstructions() {
-    if (!defaultBot) return;
-    setError("");
-    setInstructionsSaving(true);
-    setInstructionsSavedOk(false);
-    try {
-      const updated = await api.bots.update(defaultBot.id, {
-        agent_instructions: agentInstructions.trim() || null,
-      });
-      setAgentInstructions(updated.agent_instructions ?? "");
-      await mutateBots(bots?.map((b) => (b.id === updated.id ? updated : b)), false);
-      setInstructionsSavedOk(true);
-      setTimeout(() => setInstructionsSavedOk(false), 2500);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
-    } finally {
-      setInstructionsSaving(false);
-    }
-  }
 
   async function saveOwnInstructions() {
     if (!defaultBot) return;
@@ -313,47 +290,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {isLegacyInstructions ? (
-          <>
-            <p className="text-xs text-slate-500 italic">
-              This bot uses the previous instructions format; it will be moved to the new one automatically.
-            </p>
-
-            <textarea
-              rows={14}
-              placeholder={"You are a support assistant for {product_name}.\n\nYour rules here…"}
-              aria-label="Agent instructions"
-              value={agentInstructions}
-              onChange={(e) => setAgentInstructions(e.target.value)}
-              className={`w-full px-3 py-2.5 border rounded-lg text-sm text-slate-800 outline-none placeholder:text-slate-400 font-mono resize-y leading-relaxed ${
-                agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH
-                  ? "border-red-300 focus:border-red-400"
-                  : "border-slate-200 focus:border-slate-400"
-              }`}
-            />
-
-            <div className="flex items-start justify-between gap-4">
-              <p className="text-xs text-slate-500">
-                Use{" "}
-                <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">{"{product_name}"}</code>{" "}
-                to insert your product name. These instructions are prepended to every chat turn.
-              </p>
-              <span className={`text-xs shrink-0 tabular-nums ${agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH ? "text-red-500 font-medium" : "text-slate-400"}`}>
-                {agentInstructions.trim().length} / {MAX_INSTRUCTIONS_LENGTH}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={saveAgentInstructions}
-              disabled={instructionsSaving || agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH}
-              className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700 transition-colors"
-            >
-              {instructionsSaving ? "Saving…" : "Save instructions"}
-            </button>
-          </>
-        ) : (
-          <>
+        <>
             {!ownPromptOnly && presetText && (
               <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                 <summary className="cursor-pointer text-sm font-medium text-slate-700">
@@ -435,7 +372,6 @@ export default function SettingsPage() {
               {instructionsSaving ? "Saving…" : "Save instructions"}
             </button>
           </>
-        )}
       </div>
 
       {/* Response controls */}

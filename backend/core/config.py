@@ -75,6 +75,18 @@ class Settings(BaseSettings):
         False,
         alias="OBSERVABILITY_CAPTURE_FULL_PROMPTS",
     )
+    # Self-hosted OSS Langfuse has no retention of its own (that is an
+    # Enterprise Edition feature), so backend/jobs/langfuse_retention.py deletes
+    # traces older than this window through the public API once a day. Traces
+    # are the conversations themselves; the window only has to outlast the lag
+    # of a "last week the bot answered differently" complaint. 3 is Langfuse's
+    # own floor for a retention window.
+    langfuse_trace_retention_days: int = Field(
+        60,
+        alias="LANGFUSE_TRACE_RETENTION_DAYS",
+        ge=3,
+        description="Days to keep Langfuse traces before the daily retention job deletes them.",
+    )
     trace_sample_rate: float = Field(1.0, alias="TRACE_SAMPLE_RATE")
     trace_high_volume_threshold: int = Field(1000, alias="TRACE_HIGH_VOLUME_THRESHOLD")
     trace_high_volume_sample_rate: float = Field(0.1, alias="TRACE_HIGH_VOLUME_SAMPLE_RATE")

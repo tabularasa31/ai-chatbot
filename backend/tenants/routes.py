@@ -14,7 +14,7 @@ from backend.auth.middleware import (
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import RerankerStrategy, User
-from backend.observability.metrics import capture_event, group_identify
+from backend.observability.metrics import capture_event
 from backend.seats.service import holds_seat
 from backend.tenants.api_keys_service import (
     assert_owner,
@@ -81,17 +81,6 @@ def create_tenant_route(
     time it is shown. Error 409 if tenant already exists for this user.
     """
     tenant, plaintext = create_tenant(current_user.id, body.name, db)
-    try:
-        tenant_id = str(tenant.public_id)
-        group_identify("tenant", tenant_id, {"name": body.name})
-        capture_event(
-            "tenant.created",
-            distinct_id=tenant_id,
-            tenant_id=tenant_id,
-            groups={"tenant": tenant_id},
-        )
-    except Exception:
-        pass
     base = _tenant_to_response(tenant, db)
     return CreateTenantResponse(**base.model_dump(), api_key=plaintext)
 

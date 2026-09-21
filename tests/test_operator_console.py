@@ -21,6 +21,7 @@ from backend.auth.service import create_token_for_user
 from backend.email.reply_lane import mint_reply_token
 from backend.escalation.service import _notify_tenant_new_ticket, note_repeat_human_request
 from backend.models import (
+    Bot,
     Chat,
     EscalationStatus,
     EscalationTicket,
@@ -469,6 +470,103 @@ def test_after_resolve_the_bot_answers_the_next_turn(
     assert chat.assigned_operator_id is None
     assert chat.escalation_awaiting_ticket_id is None
     assert chat.escalation_pre_confirm_pending is False
+
+
+def test_resolving_a_held_chat_emits_ticket_resolved(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    from backend.operator.service import resolve_from_operator
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        "backend.chat.events.capture_event",
+        lambda event, **kwargs: captured.append({"event": event, **kwargs}),
+    )
+
+    ws = _workspace(tenant, db_session, email="ticketresolved@example.com", name="Resolved Co")
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == ws.tenant_id).one()
+    bot_row = db_session.query(Bot).filter(Bot.tenant_id == ws.tenant_id).one()
+    # Real chats always carry bot_id (stamped at creation in widget/routes.py);
+    # set it explicitly here since bot.id is nullable in the schema.
+    chat = _chat(db_session, ws.tenant_id, bot_id=bot_row.id)
+    ticket = _ticket(db_session, chat)
+    assert tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth).status_code == 200
+    db_session.expire_all()
+    chat = db_session.get(Chat, chat.id)
+
+    resolve_from_operator(
+        db_session, chat=chat, tenant_id=ws.tenant_id, resolution_text="all set"
+    )
+
+    events = [e for e in captured if e["event"] == "ticket.resolved"]
+    assert len(events) == 1, captured
+    event = events[0]
+    assert event["distinct_id"] == str(chat.id)
+    assert event["properties"] == {
+        "chat_id": str(chat.id),
+        "session_id": str(chat.session_id),
+        "resolved_count": 1,
+        "has_resolution_text": True,
+        "chat_was_with_operator": True,
+    }
+    assert event["tenant_id"] == str(tenant_row.public_id)
+    assert event["bot_id"] == str(bot_row.public_id)
+    assert event["groups"] == {"tenant": event["tenant_id"]}
+    # No message text, resolution text, e-mail or name ever reaches PostHog.
+    for value in event["properties"].values():
+        assert value != ticket.primary_question
+        assert value != "all set"
+        assert value != "visitor@example.com"
+
+
+def test_resolving_a_chat_never_taken_still_emits_with_chat_was_with_operator_false(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    from backend.operator.service import resolve_from_operator
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        "backend.chat.events.capture_event",
+        lambda event, **kwargs: captured.append({"event": event, **kwargs}),
+    )
+
+    ws = _workspace(tenant, db_session, email="ticketnottaken@example.com", name="Not Taken Co")
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == ws.tenant_id).one()
+    bot_row = db_session.query(Bot).filter(Bot.tenant_id == ws.tenant_id).one()
+    chat = _chat(db_session, ws.tenant_id, bot_id=bot_row.id)
+    _ticket(db_session, chat)
+
+    resolve_from_operator(db_session, chat=chat, tenant_id=ws.tenant_id)
+
+    events = [e for e in captured if e["event"] == "ticket.resolved"]
+    assert len(events) == 1, captured
+    assert events[0]["properties"]["resolved_count"] == 1
+    assert events[0]["properties"]["chat_was_with_operator"] is False
+    assert events[0]["properties"]["has_resolution_text"] is False
+    assert events[0]["tenant_id"] == str(tenant_row.public_id)
+    assert events[0]["bot_id"] == str(bot_row.public_id)
+
+
+def test_resolving_with_no_active_ticket_emits_nothing(
+    tenant: TestClient, db_session: Session, monkeypatch
+) -> None:
+    from backend.operator.service import resolve_from_operator
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        "backend.chat.events.capture_event",
+        lambda event, **kwargs: captured.append({"event": event, **kwargs}),
+    )
+
+    ws = _workspace(tenant, db_session, email="ticketnoactive@example.com", name="No Active Co")
+    chat = _chat(db_session, ws.tenant_id)
+    assert tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth).status_code == 200
+    db_session.expire_all()
+    chat = db_session.get(Chat, chat.id)
+
+    resolve_from_operator(db_session, chat=chat, tenant_id=ws.tenant_id)
+
+    assert [e for e in captured if e["event"] == "ticket.resolved"] == []
 
 
 def test_a_ticket_on_an_older_chat_of_the_session_still_counts(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.core.crypto import encrypt_value
 from backend.core.rls import set_tenant_context
 from backend.models import Bot, EscalationTicket, RerankerStrategy, Tenant, TenantProfile, User
+from backend.observability.metrics import capture_event, group_identify
 from backend.seats.events import (
     RELEASE_WORKSPACE_DELETED,
     capture_seat_released,
@@ -25,6 +27,8 @@ from backend.tenants.api_keys_service import (
     get_primary_active_key,
 )
 from backend.tenants.cache import invalidate_tenant
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TENANT_NAME = "My Workspace"
 
@@ -87,6 +91,18 @@ def create_tenant(
                 detail="Tenant already exists for this user",
             ) from exc
         raise
+
+    try:
+        tenant_public_id = str(tenant.public_id)
+        group_identify("tenant", tenant_public_id, {"name": name})
+        capture_event(
+            "tenant.created",
+            distinct_id=tenant_public_id,
+            tenant_id=tenant_public_id,
+            groups={"tenant": tenant_public_id},
+        )
+    except Exception:
+        logger.warning("Failed to emit tenant.created event", exc_info=True)
 
     return tenant, plaintext_key
 

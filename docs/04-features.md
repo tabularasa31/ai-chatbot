@@ -603,8 +603,7 @@ Parallel guard pool (3 threads, ~2 s budget):
   ├─ relevance_check   — vector similarity pre-filter (threshold 0.22)
   └─ capability_check  — LLM classifier: is user asking what the bot can do?
 Lightweight LLM classifiers default to `gpt-4o-mini`: explicit human-request detection uses
-`HUMAN_REQUEST_MODEL`, relevance classification uses `RELEVANCE_GUARD_MODEL`, and answer
-validation uses `VALIDATION_MODEL`.
+`HUMAN_REQUEST_MODEL` and relevance classification uses `RELEVANCE_GUARD_MODEL`.
   ↓
 Guard decisions (in priority order):
   1. injection detected          → guard_reject / injection
@@ -622,8 +621,6 @@ Hybrid search → top-k chunks  (vector + BM25 + RRF)
 Build RAG prompt (system + context + history + question)
   ↓
 gpt-5-mini → answer
-  ↓
-Answer validation (second gpt-4o-mini call by default; rollback via `VALIDATION_MODEL=gpt-4.1-mini`)
   ↓
 Store message → return response
 ```
@@ -646,7 +643,6 @@ Store message → return response
 | `injection` | Prompt injection pattern detected |
 | `not_relevant` | Relevance LLM classified the message as `offtopic` |
 | `low_retrieval` | Best vector similarity below `RELEVANCE_RETRIEVAL_THRESHOLD` (default 0.22) |
-| `insufficient_confidence` | Answer validation confidence below threshold |
 | `rephrase` | First strict zero-RAG-hits turn — soft "couldn't find an answer, please rephrase" prompt |
 | `social` | Relevance LLM classified the message as a pure social turn (thanks / farewell) — polite acknowledgement, not a refusal |
 
@@ -731,15 +727,6 @@ Correspondence masks nothing. The dashboard, the operator inbox and the escalati
 Detection is structural: every entity above has the same shape in every language, so no rule matches a word.
 
 `pii_events` records what was masked on the way to the model.
-
-### Answer validation (FI-034)
-
-After generating an answer, a **second LLM call** (`temperature=0`) checks whether the answer is grounded in the retrieved chunks:
-
-- Returns `is_valid` (bool) and `confidence` (0.0–1.0)
-- If `is_valid = false`, the answer is replaced with a safe fallback: *"I don't have enough information to answer this question."*
-- Validation errors (e.g. OpenAI timeout) are logged and treated as `validation_error`, which triggers the safe fallback instead of returning an unverified answer
-- Full validation result is visible in `POST /chat/debug` → `debug.validation`
 
 ### Language behavior
 

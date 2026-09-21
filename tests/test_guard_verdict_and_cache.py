@@ -287,15 +287,31 @@ async def test_cache_hit_is_judged_against_current_threshold(
 
 
 @pytest.mark.asyncio
-async def test_legacy_cache_entry_without_score_falls_back_to_stored_verdict(
+async def test_cache_entry_without_score_is_a_miss(
     _fake_redis: dict[str, str],
 ) -> None:
+    """A verdict with no score cannot be re-judged against the current
+    threshold, so it must not be served."""
     key = det._semantic_cache_key("t", "old text")
     _fake_redis[key] = '{"d": true, "s": null}'
-    cached = await det._semantic_cache_get(key, "old text")
-    assert cached is not None
-    assert cached.detected is True
-    assert cached.score is None
+    assert await det._semantic_cache_get(key, "old text") is None
+
+
+@pytest.mark.asyncio
+async def test_fail_open_semantic_result_has_no_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timed-out level 2 never compared a score, so it must not claim a
+    threshold — that is what keeps 'L2 did not run' apart from 'L2 scored 0'."""
+    async def _boom(text: str, *, api_key: str, **kwargs: object) -> list[float]:
+        raise TimeoutError("embedding timeout")
+
+    monkeypatch.setattr(det, "async_embed_query", _boom)
+    result = await async_detect_injection_semantic("text", "text", api_key="k")
+    assert result.detected is False
+    assert result.threshold is None
+    assert result.seeds_hash is None
+    assert det._to_verdict(result).threshold is None
 
 
 def test_semantic_cache_key_changes_with_seed_list(
@@ -307,14 +323,16 @@ def test_semantic_cache_key_changes_with_seed_list(
     assert before != after
 
 
-def test_seeds_hash_is_content_derived() -> None:
+def test_seeds_hash_changes_when_seed_list_changes() -> None:
+    import hashlib
+
     from backend.guards.injection_seeds import INJECTION_SEEDS, INJECTION_SEEDS_HASH
 
     assert len(INJECTION_SEEDS_HASH) == 12
-    expected = __import__("hashlib").sha256(
-        "\n".join(INJECTION_SEEDS).encode("utf-8")
+    extended = hashlib.sha256(
+        "\n".join([*INJECTION_SEEDS, "one more seed"]).encode("utf-8")
     ).hexdigest()[:12]
-    assert INJECTION_SEEDS_HASH == expected
+    assert extended != INJECTION_SEEDS_HASH
 
 
 def test_guard_verdict_event_includes_threshold_and_seeds_hash(

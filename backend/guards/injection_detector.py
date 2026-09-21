@@ -264,17 +264,12 @@ def _passthrough_result(normalized: str) -> InjectionDetectionResult:
 # cached in Redis keyed by ``hash(tenant_id, guard_kind, normalized_input)``.
 # The structural level (L1) is a regex sweep and not worth caching.
 #
-# What is cached is the cosine ``score`` against the seed list — deterministic
-# for a given normalized text and seed list, so the seed-list fingerprint is
-# folded into the key and a seeds change never replays a score computed
-# against the old list. The threshold is NOT part of the key: it is applied
-# at read time (``_semantic_cache_get``), so lowering or raising
-# INJECTION_SEMANTIC_THRESHOLD on Railway takes effect on cached entries
-# immediately instead of after the TTL. Dialog context and tenant-profile
-# version, which the relevance-guard cache folds into its key, are not inputs
-# here, so they are deliberately absent. Graceful: when Redis is
-# unset/unreachable the core helpers return miss/False and detection runs
-# directly.
+# What is cached is the cosine ``score``, deterministic for a given normalized
+# text and seed list — hence the seeds fingerprint in the key. The threshold is
+# deliberately NOT in the key: it is applied on read, so an env change takes
+# effect on cached entries immediately rather than after the TTL. Graceful:
+# when Redis is unset/unreachable the core helpers return miss/False and
+# detection runs directly.
 
 
 def _semantic_cache_key(tenant_id: str, normalized: str) -> str:
@@ -313,11 +308,10 @@ async def _semantic_cache_get(
     except (ValueError, TypeError):
         return None
     score = data.get("s")
-    if isinstance(score, (int, float)):
-        detected = _score_detects(float(score))
-    else:
-        score = None
-        detected = bool(data.get("d"))
+    if not isinstance(score, (int, float)):
+        return None
+    score = float(score)
+    detected = _score_detects(score)
     return InjectionDetectionResult(
         detected=detected,
         level=2 if detected else None,

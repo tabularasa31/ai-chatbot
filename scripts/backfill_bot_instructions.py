@@ -59,27 +59,51 @@ def classify(legacy: str, *, excluded: bool) -> tuple[str, str | None, str | Non
     if legacy in _KNOWN_GENERATIONS:
         return PRESET_ONLY, None, SUPPORT_AGENT_PRESET
     for block in _KNOWN_GENERATIONS:
+        count = legacy.count(block)
+        if count == 0:
+            continue
+        if count > 1:
+            # A known block repeated in the legacy text means the split point
+            # is ambiguous; leave it for manual review instead of dropping a
+            # copy of the preset into custom_instructions.
+            return UNRECOGNIZED, legacy, None
         start = legacy.find(block)
-        if start >= 0:
-            head, tail = legacy[:start], legacy[start + len(block) :]
-            custom = "\n\n".join(part for part in (head.strip(), tail.strip()) if part) or None
-            return SPLIT, custom, SUPPORT_AGENT_PRESET
+        head, tail = legacy[:start], legacy[start + len(block) :]
+        custom = "\n\n".join(part for part in (head.strip(), tail.strip()) if part) or None
+        return SPLIT, custom, SUPPORT_AGENT_PRESET
     return UNRECOGNIZED, legacy, None
 
 
-def _resolve_excluded_ids(db: Session, prefixes: Iterable[str]) -> set[uuid.UUID]:
+def _resolve_excluded_ids(
+    db: Session, *, default_prefixes: Iterable[str], explicit_prefixes: Iterable[str]
+) -> set[uuid.UUID]:
     all_ids = [row[0] for row in db.query(Bot.id).all()]
     resolved: set[uuid.UUID] = set()
-    for prefix in prefixes:
+
+    def _matches(prefix: str) -> list[uuid.UUID]:
         normalized = prefix.strip().lower()
         if not normalized:
-            continue
-        matches = [bid for bid in all_ids if str(bid).lower().startswith(normalized)]
+            return []
+        return [bid for bid in all_ids if str(bid).lower().startswith(normalized)]
+
+    for prefix in default_prefixes:
+        matches = _matches(prefix)
         if len(matches) > 1:
             raise BackfillAbort(
                 f"--exclude-id {prefix!r} matches {len(matches)} bots; use a longer prefix"
             )
         resolved.update(matches)
+
+    for prefix in explicit_prefixes:
+        matches = _matches(prefix)
+        if not matches and prefix.strip():
+            raise BackfillAbort(f"--exclude-id {prefix!r} matches no bot")
+        if len(matches) > 1:
+            raise BackfillAbort(
+                f"--exclude-id {prefix!r} matches {len(matches)} bots; use a longer prefix"
+            )
+        resolved.update(matches)
+
     return resolved
 
 
@@ -103,7 +127,9 @@ def run_backfill(
     """Run the backfill (or its dry-run plan) and return (stats, report_lines)."""
     db = session_factory()
     try:
-        excluded = _resolve_excluded_ids(db, [*DEFAULT_EXCLUDED_PREFIXES, *exclude_ids])
+        excluded = _resolve_excluded_ids(
+            db, default_prefixes=DEFAULT_EXCLUDED_PREFIXES, explicit_prefixes=exclude_ids
+        )
 
         query = db.query(Bot.id).order_by(Bot.id)
         if bot_ids is not None:
@@ -124,16 +150,20 @@ def run_backfill(
                 # Already on the new model, or a concurrent PATCH cleared it
                 # after we locked the row (re-check).
                 stats[SKIP] += 1
-                lines.append(f"{bot.id} {bot.tenant_id} {SKIP} legacy_len=0 custom_len=0")
+                skip_line = f"{bot.id} {bot.tenant_id} {SKIP} legacy_len=0 custom_len=0"
+                lines.append(skip_line)
+                logger.info(skip_line)
                 db.rollback()
                 continue
 
             category, custom, preset = classify(legacy, excluded=bot.id in excluded)
             stats[category] += 1
-            lines.append(
+            line = (
                 f"{bot.id} {bot.tenant_id} {category} "
                 f"legacy_len={len(legacy)} custom_len={len(custom or '')}"
             )
+            lines.append(line)
+            logger.info(line)
             if apply:
                 bot.custom_instructions = custom
                 bot.preset = preset
@@ -172,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     try:
-        stats, lines = run_backfill(
+        stats, _lines = run_backfill(
             apply=args.apply, exclude_ids=args.exclude_id, bot_ids=args.bot_id
         )
     except BackfillAbort as exc:
@@ -182,11 +212,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Aborted: DB error: {exc}")
         return 1
 
+    # Per-bot lines are already logged as they're produced (run_backfill), so a
+    # DB error mid-loop doesn't lose them; only the summary is printed here.
     mode = "Would write" if not args.apply else "Wrote"
     total = sum(v for k, v in stats.items() if k != SKIP)
     print(f"{mode} {total} bot(s): " + ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
-    for line in lines:
-        print(line)
     return 0
 
 

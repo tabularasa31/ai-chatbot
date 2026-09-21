@@ -131,6 +131,64 @@ def test_unrecognized(engine: Engine) -> None:
     assert bot.preset is None
     assert any(f"{bot_id}" in line and UNRECOGNIZED in line for line in lines)
 
+    text, source = effective_agent_instructions(
+        agent_instructions=bot.agent_instructions,
+        custom_instructions=bot.custom_instructions,
+        preset=bot.preset,
+    )
+    assert text == stored
+    assert source == "custom"
+
+
+def test_repeated_known_block_is_unrecognized(engine: Engine) -> None:
+    session_local = sessionmaker(bind=engine, class_=Session, future=True)
+    description = "Acme ships industrial widgets to 40 countries."
+    tail = "Refund window is 14 days."
+    stored = f"{description}\n\n{_PRESET_GEN_2.strip()}\n\n{_PRESET_GEN_2.strip()}\n\n{tail}"
+    bot_id = _make_bot(session_local, agent_instructions=stored)
+
+    stats, _ = run_backfill(apply=True, session_factory=session_local)
+
+    assert stats[UNRECOGNIZED] == 1
+    bot = _reload(session_local, bot_id)
+    assert bot.agent_instructions is None
+    assert bot.custom_instructions == stored
+    assert bot.preset is None
+
+
+def test_hand_edited_preset_is_unrecognized(engine: Engine) -> None:
+    session_local = sessionmaker(bind=engine, class_=Session, future=True)
+    stored = _PRESET_GEN_2.strip().replace("Keep it concise.", "Keep it short.")
+    bot_id = _make_bot(session_local, agent_instructions=stored)
+
+    stats, _ = run_backfill(apply=True, session_factory=session_local)
+
+    assert stats[UNRECOGNIZED] == 1
+    bot = _reload(session_local, bot_id)
+    assert bot.agent_instructions is None
+    assert bot.custom_instructions == stored
+    assert bot.preset is None
+
+
+def test_unknown_exclude_id_aborts_before_writes(engine: Engine) -> None:
+    session_local = sessionmaker(bind=engine, class_=Session, future=True)
+    bot_id = _make_bot(session_local, agent_instructions="Some legacy text.")
+
+    try:
+        run_backfill(
+            apply=True,
+            exclude_ids=["ffffffff"],
+            session_factory=session_local,
+        )
+        raised = False
+    except BackfillAbort:
+        raised = True
+    assert raised
+
+    # Nothing was written: the unmatched exclusion is detected before any row is touched.
+    bot = _reload(session_local, bot_id)
+    assert bot.agent_instructions == "Some legacy text."
+
 
 def test_excluded_by_explicit_full_id(engine: Engine) -> None:
     session_local = sessionmaker(bind=engine, class_=Session, future=True)
@@ -146,6 +204,14 @@ def test_excluded_by_explicit_full_id(engine: Engine) -> None:
     assert bot.agent_instructions is None
     assert bot.custom_instructions == stored
     assert bot.preset is None
+
+    text, source = effective_agent_instructions(
+        agent_instructions=bot.agent_instructions,
+        custom_instructions=bot.custom_instructions,
+        preset=bot.preset,
+    )
+    assert text == stored
+    assert source == "custom"
 
 
 def test_excluded_by_default_prefix(engine: Engine) -> None:

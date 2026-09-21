@@ -52,7 +52,7 @@ export default function SettingsPage() {
   const [disclosureSavedOk, setDisclosureSavedOk] = useState(false);
 
   const { data: client, error: clientError, isLoading: clientLoading, mutate: mutateClient } = useClientMe();
-  const { data: bots, isLoading: botsLoading } = useBots();
+  const { data: bots, isLoading: botsLoading, mutate: mutateBots } = useBots();
   const { data: support, isLoading: supportLoading, mutate: mutateSupport } = useSupportSettings();
 
   const defaultBot = bots?.find((b) => b.is_active) ?? null;
@@ -86,6 +86,7 @@ export default function SettingsPage() {
         agent_instructions: agentInstructions.trim() || null,
       });
       setAgentInstructions(updated.agent_instructions ?? "");
+      await mutateBots(bots?.map((b) => (b.id === updated.id ? updated : b)), false);
       setInstructionsSavedOk(true);
       setTimeout(() => setInstructionsSavedOk(false), 2500);
     } catch (err) {
@@ -103,11 +104,12 @@ export default function SettingsPage() {
     try {
       const updated = await api.bots.update(defaultBot.id, {
         custom_instructions: customInstructionsInput.trim() || null,
-        preset: ownPromptOnly ? null : "support_agent",
+        preset: ownPromptOnly ? null : defaultBot.preset ?? "support_agent",
       });
       setCustomInstructionsInput(updated.custom_instructions ?? "");
       setOwnPromptOnly(updated.preset === null);
       setPresetText(updated.preset_text);
+      await mutateBots(bots?.map((b) => (b.id === updated.id ? updated : b)), false);
       setInstructionsSavedOk(true);
       setTimeout(() => setInstructionsSavedOk(false), 2500);
     } catch (err) {
@@ -366,6 +368,13 @@ export default function SettingsPage() {
               </details>
             )}
 
+            {!ownPromptOnly && !presetText && (
+              <p className="text-sm text-slate-500">
+                <span className="font-medium text-slate-700">Standard instructions.</span>{" "}
+                The standard instructions will appear here after you save.
+              </p>
+            )}
+
             <div>
               <label htmlFor="custom-instructions" className="block text-sm font-semibold text-slate-800 mb-1">
                 Your additions
@@ -383,7 +392,12 @@ export default function SettingsPage() {
                     : "border-slate-200 focus:border-slate-400"
                 }`}
               />
-              <div className="flex items-start justify-end gap-4 mt-1">
+              <div className="flex items-start justify-between gap-4 mt-1">
+                <p className="text-xs text-slate-500">
+                  Use{" "}
+                  <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">{"{product_name}"}</code>{" "}
+                  to insert your product name. These instructions are prepended to every chat turn.
+                </p>
                 <span className={`text-xs shrink-0 tabular-nums ${customInstructionsInput.trim().length > MAX_INSTRUCTIONS_LENGTH ? "text-red-500 font-medium" : "text-slate-400"}`}>
                   {customInstructionsInput.trim().length} / {MAX_INSTRUCTIONS_LENGTH}
                 </span>
@@ -404,13 +418,18 @@ export default function SettingsPage() {
               <div className="text-sm text-amber-700 bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
                 The standard instructions are not applied to this bot. Product rules still apply. You are
                 responsible for the full prompt.
+                {customInstructionsInput.trim() === "" && " Enter your prompt before saving."}
               </div>
             )}
 
             <button
               type="button"
               onClick={saveOwnInstructions}
-              disabled={instructionsSaving || customInstructionsInput.trim().length > MAX_INSTRUCTIONS_LENGTH}
+              disabled={
+                instructionsSaving ||
+                customInstructionsInput.trim().length > MAX_INSTRUCTIONS_LENGTH ||
+                (ownPromptOnly && customInstructionsInput.trim() === "")
+              }
               className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700 transition-colors"
             >
               {instructionsSaving ? "Saving…" : "Save instructions"}

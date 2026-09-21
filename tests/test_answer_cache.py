@@ -668,6 +668,40 @@ def test_knowledge_base_or_bot_change_invalidates_cached_answer(
     assert counters["generate"] == 3
 
 
+def test_preset_or_custom_instructions_change_invalidates_cached_answer(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_redis: dict[str, str],
+) -> None:
+    """The fingerprint must hash the *effective* agent layer, not the raw
+    agent_instructions column: a preset text change in code, or a tenant's
+    custom_instructions change, both need to invalidate cached answers."""
+    cl_row, api_key = _create_client(tenant, db_session, email="answer-cache-preset@example.com")
+    _insert_single_chunk(db_session, tenant_id=cl_row.id)
+    counters = _patch_pipeline_fakes(monkeypatch, answer="Answer")
+    bot = db_session.query(Bot).filter(Bot.tenant_id == cl_row.id).first()
+    assert bot.preset == "support_agent"
+    assert bot.agent_instructions is None
+    assert bot.custom_instructions is None
+
+    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    assert counters["generate"] == 1
+
+    import backend.chat.presets as presets_module
+
+    monkeypatch.setitem(presets_module.PRESETS, "support_agent", "Replaced preset text.")
+    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    assert counters["generate"] == 2
+
+    bot.custom_instructions = "Always mention the trial period."
+    db_session.commit()
+    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    assert counters["generate"] == 3
+
+
 def test_language_switch_does_not_serve_cached_answer(
     mock_openai_client: Mock,
     tenant: TestClient,

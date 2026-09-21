@@ -16,7 +16,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 revision = "visitor_read_cursor_v1"
-down_revision = "legacy_closed_chats_marker_v1"
+down_revision = "tenant_reranker_strategy_v1"
 branch_labels = None
 depends_on = None
 

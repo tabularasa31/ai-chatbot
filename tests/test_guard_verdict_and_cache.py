@@ -212,3 +212,155 @@ def test_hash_evidence() -> None:
     assert guard_events._hash_evidence("") is None
     h = guard_events._hash_evidence("some-pattern")
     assert isinstance(h, str) and len(h) == 64  # sha256 hexdigest
+
+
+# ---------------------------------------------------------------------------
+# Threshold + seeds hash: the guard configuration a verdict was made under
+# ---------------------------------------------------------------------------
+
+
+async def _scored_embed(text: str, *, api_key: str, **kwargs: object) -> list[float]:
+    # cosine against the seed [1, 0, 0] equals the first component
+    return [0.75, 0.6614, 0.0]
+
+
+@pytest.mark.asyncio
+@patch("backend.guards.injection_detector.async_embed_queries", _fake_embed_queries)
+async def test_semantic_verdict_carries_threshold_and_seeds_hash(
+    monkeypatch: pytest.MonkeyPatch, _fake_redis: dict[str, str]
+) -> None:
+    monkeypatch.setattr(det, "async_embed_query", _scored_embed)
+    monkeypatch.setattr(det.settings, "injection_semantic_threshold", 0.7)
+
+    result = await async_detect_injection_semantic(
+        "some text", "some text", api_key="k", tenant_id="t"
+    )
+    assert result.detected is True
+    assert result.threshold == 0.7
+    assert result.seeds_hash == det.INJECTION_SEEDS_HASH
+
+    verdict = det._to_verdict(result)
+    assert verdict.reason is VerdictReason.INJECTION_SEMANTIC
+    assert verdict.threshold == 0.7
+
+
+def test_structural_verdict_has_no_threshold() -> None:
+    result = det.detect_injection_structural("[system] do this")
+    assert result.detected is True
+    assert result.threshold is None
+    assert result.seeds_hash is None
+    assert det._to_verdict(result).threshold is None
+
+
+@pytest.mark.asyncio
+@patch("backend.guards.injection_detector.async_embed_queries", _fake_embed_queries)
+async def test_cache_hit_is_judged_against_current_threshold(
+    monkeypatch: pytest.MonkeyPatch, _fake_redis: dict[str, str]
+) -> None:
+    """Lowering or raising the threshold applies to cached scores at read
+    time — the cache must never replay a verdict under a stale threshold."""
+    monkeypatch.setattr(det, "async_embed_query", _scored_embed)
+    monkeypatch.setattr(det.settings, "injection_semantic_threshold", 0.82)
+
+    first = await async_detect_injection_semantic(
+        "some text", "some text", api_key="k", tenant_id="t"
+    )
+    assert first.detected is False  # 0.75 < 0.82
+    assert first.threshold == 0.82
+
+    monkeypatch.setattr(det.settings, "injection_semantic_threshold", 0.7)
+    second = await async_detect_injection_semantic(
+        "some text", "some text", api_key="k", tenant_id="t"
+    )
+    assert second.cache_hit is True
+    assert second.detected is True  # 0.75 >= 0.7, re-judged on read
+    assert second.threshold == 0.7
+    assert second.score == pytest.approx(0.75, abs=1e-3)
+
+    monkeypatch.setattr(det.settings, "injection_semantic_threshold", 0.9)
+    third = await async_detect_injection_semantic(
+        "some text", "some text", api_key="k", tenant_id="t"
+    )
+    assert third.cache_hit is True
+    assert third.detected is False
+    assert third.threshold == 0.9
+
+
+@pytest.mark.asyncio
+async def test_legacy_cache_entry_without_score_falls_back_to_stored_verdict(
+    _fake_redis: dict[str, str],
+) -> None:
+    key = det._semantic_cache_key("t", "old text")
+    _fake_redis[key] = '{"d": true, "s": null}'
+    cached = await det._semantic_cache_get(key, "old text")
+    assert cached is not None
+    assert cached.detected is True
+    assert cached.score is None
+
+
+def test_semantic_cache_key_changes_with_seed_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = det._semantic_cache_key("t", "text")
+    monkeypatch.setattr(det, "INJECTION_SEEDS_HASH", "deadbeef0000")
+    after = det._semantic_cache_key("t", "text")
+    assert before != after
+
+
+def test_seeds_hash_is_content_derived() -> None:
+    from backend.guards.injection_seeds import INJECTION_SEEDS, INJECTION_SEEDS_HASH
+
+    assert len(INJECTION_SEEDS_HASH) == 12
+    expected = __import__("hashlib").sha256(
+        "\n".join(INJECTION_SEEDS).encode("utf-8")
+    ).hexdigest()[:12]
+    assert INJECTION_SEEDS_HASH == expected
+
+
+def test_guard_verdict_event_includes_threshold_and_seeds_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict] = []
+
+    def _capture(event: str, **kwargs: object) -> None:
+        captured.append({"event": event, **kwargs})
+
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _capture)
+
+    guard_events.record_guard_event(
+        tenant_id=uuid.uuid4(),
+        chat_id=uuid.uuid4(),
+        kind="injection",
+        verdict=Verdict.of(
+            VerdictReason.INJECTION_SEMANTIC, score=0.9, threshold=0.82
+        ),
+        cache_hit=True,
+        seeds_hash="abc123def456",
+    )
+    assert len(captured) == 1
+    props = captured[0]["properties"]
+    assert captured[0]["event"] == "guard.verdict"
+    assert props["threshold"] == 0.82
+    assert props["seeds_hash"] == "abc123def456"
+    assert props["score"] == 0.9
+
+
+def test_relevance_verdict_event_has_null_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict] = []
+
+    def _capture(event: str, **kwargs: object) -> None:
+        captured.append({"event": event, **kwargs})
+
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _capture)
+
+    guard_events.record_guard_event(
+        tenant_id=uuid.uuid4(),
+        chat_id=None,
+        kind="relevance",
+        verdict=Verdict.of(VerdictReason.OFFTOPIC),
+    )
+    props = captured[0]["properties"]
+    assert props["threshold"] is None
+    assert props["seeds_hash"] is None

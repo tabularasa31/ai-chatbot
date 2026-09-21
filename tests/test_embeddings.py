@@ -18,6 +18,7 @@ from backend.documents.parsers import (
     extract_openapi_chunks_from_rendered_text,
 )
 from backend.chunkers import get_chunker
+from backend.core.config import settings
 from backend.embeddings.service import _build_swagger_chunks, chunk_text
 from backend.models import Embedding
 
@@ -158,6 +159,7 @@ def test_create_embeddings_success(
         # chunk. Retrieval reads the script off the text itself, so this is
         # metadata for callers, not a retrieval input.
         assert m.get("language") is not None
+        assert m["embedding_model"] == settings.embedding_model
 
 
 def test_create_embeddings_document_not_found(

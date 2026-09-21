@@ -9,7 +9,9 @@ import uuid
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.core.scripts import detect_script_bucket
@@ -494,6 +496,17 @@ def get_documents(tenant_id: uuid.UUID, db: Session) -> list[Document]:
         .order_by(Document.created_at.desc())
         .all()
     )
+
+
+async def async_knowledge_base_updated_at(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> dt.datetime | None:
+    """Naive-UTC time of the tenant's most recent document change, or None
+    when the tenant has no documents."""
+    result = await db.execute(
+        select(func.max(Document.updated_at)).where(Document.tenant_id == tenant_id)
+    )
+    return result.scalar_one_or_none()
 
 
 def get_document(

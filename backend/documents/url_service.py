@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 import backend.documents.embedder as _embedder_mod
 import backend.documents.http_client as _http_client_mod
 import backend.documents.sitemap as _sitemap_mod
+from backend.core.config import settings
 from backend.core.db import SessionLocal
 from backend.core.scripts import detect_script_bucket
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
@@ -413,6 +414,7 @@ def _upsert_page_document(
                     "content_hash": chunk["content_hash"],
                     "page_content_hash": content_hash,
                     "raw_text": chunk["raw_text"],
+                    "embedding_model": settings.embedding_model,
                     **({"language": doc.language} if doc.language else {}),
                 },
             )
@@ -534,6 +536,7 @@ def _upsert_structured_document(
                         "has_examples": chunk.get("has_examples"),
                         "spec_version": chunk.get("spec_version"),
                         "page_content_hash": content_hash,
+                        "embedding_model": settings.embedding_model,
                         **({"language": doc.language} if doc.language else {}),
                     },
                 )

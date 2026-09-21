@@ -289,6 +289,7 @@ def create_embeddings_for_document(
         )
         if doc.language:
             meta_base.setdefault("language", doc.language)
+        meta_base["embedding_model"] = settings.embedding_model
         emb = Embedding(
             document_id=document_id,
             chunk_text=text_part,

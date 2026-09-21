@@ -9,6 +9,8 @@ import type {
   InboxList,
   InboxSummary,
   Thread,
+  AnalyticsPeriod,
+  AnalyticsSummaryResponse,
 } from "@/lib/api";
 
 export function useClientMe() {
@@ -44,6 +46,10 @@ export function useInboxSummary(refreshInterval = 0) {
   return useSWR<InboxSummary>("operator/inbox/summary", () => api.operator.summary(), {
     refreshInterval,
   });
+}
+
+export function useAnalyticsSummary(period: AnalyticsPeriod) {
+  return useSWR<AnalyticsSummaryResponse>(["analytics/summary", period], () => api.analytics.summary(period));
 }
 
 export function useThread(sessionId: string | null, refreshInterval = 0) {

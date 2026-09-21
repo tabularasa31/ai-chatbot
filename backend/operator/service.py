@@ -313,18 +313,20 @@ def resolve_from_operator(
         resolution_text=resolution_text,
     )
     chat_was_with_operator = chat.operator_state is not OperatorState.bot
+    tenant_public_id = getattr(getattr(chat, "tenant", None), "public_id", None)
+    bot_public_id = getattr(getattr(chat, "bot", None), "public_id", None)
+    chat_id = str(chat.id)
+    session_id = str(chat.session_id) if chat.session_id else None
     stretch = None
     if chat_was_with_operator:
         stretch = release_to_bot(db, chat, reason=OperatorSessionEndReason.released)
     db.commit()
     emit_operator_session_ended(stretch)
-    # After the commit, and reading nothing new: same rule as the stretch
-    # event above — a telemetry failure must never surface as a 500 here.
     _emit_ticket_resolved_event(
-        tenant_public_id=getattr(getattr(chat, "tenant", None), "public_id", None),
-        bot_public_id=getattr(getattr(chat, "bot", None), "public_id", None),
-        chat_id=str(chat.id),
-        session_id=str(chat.session_id) if chat.session_id else None,
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        chat_id=chat_id,
+        session_id=session_id,
         resolved_count=len(tickets),
         has_resolution_text=bool(resolution_text),
         chat_was_with_operator=chat_was_with_operator,

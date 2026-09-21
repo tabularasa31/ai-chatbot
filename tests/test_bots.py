@@ -136,8 +136,10 @@ def test_update_bot_emits_settings_updated_for_changed_fields_only(
     assert event["event"] == "bot.settings_updated"
     assert event["distinct_id"] == bot["public_id"]
     assert event["bot_id"] == bot["public_id"]
-    assert event["properties"]["changed_fields"] == ["link_safety_enabled", "name"]
-    assert event["properties"]["changed_count"] == 2
+    assert event["properties"] == {
+        "changed_fields": ["link_safety_enabled", "name"],
+        "changed_count": 2,
+    }
 
     properties_text = str(event["properties"])
     assert "Renamed Bot" not in properties_text
@@ -164,6 +166,57 @@ def test_update_bot_emits_nothing_when_nothing_changes(
         json={"name": bot["name"], "is_active": bot["is_active"]},
     )
     assert resp.status_code == 200
+    assert events == []
+
+
+def test_put_bot_disclosure_emits_settings_updated_for_changed_level(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    events: list[dict] = []
+    monkeypatch.setattr(
+        "backend.bots.events.capture_event",
+        lambda event, **kwargs: events.append({"event": event, **kwargs}),
+    )
+
+    token = register_and_verify_user(tenant, db_session, email="disclosure-event@example.com")
+    tenant_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Disclosure Event Tenant"},
+    )
+    assert tenant_resp.status_code == 201
+    tenant_public_id = tenant_resp.json()["public_id"]
+
+    bot = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]
+
+    resp = tenant.put(
+        f"/bots/{bot['id']}/disclosure",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"level": "corporate"},
+    )
+    assert resp.status_code == 200
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["event"] == "bot.settings_updated"
+    assert event["distinct_id"] == bot["public_id"]
+    assert event["tenant_id"] == tenant_public_id
+    assert event["bot_id"] == bot["public_id"]
+    assert event["groups"] == {"tenant": tenant_public_id}
+    assert event["properties"] == {
+        "changed_fields": ["disclosure_level"],
+        "changed_count": 1,
+    }
+
+    events.clear()
+    resp2 = tenant.put(
+        f"/bots/{bot['id']}/disclosure",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"level": "corporate"},
+    )
+    assert resp2.status_code == 200
     assert events == []
 
 

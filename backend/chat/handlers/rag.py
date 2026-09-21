@@ -123,6 +123,15 @@ from backend.observability import record_stage_ms
 
 logger = logging.getLogger(__name__)
 
+REJECT_REASON_TURN_OUTCOME: dict[str, TurnOutcome] = {
+    "injection": TurnOutcome.filtered,
+    "not_relevant": TurnOutcome.filtered,
+    "rephrase": TurnOutcome.unanswered,
+    "low_retrieval": TurnOutcome.unanswered,
+    "social": TurnOutcome.social,
+    "social_question": TurnOutcome.social,
+}
+
 
 # ---------------------------------------------------------------------------
 # Decision-side helpers: retrieval-confidence classification and the
@@ -437,7 +446,13 @@ class RagHandler(PipelineHandler):
                 language_context=ctx.language_context,
                 trace=ctx.trace,
                 set_rephrase_flag=(result.reject_reason == "rephrase"),
-                turn_outcome=(TurnOutcome.filtered if result.is_reject else None),
+                turn_outcome=(
+                    TurnOutcome.answered
+                    if result.is_faq_direct
+                    else REJECT_REASON_TURN_OUTCOME[result.reject_reason]
+                    if result.is_reject
+                    else None
+                ),
             )
             _try_ingest_gap_signal(
                 chat=chat,

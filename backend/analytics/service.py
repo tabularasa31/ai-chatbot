@@ -7,7 +7,7 @@ no Python-side row loops, no persisted rollup.
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,13 +59,16 @@ async def compute_analytics_summary(
     )
     messages_count = (await db.execute(messages_stmt)).scalar_one()
 
-    conversations_stmt = (
-        select(func.count(func.distinct(Chat.session_id)))
+    conversation_sessions_stmt = (
+        select(Chat.session_id)
+        .distinct()
         .select_from(Chat)
         .join(Message, Message.chat_id == Chat.id)
         .where(Chat.tenant_id == tenant_id, *in_window)
     )
-    conversations = (await db.execute(conversations_stmt)).scalar_one()
+    conversations = (
+        await db.execute(select(func.count()).select_from(conversation_sessions_stmt.subquery()))
+    ).scalar_one()
 
     escalated_sessions_stmt = select(
         func.count(func.distinct(EscalationTicket.session_id))
@@ -73,6 +76,7 @@ async def compute_analytics_summary(
         EscalationTicket.tenant_id == tenant_id,
         EscalationTicket.created_at >= window_from,
         EscalationTicket.created_at <= window_to,
+        EscalationTicket.session_id.in_(conversation_sessions_stmt),
     )
     escalated_sessions = (await db.execute(escalated_sessions_stmt)).scalar_one()
 
@@ -87,8 +91,11 @@ async def compute_analytics_summary(
             _non_empty_source_documents(db),
         ),
     )
-    denominator_condition = Message.turn_outcome.is_distinct_from(
-        TurnOutcome.filtered.value
+    denominator_condition = or_(
+        Message.turn_outcome.is_(None),
+        Message.turn_outcome.notin_(
+            [TurnOutcome.filtered.value, TurnOutcome.social.value]
+        ),
     )
     filtered_condition = Message.turn_outcome == TurnOutcome.filtered.value
 
@@ -116,8 +123,8 @@ async def compute_analytics_summary(
 
     return AnalyticsSummaryResponse(
         period=period,
-        from_=window_from,
-        to=window_to,
+        from_=window_from.replace(tzinfo=UTC),
+        to=window_to.replace(tzinfo=UTC),
         messages=messages_count,
         conversations=conversations,
         deflection_rate=deflection_rate,

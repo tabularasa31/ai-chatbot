@@ -59,13 +59,14 @@ class TurnOutcome(str, enum.Enum):
     """How a bot-answered chat turn resolved, for analytics reporting.
 
     NULL on ``messages.turn_outcome`` means a legacy row predating this
-    column, not any of these four states.
+    column, not any of these five states.
     """
 
     answered = "answered"
     unanswered = "unanswered"
     filtered = "filtered"
     escalation = "escalation"
+    social = "social"
 
 
 class OperatorState(str, enum.Enum):

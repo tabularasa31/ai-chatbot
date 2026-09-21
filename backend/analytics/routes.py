@@ -27,8 +27,6 @@ async def get_analytics_summary(
             status_code=400,
             detail=f"Invalid period '{period}'; expected one of {sorted(PERIOD_DAYS)}",
         )
-    if current_user.tenant_id is None:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     return await compute_analytics_summary(
         db, tenant_id=current_user.tenant_id, period=period
     )

@@ -42,6 +42,7 @@ from backend.models import (
     PiiEventDirection,
     Tenant,
     TenantProfile,
+    TurnOutcome,
     User,
 )
 from backend.models.base import _utcnow
@@ -2083,6 +2084,7 @@ def _perform_manual_escalation_impl(
             role=MessageRole.assistant,
             content=message_to_user,
             source_documents=None,
+            turn_outcome=TurnOutcome.escalation.value,
         )
     )
     chat.tokens_used = int(chat.tokens_used or 0) + tokens_used

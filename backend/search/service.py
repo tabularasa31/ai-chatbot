@@ -3048,13 +3048,11 @@ async def search_similar_chunks_detailed_async(
     precomputed_embedding_api_request_count: int | None = None,
     precomputed_rewritten_variant: str | None = None,
     embedding_timeout: float | None = None,
-    reranker_strategy: str | None = None,
 ) -> SearchResultBundle:
     """Run the full hybrid retrieval pipeline and return a detailed bundle.
 
     The query-rewrite LLM call and embedding of base variants execute in
     parallel (``asyncio.gather``) for measurable latency savings on every turn.
-    ``reranker_strategy`` overrides the tenant's stored choice.
     """
     retrieval_started_at = perf_counter()
 
@@ -3085,8 +3083,7 @@ async def search_similar_chunks_detailed_async(
             q, c, round((perf_counter() - retrieval_started_at) * 1000, 2)
         )
 
-    if reranker_strategy is None:
-        reranker_strategy = await _async_resolve_reranker_strategy(tenant_id, db)
+    reranker_strategy = await _async_resolve_reranker_strategy(tenant_id, db)
     r = await _async_run_ranking_stage(
         query=query,
         query_stage=q,

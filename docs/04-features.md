@@ -336,7 +336,7 @@ After RRF the fused pool (4 × `top_k` candidates) is re-ordered by a reranker c
 
 Degradation is graceful, not a kill switch: every semantic pass runs under `RERANKER_TIMEOUT_SECONDS` (default 2.5 s); on timeout, provider error, missing tenant key or missing optional dependency the turn keeps the heuristic ranking. The first `cross_encoder` request after a cold start therefore falls back once while the model loads in the background. The Langfuse `reranking` span records `strategy` and `model` on input and `strategy_applied` / `fallback_reason` / `duration_ms` on output, so rollout health is visible per turn. Scores stay on the 0–1 scale the relevance gate (`RERANKER_BYPASS_THRESHOLD`) and reliability assessment already read.
 
-Rollout gate: switch the eval test tenant, run the CHAT9-ML-50 eval before/after (`~/Projects/ai-chatbot-eval-local/run_eval.sh`), and only widen a semantic strategy to other tenants when the pass rate improves by ≥ 5 points without moving latency p95.
+Rollout gate: switch the eval test tenant, run the eval before/after (`backend/evals/`, see `docs/06-developer-test-runbook.md` § Eval pipeline), and only widen a semantic strategy to other tenants when the pass rate improves by ≥ 5 points without moving latency p95.
 
 ### Retrieval observability (FI-115)
 

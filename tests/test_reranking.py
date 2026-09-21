@@ -221,7 +221,8 @@ async def test_cross_encoder_scores_with_loaded_model(monkeypatch) -> None:
 
     class FakeModel:
         def predict(self, pairs):
-            return [4.0 if "expired" in passage else -2.0 for _, passage in pairs]
+            # Raw logits, as the loader forces an identity activation.
+            return [6.0 if "expired" in passage else -6.0 for _, passage in pairs]
 
     monkeypatch.setattr(reranking, "_load_cross_encoder", lambda name: FakeModel())
     outcome = await rerank_with_fallback(
@@ -229,12 +230,34 @@ async def test_cross_encoder_scores_with_loaded_model(monkeypatch) -> None:
         candidates,
         strategy="cross_encoder",
         signals=signals,
-        top_k=1,
+        top_k=3,
         api_key=None,
     )
     assert outcome.strategy_applied == "cross_encoder"
     assert outcome.model == CrossEncoderReranker().model
     assert outcome.results[0][0].id == candidates[2][0].id
+    # Sigmoid applied exactly once: strong logits map near the ends of the 0-1 scale.
+    assert outcome.results[0][1] > 0.8
+    assert outcome.results[-1][1] < 0.3
+
+
+@pytest.mark.asyncio
+async def test_cross_encoder_cold_load_does_not_block_other_turns(monkeypatch) -> None:
+    candidates, signals = _pool()
+    reranking._cross_encoder_lock.acquire()
+    try:
+        outcome = await rerank_with_fallback(
+            "reset password",
+            candidates,
+            strategy="cross_encoder",
+            signals=signals,
+            top_k=2,
+            api_key=None,
+        )
+    finally:
+        reranking._cross_encoder_lock.release()
+    assert outcome.strategy_applied == "heuristic"
+    assert outcome.fallback_reason == "unavailable: cross-encoder is still loading"
 
 
 @pytest.mark.asyncio

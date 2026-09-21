@@ -10,6 +10,7 @@ failure, so the chat turn never stalls or errors because of reranking.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -310,17 +311,35 @@ def _load_cross_encoder(model_name: str) -> Any:
     cached = _cross_encoder_models.get(model_name)
     if cached is not None:
         return cached
-    with _cross_encoder_lock:
+    # Non-blocking: a cold load can take minutes (first download), and a turn
+    # that would wait on it has already been abandoned by the timeout. Parking
+    # thread-pool workers behind the lock would starve the rest of the chat path.
+    if not _cross_encoder_lock.acquire(blocking=False):
+        raise RerankerUnavailableError("cross-encoder is still loading")
+    try:
         cached = _cross_encoder_models.get(model_name)
         if cached is not None:
             return cached
         try:
+            import torch
             from sentence_transformers import CrossEncoder
         except ImportError as exc:
             raise RerankerUnavailableError("sentence-transformers is not installed") from exc
-        model = CrossEncoder(model_name, max_length=512)
+        # Force raw logits: the library's default activation for single-label
+        # models differs across versions (sigmoid in 3.x, identity in 5.x), and
+        # the sigmoid must be applied exactly once to land on the 0-1 scale.
+        activation_kwarg = (
+            "activation_fn"
+            if "activation_fn" in inspect.signature(CrossEncoder.__init__).parameters
+            else "default_activation_function"
+        )
+        model = CrossEncoder(
+            model_name, max_length=512, **{activation_kwarg: torch.nn.Identity()}
+        )
         _cross_encoder_models[model_name] = model
         return model
+    finally:
+        _cross_encoder_lock.release()
 
 
 def _sigmoid(value: float) -> float:

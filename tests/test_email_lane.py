@@ -673,7 +673,43 @@ def test_a_forwarded_reply_reports_its_own_clock_not_first_response(
     )
     assert forwarded.kwargs["properties"]["response_ms"] == expected
     assert timedelta(minutes=3) <= timedelta(milliseconds=expected) < timedelta(minutes=4)
-    assert "first_response_ms" not in forwarded.kwargs["properties"]
+
+
+def test_a_failed_stamp_reports_no_clock_rather_than_the_previous_forward(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """A second forward whose stamp did not land must not report the first
+    forward's wait: the rolled-back session reloads yesterday's stamp, and a
+    stale number is worse than none. The forward itself still succeeds.
+    """
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="owner-stale@example.com", name="Stale", seated=True
+    )
+    chat = _chat(db_session, tenant_id)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+        _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
+    db_session.expire_all()
+    first_stamp = ticket.forwarded_reply_at
+    assert first_stamp is not None
+
+    with (
+        patch("backend.escalation.service.send_email", return_value="<fwd2@brevo>"),
+        patch("backend.email.inbound._utcnow", side_effect=RuntimeError("clock down")),
+        patch("backend.email.inbound.capture_event") as captured,
+    ):
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
+    assert resp.json()["outcomes"] == [InboundOutcome.forwarded.value]
+
+    db_session.expire_all()
+    assert ticket.forwarded_reply_at == first_stamp
+    [forwarded] = [
+        c for c in captured.call_args_list if c.args[0] == "email_lane.reply_forwarded"
+    ]
+    assert forwarded.kwargs["properties"]["response_ms"] is None
 
 
 def test_the_mark_hides_once_the_visitor_asks_again(

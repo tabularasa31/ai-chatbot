@@ -95,6 +95,7 @@ from backend.core.db import async_commit_or_rollback, run_sync
 # still see the patched versions.
 from backend.core.openai_client import get_async_openai_client  # noqa: F401
 from backend.core.openai_retry import async_call_openai_with_retry  # noqa: F401
+from backend.documents.service import async_knowledge_base_updated_at
 from backend.escalation.openai_escalation import (
     EscalationLlmResult,
     classify_followup_reply,  # noqa: F401
@@ -780,6 +781,7 @@ async def async_process_chat_message(
             tenant_profile = await db.get(TenantProfile, tenant_id)
             if tenant_profile is not None:
                 set_cached_tenant_profile(tenant_profile)
+    knowledge_base_updated_at = await async_knowledge_base_updated_at(tenant_id, db)
     _setup_ms = round((perf_counter() - _setup_start) * 1000, 2)
     _setup_span.end(
         output={"is_new_session": not chat.messages, "chat_id": str(chat.id)},
@@ -830,6 +832,11 @@ async def async_process_chat_message(
             "browser_locale": browser_locale,
             "question": redacted_question,
             "has_user_context": bool(effective_user_ctx),
+            "knowledge_base_updated_at": (
+                knowledge_base_updated_at.isoformat() + "Z"
+                if knowledge_base_updated_at is not None
+                else None
+            ),
             "detected_language": language_context.detected_language,
             "detected_language_resolution_reason": language_context.detected_language_resolution_reason,
             # Language-detection confidence, renamed from the bare "confidence"

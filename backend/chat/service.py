@@ -80,6 +80,7 @@ from backend.chat.persistence import (
     _source_docs_for_db,  # noqa: F401  (re-export)
 )
 from backend.chat.pii import redact
+from backend.chat.presets import effective_agent_instructions
 from backend.chat.rotation import latest_chat_query, should_rotate
 from backend.chat.steps import answer_cache as answer_cache_steps
 from backend.chat.types import QuestionIntentResult
@@ -635,7 +636,15 @@ async def _build_handler_context_async(
         bot_public_id=bot_public_id,
         bot_id=bot_id,
         bot=resolved_bot,
-        bot_agent_instructions=resolved_bot.agent_instructions if resolved_bot else None,
+        bot_agent_instructions=(
+            effective_agent_instructions(
+                agent_instructions=resolved_bot.agent_instructions,
+                custom_instructions=resolved_bot.custom_instructions,
+                preset=resolved_bot.preset,
+            )[0]
+            if resolved_bot
+            else None
+        ),
         disclosure_config=disclosure_cfg,
         allow_clarification=allow_clarification,
         user_context_line=_user_context_prompt_line(effective_user_ctx),

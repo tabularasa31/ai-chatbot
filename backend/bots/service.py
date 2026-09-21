@@ -3,10 +3,10 @@ from __future__ import annotations
 import uuid
 
 from fastapi import HTTPException
+from sqlalchemy import null
 from sqlalchemy.orm import Session
 
 from backend.bots.schemas import BotUpdate
-from backend.chat.presets import PRESET_SUPPORT_AGENT
 from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
 from backend.models import Bot
 
@@ -95,13 +95,26 @@ def create_bot(
     db: Session,
     *,
     agent_instructions: str | None = None,
+    custom_instructions: str | None = None,
+    preset: str | None = None,
+    preset_was_set: bool = False,
     link_safety_enabled: bool | None = None,
     allowed_domains: list[str] | None = None,
 ) -> Bot:
+    # No agent_instructions given: the effective prompt comes from preset/custom_instructions.
+    # Default preset to "support_agent" so a bare `POST /bots` still gets a working prompt,
+    # but honour an explicit `preset: null` in the request instead of overriding it.
+    if agent_instructions is None and preset is None and not preset_was_set:
+        preset = "support_agent"
+    # `preset` has a DB-level server_default("support_agent"); a bare None on INSERT
+    # falls back to it, so an explicit `preset: null` needs the SQL NULL sentinel.
+    preset_value = null() if preset_was_set and preset is None else preset
     bot = Bot(
         tenant_id=tenant_id,
         name=name,
-        agent_instructions=agent_instructions if agent_instructions is not None else PRESET_SUPPORT_AGENT,
+        agent_instructions=agent_instructions,
+        custom_instructions=custom_instructions,
+        preset=preset_value,
         link_safety_enabled=bool(link_safety_enabled),
         allowed_domains=normalize_allowed_domains(allowed_domains),
     )
@@ -139,6 +152,17 @@ def update_bot(
         bot.is_active = update.is_active  # type: ignore[assignment]
     if "agent_instructions" in fields:
         bot.agent_instructions = update.agent_instructions  # None clears the field
+        if update.agent_instructions and bot.custom_instructions is not None:
+            # Last write wins: the legacy field would otherwise be silently
+            # ignored by effective_agent_instructions while custom is set.
+            bot.custom_instructions = None
+    elif ("custom_instructions" in fields or "preset" in fields) and bot.agent_instructions:
+        # The tenant is moving off the legacy single-field prompt onto the new model.
+        bot.agent_instructions = None
+    if "custom_instructions" in fields:
+        bot.custom_instructions = update.custom_instructions
+    if "preset" in fields:
+        bot.preset = update.preset
     if "link_safety_enabled" in fields:
         bot.link_safety_enabled = bool(update.link_safety_enabled)
     if "allowed_domains" in fields:

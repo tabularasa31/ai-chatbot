@@ -178,6 +178,10 @@ class Bot(Base):
     link_safety_enabled = Column(Boolean, nullable=False, default=False)
     allowed_domains = Column(JSON, nullable=True, default=list)
     agent_instructions = Column(Text, nullable=True)
+    # Tenant's own text, appended after the code preset.
+    custom_instructions = Column(Text, nullable=True)
+    # NULL means the tenant's own prompt replaces the preset entirely.
+    preset = Column(String(64), nullable=True, server_default="support_agent")
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 

@@ -128,6 +128,7 @@ from backend.models import (
     MessageRole,  # noqa: F401  (re-export)
     Tenant,
     TenantProfile,
+    TurnOutcome,
 )
 from backend.observability import TraceHandle, begin_trace, record_stage_ms
 from backend.observability.metrics import capture_event  # noqa: F401  (re-export for monkeypatch)
@@ -214,6 +215,12 @@ def _escalation_turn_response(
         assistant_content=out.message_to_user,
         document_ids=[],
         extra_tokens=out.tokens_used,
+        # Every reply through this helper is a step of the escalation FSM
+        # (offer, decline, clarify-reask, follow-up ack, handoff) — including
+        # the ``escalated=False`` decline/ack turns, whose chat-state flags are
+        # already cleared by the time this runs and would otherwise infer
+        # "unanswered" from the empty document list.
+        turn_outcome=TurnOutcome.escalation,
         language_context=language_context,
         trace=trace,
     )

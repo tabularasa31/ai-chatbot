@@ -646,6 +646,45 @@ def _emit_operator_session_ended_event(
         logger.warning("Failed to emit operator_session_ended event", exc_info=True)
 
 
+def _emit_ticket_resolved_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str,
+    session_id: str | None,
+    resolved_count: int,
+    has_resolution_text: bool,
+    chat_was_with_operator: bool,
+) -> None:
+    """Report a human closing a visitor's open ticket(s) from the Inbox.
+
+    Fired once per resolve action, not once per ticket — ``resolved_count``
+    carries how many tickets closed with it. Silent when nothing was active,
+    so an idempotent second click on an already-resolved chat emits nothing.
+    """
+    if resolved_count <= 0:
+        return
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "ticket.resolved",
+            distinct_id=chat_id,
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "chat_id": chat_id,
+                "session_id": session_id,
+                "resolved_count": resolved_count,
+                "has_resolution_text": has_resolution_text,
+                "chat_was_with_operator": chat_was_with_operator,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit ticket.resolved event", exc_info=True)
+
+
 def _emit_chat_session_ended_event(
     *,
     tenant_public_id: str | None,

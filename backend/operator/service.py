@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from backend.chat.events import _emit_ticket_resolved_event
 from backend.escalation.service import mark_ticket_in_progress, resolve_session_tickets
 from backend.models import (
     Chat,
@@ -311,10 +312,22 @@ def resolve_from_operator(
         session_id=chat.session_id,
         resolution_text=resolution_text,
     )
+    chat_was_with_operator = chat.operator_state is not OperatorState.bot
     stretch = None
-    if chat.operator_state is not OperatorState.bot:
+    if chat_was_with_operator:
         stretch = release_to_bot(db, chat, reason=OperatorSessionEndReason.released)
     db.commit()
     emit_operator_session_ended(stretch)
+    # After the commit, and reading nothing new: same rule as the stretch
+    # event above — a telemetry failure must never surface as a 500 here.
+    _emit_ticket_resolved_event(
+        tenant_public_id=getattr(getattr(chat, "tenant", None), "public_id", None),
+        bot_public_id=getattr(getattr(chat, "bot", None), "public_id", None),
+        chat_id=str(chat.id),
+        session_id=str(chat.session_id) if chat.session_id else None,
+        resolved_count=len(tickets),
+        has_resolution_text=bool(resolution_text),
+        chat_was_with_operator=chat_was_with_operator,
+    )
     db.refresh(chat)
     return OperatorResolveResult(chat=chat, resolved_tickets=tickets)

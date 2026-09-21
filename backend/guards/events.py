@@ -49,8 +49,14 @@ def _emit_posthog(
     verdict: Verdict,
     latency_ms: float | None,
     cache_hit: bool | None,
+    seeds_hash: str | None,
 ) -> None:
-    """Fire the ``guard.verdict`` event that backs the 'Guards FP/FN' dashboard."""
+    """Fire the ``guard.verdict`` event that backs the 'Guards FP/FN' dashboard.
+
+    ``threshold`` and ``seeds_hash`` pin the guard configuration the verdict
+    was made under: thresholds are env vars that change on Railway without a
+    commit, so ``git_sha`` alone cannot explain a shift in the block rate.
+    """
     try:
         from backend.observability.metrics import capture_event
 
@@ -63,6 +69,8 @@ def _emit_posthog(
                 "blocked": verdict.blocked,
                 "reason": verdict.reason.value,
                 "score": verdict.score,
+                "threshold": verdict.threshold,
+                "seeds_hash": seeds_hash,
                 "cache_hit": cache_hit,
                 "latency_ms": latency_ms,
             },
@@ -116,6 +124,7 @@ def record_guard_event(
     verdict: Verdict,
     latency_ms: float | None = None,
     cache_hit: bool | None = None,
+    seeds_hash: str | None = None,
 ) -> None:
     """Record a guard verdict (PostHog now, DB write in the background).
 
@@ -123,6 +132,8 @@ def record_guard_event(
     async chat path. All failures are swallowed.
 
     ``kind`` is the guard family: ``"injection"`` or ``"relevance"``.
+    ``seeds_hash`` is the injection seed-list fingerprint the semantic level
+    scored against (None when level 2 did not decide the verdict).
     """
     try:
         tid = tenant_id if isinstance(tenant_id, uuid.UUID) else uuid.UUID(str(tenant_id))
@@ -143,6 +154,7 @@ def record_guard_event(
         verdict=verdict,
         latency_ms=latency_ms,
         cache_hit=cache_hit,
+        seeds_hash=seeds_hash,
     )
 
     try:

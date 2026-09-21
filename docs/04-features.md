@@ -507,6 +507,8 @@ Knowledge profile terminology:
 
 **Trace sampling:** Environment flag `FULL_CAPTURE_MODE` (default `true`) controls whether adaptive client sampling runs. When `true`, all traces are sampled (after the Langfuse no-op gate); when `false`, the backend uses in-process heuristics (`TRACE_*` settings) as before. Materialized traces carry `sampling_mode` in metadata (`full_capture` vs `adaptive`) and a matching `sampling_mode:*` tag. Settings: `backend/core/config.py`; decision logic: `backend/observability/service.py`. Rollout notes: `docs/07-observability-rollout.md`.
 
+**Knowledge-base stamp:** every chat-turn trace carries `knowledge_base_updated_at` — the time the tenant's documents last changed (max `Document.updated_at`, naive UTC, `Z`-suffixed ISO; `null` when the tenant has no documents). It is the one field that lets two traces of the same question a week apart show whether the base moved between them, without guessing about nightly crawls. A maximum only tracks additions and edits: deleting the newest document leaves the stamp unchanged or moves it backwards, so an unchanged stamp does not prove nothing was removed. Written in `backend/chat/service.py` inside `chat_setup`, so its cost lands in `chat_setup_ms`. Deliberately a single timestamp: crawl stats live in `UrlSourceRun`, the documents used are already in `source_document_ids`, and every extra byte per trace is Langfuse storage.
+
 ### Retrieval reliability contradiction policy
 
 Retrieval reliability keeps contradiction handling in the final capping stage. Contradiction is always recorded in `signals` and `evidence`, but it only changes the final verdict after corroboration:

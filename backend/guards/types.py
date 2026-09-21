@@ -8,12 +8,16 @@ different return shapes. A single frozen dataclass makes the contract obvious:
 
     async def guard(...) -> Verdict
 
-``Verdict`` carries exactly four things:
+``Verdict`` carries exactly five things:
 
-- ``blocked``  — did this guard divert the turn away from the normal answer path?
-- ``reason``   — machine-readable :class:`VerdictReason` (also the routing token).
-- ``score``    — confidence 0.0-1.0 (cosine similarity, or 0.0 when N/A).
-- ``evidence`` — what triggered it (matched pattern / short note), for debugging.
+- ``blocked``   — did this guard divert the turn away from the normal answer path?
+- ``reason``    — machine-readable :class:`VerdictReason` (also the routing token).
+- ``score``     — confidence 0.0-1.0 (cosine similarity, or 0.0 when N/A).
+- ``threshold`` — the cut-off ``score`` was compared against on this call, or
+  ``None`` when no numeric comparison happened (structural match, LLM
+  classifier, fail-open). Thresholds live in env vars and can change without
+  a deploy, so the verdict records the value that was actually in effect.
+- ``evidence``  — what triggered it (matched pattern / short note), for debugging.
 
 ``blocked`` is *derived* from ``reason`` via :meth:`Verdict.of` so the two can
 never disagree. The one deliberate exception is :meth:`Verdict.observation`, for
@@ -105,6 +109,7 @@ class Verdict:
     reason: VerdictReason
     score: float = 0.0
     evidence: str | None = None
+    threshold: float | None = None
 
     @classmethod
     def of(
@@ -113,6 +118,7 @@ class Verdict:
         *,
         score: float = 0.0,
         evidence: str | None = None,
+        threshold: float | None = None,
     ) -> Verdict:
         """Build a gating verdict, deriving ``blocked`` from ``reason``.
 
@@ -124,6 +130,7 @@ class Verdict:
             reason=reason,
             score=score,
             evidence=evidence,
+            threshold=threshold,
         )
 
     @classmethod
@@ -133,6 +140,7 @@ class Verdict:
         *,
         score: float = 0.0,
         evidence: str | None = None,
+        threshold: float | None = None,
     ) -> Verdict:
         """Build a verdict from a guard that only watched. Never ``blocked``.
 
@@ -148,4 +156,10 @@ class Verdict:
         keeps a delivered message out of the false-positive numbers a reviewer
         reads off ``guard_events``.
         """
-        return cls(blocked=False, reason=reason, score=score, evidence=evidence)
+        return cls(
+            blocked=False,
+            reason=reason,
+            score=score,
+            evidence=evidence,
+            threshold=threshold,
+        )

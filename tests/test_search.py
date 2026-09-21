@@ -35,9 +35,9 @@ from backend.search.service import (
     detect_source_overlaps,
     expand_query,
     mmr_select,
-    rerank_candidates,
     serialize_reliability,
 )
+from backend.search.reranking import rerank_candidates
 
 
 # --- Unit tests for cosine_similarity ---

@@ -132,7 +132,7 @@ A workspace has one owner, fixed at creation, and ownership cannot be handed ove
 | System | On deletion | Why |
 |---|---|---|
 | PostHog | **kept** | Behavioural metadata only — identifiers, durations, outcomes. No conversation text, no personal data. Product metrics stay comparable across time rather than being rewritten whenever a workspace leaves. |
-| Langfuse | **deleted** | Traces hold question previews and answers — the conversations themselves. Self-hosting makes it our infrastructure, not a third party; it does not make the data ours. No retention window is configured (`07-observability-rollout.md` still lists it under Remaining Gaps), so nothing expires on its own. |
+| Langfuse | **deleted** | Traces hold question previews and answers — the conversations themselves. Self-hosting makes it our infrastructure, not a third party; it does not make the data ours. Traces also expire on their own after `LANGFUSE_TRACE_RETENTION_DAYS` (nightly job, `07-observability-rollout.md` → Trace Retention); the purge makes a departing workspace's deletion immediate rather than eventual. |
 | Brevo | **deleted** | Addresses: members', and the support inbox escalations are routed to. Visitor addresses are in scope too, though today they only ride out as `replyTo`, which Brevo does not turn into a contact. |
 
 Both external purges run in one durable ARQ job (`backend/jobs/workspace_purge.py`) **enqueued before the local delete**, carrying everything it needs in `background_jobs.payload` so it depends on no row the delete is about to destroy. If the job cannot be scheduled, the deletion is refused with `503` and nothing is deleted. Read that module's docstring before changing any of this — the ordering, the `tenant_id=None` on the status row, and the use of `arq.Retry` each exist for a reason that is not obvious from the code alone.
@@ -311,7 +311,7 @@ Pure vector search struggles with exact keyword matches (product names, error co
 1. **Vector candidate acquisition** — semantic similarity (`pgvector` in PostgreSQL, Python cosine in SQLite tests)
 2. **Candidate-pool BM25** — keyword ranking (`rank-bm25` library, run only over the in-memory candidate pool for the current request)
 
-The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through heuristic reranking and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
+The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through a per-tenant reranking stage (see *Reranking strategies* below) and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
 
 Vector remains the recall stage and shared candidate acquisition step. BM25 stays a lexical confirmation / precision stage over that already-built in-memory pool; even when lexical expansion is enabled, it adds repeated lexical scoring over the same shared pool rather than a second corpus-acquisition search.
 
@@ -323,6 +323,20 @@ BM25 lexical expansion is an explicit policy:
 “Symmetric” here applies to query handling only. It does not mean BM25 stops depending on the vector-built pool, and it does not imply that future freer rewrites/paraphrases from vector expansion automatically become valid BM25 inputs. BM25 should continue consuming only lexical-safe normalization variants unless that contract is revisited deliberately.
 
 > Note: in the test environment (SQLite), pgvector is still unavailable, so vector candidates come from Python cosine similarity. After candidate-set construction (acquisition + merge/dedup + truncation), SQLite follows the same BM25 → RRF → reranking → post-ranking orchestration contract as PostgreSQL over that in-memory candidate pool.
+
+### Reranking strategies
+
+After RRF the fused pool (4 × `top_k` candidates) is re-ordered by a reranker chosen **per tenant** (`tenants.reranker_strategy`, set through `PATCH /tenants/me` with `reranker_strategy`; default `heuristic`, so existing tenants keep today's ranking). Implementations live in `backend/search/reranking.py` behind one `Reranker` protocol:
+
+| Strategy | What it does | Cost / latency | When to use |
+|---|---|---|---|
+| `heuristic` (default) | Weighted blend of lexical overlap, vector similarity, BM25 and RRF rank. Pure CPU, ~0 ms. | none | Baseline for every tenant; the fallback for the two below. |
+| `llm` | One chat completion on the tenant's BYO key (`RERANKER_LLM_MODEL`, default `gpt-4.1-mini`) grades up to 20 passages 0–10 by meaning; final score = 0.8 × LLM + 0.2 × heuristic. | tenant tokens (~2–3k input per turn); one extra LLM round-trip | Large / noisy knowledge bases where the right chunk lands at rank 8–12 behind generic FAQ text. |
+| `cross_encoder` | Local sentence-transformers cross-encoder (`RERANKER_CROSS_ENCODER_MODEL`, default `cross-encoder/ms-marco-MiniLM-L-6-v2`, English-only; use `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` for multilingual KBs). Runs in the thread pool; the model is loaded lazily once per process. Needs `requirements-reranker.txt` installed. | no API cost; RSS ≈ +300 MB (MiniLM-L6) / +560 MB (mMiniLMv2-L12); 20 × 600-char passages score in ~30 ms / ~60 ms on an M1 Pro (expect 3–5× on a Railway vCPU); cold load ~7 s from the HF cache, ~100–330 s on first download | Same as `llm` when the tenant should not pay tokens and the service has the RAM headroom. |
+
+Degradation is graceful, not a kill switch: every semantic pass runs under `RERANKER_TIMEOUT_SECONDS` (default 2.5 s); on timeout, provider error, missing tenant key or missing optional dependency the turn keeps the heuristic ranking. The first `cross_encoder` request after a cold start therefore falls back once while the model loads in the background. The Langfuse `reranking` span records `strategy` and `model` on input and `strategy_applied` / `fallback_reason` / `duration_ms` on output, so rollout health is visible per turn. Scores stay on the 0–1 scale the relevance gate (`RERANKER_BYPASS_THRESHOLD`) and reliability assessment already read.
+
+Rollout gate: switch the eval test tenant, run the eval before/after (`backend/evals/`, see `docs/06-developer-test-runbook.md` § Eval pipeline), and only widen a semantic strategy to other tenants when the pass rate improves by ≥ 5 points without moving latency p95.
 
 ### Retrieval observability (FI-115)
 
@@ -492,6 +506,8 @@ Knowledge profile terminology:
 - `GET/PATCH /knowledge/profile` exposes `topics` in the public contract
 
 **Trace sampling:** Environment flag `FULL_CAPTURE_MODE` (default `true`) controls whether adaptive client sampling runs. When `true`, all traces are sampled (after the Langfuse no-op gate); when `false`, the backend uses in-process heuristics (`TRACE_*` settings) as before. Materialized traces carry `sampling_mode` in metadata (`full_capture` vs `adaptive`) and a matching `sampling_mode:*` tag. Settings: `backend/core/config.py`; decision logic: `backend/observability/service.py`. Rollout notes: `docs/07-observability-rollout.md`.
+
+**Knowledge-base stamp:** every chat-turn trace carries `knowledge_base_updated_at` — the time the tenant's documents last changed (max `Document.updated_at`, naive UTC, `Z`-suffixed ISO; `null` when the tenant has no documents). It is the one field that lets two traces of the same question a week apart show whether the base moved between them, without guessing about nightly crawls. A maximum only tracks additions and edits: deleting the newest document leaves the stamp unchanged or moves it backwards, so an unchanged stamp does not prove nothing was removed. Written in `backend/chat/service.py` inside `chat_setup`, so its cost lands in `chat_setup_ms`. Deliberately a single timestamp: crawl stats live in `UrlSourceRun`, the documents used are already in `source_document_ids`, and every extra byte per trace is Langfuse storage.
 
 ### Retrieval reliability contradiction policy
 

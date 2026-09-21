@@ -1,0 +1,6 @@
+# Optional: local cross-encoder reranker (tenants.reranker_strategy = cross_encoder).
+# Not part of the default deploy — the strategy degrades to the heuristic reranker
+# when this is absent. Install on Linux with the CPU-only torch index to avoid the
+# multi-GB CUDA wheels:
+#   pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-reranker.txt
+sentence-transformers>=3.0

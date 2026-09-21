@@ -21,6 +21,7 @@ Configure `chat9-api` env:
 - `LANGFUSE_PUBLIC_KEY`
 - `LANGFUSE_SECRET_KEY`
 - `OBSERVABILITY_CAPTURE_FULL_PROMPTS`
+- `LANGFUSE_TRACE_RETENTION_DAYS` — on the `worker` service too; see **Trace Retention** below
 - `FULL_CAPTURE_MODE` — when `true` (default), every eligible request is traced and adaptive sampling is skipped; set `false` in production at scale to use tenant heuristics below
 - `TRACE_SAMPLE_RATE`
 - `TRACE_HIGH_VOLUME_THRESHOLD`
@@ -57,7 +58,7 @@ Implemented in code:
 - `vector-search`
 - `bm25-search`
 - `rrf-fusion`
-- `reranking`
+- `reranking` — carries the tenant's strategy (`strategy`, `model` on input; `strategy_applied`, `fallback_reason`, `duration_ms` on output), so a semantic reranker that timed out or degraded to the heuristic is visible per turn
 - `script-boost`
 - `mmr-pass`
 - `source-overlap-check`
@@ -81,7 +82,7 @@ Implemented in code:
 Implemented as heuristic/interim behavior:
 
 - query expansion
-- reranking
+- reranking for tenants on the default `heuristic` strategy (the `llm` and `cross_encoder` strategies are model-backed; see `docs/04-features.md` → Reranking strategies)
 - script bucket detection/boost
 - MMR similarity scoring
 - cross-document overlap detection
@@ -237,8 +238,8 @@ Trace structure exists in code, but there is no integration test against the Lan
 `AC-2` Mostly covered.
 Vector-search logs chunks with previews and similarity scores.
 
-`AC-3` Partial.
-Reranking exists, but it is heuristic rather than cross-encoder based.
+`AC-3` Covered.
+Reranking is pluggable per tenant: heuristic (default), LLM judge or local cross-encoder, with strategy and fallback recorded on the `reranking` span.
 
 `AC-4` Covered in current implementation.
 MMR pass records replacements and reasons.
@@ -285,15 +286,42 @@ Every Langfuse trace carries two top-level fields that identify which version of
 
 Since Railway auto-sets `GIT_SHA` on every deploy, `release` always resolves to a unique short SHA without any manual configuration. `PIPELINE_RELEASE` is optional — use it when you want a human-readable label (e.g. after a significant feature ship).
 
+## Trace Retention
+
+**Window: 90 days** (`LANGFUSE_TRACE_RETENTION_DAYS`, default `90`, floor `3`). Traces older than that are deleted every night; nothing else ever expires a trace.
+
+**Why we do it ourselves.** Langfuse's built-in Data Retention (Project Settings → Data Retention) is an Enterprise Edition feature; self-hosted OSS has no retention at all, and the production server is Langfuse `2.95.x` (Postgres-only, pre-ClickHouse), which predates the feature anyway. Upgrading to v3 would not change that without an EE licence. So retention is a job of ours: `backend/jobs/langfuse_retention.py`, an ARQ cron in the `worker` process at 03:17 UTC, lists traces with `toTimestamp = now − window` through the public API and bulk-deletes them (`DELETE /api/public/traces`) in batches of 100, at most 50 000 per night so a first run against months of backlog drains over several nights instead of one very long one. It reuses the client and paging of the workspace purge (`backend/observability/langfuse_purge.py`). Nothing touches Langfuse's tables directly, and nothing should: the API deletion cascades to observations and scores, a hand-written `DELETE` would not.
+
+**Why 90 days.** A trace exists to answer "last week the bot answered differently" — 90 days covers that lag many times over and still allows a quarter of `strategy`/`confidence`/latency comparison by `release`. Traces are visitor conversations; keeping them indefinitely was never a decision, only a default. The window is affordable because `OBSERVABILITY_CAPTURE_FULL_PROMPTS` is **off** in production (switched off 2026-09-21 on both `ai-chatbot` and `worker`): with it on, every turn also stores the full system prompt and every retrieved chunk — tens of KB per turn, the dominant term in Langfuse's database size. Turn it on only deliberately and briefly, for a specific investigation. Change the window by setting the env var on the `worker` service; no code change, and the next nightly run applies it (a shorter window deletes the difference that night).
+
+**What survives.** Eval datasets and their items (`backend/evals/langfuse_sink.py`) are not traces and are untouched; per-run eval traces expire like any other trace, and the durable eval record is the local SQLite store. Audit logs are not affected.
+
+**How to verify it is working.**
+
+- Sentry Crons: monitor `langfuse-trace-retention` (created on the first check-in, project `python-fastapi`) shows a daily `ok`; a missed or `error` check-in alerts. This is the primary signal — a dead worker or an unreachable Langfuse host surfaces here, not as a quietly growing database.
+- Worker logs: one line per night, `langfuse_retention_done cutoff=<iso> traces=<n> backlog_remaining=<bool>`. `backlog_remaining=True` on consecutive nights means the per-run cap is being hit every night — traffic outgrew it, raise `_RETENTION_MAX_PAGES`.
+- Langfuse UI → Traces, filter `Timestamp` before `now − window`: empty. Allow up to ~15 minutes after the run; Langfuse deletes asynchronously, so a just-deleted trace can still be listed briefly.
+- Database size, on the Langfuse Postgres service (not the app database):
+
+  ```sql
+  SELECT pg_size_pretty(pg_database_size(current_database()));
+  SELECT count(*), min(timestamp), max(timestamp) FROM traces;
+  SELECT relname, pg_size_pretty(pg_total_relation_size(relid))
+  FROM pg_catalog.pg_statio_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 5;
+  ```
+
+  `min(timestamp)` must sit at or after the cutoff once the backlog has drained. Railway also shows the volume usage of the Postgres service directly.
+
+**Baseline at enablement.** Record the three numbers above (database size, trace count, oldest trace) on the day the job first runs in production, in this section, so there is something to compare against a month later. Not yet recorded: the job shipped without production database access; fill in at first run.
+
 ## Remaining Gaps
 
 - real Langfuse deployment validation in staging
-- documented retention/TTL configuration in Langfuse itself
 - end-to-end test that a submitted query appears in Langfuse
 - worker/crawl job instrumentation
 - production-grade cost model
 - Redis/shared-store tenant counters for multi-instance deployments
 - true quick-answer implementation
-- model-backed reranking and true contradiction detection if we decide the heuristics are insufficient
+- true contradiction detection if we decide the heuristics are insufficient (model-backed reranking now exists behind `tenants.reranker_strategy`)
 - actual production review of FI-115 evidence and a follow-up guardrail decision if multi-variant tails are too expensive
 - clarification abandonment lifecycle instrumentation outside the request path

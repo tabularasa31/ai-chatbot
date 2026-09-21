@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 from backend.core.crypto import encrypt_value  # noqa: E402
 from backend.core.db import SessionLocal  # noqa: E402
+from backend.core.security import hash_password  # noqa: E402
 from backend.documents.service import upload_document  # noqa: E402
 from backend.embeddings.service import run_embeddings_background  # noqa: E402
 from backend.models import Bot, Tenant, User  # noqa: E402
@@ -76,7 +77,7 @@ def _ensure_user_tenant_bot(
         user = User(
             id=uuid.uuid4(),
             email=email,
-            password="seed-no-login",
+            password_hash=hash_password("seed-no-login"),
             is_verified=True,
             verification_token=None,
             verification_expires_at=None,
@@ -113,11 +114,10 @@ def _ensure_user_tenant_bot(
     return user, tenant, bot
 
 
-def _ingest_fixtures(
-    db: Session, *, tenant: Tenant, fixture_dir: Path, openai_api_key: str
-) -> list[uuid.UUID]:
+def _ingest_fixtures(db: Session, *, tenant: Tenant, fixture_dir: Path) -> list[uuid.UUID]:
     """Upload + embed every fixture file. Skips files already present
-    on the tenant (by filename) so re-running is a no-op."""
+    on the tenant (by filename) so re-running is a no-op. The embedding job
+    takes the tenant's stored (encrypted) key, as the upload route does."""
 
     if not fixture_dir.is_dir():
         raise SystemExit(f"fixture dir not found: {fixture_dir}")
@@ -149,7 +149,7 @@ def _ingest_fixtures(
             db=db,
         )
         print(f"  + {path.name}: uploaded as document {doc.id}")
-        run_embeddings_background(doc.id, openai_api_key)
+        run_embeddings_background(doc.id, tenant.openai_api_key)
         indexed.append(doc.id)
 
     return indexed
@@ -193,13 +193,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Tenant: {tenant.name} (public_id={tenant.public_id})")
         print(f"Bot:    {bot.name} (public_id={bot.public_id})")
         print(f"Ingesting fixtures from {args.fixture_dir} …")
-        _ingest_fixtures(
-            db, tenant=tenant, fixture_dir=Path(args.fixture_dir), openai_api_key=openai_api_key
-        )
+        _ingest_fixtures(db, tenant=tenant, fixture_dir=Path(args.fixture_dir))
+        bot_public_id = bot.public_id
     finally:
         db.close()
 
-    print(f"\nEVAL_BOT_PUBLIC_ID={bot.public_id}")
+    print(f"\nEVAL_BOT_PUBLIC_ID={bot_public_id}")
     print(
         "Embedding runs in a background thread; allow ~30s before kicking off"
         " the eval runner. Verify status via Dashboard → Knowledge or "

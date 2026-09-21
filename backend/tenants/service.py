@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.crypto import encrypt_value
 from backend.core.rls import set_tenant_context
-from backend.models import Bot, EscalationTicket, Tenant, TenantProfile, User
+from backend.models import Bot, EscalationTicket, RerankerStrategy, Tenant, TenantProfile, User
 from backend.seats.events import (
     RELEASE_WORKSPACE_DELETED,
     capture_seat_released,
@@ -230,6 +230,8 @@ def update_tenant(
             tenant.openai_api_key = None
         else:
             tenant.openai_api_key = encrypt_value(raw_key.strip())
+    if "reranker_strategy" in kwargs:
+        tenant.reranker_strategy = RerankerStrategy(kwargs["reranker_strategy"])
     db.commit()
     db.refresh(tenant)
     invalidate_tenant(tenant.id)

@@ -28,6 +28,7 @@ from backend.models.enums import (
     OperatorSessionEndReason,
     OperatorState,
     PiiEventDirection,
+    RerankerStrategy,
     SourceSchedule,
     SourceStatus,
 )
@@ -88,6 +89,7 @@ __all__ = [
     "PiiEvent",
     "PiiEventDirection",
     "QuickAnswer",
+    "RerankerStrategy",
     "SourceSchedule",
     "SourceStatus",
     "Tenant",

@@ -394,6 +394,90 @@ def test_trace_metadata_language_confidence_and_response_language_across_turns(
     assert "language_is_reliable" not in metadatas[2]
 
 
+def test_trace_metadata_stamps_knowledge_base_updated_at(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ClickUp 86eytw2zn — every chat-turn trace carries the time the tenant's
+    knowledge base last changed (max ``Document.updated_at``), so two traces of
+    the same question a week apart show at a glance whether the base moved in
+    between. Tenants with no documents get an explicit ``None``."""
+    import datetime as dt
+
+    from backend.models import Document, DocumentStatus, DocumentType
+
+    class FakeSpan:
+        def end(self, **kwargs: object) -> None:
+            return None
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.update_calls: list[dict[str, object]] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            self.update_calls.append(kwargs)
+
+        def promote(self, **kwargs: object) -> None:
+            return None
+
+        def stamp(self) -> object:
+            for call in self.update_calls:
+                md = call.get("metadata")
+                if isinstance(md, dict) and "knowledge_base_updated_at" in md:
+                    return md["knowledge_base_updated_at"]
+            raise AssertionError("knowledge_base_updated_at missing from trace metadata")
+
+    token = register_and_verify_user(tenant, db_session, email="trace-kb-stamp@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace KB Stamp Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    traces: list[FakeTrace] = []
+
+    def _begin_trace(**kwargs: object) -> FakeTrace:
+        trace = FakeTrace()
+        traces.append(trace)
+        return trace
+
+    monkeypatch.setattr("backend.chat.service.begin_trace", _begin_trace)
+
+    async def _fake_async_pipeline(*args, **kwargs):
+        return _make_pipeline_result(final_answer="Use the reset link in settings.")
+
+    monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _fake_async_pipeline)
+
+    process_chat_message(tenant_id, "How do I reset my password?", uuid.uuid4(), db_session, api_key=api_key)
+    assert traces[-1].stamp() is None
+
+    older = dt.datetime(2026, 9, 1, 8, 0, 0)
+    newest = dt.datetime(2026, 9, 14, 3, 30, 0)
+    for filename, updated_at in (("old.md", older), ("new.md", newest)):
+        db_session.add(
+            Document(
+                tenant_id=tenant_id,
+                filename=filename,
+                file_type=DocumentType.markdown,
+                status=DocumentStatus.ready,
+                parsed_text="content",
+                created_at=updated_at,
+                updated_at=updated_at,
+            )
+        )
+    db_session.commit()
+
+    process_chat_message(tenant_id, "How do I reset my password?", uuid.uuid4(), db_session, api_key=api_key)
+    assert traces[-1].stamp() == "2026-09-14T03:30:00Z"
+
+
 def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     tenant: TestClient,
     db_session: Session,

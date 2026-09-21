@@ -43,7 +43,7 @@ from backend.chat.streaming import (
 from backend.chat.types import ChatPipelineResult, PipelineRun
 from backend.core.config import settings
 from backend.core.openai_client import is_reasoning_model
-from backend.core.openai_retry import async_call_openai_with_retry
+from backend.core.openai_retry import async_call_openai_with_retry, provider_response_stamps
 from backend.faq.faq_matcher import FAQRow
 from backend.models import Chat, MessageRole
 from backend.observability import TraceHandle, record_stage_ms
@@ -394,6 +394,7 @@ async def _async_generate_answer_native(
         cached_tokens_raw = 0
         finish_reason: str | None = None
         actual_model: str = settings.chat_model
+        _provider_stamps = provider_response_stamps(None)
         _was_thought_truncated: bool = False
         if stream_callback is not None:
             stream = await async_call_openai_with_retry(
@@ -418,6 +419,9 @@ async def _async_generate_answer_native(
                 async for chunk in stream:
                     if isinstance(getattr(chunk, "model", None), str):
                         actual_model = chunk.model
+                    _provider_stamps.update(
+                        {k: v for k, v in provider_response_stamps(chunk).items() if v is not None}
+                    )
                     if getattr(chunk, "usage", None):
                         total_tokens = chunk.usage.total_tokens or 0
                         prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
@@ -460,6 +464,7 @@ async def _async_generate_answer_native(
                 langfuse_observation=generation,
             )
             actual_model = response.model if isinstance(getattr(response, "model", None), str) else settings.chat_model
+            _provider_stamps = provider_response_stamps(response)
             _raw_content = response.choices[0].message.content or ""
             _was_thought_truncated = _thought_truncated(_raw_content)
             answer_text = _strip_thought_tags(_raw_content)
@@ -518,6 +523,7 @@ async def _async_generate_answer_native(
                 metadata={
                     "total_tokens": _safe_int(total_tokens),
                     "finish_reason": finish_reason,
+                    **_provider_stamps,
                     "thought_truncated": _was_thought_truncated,
                     "cost_usd": _cost_usd,
                     "cost_rate_usd_per_1m": _cost_rates,

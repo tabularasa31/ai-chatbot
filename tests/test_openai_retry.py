@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from backend.core.openai_retry import (
     _delay_for_user,
     async_call_openai_with_retry,
     call_openai_with_retry,
+    provider_response_stamps,
 )
 from backend.core.openai_errors import ClassifiedError, OpenAIFailureKind
 
@@ -332,6 +334,53 @@ def test_async_observation_stamped_on_success(monkeypatch: pytest.MonkeyPatch) -
         assert obs.updates == [{"attempt_count": 1, "was_retried": False}]
 
     asyncio.run(_runner())
+
+
+def test_observation_stamped_with_provider_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    obs = _RecordingObservation()
+    response = SimpleNamespace(id="chatcmpl-abc123", system_fingerprint="fp_44709d6f")
+
+    result = call_openai_with_retry(
+        "chat_generate", lambda: response, langfuse_observation=obs
+    )
+
+    assert result is response
+    assert obs.updates == [
+        {
+            "attempt_count": 1,
+            "was_retried": False,
+            "provider_request_id": "chatcmpl-abc123",
+            "system_fingerprint": "fp_44709d6f",
+        }
+    ]
+
+
+def test_observation_skips_missing_provider_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response without string identifiers (embeddings, streams, mocks)
+    leaves the stamp as before instead of writing ``None`` onto every span."""
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    obs = _RecordingObservation()
+    response = SimpleNamespace(id=None, system_fingerprint=None)
+
+    call_openai_with_retry("chat_generate", lambda: response, langfuse_observation=obs)
+
+    assert obs.updates == [{"attempt_count": 1, "was_retried": False}]
+
+
+def test_provider_response_stamps_always_has_both_keys() -> None:
+    assert provider_response_stamps(None) == {
+        "provider_request_id": None,
+        "system_fingerprint": None,
+    }
+    assert provider_response_stamps(SimpleNamespace(id="chatcmpl-x")) == {
+        "provider_request_id": "chatcmpl-x",
+        "system_fingerprint": None,
+    }
 
 
 def test_logs_retry_event_with_operation_label(

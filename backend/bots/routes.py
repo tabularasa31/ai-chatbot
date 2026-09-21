@@ -49,21 +49,19 @@ def _owner_tenant_id(
 
 
 def _enrich_bot_instructions(bot_id: uuid.UUID, tenant_id: uuid.UUID, website_url: str, api_key: str) -> None:
-    """Background task: extract company description and update bot agent_instructions."""
-    from backend.chat.presets import PRESET_SUPPORT_AGENT
+    """Background task: extract company description and store it as custom_instructions."""
     from backend.core.db import SessionLocal
     from backend.onboarding.extractor import extract_company_description
 
     description = extract_company_description(website_url, api_key)
     if not description:
         return
-    instructions = f"{description}\n\n{PRESET_SUPPORT_AGENT}"
     with SessionLocal() as db:
         bots_service.update_bot(
             bot_id,
             tenant_id,
             db,
-            BotUpdate(agent_instructions=instructions),
+            BotUpdate(custom_instructions=description.strip(), preset="support_agent"),
         )
 
 
@@ -73,7 +71,7 @@ def list_bots(
     db: Annotated[Session, Depends(get_db)],
 ) -> BotList:
     bots = bots_service.get_bots_for_tenant(tenant_id, db)
-    return BotList(items=bots)
+    return BotList(items=[BotResponse.from_bot(bot) for bot in bots])
 
 
 @bots_router.post("", response_model=BotResponse, status_code=201)
@@ -89,6 +87,8 @@ def create_bot(
         body.name,
         db,
         agent_instructions=body.agent_instructions,
+        custom_instructions=body.custom_instructions,
+        preset=body.preset,
         link_safety_enabled=body.link_safety_enabled,
         allowed_domains=body.allowed_domains,
     )
@@ -114,7 +114,7 @@ def create_bot(
             except Exception:
                 logger.warning("create_bot: could not schedule instruction enrichment", exc_info=True)
 
-    return bot
+    return BotResponse.from_bot(bot)
 
 
 @bots_router.get("/{bot_id}", response_model=BotResponse)
@@ -123,7 +123,7 @@ def get_bot(
     tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
-    return bots_service.get_bot_by_id(bot_id, tenant_id, db)
+    return BotResponse.from_bot(bots_service.get_bot_by_id(bot_id, tenant_id, db))
 
 
 @bots_router.patch("/{bot_id}", response_model=BotResponse)
@@ -133,7 +133,7 @@ def update_bot(
     tenant_id: Annotated[uuid.UUID, Depends(_owner_tenant_id)],
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
-    return bots_service.update_bot(bot_id, tenant_id, db, body)
+    return BotResponse.from_bot(bots_service.update_bot(bot_id, tenant_id, db, body))
 
 
 @bots_router.delete("/{bot_id}", status_code=204, response_model=None)

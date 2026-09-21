@@ -1,5 +1,23 @@
 from __future__ import annotations
 
+
+def effective_agent_instructions(
+    *, agent_instructions: str | None, custom_instructions: str | None, preset: str | None
+) -> tuple[str | None, str]:
+    """Return (text, source); source in {"legacy", "preset", "custom", "preset+custom", "none"}."""
+    if agent_instructions and custom_instructions is None:
+        return agent_instructions, "legacy"
+    preset_text = PRESETS.get(preset) if preset else None
+    custom = custom_instructions.strip() or None if custom_instructions else None
+    if preset_text and custom:
+        return f"{preset_text}\n\n{custom}", "preset+custom"
+    if preset_text:
+        return preset_text, "preset"
+    if custom:
+        return custom, "custom"
+    return None, "none"
+
+
 PRESET_SUPPORT_AGENT = """\
 You are a support assistant for {product_name}. Your job is to help users get answers from the provided documentation — clearly, honestly, and in the user's language.
 
@@ -18,6 +36,8 @@ Formatting:
 - When you can't answer, say plainly that the documentation does not cover it and point at what you can help with instead. Do not offer the support team as a substitute for an answer — the backend offers the handoff when one is warranted. When the user asks how to reach support, give the contact details from the context as usual.
 
 """
+
+PRESETS: dict[str, str] = {"support_agent": PRESET_SUPPORT_AGENT}
 
 COT_REASONING_BLOCK = """\
 ## Internal reasoning

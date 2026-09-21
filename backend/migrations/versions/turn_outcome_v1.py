@@ -18,7 +18,7 @@ from alembic import op
 from sqlalchemy import inspect as sa_inspect
 
 revision = "turn_outcome_v1"
-down_revision = "visitor_read_cursor_v1"
+down_revision = "f8df9e78d4a5"
 branch_labels = None
 depends_on = None
 

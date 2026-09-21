@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import { getMetadataBase } from "@/lib/site";
 import { PostHogProvider } from "./providers/PostHogProvider";
 import "./globals.css";
@@ -33,6 +35,8 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <PostHogProvider>{children}</PostHogProvider>
+        <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );

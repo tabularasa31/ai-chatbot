@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS = 60
 
 from backend.admin.routes import admin_router
+from backend.analytics.routes import analytics_router
 from backend.auth.routes import auth_router
 from backend.bots.routes import bots_router
 from backend.chat.routes import chat_router
@@ -197,6 +198,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router, include_in_schema=False)
+app.include_router(analytics_router)
 app.include_router(bots_router)
 # Before ``tenants_router``: its ``/{tenant_id}`` catch-all would otherwise
 # match ``/tenants/members`` first.

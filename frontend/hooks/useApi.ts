@@ -9,6 +9,8 @@ import type {
   InboxList,
   InboxSummary,
   Thread,
+  AnalyticsPeriod,
+  AnalyticsSummaryResponse,
 } from "@/lib/api";
 
 export function useClientMe() {
@@ -43,6 +45,12 @@ export function useInbox(scope: "attention" | "all", refreshInterval = 0) {
 export function useInboxSummary(refreshInterval = 0) {
   return useSWR<InboxSummary>("operator/inbox/summary", () => api.operator.summary(), {
     refreshInterval,
+  });
+}
+
+export function useAnalyticsSummary(period: AnalyticsPeriod) {
+  return useSWR<AnalyticsSummaryResponse>(["analytics/summary", period], () => api.analytics.summary(period), {
+    keepPreviousData: true,
   });
 }
 

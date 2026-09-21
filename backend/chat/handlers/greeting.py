@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import LocalizationResult, generate_greeting_in_language_result
 from backend.guards.injection_detector import detect_injection_structural
-from backend.models import Tenant, TenantProfile
+from backend.models import Tenant, TenantProfile, TurnOutcome
 
 
 def _resolve_product_name(
@@ -171,6 +171,7 @@ class GreetingHandler(PipelineHandler):
                 assistant_content=greeting.text,
                 extra_tokens=greeting.tokens_used,
                 language_context=ctx.language_context,
+                turn_outcome=TurnOutcome.social,
             )
         else:
             # Typed social turn: persist the real user message and the greeting.
@@ -186,6 +187,7 @@ class GreetingHandler(PipelineHandler):
                 extra_tokens=greeting.tokens_used,
                 language_context=ctx.language_context,
                 trace=ctx.trace,
+                turn_outcome=TurnOutcome.social,
             )
 
         if ctx.trace is not None:

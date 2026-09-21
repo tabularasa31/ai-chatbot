@@ -63,6 +63,16 @@ const mainNav: NavItem[] = [
       </svg>
     ),
   },
+  {
+    href: "/analytics",
+    label: "Analytics",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M2 13V2M2 13h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4.5 10.5V8M7.5 10.5V5.5M10.5 10.5V7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    ),
+  },
 ];
 
 const settingsNav: NavItem[] = [

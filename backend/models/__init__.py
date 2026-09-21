@@ -31,6 +31,7 @@ from backend.models.enums import (
     RerankerStrategy,
     SourceSchedule,
     SourceStatus,
+    TurnOutcome,
 )
 from backend.models.gap import (
     GapAnalyzerJob,
@@ -96,6 +97,7 @@ __all__ = [
     "TenantApiKey",
     "TenantFaq",
     "TenantProfile",
+    "TurnOutcome",
     "UrlSource",
     "UrlSourceRun",
     "User",

@@ -764,7 +764,7 @@ Once a chat has settled on a language, it stops re-detecting and stays in that l
 
 After lock, `resolve_language_context` returns the stored `last_response_language` with `response_language_resolution_reason = "locked"` and skips the detector entirely. This is implemented in `_resolve_language_context_inner` (locked fast path) and `_decide_language_lock` in `backend/chat/language.py`. Stored on `Chat.language_locked` (boolean, default False); set once and never reset on existing chats.
 
-Bilingual mid-conversation switches require the user to start a new conversation (`Start new chat`, or returning after the idle timeout). This is a deliberate trade-off: real bilingual switches mid-conversation are rare in B2B support, and locking eliminates flip-flopping when one off-language turn would otherwise change the bot's reply language.
+A visitor cannot switch languages mid-conversation: the lock holds until the conversation ends. Language is resolved afresh only in a new conversation, which opens after the idle timeout or when the chat was closed after an escalation and the visitor pressed `Start new chat` (that button exists only in a closed chat; a tenant integration can also open a new session via the API). This is a deliberate trade-off: real bilingual switches mid-conversation are rare in B2B support, and locking eliminates flip-flopping when one off-language turn would otherwise change the bot's reply language.
 
 ### Default greeting
 

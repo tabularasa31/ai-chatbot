@@ -9,7 +9,7 @@ Chat9 is language-agnostic. End users can write in any language and the bot repl
 
 - **The default greeting (shown before the user types anything)** comes out in the language picked by this chain, in order: the `locale` you passed via `userHints` → the browser's reported locale → English.
 - **As soon as the user sends a message, the bot replies in the language of that message.** This is the default and covers the vast majority of cases.
-- **Once the conversation has settled on a language, it stays in that language for the rest of the session.** A clearly non-English first message locks the language right away; an English first message locks once a second turn confirms it. After lock, off-language turns don't change the bot's reply language. To switch languages mid-conversation, end users start a new chat.
+- **Once the conversation has settled on a language, it stays in that language for the rest of the session.** A clearly non-English first message locks the language right away; an English first message locks once a second turn confirms it. After lock, off-language turns don't change the bot's reply language, and the end user has no way to switch it; a new language is picked only when a new conversation starts.
 - **Tickets and support-team artifacts** can be pinned to a fixed language from your dashboard, independent of what language end users write in.
 
 ## What the user sees
@@ -55,7 +55,7 @@ After lock:
 - The bot replies in the locked language regardless of what the user types in subsequent turns. An English error message dropped into a Spanish chat doesn't change anything — the bot keeps replying in Spanish.
 - Detection runs only as a low-cost telemetry signal; it cannot override the lock.
 
-To switch languages mid-conversation, the end user clicks **Start new chat** (or your integration starts a new session). The new session goes through the full chain again and may settle on a different language. This is intentional: real bilingual switches mid-conversation are rare in support, and the lock prevents the much-more-common annoyance of the bot flip-flopping between languages on noisy turns.
+Languages cannot be switched mid-conversation. A new language is resolved only in a new conversation: after the idle timeout, after the chat was closed following an escalation and the end user clicked **Start new chat**, or when your integration starts a new session. The new session goes through the full chain again and may settle on a different language. This is intentional: real bilingual switches mid-conversation are rare in support, and the lock prevents the much-more-common annoyance of the bot flip-flopping between languages on noisy turns.
 
 ## What you can control
 

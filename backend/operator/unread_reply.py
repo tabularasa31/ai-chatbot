@@ -197,8 +197,11 @@ def mail_unread_operator_replies(
 ) -> str:
     """Mail the visitor what they have not read. Returns the outcome for logs.
 
-    The chat row stays locked across the send so two jobs for replies typed
-    seconds apart cannot both find the same unread tail and both mail it.
+    The marker is claimed under the row lock and committed *before* the send,
+    so two jobs for replies typed seconds apart cannot both find the same
+    unread tail, and the lock is not held across a ten-second provider call
+    that a visitor's turn on the same chat would otherwise wait behind. A
+    failed send hands the marker back so the retry finds the replies again.
     """
     from backend.escalation.service import _support_inbox_recipient
 
@@ -216,6 +219,12 @@ def mail_unread_operator_replies(
         logger.info("unread_reply_mail_skipped_no_recipient chat_id=%s", chat.id)
         return "no_recipient"
 
+    previous_marker = chat.unread_reply_mailed_message_id
+    claimed = replies[-1].id
+    chat.unread_reply_mailed_message_id = claimed
+    db.add(chat)
+    db.commit()
+
     reply_to = _support_inbox_recipient(chat.tenant, db) if chat.tenant is not None else None
     sent = send_email(
         recipient,
@@ -224,13 +233,14 @@ def mail_unread_operator_replies(
         reply_to=reply_to,
     )
     if sent is None:
-        db.rollback()
-        logger.warning("unread_reply_mail_send_failed chat_id=%s", chat.id)
+        locked = _lock_chat(db, chat_id)
+        if locked is not None and locked.unread_reply_mailed_message_id == claimed:
+            locked.unread_reply_mailed_message_id = previous_marker
+            db.add(locked)
+        db.commit()
+        logger.warning("unread_reply_mail_send_failed chat_id=%s", chat_id)
         return "send_failed"
 
-    chat.unread_reply_mailed_message_id = replies[-1].id
-    db.add(chat)
-    db.commit()
     logger.info(
         "unread_reply_mailed chat_id=%s replies=%d ticket=%s",
         chat.id,

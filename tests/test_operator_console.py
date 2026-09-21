@@ -21,6 +21,7 @@ from backend.auth.service import create_token_for_user
 from backend.email.reply_lane import mint_reply_token
 from backend.escalation.service import _notify_tenant_new_ticket, note_repeat_human_request
 from backend.models import (
+    Bot,
     Chat,
     EscalationStatus,
     EscalationTicket,
@@ -483,7 +484,11 @@ def test_resolving_a_held_chat_emits_ticket_resolved(
     )
 
     ws = _workspace(tenant, db_session, email="ticketresolved@example.com", name="Resolved Co")
-    chat = _chat(db_session, ws.tenant_id)
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == ws.tenant_id).one()
+    bot_row = db_session.query(Bot).filter(Bot.tenant_id == ws.tenant_id).one()
+    # Real chats always carry bot_id (stamped at creation in widget/routes.py);
+    # set it explicitly here since bot.id is nullable in the schema.
+    chat = _chat(db_session, ws.tenant_id, bot_id=bot_row.id)
     ticket = _ticket(db_session, chat)
     assert tenant.post(f"/operator/chats/{chat.id}/take", headers=ws.auth).status_code == 200
     db_session.expire_all()
@@ -504,6 +509,8 @@ def test_resolving_a_held_chat_emits_ticket_resolved(
         "has_resolution_text": True,
         "chat_was_with_operator": True,
     }
+    assert event["tenant_id"] == str(tenant_row.public_id)
+    assert event["bot_id"] == str(bot_row.public_id)
     assert event["groups"] == {"tenant": event["tenant_id"]}
     # No message text, resolution text, e-mail or name ever reaches PostHog.
     for value in event["properties"].values():
@@ -524,7 +531,9 @@ def test_resolving_a_chat_never_taken_still_emits_with_chat_was_with_operator_fa
     )
 
     ws = _workspace(tenant, db_session, email="ticketnottaken@example.com", name="Not Taken Co")
-    chat = _chat(db_session, ws.tenant_id)
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == ws.tenant_id).one()
+    bot_row = db_session.query(Bot).filter(Bot.tenant_id == ws.tenant_id).one()
+    chat = _chat(db_session, ws.tenant_id, bot_id=bot_row.id)
     _ticket(db_session, chat)
 
     resolve_from_operator(db_session, chat=chat, tenant_id=ws.tenant_id)
@@ -534,6 +543,8 @@ def test_resolving_a_chat_never_taken_still_emits_with_chat_was_with_operator_fa
     assert events[0]["properties"]["resolved_count"] == 1
     assert events[0]["properties"]["chat_was_with_operator"] is False
     assert events[0]["properties"]["has_resolution_text"] is False
+    assert events[0]["tenant_id"] == str(tenant_row.public_id)
+    assert events[0]["bot_id"] == str(bot_row.public_id)
 
 
 def test_resolving_with_no_active_ticket_emits_nothing(

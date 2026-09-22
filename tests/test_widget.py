@@ -155,23 +155,28 @@ def _seed_rag_chunk(db_session: Session, client_uuid: uuid.UUID) -> None:
     db_session.commit()
 
 
+def _setup_widget_tenant(
+    tenant: TestClient, db_session: Session, email: str, name: str = "Widget Co"
+) -> tuple[uuid.UUID, str]:
+    """Register a verified user, create a tenant + bot, return (tenant_id, bot_public_id)."""
+    token = register_and_verify_user(tenant, db_session, email=email)
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": name},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    return uuid.UUID(cl_resp.json()["id"]), _create_bot(tenant, token)
+
+
 def test_widget_chat_success(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Happy path: public widget chat returns answer and session_id."""
-    token = register_and_verify_user(tenant, db_session, email="widget-ok@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Ok Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    body = cl_resp.json()
-    client_uuid = uuid.UUID(body["id"])
-    bot_public_id = _create_bot(tenant, token)
+    client_uuid, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-ok@example.com")
     _seed_rag_chunk(db_session, client_uuid)
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
@@ -188,72 +193,45 @@ def test_widget_chat_success(
     assert data.get("chat_ended") is False
 
 
-def test_widget_config_returns_link_safety_settings(
+def test_widget_config_link_safety_disabled_then_enabled(
     tenant: TestClient,
     db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-config@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Config Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
+    """/widget/config: with link safety disabled, labels use English
+    defaults and localization is never invoked; once enabled, the response
+    carries the tenant's allowed_domains and localized labels."""
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-config@example.com")
+
+    localize = Mock(side_effect=AssertionError("localization should not run when link safety is disabled"))
+    monkeypatch.setattr("backend.widget.routes.async_localize_text_to_language_result", localize)
+
+    disabled_resp = tenant.get(f"/widget/config?bot_id={bot_public_id}&locale=ru-RU")
+    assert disabled_resp.status_code == 200
+    disabled_data = disabled_resp.json()
+    assert disabled_data["link_safety_enabled"] is False
+    assert disabled_data["link_safety_labels"]["title"] == "Open external link?"
+    localize.assert_not_called()
+    monkeypatch.undo()
+
     bot = db_session.query(Bot).filter(Bot.public_id == bot_public_id).one()
     bot.link_safety_enabled = True
     bot.allowed_domains = ["example.com"]
     db_session.commit()
 
-    r = tenant.get(f"/widget/config?bot_id={bot_public_id}")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["link_safety_enabled"] is True
-    assert data["allowed_domains"] == ["example.com"]
-    assert data["link_safety_labels"]["body"] == "You are going to {hostname}. Continue?"
-
-
-def test_widget_config_skips_localization_when_link_safety_disabled(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-config-disabled@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Config Disabled Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
-
-    localize = Mock(side_effect=AssertionError("localization should not run when link safety is disabled"))
-    monkeypatch.setattr("backend.widget.routes.async_localize_text_to_language_result", localize)
-
-    r = tenant.get(f"/widget/config?bot_id={bot_public_id}&locale=ru-RU")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["link_safety_enabled"] is False
-    assert data["link_safety_labels"]["title"] == "Open external link?"
-    localize.assert_not_called()
+    enabled_resp = tenant.get(f"/widget/config?bot_id={bot_public_id}")
+    assert enabled_resp.status_code == 200
+    enabled_data = enabled_resp.json()
+    assert enabled_data["link_safety_enabled"] is True
+    assert enabled_data["allowed_domains"] == ["example.com"]
+    assert enabled_data["link_safety_labels"]["body"] == "You are going to {hostname}. Continue?"
 
 
 def test_widget_chat_empty_message_returns_422(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-greeting@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Greeting Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    client_uuid = uuid.UUID(cl_resp.json()["id"])
-    bot_public_id = _create_bot(tenant, token)
+    client_uuid, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-greeting@example.com")
     existing_chat = Chat(
         tenant_id=client_uuid,
         session_id=uuid.uuid4(),
@@ -277,15 +255,7 @@ def test_widget_chat_empty_message_bootstraps_new_session(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-bootstrap@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Bootstrap Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-bootstrap@example.com")
 
     async def _fake_async_process(*args, **kwargs):
         return ChatTurnOutcome(
@@ -317,17 +287,7 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
     """
     from backend.core.limiter import set_widget_public_rate_limit_key_override
 
-    token = register_and_verify_user(tenant, db_session, email="widget-rl@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget RL Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    body = cl_resp.json()
-    client_uuid = uuid.UUID(body["id"])
-    bot_public_id = _create_bot(tenant, token)
+    client_uuid, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-rl@example.com")
     _seed_rag_chunk(db_session, client_uuid)
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
@@ -374,157 +334,104 @@ def test_widget_chat_unknown_bot_id_404(tenant: TestClient) -> None:
     assert r.status_code == 404
 
 
-def test_widget_chat_invalid_session_id_returns_controlled_error(
+@pytest.mark.parametrize(
+    "kind,expected_status,expected_code",
+    [
+        pytest.param("malformed", 422, "session_invalid", id="malformed_session_id"),
+        pytest.param("nonexistent", 409, "session_not_found", id="nonexistent_session"),
+        pytest.param("foreign_tenant", 409, "session_not_found", id="foreign_tenant_session"),
+        pytest.param("same_tenant_other_bot", 409, "session_not_found", id="same_tenant_other_bot_session"),
+    ],
+)
+def test_widget_chat_session_id_validation(
     tenant: TestClient,
     db_session: Session,
+    kind: str,
+    expected_status: int,
+    expected_code: str,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-invalid-session@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Invalid Session Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
+    """/widget/chat rejects a session_id that is malformed, unknown, or
+    belongs to a different tenant/bot — never leaking another party's chat."""
+    if kind == "malformed":
+        _, bot_public_id = _setup_widget_tenant(tenant, db_session, f"widget-session-{kind}@example.com")
+        session_id = "not-a-uuid"
+    elif kind == "nonexistent":
+        _, bot_public_id = _setup_widget_tenant(tenant, db_session, f"widget-session-{kind}@example.com")
+        session_id = str(uuid.uuid4())
+    elif kind == "foreign_tenant":
+        _, bot_public_id = _setup_widget_tenant(tenant, db_session, f"widget-session-{kind}@example.com")
+        other_tenant_uuid, _ = _setup_widget_tenant(
+            tenant, db_session, f"widget-session-{kind}-owner@example.com"
+        )
+        foreign_chat = Chat(tenant_id=other_tenant_uuid, session_id=uuid.uuid4(), user_context={})
+        db_session.add(foreign_chat)
+        db_session.commit()
+        session_id = str(foreign_chat.session_id)
+    else:  # same_tenant_other_bot
+        token = register_and_verify_user(tenant, db_session, email=f"widget-session-{kind}@example.com")
+        cl_resp = tenant.post(
+            "/tenants",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": "Widget Same Tenant Bots"},
+        )
+        tenant_uuid = uuid.UUID(cl_resp.json()["id"])
+        set_client_openai_key(tenant, token)
+        bot_a_public_id = _create_bot(tenant, token)
+        bot_public_id = _create_bot(tenant, token)
+        bot_a = db_session.query(Bot).filter(Bot.public_id == bot_a_public_id).one()
+        foreign_chat = Chat(
+            tenant_id=tenant_uuid, bot_id=bot_a.id, session_id=uuid.uuid4(), user_context={}
+        )
+        db_session.add(foreign_chat)
+        db_session.commit()
+        session_id = str(foreign_chat.session_id)
 
     r = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id}&session_id=not-a-uuid",
+        f"/widget/chat?bot_id={bot_public_id}&session_id={session_id}",
         json={"message": "hello"},
     )
-    assert r.status_code == 422
-    assert r.json()["detail"]["code"] == "session_invalid"
+    assert r.status_code == expected_status
+    assert r.json()["detail"]["code"] == expected_code
 
 
-def test_widget_chat_missing_session_returns_controlled_error(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-missing-session@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Missing Session Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
-
-    r = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id}&session_id={uuid.uuid4()}",
-        json={"message": "hello"},
-    )
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "session_not_found"
-
-
-def test_widget_chat_foreign_session_id_returns_not_found(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token_a = register_and_verify_user(tenant, db_session, email="widget-foreign-a@example.com")
-    token_b = register_and_verify_user(tenant, db_session, email="widget-foreign-b@example.com")
-    cl_resp_a = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Widget Foreign A"},
-    )
-    cl_resp_b = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Widget Foreign B"},
-    )
-    assert cl_resp_a.status_code == 201
-    assert cl_resp_b.status_code == 201
-
-    set_client_openai_key(tenant, token_a)
-    set_client_openai_key(tenant, token_b)
-
-    client_a_uuid = uuid.UUID(cl_resp_a.json()["id"])
-    bot_public_id_b = _create_bot(tenant, token_b)
-    foreign_chat = Chat(
-        tenant_id=client_a_uuid,
-        session_id=uuid.uuid4(),
-        user_context={},
-    )
-    db_session.add(foreign_chat)
-    db_session.commit()
-
-    r = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id_b}&session_id={foreign_chat.session_id}",
-        json={"message": "hello"},
-    )
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "session_not_found"
-
-
-def test_widget_chat_same_tenant_other_bot_session_returns_not_found(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-same-tenant-bots@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Same Tenant Bots"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-
-    tenant_uuid = uuid.UUID(cl_resp.json()["id"])
-    bot_public_id_a = _create_bot(tenant, token)
-    bot_public_id_b = _create_bot(tenant, token)
-    bot_a = db_session.query(Bot).filter(Bot.public_id == bot_public_id_a).first()
-    assert bot_a is not None
-    foreign_chat = Chat(
-        tenant_id=tenant_uuid,
-        bot_id=bot_a.id,
-        session_id=uuid.uuid4(),
-        user_context={},
-    )
-    db_session.add(foreign_chat)
-    db_session.commit()
-
-    r = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id_b}&session_id={foreign_chat.session_id}",
-        json={"message": "hello"},
-    )
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "session_not_found"
-
-
-def test_widget_chat_legacy_ended_at_chat_still_answers(
+@pytest.mark.parametrize(
+    "idle_minutes,expected_text",
+    [
+        pytest.param(1, "Still here", id="within_idle_window_still_answers"),
+        pytest.param(45, "Answer in a fresh conversation", id="past_idle_threshold_rotates"),
+    ],
+)
+def test_widget_chat_legacy_ended_at_idle_behavior(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
+    idle_minutes: int,
+    expected_text: str,
 ) -> None:
-    # Rows closed before the closed-chat state was removed still exist in
-    # prod; they behave like any open conversation.
-    from datetime import datetime, timezone
+    """A row with a legacy ``ended_at`` (from before the closed-chat state was
+    removed) behaves like any open conversation: it still answers within the
+    idle window, and rotates like any other chat once idle exceeds the
+    threshold (default 1800s, pinned by the autouse fixture below)."""
+    from datetime import datetime, timedelta, timezone
 
-    token = register_and_verify_user(tenant, db_session, email="widget-closed-session@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Closed Session Co"},
+    tenant_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, f"widget-legacy-{idle_minutes}@example.com"
     )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-
-    client_uuid = uuid.UUID(cl_resp.json()["id"])
-    bot_public_id = _create_bot(tenant, token)
+    session_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
     legacy_chat = Chat(
-        tenant_id=client_uuid,
-        session_id=uuid.uuid4(),
+        tenant_id=tenant_uuid,
+        session_id=session_id,
         user_context={},
-        ended_at=datetime.now(timezone.utc),
+        ended_at=now,
+        updated_at=now - timedelta(minutes=idle_minutes),
     )
     db_session.add(legacy_chat)
     db_session.commit()
 
     async def _fake_async_process(*args, **kwargs):
         return ChatTurnOutcome(
-            text="Still here",
+            text=expected_text,
             document_ids=[],
             tokens_used=0,
             chat_ended=False,
@@ -536,10 +443,10 @@ def test_widget_chat_legacy_ended_at_chat_still_answers(
     )
 
     r = _post_widget_chat(
-        tenant, bot_public_id, message="hello", session_id=str(legacy_chat.session_id)
+        tenant, bot_public_id, message="hello again", session_id=str(session_id)
     )
     assert r.status_code == 200
-    assert r.json()["text"] == "Still here"
+    assert r.json()["text"] == expected_text
     assert r.json()["chat_ended"] is False
 
 
@@ -548,17 +455,9 @@ def test_widget_chat_hints_session_increments_user_session_turns(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-user-session-turns@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget User Session Turns Co"},
+    client_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-user-session-turns@example.com"
     )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    body = cl_resp.json()
-    client_uuid = uuid.UUID(body["id"])
-    bot_public_id = _create_bot(tenant, token)
     _seed_rag_chunk(db_session, client_uuid)
 
     init_resp = tenant.post(
@@ -595,41 +494,45 @@ def test_widget_chat_hints_session_increments_user_session_turns(
     assert row.conversation_turns == 1
 
 
-def _setup_widget_tenant(tenant: TestClient, db_session: Session, email: str) -> str:
-    """Register a verified user, create a tenant + bot, return bot public_id."""
-    token = register_and_verify_user(tenant, db_session, email=email)
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Resume Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    return _create_bot(tenant, token)
-
-
-def test_widget_session_init_resumes_open_session_for_identified_user(
+@pytest.mark.parametrize(
+    "hints,expected_mode,expect_resume",
+    [
+        pytest.param({"user_id": "ext-99"}, "hints", True, id="identified_user_resumes"),
+        pytest.param(None, "anonymous", False, id="anonymous_always_new"),
+        pytest.param({"email": "visitor@example.com"}, "hints", False, id="email_only_never_resumes"),
+    ],
+)
+def test_widget_session_init_resume_modes(
     tenant: TestClient,
     db_session: Session,
+    hints: dict | None,
+    expected_mode: str,
+    expect_resume: bool,
 ) -> None:
-    bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume@example.com")
-
-    first = tenant.post(
-        "/widget/session/init",
-        json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-99"}},
+    """Session resume on repeat /widget/session/init depends on the hint
+    kind: a stable user_id resumes the open session; no hints (anonymous)
+    or an email-only hint (too guessable to safely reattach) always start
+    a fresh one."""
+    _, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, f"widget-resume-{expected_mode}-{expect_resume}@example.com"
     )
+    payload = {"bot_id": bot_public_id}
+    if hints is not None:
+        payload["user_hints"] = hints
+
+    first = tenant.post("/widget/session/init", json=payload)
     assert first.status_code == 200
+    assert first.json()["mode"] == expected_mode
     assert first.json()["resumed"] is False
     first_session = first.json()["session_id"]
 
-    # Same identified user, fresh "device" (no localStorage) → resume.
-    second = tenant.post(
-        "/widget/session/init",
-        json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-99"}},
-    )
+    second = tenant.post("/widget/session/init", json=payload)
     assert second.status_code == 200
-    assert second.json()["resumed"] is True
-    assert second.json()["session_id"] == first_session
+    assert second.json()["resumed"] is expect_resume
+    if expect_resume:
+        assert second.json()["session_id"] == first_session
+    else:
+        assert second.json()["session_id"] != first_session
 
 
 def test_widget_session_init_resumes_despite_legacy_ended_at(
@@ -638,7 +541,7 @@ def test_widget_session_init_resumes_despite_legacy_ended_at(
 ) -> None:
     from datetime import UTC, datetime
 
-    bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume-ended@example.com")
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume-ended@example.com")
 
     first = tenant.post(
         "/widget/session/init",
@@ -659,58 +562,13 @@ def test_widget_session_init_resumes_despite_legacy_ended_at(
     assert second.json()["session_id"] == first_session
 
 
-def test_widget_session_init_anonymous_always_new(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-anon@example.com")
-
-    first = tenant.post("/widget/session/init", json={"bot_id": bot_public_id})
-    second = tenant.post("/widget/session/init", json={"bot_id": bot_public_id})
-    assert first.json()["mode"] == "anonymous"
-    assert first.json()["resumed"] is False
-    assert second.json()["resumed"] is False
-    assert first.json()["session_id"] != second.json()["session_id"]
-
-
-def test_widget_session_init_email_only_hint_never_resumes(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    # Email is too guessable to safely reattach over a public endpoint, so an
-    # email-only hint always starts a fresh session even on repeat init.
-    bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume-email@example.com")
-
-    first = tenant.post(
-        "/widget/session/init",
-        json={"bot_id": bot_public_id, "user_hints": {"email": "visitor@example.com"}},
-    )
-    assert first.json()["resumed"] is False
-    first_session = first.json()["session_id"]
-
-    second = tenant.post(
-        "/widget/session/init",
-        json={"bot_id": bot_public_id, "user_hints": {"email": "visitor@example.com"}},
-    )
-    assert second.json()["resumed"] is False
-    assert second.json()["session_id"] != first_session
-
-
 def test_widget_chat_stream_sse(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """stream=true returns text/event-stream with chunk + done events."""
-    token = register_and_verify_user(tenant, db_session, email="widget-stream@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Stream Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-stream@example.com")
 
     async def fake_process(*, stream_callback=None, session_id=None, **kwargs):
         if stream_callback is not None:
@@ -771,7 +629,7 @@ def test_widget_stream_language_mismatch_aborts_before_client_sees_it(
     from backend.search.service import build_reliability_assessment
     from tests._async_utils import as_async as _as_async
 
-    bot_public_id = _setup_widget_tenant(
+    _, bot_public_id = _setup_widget_tenant(
         tenant, db_session, "widget-lang-gate@example.com"
     )
     doc_id = _uuid.uuid4()
@@ -857,15 +715,7 @@ def test_widget_chat_returns_plain_answer_payload(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="widget-clarify@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Clarify Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-clarify@example.com")
 
     async def _fake_async_process(*args, **kwargs):
         return ChatTurnOutcome(
@@ -891,21 +741,6 @@ def test_widget_chat_returns_plain_answer_payload(
 # ---------------------------------------------------------------------------
 # Conversation rotation (widget protocol)
 # ---------------------------------------------------------------------------
-
-
-def _setup_rotation_tenant(
-    tenant: TestClient, db_session: Session, *, email: str, name: str
-) -> tuple[uuid.UUID, str]:
-    token = register_and_verify_user(tenant, db_session, email=email)
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": name},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
-    return uuid.UUID(cl_resp.json()["id"]), bot_public_id
 
 
 @pytest.fixture(autouse=True)
@@ -965,91 +800,65 @@ def _make_session_chat(
     return chat
 
 
-def test_widget_history_marks_conversation_boundaries(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    "chats,expected",
+    [
+        pytest.param(
+            [
+                (120, [("user", "old question"), ("assistant", "old answer")], {}),
+                (1, [("user", "new question")], {}),
+            ],
+            {
+                "messages": ["old question", "old answer", "new question"],
+                "boundary_indices": [2],
+                "conversation_rotated": False,
+            },
+            id="recent_followup_no_rotation",
+        ),
+        pytest.param(
+            [(45, [("user", "old question"), ("assistant", "old answer")], {})],
+            {"conversation_rotated": True, "boundary_indices": []},
+            id="idle_past_threshold_flags_rotation",
+        ),
+        pytest.param(
+            [(45, [("assistant", "Hi, how can I help?")], {})],
+            {
+                "conversation_rotated": False,
+                "messages": ["Hi, how can I help?"],
+            },
+            id="greeting_only_idle_does_not_flag_rotation",
+        ),
+    ],
+)
+def test_widget_history_rotation_flags(
+    tenant: TestClient, db_session: Session, chats: list, expected: dict
 ) -> None:
-    tenant_uuid, bot_public_id = _setup_rotation_tenant(
-        tenant, db_session, email="widget-rot-hist@example.com", name="Widget Rot Hist Co"
+    """/widget/history computes conversation_rotated / boundary_indices from
+    idle time and message content, across the failure modes that decide
+    whether a returning visitor is re-greeted."""
+    tenant_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, f"widget-rot-hist-{expected.get('conversation_rotated')}@example.com"
     )
     session_id = uuid.uuid4()
-    _make_session_chat(
-        db_session,
-        tenant_uuid,
-        session_id=session_id,
-        idle_minutes=120,
-        messages=[("user", "old question"), ("assistant", "old answer")],
-    )
-    _make_session_chat(
-        db_session,
-        tenant_uuid,
-        session_id=session_id,
-        idle_minutes=1,
-        messages=[("user", "new question")],
-    )
+    for idle_minutes, messages, extra_fields in chats:
+        _make_session_chat(
+            db_session,
+            tenant_uuid,
+            session_id=session_id,
+            idle_minutes=idle_minutes,
+            messages=messages,
+            **extra_fields,
+        )
 
     r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
 
     assert r.status_code == 200
     data = r.json()
-    assert [m["content"] for m in data["messages"]] == [
-        "old question",
-        "old answer",
-        "new question",
-    ]
-    assert data["boundary_indices"] == [2]
-    assert data["conversation_rotated"] is False
-
-
-def test_widget_history_flags_pending_rotation(
-    tenant: TestClient, db_session: Session
-) -> None:
-    tenant_uuid, bot_public_id = _setup_rotation_tenant(
-        tenant, db_session, email="widget-rot-flag@example.com", name="Widget Rot Flag Co"
-    )
-    session_id = uuid.uuid4()
-    _make_session_chat(
-        db_session,
-        tenant_uuid,
-        session_id=session_id,
-        idle_minutes=45,
-        messages=[("user", "old question"), ("assistant", "old answer")],
-    )
-
-    r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
-
-    assert r.status_code == 200
-    data = r.json()
-    assert data["conversation_rotated"] is True
-    assert data["boundary_indices"] == []
-
-
-def test_widget_history_greeting_only_idle_chat_does_not_flag_rotation(
-    tenant: TestClient, db_session: Session
-) -> None:
-    # A conversation that only ever received the bootstrap greeting (no user
-    # turn) must NOT signal rotation when idle: re-greeting it would churn
-    # another empty greeting Chat + trace for a visitor who never engaged.
-    tenant_uuid, bot_public_id = _setup_rotation_tenant(
-        tenant,
-        db_session,
-        email="widget-rot-greetonly@example.com",
-        name="Widget Rot GreetOnly Co",
-    )
-    session_id = uuid.uuid4()
-    _make_session_chat(
-        db_session,
-        tenant_uuid,
-        session_id=session_id,
-        idle_minutes=45,
-        messages=[("assistant", "Hi, how can I help?")],
-    )
-
-    r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
-
-    assert r.status_code == 200
-    data = r.json()
-    assert data["conversation_rotated"] is False
-    assert [m["content"] for m in data["messages"]] == ["Hi, how can I help?"]
+    if "messages" in expected:
+        assert [m["content"] for m in data["messages"]] == expected["messages"]
+    assert data["conversation_rotated"] is expected["conversation_rotated"]
+    if "boundary_indices" in expected:
+        assert data["boundary_indices"] == expected["boundary_indices"]
 
 
 def test_widget_history_legacy_ended_at_chat_is_not_ended(
@@ -1059,8 +868,8 @@ def test_widget_history_legacy_ended_at_chat_is_not_ended(
     # the widget must not lock its input.
     from backend.models.base import _utcnow
 
-    tenant_uuid, bot_public_id = _setup_rotation_tenant(
-        tenant, db_session, email="widget-rot-closed@example.com", name="Widget Rot Closed Co"
+    tenant_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-rot-closed@example.com"
     )
     session_id = uuid.uuid4()
     _make_session_chat(
@@ -1085,8 +894,8 @@ def test_widget_chat_empty_message_allowed_when_rotation_pending(
 ) -> None:
     # The widget re-greets a returning visitor by POSTing an empty message
     # with the existing session; mid-conversation empty messages still 422.
-    tenant_uuid, bot_public_id = _setup_rotation_tenant(
-        tenant, db_session, email="widget-rot-greet@example.com", name="Widget Rot Greet Co"
+    tenant_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-rot-greet@example.com"
     )
     session_id = uuid.uuid4()
     _make_session_chat(
@@ -1115,42 +924,3 @@ def test_widget_chat_empty_message_allowed_when_rotation_pending(
     )
     assert r.status_code == 200
     assert r.json()["text"] == "Fresh greeting"
-
-
-def test_widget_chat_legacy_ended_at_chat_rotates_when_idle(
-    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Past the idle threshold a legacy closed row rotates like any other.
-    from backend.models.base import _utcnow
-
-    tenant_uuid, bot_public_id = _setup_rotation_tenant(
-        tenant, db_session, email="widget-rot-409@example.com", name="Widget Rot 409 Co"
-    )
-    session_id = uuid.uuid4()
-    _make_session_chat(
-        db_session,
-        tenant_uuid,
-        session_id=session_id,
-        idle_minutes=45,
-        messages=[("user", "old question")],
-        ended_at=_utcnow(),
-    )
-
-    async def _fake_async_process(*args, **kwargs):
-        return ChatTurnOutcome(
-            text="Answer in a fresh conversation",
-            document_ids=[],
-            tokens_used=0,
-            chat_ended=False,
-        )
-
-    monkeypatch.setattr(
-        "backend.widget.routes.async_process_chat_message",
-        _fake_async_process,
-    )
-
-    r = _post_widget_chat(
-        tenant, bot_public_id, message="hello again", session_id=str(session_id)
-    )
-    assert r.status_code == 200
-    assert r.json()["text"] == "Answer in a fresh conversation"

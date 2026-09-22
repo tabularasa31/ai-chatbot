@@ -11,8 +11,11 @@ from backend.tenants.service import ensure_tenant_for_user
 from tests.conftest import register_and_verify_user
 
 
-def test_create_client_success(tenant: TestClient, db_session: Session) -> None:
-    """Create tenant returns 201 and 32-char api_key."""
+def test_create_client_journey_success_then_duplicate_rejected(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """201 with a ck_-prefixed 35-char api_key on first create; a second
+    tenant for the same user is rejected with 409."""
     token = register_and_verify_user(tenant, db_session, email="user@example.com")
     response = tenant.post(
         "/tenants",
@@ -23,28 +26,18 @@ def test_create_client_success(tenant: TestClient, db_session: Session) -> None:
     data = response.json()
     assert "id" in data
     assert data["name"] == "My Tenant"
-    assert "api_key" in data
     assert data["api_key"].startswith("ck_")
     assert len(data["api_key"]) == 35
     assert "created_at" in data
     assert "updated_at" in data
 
-
-def test_create_client_duplicate(tenant: TestClient, db_session: Session) -> None:
-    """Same user tries to create second tenant → 409."""
-    token = register_and_verify_user(tenant, db_session, email="dup@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "First Tenant"},
-    )
-    response = tenant.post(
+    dup_response = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Second Tenant"},
     )
-    assert response.status_code == 409
-    assert "already exists" in response.json()["detail"].lower()
+    assert dup_response.status_code == 409
+    assert "already exists" in dup_response.json()["detail"].lower()
 
 
 def test_ensure_client_for_user_returns_existing_on_conflict(
@@ -95,8 +88,8 @@ def test_create_client_unauthenticated(tenant: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_get_my_client_success(tenant: TestClient, db_session: Session) -> None:
-    """Get own tenant after creation."""
+def test_get_client_success_via_me_and_by_id(tenant: TestClient, db_session: Session) -> None:
+    """Own tenant is fetchable both via /tenants/me and /tenants/{id}."""
     token = register_and_verify_user(tenant, db_session, email="me@example.com")
     create_resp = tenant.post(
         "/tenants",
@@ -104,16 +97,21 @@ def test_get_my_client_success(tenant: TestClient, db_session: Session) -> None:
         json={"name": "My Tenant"},
     )
     tenant_id = create_resp.json()["id"]
-    response = tenant.get(
-        "/tenants/me",
-        headers={"Authorization": f"Bearer {token}"},
+
+    me_resp = tenant.get("/tenants/me", headers={"Authorization": f"Bearer {token}"})
+    assert me_resp.status_code == 200
+    me_data = me_resp.json()
+    assert me_data["id"] == tenant_id
+    assert me_data["name"] == "My Tenant"
+    assert me_data.get("api_key_hint") and len(me_data["api_key_hint"]) == 4
+    assert "api_key" not in me_data
+
+    by_id_resp = tenant.get(
+        f"/tenants/{tenant_id}", headers={"Authorization": f"Bearer {token}"}
     )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["id"] == tenant_id
-    assert data["name"] == "My Tenant"
-    assert data.get("api_key_hint") and len(data["api_key_hint"]) == 4
-    assert "api_key" not in data
+    assert by_id_resp.status_code == 200
+    assert by_id_resp.json()["id"] == tenant_id
+    assert by_id_resp.json()["name"] == "My Tenant"
 
 
 def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> None:
@@ -124,24 +122,6 @@ def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> Non
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 404
-
-
-def test_get_client_by_id_success(tenant: TestClient, db_session: Session) -> None:
-    """Get tenant by UUID."""
-    token = register_and_verify_user(tenant, db_session, email="byid@example.com")
-    create_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Test Tenant"},
-    )
-    tenant_id = create_resp.json()["id"]
-    response = tenant.get(
-        f"/tenants/{tenant_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
-    assert response.json()["id"] == tenant_id
-    assert response.json()["name"] == "Test Tenant"
 
 
 def test_get_client_by_id_wrong_user(tenant: TestClient, db_session: Session) -> None:
@@ -211,24 +191,16 @@ def test_delete_client_wrong_user(tenant: TestClient, db_session: Session) -> No
     assert response.status_code == 404
 
 
-def test_api_key_is_ck_prefixed(tenant: TestClient, db_session: Session) -> None:
-    """Verify api_key is ck_-prefixed, 35 chars total."""
-    token = register_and_verify_user(tenant, db_session, email="len@example.com")
-    response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Len Check"},
-    )
-    assert response.status_code == 201
-    key = response.json()["api_key"]
-    assert key.startswith("ck_")
-    assert len(key) == 35
-
-
-def test_support_settings_default_falls_back_to_owner_email(
+def test_support_settings_journey_default_update_and_partial_preserve(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
+    """Support-settings lifecycle in one pass:
+    - default falls back to the owner's email, unset fields absent (exclude_none)
+    - PUT rejects an invalid l2_email
+    - PUT persists l2_email + escalation_language, GET reflects it
+    - a partial PUT (l2_email only) must not clear escalation_language
+    """
     token = register_and_verify_user(tenant, db_session, email="owner-support@example.com")
     tenant.post(
         "/tenants",
@@ -236,121 +208,47 @@ def test_support_settings_default_falls_back_to_owner_email(
         json={"name": "Support Tenant"},
     )
 
-    response = tenant.get(
+    default_resp = tenant.get(
         "/tenants/me/support-settings",
         headers={"Authorization": f"Bearer {token}"},
     )
+    assert default_resp.status_code == 200
+    default_body = default_resp.json()
+    assert default_body == {"fallback_email": "owner-support@example.com"}
+    assert "l2_email" not in default_body, "unset l2_email must be absent (exclude_none)"
+    assert "escalation_language" not in default_body
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "fallback_email": "owner-support@example.com",
-    }
-
-
-def test_support_settings_put_and_get(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="support-put@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Support Put"},
-    )
-
-    response = tenant.put(
-        "/tenants/me/support-settings",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"l2_email": "L2@Example.com"},
-    )
-    assert response.status_code == 200
-    assert response.json()["l2_email"] == "l2@example.com"
-    assert response.json()["fallback_email"] == "support-put@example.com"
-
-    response = tenant.get(
-        "/tenants/me/support-settings",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
-    assert response.json()["l2_email"] == "l2@example.com"
-
-
-def test_support_settings_reject_invalid_email(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="support-bad@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Support Bad"},
-    )
-
-    response = tenant.put(
+    invalid_resp = tenant.put(
         "/tenants/me/support-settings",
         headers={"Authorization": f"Bearer {token}"},
         json={"l2_email": "not-an-email"},
     )
-    assert response.status_code == 422
+    assert invalid_resp.status_code == 422
 
-
-def test_support_settings_null_fields_excluded_from_response(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """Unset optional fields are NOT included in the response body (exclude_none=True).
-
-    This documents the intentional API contract: tenants must not rely on
-    ``l2_email`` or ``escalation_language`` being present as explicit null keys;
-    absence means the field is unset.
-    """
-    token = register_and_verify_user(tenant, db_session, email="support-exclude@example.com")
-    tenant.post(
-        "/tenants",
+    put_resp = tenant.put(
+        "/tenants/me/support-settings",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Exclude None"},
+        json={"l2_email": "L2@Example.com", "escalation_language": "fr"},
     )
+    assert put_resp.status_code == 200
+    assert put_resp.json()["l2_email"] == "l2@example.com"
+    assert put_resp.json()["fallback_email"] == "owner-support@example.com"
 
-    response = tenant.get(
+    get_resp = tenant.get(
         "/tenants/me/support-settings",
         headers={"Authorization": f"Bearer {token}"},
     )
+    assert get_resp.status_code == 200
+    assert get_resp.json()["l2_email"] == "l2@example.com"
+    assert get_resp.json()["escalation_language"] == "fr"
 
-    assert response.status_code == 200
-    body = response.json()
-    assert "l2_email" not in body, "unset l2_email must be absent (exclude_none)"
-    assert "escalation_language" not in body, "unset escalation_language must be absent (exclude_none)"
-    assert "fallback_email" in body
-
-
-def test_support_settings_partial_put_preserves_escalation_language(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """PUT with only l2_email must not clear an existing escalation_language."""
-    token = register_and_verify_user(tenant, db_session, email="support-partial@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Partial Put"},
-    )
-
-    # Set both fields first
-    tenant.put(
-        "/tenants/me/support-settings",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"l2_email": "l2@example.com", "escalation_language": "fr"},
-    )
-
-    # Update only l2_email — escalation_language must survive
-    response = tenant.put(
+    partial_resp = tenant.put(
         "/tenants/me/support-settings",
         headers={"Authorization": f"Bearer {token}"},
         json={"l2_email": "new-l2@example.com"},
     )
-
-    assert response.status_code == 200
-    assert response.json()["l2_email"] == "new-l2@example.com"
-    assert response.json().get("escalation_language") == "fr", (
+    assert partial_resp.status_code == 200
+    assert partial_resp.json()["l2_email"] == "new-l2@example.com"
+    assert partial_resp.json().get("escalation_language") == "fr", (
         "escalation_language must not be cleared by a partial PUT"
     )

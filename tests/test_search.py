@@ -1058,40 +1058,6 @@ def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candida
     assert reranked[2][1] > 0.0
 
 
-def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:
-    from backend.models import Embedding
-
-    first = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password",
-        metadata_json={"chunk_index": 0},
-    )
-    second = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password steps",
-        metadata_json={"chunk_index": 1},
-    )
-    third = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="password reset troubleshooting",
-        metadata_json={"chunk_index": 2},
-    )
-
-    reranked = rerank_candidates(
-        "reset password",
-        [(first, 0.9), (second, 0.8), (third, 0.7)],
-        vector_scores={first.id: 0.9, second.id: 0.8, third.id: 0.7},
-        bm25_scores={first.id: 1.0, second.id: 0.8, third.id: 0.6},
-        top_k=3,
-    )
-
-    assert len(reranked) == 3
-    assert reranked[2][1] > 0.0
-
-
 def test_detect_source_overlaps_flags_duplicate_chunks_from_different_docs() -> None:
     from backend.models import Embedding
 

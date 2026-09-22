@@ -11,8 +11,6 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from typing import Generator
-from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -62,27 +60,45 @@ def _make_document(
     return doc
 
 
-# ---------------------------------------------------------------------------
-# document_indexed — upload path
-# ---------------------------------------------------------------------------
-
-
-def test_upload_document_emits_document_indexed(db_session: Session, monkeypatch):
-    tenant = _make_tenant(db_session)
-
+def _capture_events(monkeypatch: pytest.MonkeyPatch, target: str) -> list[dict]:
     events: list[dict] = []
 
     def fake_capture(event, **kwargs):
         events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.documents.service.capture_event", fake_capture)
+    monkeypatch.setattr(target, fake_capture)
+    return events
+
+
+# ---------------------------------------------------------------------------
+# document_indexed — upload path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "detected_language, parsed_text, expected_language, expected_language_detected",
+    [
+        pytest.param("en", "parsed content", "en", True, id="language_detected"),
+        pytest.param(None, "short text", None, False, id="language_detected_false_when_null"),
+    ],
+)
+def test_upload_document_emits_document_indexed(
+    db_session: Session,
+    monkeypatch,
+    detected_language: str | None,
+    parsed_text: str,
+    expected_language: str | None,
+    expected_language_detected: bool,
+):
+    tenant = _make_tenant(db_session)
+    events = _capture_events(monkeypatch, "backend.documents.service.capture_event")
     monkeypatch.setattr(
         "backend.documents.service.detect_document_language",
-        lambda text: "en",
+        lambda text: detected_language,
     )
     monkeypatch.setattr(
         "backend.documents.service._parse_content",
-        lambda content, file_type: "parsed content",
+        lambda content, file_type: parsed_text,
     )
     monkeypatch.setattr(
         "backend.documents.service.invalidate_bm25_cache_for_tenant",
@@ -106,50 +122,9 @@ def test_upload_document_emits_document_indexed(db_session: Session, monkeypatch
     props = e["properties"]
     assert props["file_type"] == "markdown"
     assert props["source_kind"] == "upload"
-    assert props["language"] == "en"
-    assert props["language_detected"] is True
+    assert props["language"] == expected_language
+    assert props["language_detected"] is expected_language_detected
     assert "parsed_text_chars" in props
-
-
-def test_upload_document_emits_language_detected_false_when_null(
-    db_session: Session, monkeypatch
-):
-    tenant = _make_tenant(db_session)
-
-    events: list[dict] = []
-
-    def fake_capture(event, **kwargs):
-        events.append({"event": event, **kwargs})
-
-    monkeypatch.setattr("backend.documents.service.capture_event", fake_capture)
-    monkeypatch.setattr(
-        "backend.documents.service.detect_document_language",
-        lambda text: None,
-    )
-    monkeypatch.setattr(
-        "backend.documents.service._parse_content",
-        lambda content, file_type: "short text",
-    )
-    monkeypatch.setattr(
-        "backend.documents.service.invalidate_bm25_cache_for_tenant",
-        lambda tid: None,
-    )
-
-    from backend.documents.service import upload_document
-
-    upload_document(
-        tenant_id=tenant.id,
-        filename="doc.md",
-        content=b"short",
-        file_type="markdown",
-        db=db_session,
-    )
-
-    indexed = [e for e in events if e["event"] == "document_indexed"]
-    assert len(indexed) == 1
-    props = indexed[0]["properties"]
-    assert props["language"] is None
-    assert props["language_detected"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -163,15 +138,7 @@ def test_snapshot_emits_for_tenant_with_documents(db_session: Session, monkeypat
     _make_document(db_session, tenant, language="ru", script="cyrillic")
     _make_document(db_session, tenant, language=None, script=None)
 
-    events: list[dict] = []
-
-    def fake_capture(event, **kwargs):
-        events.append({"event": event, **kwargs})
-
-    monkeypatch.setattr(
-        "backend.jobs.kb_language_snapshot.capture_event",
-        fake_capture,
-    )
+    events = _capture_events(monkeypatch, "backend.jobs.kb_language_snapshot.capture_event")
 
     from backend.jobs.kb_language_snapshot import (
         run_kb_language_snapshot_for_all_tenants,
@@ -195,17 +162,9 @@ def test_snapshot_emits_for_tenant_with_documents(db_session: Session, monkeypat
 
 
 def test_snapshot_skips_tenant_with_no_documents(db_session: Session, monkeypatch):
-    tenant = _make_tenant(db_session)
+    _make_tenant(db_session)
 
-    events: list[dict] = []
-
-    def fake_capture(event, **kwargs):
-        events.append({"event": event, **kwargs})
-
-    monkeypatch.setattr(
-        "backend.jobs.kb_language_snapshot.capture_event",
-        fake_capture,
-    )
+    events = _capture_events(monkeypatch, "backend.jobs.kb_language_snapshot.capture_event")
 
     from backend.jobs.kb_language_snapshot import (
         run_kb_language_snapshot_for_all_tenants,
@@ -222,15 +181,7 @@ def test_snapshot_monolingual_tenant(db_session: Session, monkeypatch):
     _make_document(db_session, tenant, language="en")
     _make_document(db_session, tenant, language="en")
 
-    events: list[dict] = []
-
-    def fake_capture(event, **kwargs):
-        events.append({"event": event, **kwargs})
-
-    monkeypatch.setattr(
-        "backend.jobs.kb_language_snapshot.capture_event",
-        fake_capture,
-    )
+    events = _capture_events(monkeypatch, "backend.jobs.kb_language_snapshot.capture_event")
 
     from backend.jobs.kb_language_snapshot import (
         run_kb_language_snapshot_for_all_tenants,
@@ -252,12 +203,7 @@ def test_snapshot_monolingual_tenant(db_session: Session, monkeypatch):
 
 
 def test_emit_chat_turn_event_includes_cross_lingual_props(monkeypatch):
-    captured: list[dict] = []
-
-    def fake_capture(event, **kwargs):
-        captured.append({"event": event, **kwargs})
-
-    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+    captured = _capture_events(monkeypatch, "backend.chat.events.capture_event")
 
     from backend.chat.events import _emit_chat_turn_event
 
@@ -288,12 +234,7 @@ def test_emit_chat_turn_event_includes_cross_lingual_props(monkeypatch):
 
 
 def test_emit_chat_turn_event_cross_lingual_defaults_to_false(monkeypatch):
-    captured: list[dict] = []
-
-    def fake_capture(event, **kwargs):
-        captured.append({"event": event, **kwargs})
-
-    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+    captured = _capture_events(monkeypatch, "backend.chat.events.capture_event")
 
     from backend.chat.events import _emit_chat_turn_event
 

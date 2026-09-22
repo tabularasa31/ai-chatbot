@@ -78,7 +78,7 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     """One sweep pass, seeded with every row shape the sweeper must tell apart:
     - a fresh (non-idle) chat is left untouched
     - an idle chat with messages is swept: emitted once, marker set,
-      ended_at stays NULL, duration_ms matches its real activity window
+      duration_ms matches its real activity window
     - an idle *empty* mount chat (no messages) is marked but never emitted.
       /widget/session/init creates a Chat row on every widget mount before the
       user writes anything; emitting chat_session_ended for those inflated the
@@ -86,9 +86,6 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
       The has_messages check must also correlate per row, not just "any
       message exists anywhere" (that bug would emit for the empty chat too)
     - a chat already carrying the marker is not re-swept/re-emitted
-    - a legacy row closed via ``ended_at`` is swept like any other idle chat
-      (the sweeper ignores ``ended_at``; in practice this only reaches a
-      legacy row the ``legacy_closed_chats_marker_v1`` backfill never saw)
     - the marker write does not disturb updated_at — it is an analytics
       write, not activity, and rotation must still see the swept chat's real
       last-activity timestamp, not the marker commit's
@@ -101,14 +98,6 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     already_reported = _make_chat(db_session, tenant, age_minutes=90)
     already_reported.session_ended_event_at = already_reported.updated_at
     db_session.commit()
-    legacy = _make_chat(db_session, tenant, age_minutes=90)
-    # Query-level update: a plain ORM commit would fire updated_at's onupdate
-    # and make the idle chat look fresh.
-    db_session.query(Chat).filter(Chat.id == legacy.id).update(
-        {"ended_at": legacy.updated_at, "updated_at": legacy.updated_at},
-        synchronize_session=False,
-    )
-    db_session.commit()
 
     captured: list[dict] = []
     monkeypatch.setattr(
@@ -119,9 +108,9 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
 
     count = sweep_inactive_chats(db_session)
 
-    assert count == 2
+    assert count == 1
     swept_sessions = {c["session_id"] for c in captured}
-    assert swept_sessions == {str(active.session_id), str(legacy.session_id)}
+    assert swept_sessions == {str(active.session_id)}
 
     db_session.expire_all()
     db_session.refresh(fresh)
@@ -129,7 +118,6 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
 
     db_session.refresh(active)
     assert active.session_ended_event_at is not None
-    assert active.ended_at is None
     assert active.updated_at == active_last_activity
     active_payload = next(c for c in captured if c["session_id"] == str(active.session_id))
     assert active_payload["tenant_public_id"] == tenant.public_id
@@ -140,9 +128,6 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
 
     db_session.refresh(empty)
     assert empty.session_ended_event_at is not None
-
-    db_session.refresh(legacy)
-    assert legacy.session_ended_event_at is not None
 
 
 def test_sweep_is_capped_and_drains_oldest_first(
@@ -258,24 +243,6 @@ def test_ticket_on_active_conversation_is_left_open(db_session: Session) -> None
 
     db_session.refresh(ticket)
     assert ticket.status == EscalationStatus.open
-
-
-def test_auto_close_covers_legacy_ended_at_chats(db_session: Session) -> None:
-    """Tickets on legacy closed rows age out on the same idle rule."""
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, age_minutes=90)
-    # Query-level update with an explicit updated_at: a plain ORM commit would
-    # fire the column's onupdate and make the idle chat look fresh.
-    db_session.query(Chat).filter(Chat.id == chat.id).update(
-        {"ended_at": chat.updated_at, "updated_at": chat.updated_at},
-        synchronize_session=False,
-    )
-    db_session.commit()
-    ticket = _make_ticket(db_session, tenant, chat)
-
-    assert auto_close_stale_tickets(db_session) == 1
-    db_session.refresh(ticket)
-    assert ticket.status == EscalationStatus.auto_closed
 
 
 def test_auto_close_leaves_already_terminal_tickets_alone(db_session: Session) -> None:

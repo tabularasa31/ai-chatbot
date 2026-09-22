@@ -91,7 +91,6 @@ def _parse_sse_response(raw_body: str) -> dict:
             chunks.append(event["text"])
         elif event.get("type") == "done":
             payload["session_id"] = event.get("session_id")
-            payload["chat_ended"] = event.get("chat_ended")
             text = event.get("text")
             payload["text"] = text if isinstance(text, str) else "".join(chunks)
         elif event.get("type") == "error":
@@ -190,7 +189,6 @@ def test_widget_chat_success(
     data = r.json()
     assert data["text"] == "Widget says hi"
     assert "session_id" in data
-    assert data.get("chat_ended") is False
 
 
 def test_widget_config_link_safety_disabled_then_enabled(
@@ -394,62 +392,6 @@ def test_widget_chat_session_id_validation(
     assert r.json()["detail"]["code"] == expected_code
 
 
-@pytest.mark.parametrize(
-    "idle_minutes,expected_text",
-    [
-        pytest.param(1, "Still here", id="within_idle_window_still_answers"),
-        pytest.param(45, "Answer in a fresh conversation", id="past_idle_threshold_rotates"),
-    ],
-)
-def test_widget_chat_legacy_ended_at_idle_behavior(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-    idle_minutes: int,
-    expected_text: str,
-) -> None:
-    """A row with a legacy ``ended_at`` (from before the closed-chat state was
-    removed) behaves like any open conversation: it still answers within the
-    idle window, and rotates like any other chat once idle exceeds the
-    threshold (default 1800s, pinned by the autouse fixture below)."""
-    from datetime import datetime, timedelta, timezone
-
-    tenant_uuid, bot_public_id = _setup_widget_tenant(
-        tenant, db_session, f"widget-legacy-{idle_minutes}@example.com"
-    )
-    session_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
-    legacy_chat = Chat(
-        tenant_id=tenant_uuid,
-        session_id=session_id,
-        user_context={},
-        ended_at=now,
-        updated_at=now - timedelta(minutes=idle_minutes),
-    )
-    db_session.add(legacy_chat)
-    db_session.commit()
-
-    async def _fake_async_process(*args, **kwargs):
-        return ChatTurnOutcome(
-            text=expected_text,
-            document_ids=[],
-            tokens_used=0,
-            chat_ended=False,
-        )
-
-    monkeypatch.setattr(
-        "backend.widget.routes.async_process_chat_message",
-        _fake_async_process,
-    )
-
-    r = _post_widget_chat(
-        tenant, bot_public_id, message="hello again", session_id=str(session_id)
-    )
-    assert r.status_code == 200
-    assert r.json()["text"] == expected_text
-    assert r.json()["chat_ended"] is False
-
-
 def test_widget_chat_hints_session_increments_user_session_turns(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -535,33 +477,6 @@ def test_widget_session_init_resume_modes(
         assert second.json()["session_id"] != first_session
 
 
-def test_widget_session_init_resumes_despite_legacy_ended_at(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    from datetime import UTC, datetime
-
-    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume-ended@example.com")
-
-    first = tenant.post(
-        "/widget/session/init",
-        json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-ended"}},
-    )
-    first_session = first.json()["session_id"]
-
-    chat = db_session.query(Chat).filter(Chat.session_id == uuid.UUID(first_session)).one()
-    chat.ended_at = datetime.now(UTC)
-    db_session.commit()
-
-    second = tenant.post(
-        "/widget/session/init",
-        json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-ended"}},
-    )
-    assert second.status_code == 200
-    assert second.json()["resumed"] is True
-    assert second.json()["session_id"] == first_session
-
-
 def test_widget_chat_stream_sse(
     tenant: TestClient,
     db_session: Session,
@@ -608,7 +523,6 @@ def test_widget_chat_stream_sse(
     assert "".join(e["text"] for e in chunk_events) == "Hello, world!"
     assert len(done_events) == 1
     assert done_events[0]["session_id"]
-    assert done_events[0]["chat_ended"] is False
 
 
 def test_widget_stream_language_mismatch_aborts_before_client_sees_it(
@@ -859,34 +773,6 @@ def test_widget_history_rotation_flags(
     assert data["conversation_rotated"] is expected["conversation_rotated"]
     if "boundary_indices" in expected:
         assert data["boundary_indices"] == expected["boundary_indices"]
-
-
-def test_widget_history_legacy_ended_at_chat_is_not_ended(
-    tenant: TestClient, db_session: Session
-) -> None:
-    # A legacy closed row within the idle window is an open conversation:
-    # the widget must not lock its input.
-    from backend.models.base import _utcnow
-
-    tenant_uuid, bot_public_id = _setup_widget_tenant(
-        tenant, db_session, "widget-rot-closed@example.com"
-    )
-    session_id = uuid.uuid4()
-    _make_session_chat(
-        db_session,
-        tenant_uuid,
-        session_id=session_id,
-        idle_minutes=5,
-        messages=[("user", "old question")],
-        ended_at=_utcnow(),
-    )
-
-    r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
-
-    assert r.status_code == 200
-    data = r.json()
-    assert data["conversation_rotated"] is False
-    assert data["chat_ended"] is False
 
 
 def test_widget_chat_empty_message_allowed_when_rotation_pending(

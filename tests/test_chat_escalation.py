@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -260,10 +260,8 @@ def test_chat_followup_no_keeps_chat_open(
         json={"session_id": str(chat.session_id), "question": "no thanks"},
     )
     assert response.status_code == 200
-    assert response.json()["chat_ended"] is False
     db_session.refresh(chat)
     assert chat.escalation_followup_pending is False
-    assert chat.ended_at is None
 
     doc = Document(
         tenant_id=tenant_id,
@@ -303,7 +301,6 @@ def test_chat_followup_no_keeps_chat_open(
     )
     assert followup.status_code == 200
     assert followup.json()["text"] == "Yes, wildcard domains are supported."
-    assert followup.json()["chat_ended"] is False
 
 
 @pytest.mark.escalation
@@ -372,7 +369,6 @@ def test_chat_followup_no_keeps_active_user_session_open(
         json={"session_id": str(chat.session_id), "question": "no thanks"},
     )
     assert response.status_code == 200
-    assert response.json()["chat_ended"] is False
 
     db_session.refresh(row)
     assert row.conversation_turns == 1
@@ -445,12 +441,10 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
         json={"session_id": str(chat.session_id), "question": "yes please continue"},
     )
     assert response.status_code == 200
-    assert response.json()["chat_ended"] is False
 
     db_session.refresh(chat)
     db_session.refresh(row)
     assert chat.escalation_followup_pending is False
-    assert chat.ended_at is None
     assert row.conversation_turns == 1
     assert row.session_ended_at is None
 
@@ -512,7 +506,6 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
         json={"session_id": str(chat.session_id), "question": "maybe"},
     )
     assert r1.status_code == 200
-    assert r1.json()["chat_ended"] is False
     db_session.refresh(chat)
     assert chat.escalation_followup_pending is True
     assert (chat.user_context or {}).get("escalation_followup_clarify") is True
@@ -523,82 +516,9 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
         json={"session_id": str(chat.session_id), "question": "still not sure"},
     )
     assert r2.status_code == 200
-    assert r2.json()["chat_ended"] is False
     db_session.refresh(chat)
     assert chat.escalation_followup_pending is False
     assert (chat.user_context or {}).get("escalation_followup_clarify") is None
-
-
-@pytest.mark.escalation
-def test_chat_legacy_ended_at_chat_is_answered_normally(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rows closed before the closed-chat state was removed behave like open
-    conversations: no "already closed" reply, the question reaches RAG."""
-    from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding
-
-    token = register_and_verify_user(tenant, db_session, email="closed@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Closed Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
-
-    chat = Chat(
-        tenant_id=tenant_id,
-        session_id=uuid.uuid4(),
-        user_context={"user_id": "u-closed"},
-        ended_at=datetime.now(timezone.utc),
-    )
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    doc = Document(
-        tenant_id=tenant_id,
-        filename="legacy.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-        parsed_text="content",
-    )
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-    db_session.add(
-        Embedding(
-            document_id=doc.id,
-            chunk_text="Legacy answer",
-            vector=None,
-            metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
-        )
-    )
-    db_session.commit()
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
-        "Legacy answer"
-    )
-
-    async def _fail_escalation_turn(**kwargs):
-        raise AssertionError("a legacy ended_at chat must not enter the escalation FSM")
-
-    monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn", _fail_escalation_turn
-    )
-
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "hello again"},
-    )
-    assert response.status_code == 200
-    assert response.json()["chat_ended"] is False
-    assert response.json()["text"] == "Legacy answer"
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +562,6 @@ def test_explicit_human_request_with_content_bypasses_pre_confirm_and_escalates(
         tenant, api_key, chat.session_id, "my billing is broken, connect me to a human please"
     )
 
-    assert resp["chat_ended"] is False
     ticket = (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     )
@@ -783,7 +702,6 @@ def test_pre_confirm_null_reply_with_explicit_human_request_still_escalates(
         tenant, api_key, chat.session_id, "still broken, just connect me to a human already"
     )
 
-    assert resp["chat_ended"] is False
     ticket = (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     )
@@ -876,7 +794,6 @@ def test_stale_followup_with_explicit_human_request_still_escalates(
         tenant, api_key, chat.session_id, "the import still fails — just connect me to a human already"
     )
 
-    assert resp["chat_ended"] is False
     ticket = (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     )
@@ -938,8 +855,6 @@ def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
         "wait, what do you mean by forwarding?",
         "still not sure what you mean",
     )
-    assert r1["chat_ended"] is False
-    assert r2["chat_ended"] is False
     db_session.refresh(chat)
     assert chat.escalation_pre_confirm_pending is True
     assert (
@@ -948,7 +863,6 @@ def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
     )
 
     [r3] = drive(tenant, api_key, chat.session_id, "yes please")
-    assert r3["chat_ended"] is False
     assert r3.get("ticket_number")
     ticket = (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
@@ -977,13 +891,11 @@ def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
 
     [r4] = drive(tenant, api_key, chat.session_id, "do you support wildcard domain names?")
     assert r4["text"] == "Yes, wildcard domains are supported."
-    assert r4.get("chat_ended") is False
     # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
     assert r4["tokens_used"] == 7
 
     db_session.refresh(chat)
     assert chat.escalation_followup_pending is False
-    assert chat.ended_at is None
 
 
 @pytest.mark.smoke
@@ -1134,7 +1046,6 @@ def test_awaiting_request_journey_elicit_then_reping_then_substantive_escalates(
 
     r1, r2 = drive(tenant, api_key, chat.session_id, "connect me to a human", "is anyone there??")
     assert r1["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
-    assert r1["chat_ended"] is False
     assert r2["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
     db_session.refresh(chat)
     assert chat.escalation_awaiting_request is True
@@ -1144,7 +1055,6 @@ def test_awaiting_request_journey_elicit_then_reping_then_substantive_escalates(
     )
 
     [r3] = drive(tenant, api_key, chat.session_id, "my invoice shows the wrong amount")
-    assert r3["chat_ended"] is False
     ticket = (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     )

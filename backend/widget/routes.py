@@ -731,7 +731,6 @@ def _widget_chat_stream(
         turn_response = WidgetChatTurnResponse(
             text=final_text,
             session_id=sid,
-            chat_ended=bool(outcome.chat_ended) if outcome is not None else False,
             ticket_number=outcome.ticket_number if outcome is not None else None,
             outcome="llm_unavailable" if is_llm_unavailable else None,
             failure_state=outcome.failure_state if is_llm_unavailable else None,
@@ -806,9 +805,6 @@ def _handoff_state(s, chat: Chat) -> str:
 class WidgetHistoryResponse(BaseModel):
     session_id: uuid.UUID
     messages: list[WidgetHistoryMessage]
-    #: Always ``False``: conversations never close. Kept for older widgets
-    #: that still read it; drop in the next major.
-    chat_ended: bool = False
     ticket_number: str | None = None
     #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
     handoff_state: str = "bot"
@@ -904,7 +900,6 @@ async def widget_history(
                 WidgetHistoryMessage(id=m.id, role=m.role.value, content=m.content)
                 for m in messages
             ],
-            chat_ended=False,
             ticket_number=ticket_number,
             boundary_indices=boundary_indices,
             conversation_rotated=conversation_rotated,
@@ -923,7 +918,6 @@ class WidgetMessagesResponse(BaseModel):
     messages: list[WidgetHistoryMessage]
     #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
     handoff_state: str = "bot"
-    chat_ended: bool = False
     #: Byline for operator-authored messages.
     operator_label: str = OPERATOR_LABEL
     #: The cursor named a message this conversation does not contain (the
@@ -1048,7 +1042,6 @@ async def widget_messages(
                 for m in page
             ],
             handoff_state=_handoff_state(s, chat),
-            chat_ended=False,
             cursor_stale=cursor_stale,
         )
 

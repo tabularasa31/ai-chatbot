@@ -53,7 +53,6 @@ class _FakeChat:
         return ChatResponse(
             text=text,
             sources=[],
-            chat_ended=False,
             latency_ms=42,
             escalation_offered=question in self._offers,
             ticket_number=self._tickets.get(question),
@@ -274,7 +273,6 @@ def test_judge_parser(raw, expected_score, expected_rationale) -> None:
                 {
                     "type": "done",
                     "text": "Hello world.",
-                    "chat_ended": False,
                     "sources": [{"title": "x", "url": "y"}],
                 },
             ],
@@ -327,7 +325,7 @@ class _StubStreamResp:
         return None
 
     def iter_lines(self):
-        yield 'data: {"type":"done","text":"ok","chat_ended":false}'
+        yield 'data: {"type":"done","text":"ok"}'
 
 
 class _StubPostResp:

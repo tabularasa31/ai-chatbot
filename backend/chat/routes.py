@@ -240,7 +240,6 @@ async def chat(
             session_id=session_id,
             source_documents=outcome.document_ids,
             tokens_used=outcome.tokens_used,
-            chat_ended=outcome.chat_ended,
             ticket_number=outcome.ticket_number,
             delivered_to_operator=outcome.delivered_to_operator,
         )

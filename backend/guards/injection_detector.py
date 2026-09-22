@@ -288,7 +288,10 @@ async def _semantic_cache_get(
 ) -> InjectionDetectionResult | None:
     from backend.core import redis as redis_mod
 
-    raw = await redis_mod.cache_get(key)
+    try:
+        raw = await redis_mod.cache_get(key)
+    except Exception:
+        return None
     if raw is None:
         return None
     try:
@@ -320,9 +323,12 @@ async def _semantic_cache_set(key: str, result: InjectionDetectionResult) -> Non
     from backend.core import redis as redis_mod
 
     payload = json.dumps({"d": result.detected, "s": result.score})
-    await redis_mod.cache_set_with_ttl(
-        key, payload, settings.guard_semantic_cache_ttl_seconds
-    )
+    try:
+        await redis_mod.cache_set_with_ttl(
+            key, payload, settings.guard_semantic_cache_ttl_seconds
+        )
+    except Exception:
+        pass
 
 
 async def async_detect_injection_semantic(

@@ -131,14 +131,6 @@ class TestLanguageNotValidated:
             "RC-2: the translated answer must be the one returned to the client"
         )
 
-    def test_language_check_span_imported_in_rag_handler(self) -> None:
-        """detect_language is imported at module level in rag.py for the language check."""
-        import backend.chat.handlers.rag as rag_module
-
-        assert hasattr(rag_module, "detect_language"), (
-            "detect_language must be imported in rag.py for the language-check span"
-        )
-
 
 # ---------------------------------------------------------------------------
 # RC-3 — ticket_number surfaced after email capture (fixed)

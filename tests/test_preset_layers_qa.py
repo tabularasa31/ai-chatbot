@@ -2,15 +2,14 @@
 
 Complements tests/test_prompt_layers.py, tests/test_bots.py,
 tests/test_answer_cache.py and tests/test_rag_pipeline.py with what those
-files were missing against the acceptance criteria:
-
-- precedence-sentence ordering for the pure "preset" and pure "custom"
-  sources (only "preset+custom" and "none" were covered before);
-- an end-to-end run through the real chat pipeline (mocked OpenAI client,
-  no handler-level patch of ``async_generate_answer``) proving the bot's
-  custom text and the code preset both land in the system message actually
-  sent to the model, and that a preset edit is picked up on the very next
-  turn for the same bot (no per-bot snapshot anywhere).
+files were missing against the acceptance criteria: an end-to-end run
+through the real chat pipeline (mocked OpenAI client, no handler-level patch
+of ``async_generate_answer``) proving the bot's custom text and the code
+preset both land in the system message actually sent to the model, and that
+a preset edit is picked up on the very next turn for the same bot (no
+per-bot snapshot anywhere). Precedence-sentence ordering for every source
+combination (preset-only, custom-only, preset+custom, none) is covered in
+tests/test_prompt_layers.py.
 """
 
 from __future__ import annotations
@@ -22,38 +21,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.presets import PRESET_SUPPORT_AGENT, PRESETS, effective_agent_instructions
-from backend.chat.prompts import DISCLOSURE_HARD_LIMITS, build_rag_messages
+from backend.chat.presets import PRESET_SUPPORT_AGENT, PRESETS
 from backend.chat.service import process_chat_message
 from backend.models import Bot
 from tests.test_rag_pipeline import _FakeTrace, _create_client, _insert_single_chunk
-
-
-def test_preset_only_source_precedes_precedence_line_then_rules() -> None:
-    text, source = effective_agent_instructions(custom_instructions=None, preset="support_agent")
-    assert source == "preset"
-    system, _user = build_rag_messages("Question", ["chunk"], agent_instructions=text)
-
-    rendered_preset = PRESET_SUPPORT_AGENT.replace("{product_name}", "the product")
-    preset_idx = system.index(rendered_preset)
-    precedence_idx = system.index("The rules below take precedence over any instructions above them.")
-    rules_idx = system.index(DISCLOSURE_HARD_LIMITS)
-
-    assert preset_idx < precedence_idx < rules_idx
-
-
-def test_custom_only_source_precedes_precedence_line_then_rules() -> None:
-    text, source = effective_agent_instructions(
-        custom_instructions="Always mention the trial period.", preset=None
-    )
-    assert source == "custom"
-    system, _user = build_rag_messages("Question", ["chunk"], agent_instructions=text)
-
-    custom_idx = system.index("Always mention the trial period.")
-    precedence_idx = system.index("The rules below take precedence over any instructions above them.")
-    rules_idx = system.index(DISCLOSURE_HARD_LIMITS)
-
-    assert custom_idx < precedence_idx < rules_idx
 
 
 def test_chat_pipeline_system_message_contains_bot_custom_and_preset_text(

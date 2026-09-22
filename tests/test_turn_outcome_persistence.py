@@ -54,7 +54,16 @@ def _make_chat(db_session: Session, **overrides: object) -> Chat:
     return chat
 
 
-def test_grounded_reply_persists_answered(db_session: Session) -> None:
+@pytest.mark.parametrize(
+    ("document_ids", "expected"),
+    [
+        pytest.param([uuid.uuid4()], TurnOutcome.answered, id="grounded_reply_persists_answered"),
+        pytest.param([], TurnOutcome.unanswered, id="ungrounded_reply_persists_unanswered"),
+    ],
+)
+def test_document_ids_drive_answered_vs_unanswered(
+    db_session: Session, document_ids: list, expected: TurnOutcome
+) -> None:
     chat = _make_chat(db_session)
     _, assistant_message = _persist_turn(
         db_session,
@@ -62,24 +71,10 @@ def test_grounded_reply_persists_answered(db_session: Session) -> None:
         chat.tenant_id,
         "How do I reset my password?",
         "Click 'forgot password' on the login page.",
-        [uuid.uuid4()],
+        document_ids,
         extra_tokens=10,
     )
-    assert assistant_message.turn_outcome == TurnOutcome.answered.value
-
-
-def test_ungrounded_reply_persists_unanswered(db_session: Session) -> None:
-    chat = _make_chat(db_session)
-    _, assistant_message = _persist_turn(
-        db_session,
-        chat,
-        chat.tenant_id,
-        "What's the meaning of life?",
-        "I don't have information about that in the knowledge base.",
-        [],
-        extra_tokens=5,
-    )
-    assert assistant_message.turn_outcome == TurnOutcome.unanswered.value
+    assert assistant_message.turn_outcome == expected.value
 
 
 @pytest.mark.parametrize(
@@ -132,39 +127,36 @@ def test_explicit_override_wins_over_inference(db_session: Session) -> None:
     assert assistant_message.turn_outcome == TurnOutcome.filtered.value
 
 
-def test_user_message_never_gets_turn_outcome(db_session: Session) -> None:
+@pytest.mark.parametrize(
+    ("persist", "expected_role"),
+    [
+        pytest.param(
+            lambda db, chat: _persist_turn(
+                db, chat, chat.tenant_id, "Hello", "Hi, how can I help?", [uuid.uuid4()], extra_tokens=1
+            )[0],
+            MessageRole.user,
+            id="user_message_of_a_full_turn",
+        ),
+        pytest.param(
+            lambda db, chat: _persist_user_only_turn(
+                db, chat=chat, tenant_id=chat.tenant_id, user_content="still there?"
+            ),
+            MessageRole.user,
+            id="user_only_turn",
+        ),
+        pytest.param(
+            lambda db, chat: _persist_operator_message(
+                db, chat=chat, tenant_id=chat.tenant_id, content="I'll take it from here.", operator_user_id=None
+            ),
+            MessageRole.operator,
+            id="operator_message",
+        ),
+    ],
+)
+def test_non_assistant_messages_never_get_turn_outcome(db_session: Session, persist, expected_role) -> None:
     chat = _make_chat(db_session)
-    user_message, _ = _persist_turn(
-        db_session,
-        chat,
-        chat.tenant_id,
-        "Hello",
-        "Hi, how can I help?",
-        [uuid.uuid4()],
-        extra_tokens=1,
-    )
-    assert user_message.turn_outcome is None
-
-
-def test_persist_user_only_turn_stays_null(db_session: Session) -> None:
-    chat = _make_chat(db_session)
-    message = _persist_user_only_turn(
-        db_session, chat=chat, tenant_id=chat.tenant_id, user_content="still there?"
-    )
-    assert message.role == MessageRole.user
-    assert message.turn_outcome is None
-
-
-def test_operator_message_stays_null(db_session: Session) -> None:
-    chat = _make_chat(db_session)
-    message = _persist_operator_message(
-        db_session,
-        chat=chat,
-        tenant_id=chat.tenant_id,
-        content="I'll take it from here.",
-        operator_user_id=None,
-    )
-    assert message.role == MessageRole.operator
+    message = persist(db_session, chat)
+    assert message.role == expected_role
     assert message.turn_outcome is None
 
 

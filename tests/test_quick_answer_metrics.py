@@ -18,46 +18,62 @@ def captured_events(monkeypatch):
     return events
 
 
-def test_emits_quick_answer_lookup_hit(captured_events):
+@pytest.mark.parametrize(
+    (
+        "selected_keys",
+        "matched_count",
+        "bot_public_id",
+        "expected_distinct_id",
+        "expected_found",
+    ),
+    [
+        pytest.param(
+            ["pricing_url", "trial_info"],
+            2,
+            "bot_test",
+            "bot_test",
+            True,
+            id="hit_prefers_bot_distinct_id",
+        ),
+        pytest.param(
+            ["pricing_url"],
+            0,
+            None,
+            "tnt_test",
+            False,
+            id="miss_falls_back_to_tenant_distinct_id",
+        ),
+    ],
+)
+def test_emits_quick_answer_lookup_event(
+    captured_events,
+    selected_keys,
+    matched_count,
+    bot_public_id,
+    expected_distinct_id,
+    expected_found,
+):
     _emit_quick_answer_lookup_event(
-        selected_keys=["pricing_url", "trial_info"],
-        matched_count=2,
+        selected_keys=selected_keys,
+        matched_count=matched_count,
         text_length=42,
         tenant_public_id="tnt_test",
-        bot_public_id="bot_test",
+        bot_public_id=bot_public_id,
         chat_id="chat_test",
     )
 
     assert len(captured_events) == 1
     e = captured_events[0]
     assert e["event"] == "quick_answer.lookup"
-    assert e["distinct_id"] == "bot_test"
+    assert e["distinct_id"] == expected_distinct_id
     assert e["tenant_id"] == "tnt_test"
-    assert e["bot_id"] == "bot_test"
+    assert e["bot_id"] == bot_public_id
     props = e["properties"]
-    assert props["selected_keys"] == "pricing_url,trial_info"
-    assert props["selected_count"] == 2
-    assert props["matched_count"] == 2
-    assert props["found"] is True
-    assert props["text_length"] == 42
+    assert props["selected_keys"] == ",".join(selected_keys)
+    assert props["selected_count"] == len(selected_keys)
+    assert props["matched_count"] == matched_count
+    assert props["found"] is expected_found
     assert props["chat_id"] == "chat_test"
-
-
-def test_emits_quick_answer_lookup_miss(captured_events):
-    _emit_quick_answer_lookup_event(
-        selected_keys=["pricing_url"],
-        matched_count=0,
-        text_length=10,
-        tenant_public_id="tnt_test",
-        bot_public_id=None,
-        chat_id="chat_test",
-    )
-
-    assert len(captured_events) == 1
-    e = captured_events[0]
-    assert e["distinct_id"] == "tnt_test"
-    assert e["properties"]["matched_count"] == 0
-    assert e["properties"]["found"] is False
 
 
 def test_skips_emit_when_no_identifiers(captured_events):

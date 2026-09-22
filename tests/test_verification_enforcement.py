@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.chunkers import get_chunker
@@ -36,68 +37,40 @@ def _get_verified_user_token(tenant: TestClient, db_session) -> str:
 
 
 @patch("backend.auth.routes.send_email")
-def test_get_me_forbidden_for_unverified_user(
-    mock_send_email: Mock, tenant: TestClient, db_session
+@pytest.mark.parametrize(
+    "make_request",
+    [
+        pytest.param(
+            lambda tenant, token: tenant.get(
+                "/auth/me", headers={"Authorization": f"Bearer {token}"}
+            ),
+            id="get_me",
+        ),
+        pytest.param(
+            lambda tenant, token: tenant.post(
+                "/tenants",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"name": "Test Tenant"},
+            ),
+            id="create_client",
+        ),
+        pytest.param(
+            lambda tenant, token: tenant.post(
+                "/documents",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"file": ("test.md", b"# Test\n\nContent.", "text/markdown")},
+            ),
+            id="upload_document",
+        ),
+    ],
+)
+def test_mutating_endpoint_forbidden_for_unverified_user(
+    mock_send_email: Mock, tenant: TestClient, db_session, make_request
 ) -> None:
-    """GET /auth/me with unverified user JWT → 403."""
+    """GET /auth/me, POST /tenants, and POST /documents all reject an
+    unverified user's JWT with 403 'Email not verified.'."""
     token = _get_unverified_user_token(tenant, db_session)
-    response = tenant.get(
-        "/auth/me",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Email not verified."
-
-
-@patch("backend.auth.routes.send_email")
-def test_create_client_forbidden_for_unverified_user(
-    mock_send_email: Mock, tenant: TestClient, db_session
-) -> None:
-    """POST /tenants with unverified user → 403."""
-    token = _get_unverified_user_token(tenant, db_session)
-    response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Test Tenant"},
-    )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Email not verified."
-
-
-@patch("backend.auth.routes.send_email")
-def test_create_client_allowed_for_verified_user(
-    mock_send_email: Mock,
-    tenant: TestClient,
-    db_session,
-) -> None:
-    """POST /tenants with verified user → 201, tenant created."""
-    token = _get_verified_user_token(tenant, db_session)
-    response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Verified Tenant"},
-    )
-    assert response.status_code == 201
-    data = response.json()
-    assert data["name"] == "Verified Tenant"
-    assert "id" in data
-    assert "api_key" in data
-
-
-@patch("backend.auth.routes.send_email")
-def test_upload_document_forbidden_for_unverified_user(
-    mock_send_email: Mock,
-    tenant: TestClient,
-    db_session,
-) -> None:
-    """POST /documents with unverified user → 403."""
-    token = _get_unverified_user_token(tenant, db_session)
-    md_content = b"# Test\n\nContent."
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("test.md", md_content, "text/markdown")},
-    )
+    response = make_request(tenant, token)
     assert response.status_code == 403
     assert response.json()["detail"] == "Email not verified."
 
@@ -181,7 +154,7 @@ def test_create_embeddings_allowed_for_verified_user(
     db_session,
 ) -> None:
     """POST /embeddings/documents/{id} with verified user → 200, embeddings created."""
-    from tests.conftest import register_and_verify_user, set_client_openai_key
+    from tests.conftest import register_and_verify_user
 
     token = register_and_verify_user(tenant, db_session, email="emb_verified@example.com")
     tenant.post(

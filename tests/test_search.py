@@ -232,13 +232,21 @@ async def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatc
     assert bundle.retrieval_duration_ms >= bundle.vector_search_duration_ms
 
 
-@pytest.mark.asyncio
-async def test_search_trace_sqlite_runs_full_stage_contract(
-    monkeypatch, db_session: Session, async_search_session
+def test_search_trace_sqlite_runs_full_stage_contract(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """POST /search on SQLite runs every retrieval stage span, in order, with the
+    expected input/output contract (query-expansion through source-overlap-check).
+
+    Covers the same observability counters as the former
+    test_search_sqlite_observability_counts_executed_variants (query_variant_count,
+    vector_search_call_count, extra_vector_search_calls), asserted below via the
+    vector-search span output instead of a direct bundle.
+    """
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
-    from tests.test_models import _create_client, _create_user
 
     class FakeSpan:
         def __init__(self, name: str) -> None:
@@ -259,8 +267,18 @@ async def test_search_trace_sqlite_runs_full_stage_contract(
             self.spans.append(span)
             return span
 
-    user = _create_user(db_session, email="sqlite_trace@example.com")
-    tenant_id = _create_client(db_session, user, name="SQLite Trace").id
+        def update(self, **kwargs: object) -> None:
+            return None
+
+    token = register_and_verify_user(tenant, db_session, email="sqlite_trace@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "SQLite Trace Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
     doc = Document(
         tenant_id=tenant_id,
         filename="reset.md",
@@ -296,26 +314,19 @@ async def test_search_trace_sqlite_runs_full_stage_contract(
     )
     db_session.commit()
 
-    async def fake_embed_queries(queries, **kwargs):
-        return [[1.0, 0.0, 0.0] for _ in queries]
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[1.0, 0.0, 0.0])]
 
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    fake_trace = FakeTrace()
+    monkeypatch.setattr("backend.search.routes.begin_trace", lambda **kwargs: fake_trace)
 
-    trace = FakeTrace()
-    bundle = await search_similar_chunks_detailed_async(
-        tenant_id=tenant_id,
-        query="Reset-password!!   reset password",
-        top_k=2,
-        db=async_search_session,
-        api_key="sk-test",
-        trace=trace,
+    response = tenant.post(
+        "/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "Reset-password!!   reset password", "top_k": 2},
     )
+    assert response.status_code == 200
 
-    assert bundle.query_variant_count == 3
-    assert bundle.vector_search_call_count == 3
-    assert bundle.extra_vector_search_calls == 2
-    assert bundle.has_lexical_signal is True
-    assert [span.name for span in trace.spans] == [
+    assert [span.name for span in fake_trace.spans] == [
         "query-expansion",
         "query-embedding",
         "vector-search",
@@ -333,9 +344,9 @@ async def test_search_trace_sqlite_runs_full_stage_contract(
         "source-overlap-check",
     ]
 
-    vector_span = next(span for span in trace.spans if span.name == "vector-search")
-    bm25_span = next(span for span in trace.spans if span.name == "bm25-search")
-    overlap_span = next(span for span in trace.spans if span.name == "source-overlap-check")
+    vector_span = next(span for span in fake_trace.spans if span.name == "vector-search")
+    bm25_span = next(span for span in fake_trace.spans if span.name == "bm25-search")
+    overlap_span = next(span for span in fake_trace.spans if span.name == "source-overlap-check")
     assert vector_span.input is not None
     assert vector_span.input["engine"] == "python-cosine"
     assert vector_span.output is not None
@@ -355,148 +366,81 @@ async def test_search_trace_sqlite_runs_full_stage_contract(
     assert overlap_span.output["contradiction_basis_types"] == []
 
 
-@pytest.mark.asyncio
-async def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> None:
-    from backend.models import Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A chunk matched by more than one query variant keeps its best (max) vector
+    similarity, and appears only once in the final results — not once per variant.
 
-    class FakeBind:
-        url = "sqlite://test"
+    ``shared`` scores weakly against the first query variant but strongly against
+    the second; ``tertiary`` scores in between and is only matched by the third
+    variant. If dedup kept a variant's first-seen score instead of the max,
+    ``tertiary`` would incorrectly outrank ``shared`` in the final response.
+    """
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    class FakeDB:
-        bind = FakeBind()
-
-    embedding = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password instructions",
-        metadata_json={"chunk_index": 0},
+    token = register_and_verify_user(tenant, db_session, email="variant_dedup@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Variant Dedup Tenant"},
     )
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    async def fake_embed_queries(queries, **kwargs):
-        return [[float(index)] for index, _ in enumerate(queries, start=1)]
-
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
-    async def fake_python_cosine_search(*args, **kwargs):
-        return [(embedding, 0.91)]
-
-    monkeypatch.setattr(
-        "backend.search.service._async_python_cosine_search", fake_python_cosine_search
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="dedup.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="dedup docs",
     )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
 
-    bundle = await search_similar_chunks_detailed_async(
-        tenant_id=uuid.uuid4(),
-        query="Reset-password!!   reset password",
-        top_k=2,
-        db=FakeDB(),
-        api_key="sk-test",
+    # Lexically neutral text (no overlap with the query) keeps BM25 out of the
+    # ranking, so the final order reflects the vector-dedup decision alone.
+    db_session.add_all(
+        [
+            Embedding(
+                document_id=doc.id,
+                chunk_text="alpha bravo charlie",
+                vector=None,
+                metadata_json={"chunk_index": 0, "vector": [1.0, 0.0, 0.0]},
+            ),
+            Embedding(
+                document_id=doc.id,
+                chunk_text="delta echo foxtrot",
+                vector=None,
+                metadata_json={"chunk_index": 1, "vector": [0.0, 0.0, 1.0]},
+            ),
+        ]
     )
+    db_session.commit()
 
-    assert bundle.query_variant_count == 3
-    assert bundle.vector_search_call_count == 3
-    assert bundle.extra_vector_search_calls == 2
+    # expand_query("Widget-setup!!   widget setup") yields 3 variants (raw,
+    # punctuation-cleaned, deduped-tokens) — same trick as the query used in
+    # test_search_trace_sqlite_runs_full_stage_contract.
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.4, 0.1, 0.0]),  # variant 1: weak match on "shared" (index 0)
+        Mock(embedding=[1.0, 0.0, 0.0]),  # variant 2: strong match on "shared" (index 0)
+        Mock(embedding=[0.0, 0.0, 1.0]),  # variant 3: match on "tertiary" (index 1)
+    ]
 
-
-@pytest.mark.asyncio
-async def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeypatch) -> None:
-    from backend.models import Embedding
-    from backend.search.service import (
-        BM25SearchBundle,
-        BM25Winner,
-        search_similar_chunks_detailed_async,
+    response = tenant.post(
+        "/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "Widget-setup!!   widget setup", "top_k": 2},
     )
+    assert response.status_code == 200
+    data = response.json()["results"]
 
-    class FakeBind:
-        url = "sqlite://test"
-
-    class FakeDB:
-        bind = FakeBind()
-
-    shared = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password instructions",
-        metadata_json={"chunk_index": 0},
-    )
-    secondary = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="download invoice guide",
-        metadata_json={"chunk_index": 1},
-    )
-    tertiary = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="rotate api key settings",
-        metadata_json={"chunk_index": 2},
-    )
-
-    async def fake_embed_queries(queries, **kwargs):
-        return [[float(index)] for index, _ in enumerate(queries, start=1)]
-
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
-
-    async def fake_python_cosine_search(
-        tenant_id: uuid.UUID,
-        query_vector: list[float],
-        top_k: int,
-        db,
-    ) -> list[tuple[Embedding, float]]:
-        marker = int(query_vector[0])
-        if marker == 1:
-            return [(shared, 0.4), (secondary, 0.3)]
-        if marker == 2:
-            return [(shared, 0.9)]
-        return [(tertiary, 0.2)]
-
-    captured: dict[str, object] = {}
-
-    def fake_run_bm25_search(
-        candidates: list[Embedding],
-        *,
-        query: str,
-        variant_queries: list[str],
-        top_k: int,
-        expansion_mode: str,
-    ) -> BM25SearchBundle:
-        captured["candidate_ids"] = [embedding.id for embedding in candidates]
-        return BM25SearchBundle(
-            results=[(secondary, 1.0)],
-            has_lexical_signal=True,
-            variant_queries=[query],
-            variant_eval_count=1,
-            merged_hit_count_before_cap=1,
-            merged_hit_count_after_cap=1,
-            winner_by_id={
-                secondary.id: BM25Winner(
-                    variant_index=0,
-                    variant_query=query,
-                    score=1.0,
-                )
-            },
-        )
-
-    monkeypatch.setattr(
-        "backend.search.service._async_python_cosine_search",
-        fake_python_cosine_search,
-    )
-    monkeypatch.setattr(
-        "backend.search.service._run_bm25_search",
-        fake_run_bm25_search,
-    )
-
-    bundle = await search_similar_chunks_detailed_async(
-        tenant_id=uuid.uuid4(),
-        query="Reset-password!!   reset password",
-        top_k=2,
-        db=FakeDB(),
-        api_key="sk-test",
-    )
-
-    candidate_ids = captured["candidate_ids"]
-    assert candidate_ids == [shared.id, secondary.id, tertiary.id]
-    assert bundle.best_vector_similarity == 0.9
-    assert len({embedding.id for embedding, _ in bundle.results}) == len(bundle.results)
+    result_texts = [item["chunk_text"] for item in data]
+    assert len(result_texts) == len(set(result_texts))
+    assert result_texts.index("alpha bravo charlie") < result_texts.index("delta echo foxtrot")
 
 
 def test_run_bm25_search_symmetric_merge_deduplicates_hits_and_keeps_earliest_tie_winner(

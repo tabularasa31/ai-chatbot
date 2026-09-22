@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.escalation.service import HumanRequestResult
-from backend.models import ContactSession
+from backend.models import Chat, ContactSession
 from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -84,6 +84,15 @@ def _make_open_ticket(db_session: Session, tenant_id: uuid.UUID, chat, **kwargs:
     db_session.commit()
     db_session.refresh(ticket)
     return ticket
+
+
+def _latest_chat_for_session(db_session: Session, session_id: uuid.UUID) -> Chat:
+    return (
+        db_session.query(Chat)
+        .filter(Chat.session_id == session_id)
+        .order_by(Chat.created_at.desc(), Chat.id.desc())
+        .first()
+    )
 
 
 def drive(
@@ -981,17 +990,6 @@ def test_pre_confirm_null_reply_with_explicit_human_request_still_escalates(
 
 
 @pytest.mark.escalation
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "should_rotate() (backend/chat/rotation.py) unconditionally rotates a "
-        "chat once session_ended_event_at is set, exempting only "
-        "escalation_awaiting_ticket_id — not escalation_followup_pending — so "
-        "the next turn lands on a brand-new Chat row before the FSM's "
-        "stale-followup branch in _handle_followup_yes_no ever runs; that "
-        "branch is dead code through the app today (real gap, not a test bug)"
-    ),
-)
 def test_stale_followup_falls_through_to_rag_after_session_ended(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -999,9 +997,10 @@ def test_stale_followup_falls_through_to_rag_after_session_ended(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A follow-up prompt left pending across an inactivity gap must not eat a
-    genuine new question: once the sweeper reports the session ended, the gate
-    clears and the new question gets a fresh RAG answer, not the yes/no
-    classifier."""
+    genuine new question. Once the sweeper reports the session ended the next
+    turn rotates to a fresh chat, so the new question gets a RAG answer and
+    never reaches the yes/no classifier; the handler's own stale-gate branch
+    is a second line of defence that rotation makes unreachable here."""
     from datetime import UTC, datetime
 
     api_key, tenant_id = _register_tenant_with_key(
@@ -1029,22 +1028,12 @@ def test_stale_followup_falls_through_to_rag_after_session_ended(
     )
 
     assert resp["text"] == "The A record was added."
-    db_session.refresh(chat)
-    assert chat.escalation_followup_pending is False
-    assert (chat.user_context or {}).get("escalation_followup_clarify") is None
+    served = _latest_chat_for_session(db_session, chat.session_id)
+    assert served.id != chat.id, "ended session must rotate to a fresh chat"
+    assert served.escalation_followup_pending is False
 
 
 @pytest.mark.escalation
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Same rotation gap as test_stale_followup_falls_through_to_rag_after_"
-        "session_ended: should_rotate() rotates away from this chat before "
-        "the FSM runs, so the ticket lands on a fresh Chat row rather than "
-        "clearing escalation_followup_pending on this one — dead code path "
-        "through the app, not a test bug"
-    ),
-)
 def test_stale_followup_with_explicit_human_request_still_escalates(
     tenant: TestClient,
     db_session: Session,
@@ -1088,8 +1077,10 @@ def test_stale_followup_with_explicit_human_request_still_escalates(
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     )
     assert ticket.trigger == EscalationTrigger.user_request
-    db_session.refresh(chat)
-    assert chat.escalation_followup_pending is False
+    served = _latest_chat_for_session(db_session, chat.session_id)
+    assert served.id != chat.id, "ended session must rotate to a fresh chat"
+    assert ticket.chat_id == served.id
+    assert served.escalation_followup_pending is False
 
 
 @pytest.mark.smoke

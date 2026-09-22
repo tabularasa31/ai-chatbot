@@ -6,7 +6,7 @@ from typing import Any, Generator, Optional
 import json
 import os
 import sys
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 # Set test env before any backend imports
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:?check_same_thread=False")
@@ -427,7 +427,7 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
         )
         monkeypatch.setattr(
             "backend.escalation.openai_escalation.get_async_openai_client",
-            lambda _api_key: esc_client,
+            lambda _api_key, **_kwargs: esc_client,
         )
         return esc_client
 

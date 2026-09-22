@@ -188,22 +188,22 @@ async def test_semantic_no_cache_when_tenant_absent(
 # ---------------------------------------------------------------------------
 
 
-def test_record_guard_event_no_loop_is_safe() -> None:
-    """Called from a sync context (no running loop) it must not raise."""
+@pytest.mark.parametrize(
+    "tenant_id,kind,verdict",
+    [
+        (uuid.uuid4(), "injection", Verdict.of(VerdictReason.OK)),
+        ("not-a-uuid", "relevance", Verdict.of(VerdictReason.OFFTOPIC)),
+    ],
+    ids=["no-running-loop", "bad-tenant-id"],
+)
+def test_record_guard_event_is_safe(tenant_id, kind, verdict) -> None:
+    """Called from a sync context (no running loop) or with a malformed
+    tenant_id, record_guard_event must never raise."""
     guard_events.record_guard_event(
-        tenant_id=uuid.uuid4(),
+        tenant_id=tenant_id,
         chat_id=None,
-        kind="injection",
-        verdict=Verdict.of(VerdictReason.OK),
-    )
-
-
-def test_record_guard_event_bad_tenant_id_is_safe() -> None:
-    guard_events.record_guard_event(
-        tenant_id="not-a-uuid",
-        chat_id=None,
-        kind="relevance",
-        verdict=Verdict.of(VerdictReason.OFFTOPIC),
+        kind=kind,
+        verdict=verdict,
     )
 
 
@@ -335,8 +335,26 @@ def test_seeds_hash_changes_when_seed_list_changes() -> None:
     assert extended != INJECTION_SEEDS_HASH
 
 
-def test_guard_verdict_event_includes_threshold_and_seeds_hash(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "kind,verdict,event_kwargs,expected_props",
+    [
+        (
+            "injection",
+            Verdict.of(VerdictReason.INJECTION_SEMANTIC, score=0.9, threshold=0.82),
+            {"cache_hit": True, "seeds_hash": "abc123def456"},
+            {"threshold": 0.82, "seeds_hash": "abc123def456", "score": 0.9},
+        ),
+        (
+            "relevance",
+            Verdict.of(VerdictReason.OFFTOPIC),
+            {},
+            {"threshold": None, "seeds_hash": None},
+        ),
+    ],
+    ids=["injection-semantic-carries-threshold", "relevance-verdict-has-null-threshold"],
+)
+def test_guard_verdict_event_props(
+    monkeypatch: pytest.MonkeyPatch, kind, verdict, event_kwargs, expected_props
 ) -> None:
     captured: list[dict] = []
 
@@ -348,37 +366,12 @@ def test_guard_verdict_event_includes_threshold_and_seeds_hash(
     guard_events.record_guard_event(
         tenant_id=uuid.uuid4(),
         chat_id=uuid.uuid4(),
-        kind="injection",
-        verdict=Verdict.of(
-            VerdictReason.INJECTION_SEMANTIC, score=0.9, threshold=0.82
-        ),
-        cache_hit=True,
-        seeds_hash="abc123def456",
+        kind=kind,
+        verdict=verdict,
+        **event_kwargs,
     )
     assert len(captured) == 1
-    props = captured[0]["properties"]
     assert captured[0]["event"] == "guard.verdict"
-    assert props["threshold"] == 0.82
-    assert props["seeds_hash"] == "abc123def456"
-    assert props["score"] == 0.9
-
-
-def test_relevance_verdict_event_has_null_threshold(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: list[dict] = []
-
-    def _capture(event: str, **kwargs: object) -> None:
-        captured.append({"event": event, **kwargs})
-
-    monkeypatch.setattr("backend.observability.metrics.capture_event", _capture)
-
-    guard_events.record_guard_event(
-        tenant_id=uuid.uuid4(),
-        chat_id=None,
-        kind="relevance",
-        verdict=Verdict.of(VerdictReason.OFFTOPIC),
-    )
     props = captured[0]["properties"]
-    assert props["threshold"] is None
-    assert props["seeds_hash"] is None
+    for key, value in expected_props.items():
+        assert props[key] == value

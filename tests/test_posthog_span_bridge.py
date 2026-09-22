@@ -39,44 +39,40 @@ def patch_capture_event(captured_events: list[dict[str, object]]):
         yield
 
 
-def test_emit_ai_generation_includes_trace_ids(captured_events: list) -> None:
-    _emit_ai_generation_event(
-        tenant_public_id="ck_test",
-        bot_public_id="bot_test",
-        model="gpt-5-mini",
-        input_tokens=100,
-        output_tokens=50,
-        cost_usd=0.001,
-        latency_s=1.2,
-        operation="chat/generate",
-        trace_id="trace-abc",
-        span_id="span-1",
-        parent_id="trace-abc",
-    )
-    assert len(captured_events) == 1
-    props = captured_events[0]["properties"]
-    assert props["$ai_trace_id"] == "trace-abc"
-    assert props["$ai_span_id"] == "span-1"
-    assert props["$ai_parent_id"] == "trace-abc"
-    assert props["$ai_model"] == "gpt-5-mini"
-
-
-def test_emit_ai_generation_omits_trace_keys_when_absent(captured_events: list) -> None:
+@pytest.mark.parametrize(
+    "trace_kwargs,expect_trace_keys",
+    [
+        ({"trace_id": "trace-abc", "span_id": "span-1", "parent_id": "trace-abc"}, True),
+        ({}, False),
+    ],
+    ids=["with-trace-ids", "back-compat-without-trace-ids"],
+)
+def test_emit_ai_generation_trace_id_propagation(
+    captured_events: list, trace_kwargs: dict, expect_trace_keys: bool
+) -> None:
     """Back-compat: legacy call sites that don't pass trace_id still work."""
     _emit_ai_generation_event(
         tenant_public_id="ck_test",
-        bot_public_id=None,
+        bot_public_id="bot_test" if expect_trace_keys else None,
         model="gpt-5-mini",
-        input_tokens=10,
-        output_tokens=5,
-        cost_usd=0.0001,
-        latency_s=0.5,
+        input_tokens=100 if expect_trace_keys else 10,
+        output_tokens=50 if expect_trace_keys else 5,
+        cost_usd=0.001 if expect_trace_keys else 0.0001,
+        latency_s=1.2 if expect_trace_keys else 0.5,
         operation="chat/generate",
+        **trace_kwargs,
     )
+    assert len(captured_events) == 1
     props = captured_events[0]["properties"]
-    assert "$ai_trace_id" not in props
-    assert "$ai_span_id" not in props
-    assert "$ai_parent_id" not in props
+    assert props["$ai_model"] == "gpt-5-mini"
+    if expect_trace_keys:
+        assert props["$ai_trace_id"] == "trace-abc"
+        assert props["$ai_span_id"] == "span-1"
+        assert props["$ai_parent_id"] == "trace-abc"
+    else:
+        assert "$ai_trace_id" not in props
+        assert "$ai_span_id" not in props
+        assert "$ai_parent_id" not in props
 
 
 def test_emit_ai_embedding_event_fires(captured_events: list) -> None:

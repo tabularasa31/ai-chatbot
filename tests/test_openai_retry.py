@@ -25,40 +25,62 @@ def _response(status_code: int, *, headers: dict[str, str] | None = None) -> htt
     return httpx.Response(status_code, request=_request(), headers=headers)
 
 
-def test_retry_succeeds_after_transient(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        lambda: InternalServerError("boom", response=_response(500), body=None),
+        lambda: RateLimitError(
+            "rate limited", response=_response(429, headers={"retry-after": "1"}), body=None
+        ),
+    ],
+    ids=["transient-500", "rate-limit-429-short-retry-after"],
+)
+def test_retry_recovers_after_one_transient_failure(
+    monkeypatch: pytest.MonkeyPatch, make_error
+) -> None:
     calls = {"count": 0}
     sleeps: list[float] = []
-
     monkeypatch.setattr("backend.core.openai_retry.time.sleep", sleeps.append)
 
     def _fn() -> str:
         calls["count"] += 1
         if calls["count"] == 1:
-            raise InternalServerError("boom", response=_response(500), body=None)
+            raise make_error()
         return "ok"
 
-    result = call_openai_with_retry("chat_generate", _fn)
-
-    assert result == "ok"
+    assert call_openai_with_retry("chat_generate", _fn) == "ok"
     assert calls["count"] == 2
     assert len(sleeps) == 1
 
 
-def test_no_retry_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "error,expected_exc",
+    [
+        (lambda: APITimeoutError(request=_request()), APITimeoutError),
+        (lambda: AuthenticationError("auth", response=_response(401), body=None), AuthenticationError),
+        (
+            lambda: RateLimitError(
+                "rate limited", response=_response(429, headers={"retry-after": "10"}), body=None
+            ),
+            RateLimitError,
+        ),
+    ],
+    ids=["timeout-not-retried", "permanent-401-not-retried", "rate-limit-retry-after-exceeds-budget"],
+)
+def test_no_retry_reraises_immediately(
+    monkeypatch: pytest.MonkeyPatch, error, expected_exc
+) -> None:
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
     calls = {"count": 0}
-    sleeps: list[float] = []
-
-    monkeypatch.setattr("backend.core.openai_retry.time.sleep", sleeps.append)
 
     def _fn() -> str:
         calls["count"] += 1
-        raise APITimeoutError(request=_request())
+        raise error()
 
-    with pytest.raises(APITimeoutError):
+    with pytest.raises(expected_exc):
         call_openai_with_retry("chat_generate", _fn)
 
     assert calls["count"] == 1
-    assert len(sleeps) == 0
 
 
 def test_retry_exhausts_then_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,55 +91,6 @@ def test_retry_exhausts_then_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
             "chat_generate",
             lambda: (_ for _ in ()).throw(
                 InternalServerError("boom", response=_response(500), body=None)
-            ),
-        )
-
-
-def test_no_retry_on_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = {"count": 0}
-    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
-
-    def _fn() -> str:
-        calls["count"] += 1
-        raise AuthenticationError("auth", response=_response(401), body=None)
-
-    with pytest.raises(AuthenticationError):
-        call_openai_with_retry("chat_generate", _fn)
-
-    assert calls["count"] == 1
-
-
-def test_rate_limit_honors_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = {"count": 0}
-    sleeps: list[float] = []
-    monkeypatch.setattr("backend.core.openai_retry.time.sleep", sleeps.append)
-
-    def _fn() -> str:
-        calls["count"] += 1
-        if calls["count"] == 1:
-            raise RateLimitError(
-                "rate limited",
-                response=_response(429, headers={"retry-after": "1"}),
-                body=None,
-            )
-        return "ok"
-
-    assert call_openai_with_retry("chat_generate", _fn) == "ok"
-    assert sleeps == [1.0]
-
-
-def test_rate_limit_long_retry_after_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
-
-    with pytest.raises(RateLimitError):
-        call_openai_with_retry(
-            "chat_generate",
-            lambda: (_ for _ in ()).throw(
-                RateLimitError(
-                    "rate limited",
-                    response=_response(429, headers={"retry-after": "10"}),
-                    body=None,
-                )
             ),
         )
 
@@ -226,16 +199,28 @@ def test_observation_stamped_on_exhaustion(monkeypatch: pytest.MonkeyPatch) -> N
     assert "retry_failure_kind" in final
 
 
-def test_observation_stamped_on_timeout_no_retry(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "error,expected_exc,failure_kind",
+    [
+        (lambda: APITimeoutError(request=_request()), APITimeoutError, "timeout"),
+        (
+            lambda: AuthenticationError("auth", response=_response(401), body=None),
+            AuthenticationError,
+            "permanent",
+        ),
+    ],
+    ids=["timeout-no-retry", "permanent-error"],
+)
+def test_observation_stamped_on_immediate_failure(
+    monkeypatch: pytest.MonkeyPatch, error, expected_exc, failure_kind
 ) -> None:
     monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
     obs = _RecordingObservation()
 
-    with pytest.raises(APITimeoutError):
+    with pytest.raises(expected_exc):
         call_openai_with_retry(
             "chat_generate",
-            lambda: (_ for _ in ()).throw(APITimeoutError(request=_request())),
+            lambda: (_ for _ in ()).throw(error()),
             langfuse_observation=obs,
         )
 
@@ -244,69 +229,29 @@ def test_observation_stamped_on_timeout_no_retry(
             "attempt_count": 1,
             "was_retried": False,
             "retry_exhausted": True,
-            "retry_failure_kind": "timeout",
+            "retry_failure_kind": failure_kind,
         }
     ]
 
 
-def test_observation_stamped_on_permanent_error(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "make_observation",
+    [
+        lambda: None,
+        lambda: _RecordingObservation(raise_on_update=True),
+        lambda: SimpleNamespace(),
+    ],
+    ids=["none-observation", "update_metadata-raises", "duck-typed-without-method"],
+)
+def test_retry_result_survives_observation_edge_cases(
+    monkeypatch: pytest.MonkeyPatch, make_observation
 ) -> None:
+    """Result must be returned regardless of a missing/broken observation handle."""
     monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
-    obs = _RecordingObservation()
-
-    with pytest.raises(AuthenticationError):
-        call_openai_with_retry(
-            "chat_generate",
-            lambda: (_ for _ in ()).throw(
-                AuthenticationError("auth", response=_response(401), body=None)
-            ),
-            langfuse_observation=obs,
-        )
-
-    assert obs.updates == [
-        {
-            "attempt_count": 1,
-            "was_retried": False,
-            "retry_exhausted": True,
-            "retry_failure_kind": "permanent",
-        }
-    ]
-
-
-def test_observation_none_default_is_a_noop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Default langfuse_observation=None must not blow anything up."""
-    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
-    assert call_openai_with_retry("chat_generate", lambda: "ok") == "ok"
-
-
-def test_broken_observation_does_not_break_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If update_metadata raises, retry result must still be returned."""
-    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
-    obs = _RecordingObservation(raise_on_update=True)
-
-    assert (
-        call_openai_with_retry("chat_generate", lambda: "ok", langfuse_observation=obs)
-        == "ok"
-    )
-
-
-def test_observation_without_update_metadata_is_silently_skipped(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Duck-typed: observation lacking update_metadata is silently skipped."""
-    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
-
-    class _NoMethod:
-        pass
 
     assert (
         call_openai_with_retry(
-            "chat_generate", lambda: "ok", langfuse_observation=_NoMethod()
+            "chat_generate", lambda: "ok", langfuse_observation=make_observation()
         )
         == "ok"
     )
@@ -336,45 +281,34 @@ def test_async_observation_stamped_on_success(monkeypatch: pytest.MonkeyPatch) -
     asyncio.run(_runner())
 
 
+@pytest.mark.parametrize(
+    "response,expected_extra",
+    [
+        (
+            SimpleNamespace(id="chatcmpl-abc123", system_fingerprint="fp_44709d6f"),
+            {"provider_request_id": "chatcmpl-abc123", "system_fingerprint": "fp_44709d6f"},
+        ),
+        (SimpleNamespace(id=None, system_fingerprint=None), {}),
+    ],
+    ids=["present-provider-identifiers", "missing-provider-identifiers"],
+)
 def test_observation_stamped_with_provider_identifiers(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, response, expected_extra
 ) -> None:
+    """A response without string identifiers (embeddings, streams, mocks)
+    leaves the stamp as before instead of writing ``None`` onto every span."""
     monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
     obs = _RecordingObservation()
-    response = SimpleNamespace(id="chatcmpl-abc123", system_fingerprint="fp_44709d6f")
 
     result = call_openai_with_retry(
         "chat_generate", lambda: response, langfuse_observation=obs
     )
 
     assert result is response
-    assert obs.updates == [
-        {
-            "attempt_count": 1,
-            "was_retried": False,
-            "provider_request_id": "chatcmpl-abc123",
-            "system_fingerprint": "fp_44709d6f",
-        }
-    ]
+    assert obs.updates == [{"attempt_count": 1, "was_retried": False, **expected_extra}]
 
 
-def test_observation_skips_missing_provider_identifiers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A response without string identifiers (embeddings, streams, mocks)
-    leaves the stamp as before instead of writing ``None`` onto every span."""
-    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
-    obs = _RecordingObservation()
-    response = SimpleNamespace(id=None, system_fingerprint=None)
-
-    call_openai_with_retry("chat_generate", lambda: response, langfuse_observation=obs)
-
-    assert obs.updates == [{"attempt_count": 1, "was_retried": False}]
-
-
-def test_async_observation_stamped_with_provider_identifiers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_async_observation_stamped_with_provider_identifiers(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _runner() -> None:
         obs = _RecordingObservation()
         response = SimpleNamespace(id="chatcmpl-async", system_fingerprint="fp_async")

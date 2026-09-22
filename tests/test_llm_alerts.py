@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import timedelta
-from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -58,11 +57,21 @@ def _bootstrap_tenant(
 # --- service: record/clear, throttle ----------------------------------------
 
 
-def test_apply_llm_failure_sets_state_and_emails(
+def test_apply_llm_failure_state_machine(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Drives apply_llm_failure through its full lifecycle on one tenant.
+
+    Failure modes asserted, in order:
+    - non-actionable failure types (provider_timeout, rate_limited) never set alert state or email
+    - first actionable failure sets alert state and sends exactly one email
+    - repeated same-type failures within the throttle window send no more email
+    - a same-type failure after the throttle window elapses resends the email
+    - switching failure type bypasses the throttle and emails immediately
+    - apply_clear_alert resets all alert fields to None
+    """
     sent: list[dict] = []
     monkeypatch.setattr(
         "backend.tenants.llm_alerts.send_email",
@@ -70,10 +79,20 @@ def test_apply_llm_failure_sets_state_and_emails(
     )
 
     tenant_row, owner = _bootstrap_tenant(
-        tenant, db_session, email="alert-record@example.com", name="Alert Record"
+        tenant, db_session, email="alert-lifecycle@example.com", name="Alert Lifecycle"
     )
-    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
 
+    # Non-actionable types short-circuit before any state change or email.
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.provider_timeout)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.rate_limited)
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_row.id)
+    assert tenant_row is not None
+    assert tenant_row.llm_alert_type is None
+    assert sent == []
+
+    # First actionable failure sets state and emails once.
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
     db_session.expire_all()
     tenant_row = db_session.get(Tenant, tenant_row.id)
     assert tenant_row is not None
@@ -84,43 +103,12 @@ def test_apply_llm_failure_sets_state_and_emails(
     assert sent[0]["to"] == owner.email
     assert "quota" in sent[0]["subject"].lower()
 
-
-def test_apply_llm_failure_throttles_email_within_24h(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sent: list[dict] = []
-    monkeypatch.setattr(
-        "backend.tenants.llm_alerts.send_email",
-        lambda **kwargs: sent.append(kwargs),
-    )
-
-    tenant_row, _ = _bootstrap_tenant(
-        tenant, db_session, email="alert-throttle@example.com", name="Throttle Co"
-    )
-    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
+    # Same type again, within the throttle window: no additional email.
     alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
     alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
     assert len(sent) == 1
 
-
-def test_apply_llm_failure_resends_after_throttle_window(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sent: list[dict] = []
-    monkeypatch.setattr(
-        "backend.tenants.llm_alerts.send_email",
-        lambda **kwargs: sent.append(kwargs),
-    )
-
-    tenant_row, _ = _bootstrap_tenant(
-        tenant, db_session, email="alert-reemit@example.com", name="Re-emit Co"
-    )
-    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
-    # Backdate the last-sent timestamp past the throttle window.
+    # Backdate past the throttle window: same type resends.
     db_session.expire_all()
     tenant_row = db_session.get(Tenant, tenant_row.id)
     assert tenant_row is not None
@@ -131,68 +119,13 @@ def test_apply_llm_failure_resends_after_throttle_window(
     alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
     assert len(sent) == 2
 
-
-def test_apply_llm_failure_emails_immediately_when_type_changes(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Switching from quota_exhausted to invalid_api_key bypasses throttle —
-    it's a different problem the admin needs to know about right away."""
-    sent: list[dict] = []
-    monkeypatch.setattr(
-        "backend.tenants.llm_alerts.send_email",
-        lambda **kwargs: sent.append(kwargs),
-    )
-
-    tenant_row, _ = _bootstrap_tenant(
-        tenant, db_session, email="alert-typechange@example.com", name="Type Change"
-    )
-    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
+    # A different failure type bypasses the throttle and emails immediately.
     alerts.apply_llm_failure(tenant_row.id, LlmFailureType.invalid_api_key)
-    assert len(sent) == 2
+    assert len(sent) == 3
     assert "quota" in sent[0]["subject"].lower()
-    assert "invalid" in sent[1]["subject"].lower()
+    assert "invalid" in sent[2]["subject"].lower()
 
-
-def test_apply_llm_failure_ignores_non_actionable_types(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sent: list[dict] = []
-    monkeypatch.setattr(
-        "backend.tenants.llm_alerts.send_email",
-        lambda **kwargs: sent.append(kwargs),
-    )
-
-    tenant_row, _ = _bootstrap_tenant(
-        tenant, db_session, email="alert-noop@example.com", name="Noop Co"
-    )
-    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.provider_timeout)
-    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.rate_limited)
-    db_session.expire_all()
-    tenant_row = db_session.get(Tenant, tenant_row.id)
-    assert tenant_row is not None
-    assert tenant_row.llm_alert_type is None
-    assert sent == []
-
-
-def test_apply_clear_alert_resets_state(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("backend.tenants.llm_alerts.send_email", lambda **_: None)
-
-    tenant_row, _ = _bootstrap_tenant(
-        tenant, db_session, email="alert-clear@example.com", name="Clear Co"
-    )
-    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
-    db_session.expire_all()
-    tenant_row = db_session.get(Tenant, tenant_row.id)
-    assert tenant_row is not None
-    assert tenant_row.llm_alert_type == "quota_exhausted"
+    # Clearing resets every alert field.
     alerts.apply_clear_alert(tenant_row.id)
     db_session.expire_all()
     tenant_row = db_session.get(Tenant, tenant_row.id)
@@ -236,52 +169,33 @@ def test_record_llm_failure_returns_should_email_bool(
 # --- API: GET /tenants/me/llm-alert -----------------------------------------
 
 
-def test_llm_alert_endpoint_returns_null_when_no_alert(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(
-        tenant, db_session, email="alert-api-empty@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Alert"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-
-    r = tenant.get(
-        "/tenants/me/llm-alert",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert r.status_code == 200
-    assert r.json() == {"type": None, "since": None}
-
-
-def test_llm_alert_endpoint_returns_active_alert(
+def test_llm_alert_endpoint_reflects_alert_state(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """GET /tenants/me/llm-alert returns null before any failure and the
+    active alert (type + since) once one has been recorded."""
     monkeypatch.setattr("backend.tenants.llm_alerts.send_email", lambda **_: None)
     token = register_and_verify_user(
-        tenant, db_session, email="alert-api-active@example.com"
+        tenant, db_session, email="alert-api@example.com"
     )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Active Alert"},
+        json={"name": "Alert API"},
     )
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    r = tenant.get("/tenants/me/llm-alert", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json() == {"type": None, "since": None}
+
     alerts.apply_llm_failure(tenant_id, LlmFailureType.invalid_api_key)
 
-    r = tenant.get(
-        "/tenants/me/llm-alert",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    r = tenant.get("/tenants/me/llm-alert", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     body = r.json()
     assert body["type"] == "invalid_api_key"
@@ -319,11 +233,21 @@ def _create_bot(client: TestClient, token: str) -> str:
     return resp.json()["public_id"]
 
 
-def test_widget_quota_exhausted_raises_tenant_alert(
+def test_widget_llm_failure_alert_lifecycle(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Drives the widget chat pipeline through a full alert lifecycle.
+
+    Failure modes asserted, in order:
+    - a quota-exhausted turn raises the tenant alert and emails once
+    - a subsequent auth failure switches the alert type and emails again
+    - a canned greeting turn (tokens_used == 0) does not clear the alert
+    - a real successful turn (tokens_used > 0) clears the alert
+    """
+    from backend.chat.service import ChatTurnOutcome
+
     sent: list[dict] = []
     monkeypatch.setattr(
         "backend.tenants.llm_alerts.send_email",
@@ -331,12 +255,12 @@ def test_widget_quota_exhausted_raises_tenant_alert(
     )
 
     token = register_and_verify_user(
-        tenant, db_session, email="widget-alert-quota@example.com"
+        tenant, db_session, email="widget-alert-lifecycle@example.com"
     )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Alert Quota"},
+        json={"name": "Widget Alert Lifecycle"},
     )
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
@@ -350,23 +274,57 @@ def test_widget_quota_exhausted_raises_tenant_alert(
             body={"error": {"code": "insufficient_quota"}},
         )
 
-    monkeypatch.setattr(
-        "backend.widget.routes.async_process_chat_message", _raise_quota
-    )
-
-    resp = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id}",
-        json={"message": "hi"},
-    )
+    monkeypatch.setattr("backend.widget.routes.async_process_chat_message", _raise_quota)
+    resp = tenant.post(f"/widget/chat?bot_id={bot_public_id}", json={"message": "hi"})
     assert resp.status_code == 200
     event = _parse_done_event(resp.text)
     assert event["failure_state"]["type"] == "quota_exhausted"
-
     db_session.expire_all()
     tenant_row = db_session.get(Tenant, tenant_id)
     assert tenant_row is not None
     assert tenant_row.llm_alert_type == "quota_exhausted"
     assert len(sent) == 1
+
+    async def _raise_auth(*args, **kwargs):
+        raise AuthenticationError("bad key", response=_response(401), body=None)
+
+    monkeypatch.setattr("backend.widget.routes.async_process_chat_message", _raise_auth)
+    resp = tenant.post(f"/widget/chat?bot_id={bot_public_id}", json={"message": "hi"})
+    assert resp.status_code == 200
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_id)
+    assert tenant_row is not None
+    assert tenant_row.llm_alert_type == "invalid_api_key"
+    assert len(sent) == 2
+    assert "invalid" in sent[1]["subject"].lower()
+
+    async def _greeting(*args, **kwargs):
+        return ChatTurnOutcome(
+            text="Hello!", document_ids=[], tokens_used=0, chat_ended=False
+        )
+
+    monkeypatch.setattr("backend.widget.routes.async_process_chat_message", _greeting)
+    resp = tenant.post(f"/widget/chat?bot_id={bot_public_id}", json={"message": "hi"})
+    assert resp.status_code == 200
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_id)
+    assert tenant_row is not None
+    # Alert remains — greeting didn't exercise the LLM, so we have no
+    # evidence the broken key is back.
+    assert tenant_row.llm_alert_type == "invalid_api_key"
+
+    async def _success(*args, **kwargs):
+        return ChatTurnOutcome(
+            text="answer with tokens", document_ids=[], tokens_used=10, chat_ended=False
+        )
+
+    monkeypatch.setattr("backend.widget.routes.async_process_chat_message", _success)
+    resp = tenant.post(f"/widget/chat?bot_id={bot_public_id}", json={"message": "hi"})
+    assert resp.status_code == 200
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_id)
+    assert tenant_row is not None
+    assert tenant_row.llm_alert_type is None
 
 
 def test_widget_provider_timeout_does_not_raise_tenant_alert(
@@ -412,150 +370,3 @@ def test_widget_provider_timeout_does_not_raise_tenant_alert(
     assert tenant_row is not None
     assert tenant_row.llm_alert_type is None
     assert sent == []
-
-
-def test_widget_invalid_api_key_raises_alert(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sent: list[dict] = []
-    monkeypatch.setattr(
-        "backend.tenants.llm_alerts.send_email",
-        lambda **kwargs: sent.append(kwargs),
-    )
-
-    token = register_and_verify_user(
-        tenant, db_session, email="widget-alert-invalidkey@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Invalid Key Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    async def _raise_auth(*args, **kwargs):
-        raise AuthenticationError("bad key", response=_response(401), body=None)
-
-    monkeypatch.setattr(
-        "backend.widget.routes.async_process_chat_message", _raise_auth
-    )
-
-    resp = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id}",
-        json={"message": "hi"},
-    )
-    assert resp.status_code == 200
-    db_session.expire_all()
-    tenant_row = db_session.get(Tenant, tenant_id)
-    assert tenant_row is not None
-    assert tenant_row.llm_alert_type == "invalid_api_key"
-    assert len(sent) == 1
-    assert "invalid" in sent[0]["subject"].lower()
-
-
-def test_widget_greeting_does_not_clear_alert(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A successful turn that didn't actually call the LLM (greeting,
-    canned small-talk: tokens_used == 0) is not evidence the broken key
-    is back, so the alert must not be cleared."""
-    monkeypatch.setattr("backend.tenants.llm_alerts.send_email", lambda **_: None)
-    from backend.chat.service import ChatTurnOutcome
-
-    token = register_and_verify_user(
-        tenant, db_session, email="widget-greeting-no-clear@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Greeting Test"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    alerts.apply_llm_failure(tenant_id, LlmFailureType.quota_exhausted)
-
-    async def _greeting(*args, **kwargs):
-        return ChatTurnOutcome(
-            text="Hello!",
-            document_ids=[],
-            tokens_used=0,  # canned greeting, no LLM call
-            chat_ended=False,
-        )
-
-    monkeypatch.setattr(
-        "backend.widget.routes.async_process_chat_message", _greeting
-    )
-
-    resp = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id}",
-        json={"message": "hi"},
-    )
-    assert resp.status_code == 200
-    db_session.expire_all()
-    tenant_row = db_session.get(Tenant, tenant_id)
-    assert tenant_row is not None
-    # Alert remains — greeting didn't exercise the LLM, so we have no
-    # evidence the broken key is back.
-    assert tenant_row.llm_alert_type == "quota_exhausted"
-
-
-def test_widget_success_after_failure_clears_alert(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sent: list[dict] = []
-    monkeypatch.setattr(
-        "backend.tenants.llm_alerts.send_email",
-        lambda **kwargs: sent.append(kwargs),
-    )
-    from backend.chat.service import ChatTurnOutcome
-
-    token = register_and_verify_user(
-        tenant, db_session, email="widget-alert-clear@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Clear Flow"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(tenant, token)
-    bot_public_id = _create_bot(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    alerts.apply_llm_failure(tenant_id, LlmFailureType.quota_exhausted)
-    db_session.expire_all()
-    tenant_row = db_session.get(Tenant, tenant_id)
-    assert tenant_row is not None
-    assert tenant_row.llm_alert_type == "quota_exhausted"
-
-    async def _success(*args, **kwargs):
-        return ChatTurnOutcome(
-            text="answer with tokens",
-            document_ids=[],
-            tokens_used=10,
-            chat_ended=False,
-        )
-
-    monkeypatch.setattr(
-        "backend.widget.routes.async_process_chat_message", _success
-    )
-
-    resp = tenant.post(
-        f"/widget/chat?bot_id={bot_public_id}",
-        json={"message": "hi"},
-    )
-    assert resp.status_code == 200
-    db_session.expire_all()
-    tenant_row = db_session.get(Tenant, tenant_id)
-    assert tenant_row is not None
-    assert tenant_row.llm_alert_type is None

@@ -115,11 +115,13 @@ def _seed_tenant_with_kb(
 
 # ── Storage keeps the original ────────────────────────────────────────────────
 
-def test_chat_turn_stores_the_original_text(
+def test_chat_turn_stores_original_and_logs_the_egress_pii_event(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
+    """One chat turn with PII: storage keeps the original, and the privacy
+    log still tells the tenant what was masked on the way out."""
     tenant_id, api_key = _seed_tenant_with_kb(
         mock_openai_client,
         tenant,
@@ -146,28 +148,6 @@ def test_chat_turn_stores_the_original_text(
     assert user_message.content == QUESTION_WITH_PII
     assert not hasattr(user_message, "content_redacted")
     assert not hasattr(user_message, "content_original_encrypted")
-
-
-def test_chat_turn_records_an_egress_pii_event(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """The privacy log still tells the tenant what was masked on the way out."""
-    tenant_id, api_key = _seed_tenant_with_kb(
-        mock_openai_client,
-        tenant,
-        db_session,
-        email="egress-event@example.com",
-        name="Egress Event Tenant",
-    )
-
-    resp = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"question": QUESTION_WITH_PII},
-    )
-    assert resp.status_code == 200
 
     events = (
         db_session.query(PiiEvent)

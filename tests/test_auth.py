@@ -272,6 +272,8 @@ def test_reset_password_success_then_reused_token_rejected(
     assert reused.status_code == 400
 
 
+@pytest.mark.smoke
+@pytest.mark.auth_reset
 @pytest.mark.parametrize("kind", ["invalid_token", "expired_token"])
 def test_reset_password_rejects_invalid_or_expired_token(
     tenant: TestClient, db_session, kind: str

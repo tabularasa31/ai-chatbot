@@ -13,7 +13,6 @@ import uuid
 from datetime import timedelta
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 

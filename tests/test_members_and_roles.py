@@ -189,35 +189,35 @@ def test_inviting_an_existing_member_or_a_stranger_conflicts(
     assert other.tenant_id != ws.tenant_id
 
 
-def test_invite_token_expires(tenant: TestClient, db_session: Session) -> None:
-    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    assert _invite(tenant, ws, email="ops@acme.example.com")[0].status_code == 201
-
-    member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    token = member.reset_password_token
-    member.reset_password_expires_at = _utcnow() - timedelta(minutes=1)
-    db_session.commit()
-
-    assert _accept(tenant, token).status_code == 400
-    db_session.expire_all()
-    member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    assert member.is_verified is False
-
-
-def test_invite_token_cannot_be_replayed(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize("reason", ["expired", "already_redeemed"])
+def test_invite_token_is_refused_once_dead(
+    tenant: TestClient, db_session: Session, reason: str
 ) -> None:
+    """A dead link — whether by clock or by having already worked once — must
+    not reset the password a second time.
+    """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
     assert _invite(tenant, ws, email="ops@acme.example.com")[0].status_code == 201
     token = _invite_token(db_session, "ops@acme.example.com")
 
-    assert _accept(tenant, token).status_code == 200
-    # A second redemption of the same link must not reset the password again.
-    assert _accept(tenant, token, password="Replayed3#").status_code == 400
-    login = tenant.post(
-        "/auth/login", json={"email": "ops@acme.example.com", "password": "Replayed3#"}
-    )
-    assert login.status_code == 401
+    if reason == "expired":
+        member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+        member.reset_password_expires_at = _utcnow() - timedelta(minutes=1)
+        db_session.commit()
+
+        assert _accept(tenant, token).status_code == 400
+        db_session.expire_all()
+        member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+        assert member.is_verified is False
+    else:
+        assert _accept(tenant, token).status_code == 200
+        # A second redemption of the same link must not reset the password again.
+        assert _accept(tenant, token, password="Replayed3#").status_code == 400
+        login = tenant.post(
+            "/auth/login",
+            json={"email": "ops@acme.example.com", "password": "Replayed3#"},
+        )
+        assert login.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -252,73 +252,83 @@ def test_operator_reaches_the_inbox_the_logs_and_the_knowledge_reads(
     )
 
 
-def test_operator_is_refused_settings_keys_privacy_and_member_management(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        pytest.param("patch", "/tenants/me", {"name": "Renamed"}, id="rename_workspace"),
+        pytest.param("get", "/tenants/me/api-keys", None, id="read_api_keys"),
+        pytest.param(
+            "post",
+            "/tenants/me/api-keys/rotate",
+            {"reason": "other", "revoke_old_immediately": False},
+            id="rotate_api_keys",
+        ),
+        pytest.param(
+            "put",
+            "/tenants/me/support-settings",
+            {"l2_email": "support@acme.example.com"},
+            id="write_support_settings",
+        ),
+        pytest.param("get", "/tenants/members", None, id="list_members"),
+        pytest.param(
+            "post",
+            "/tenants/members/invite",
+            {"email": "third@acme.example.com"},
+            id="invite_member",
+        ),
+        pytest.param("delete", "/tenants/members/{owner_id}", None, id="remove_a_member"),
+        pytest.param(
+            "post",
+            "/documents/sources/url",
+            {"url": "https://acme.example.com/docs"},
+            id="add_document_source",
+        ),
+        pytest.param("delete", "/documents/{random_uuid}", None, id="delete_document"),
+        pytest.param(
+            "patch",
+            "/api/v1/knowledge/profile",
+            {"topics": ["billing"]},
+            id="edit_knowledge_profile",
+        ),
+        pytest.param(
+            "post", "/api/v1/knowledge/faq/approve-all", None, id="approve_all_faq"
+        ),
+    ],
+)
+def test_operator_is_refused_every_owner_only_route(
+    tenant: TestClient, db_session: Session, method: str, path: str, body: dict | None
 ) -> None:
+    """Settings, keys, privacy, member management and knowledge edits are all
+    owner-only. Every forbidden combination, in one parametrized test.
+    """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
     op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
     headers = _auth(op_token)
+    resolved_path = path.format(owner_id=ws.owner_id, random_uuid=uuid.uuid4())
 
-    refusals = [
-        tenant.patch("/tenants/me", headers=headers, json={"name": "Renamed"}),
-        tenant.get("/tenants/me/api-keys", headers=headers),
-        tenant.post(
-            "/tenants/me/api-keys/rotate",
-            headers=headers,
-            json={"reason": "other", "revoke_old_immediately": False},
-        ),
-        tenant.put(
-            "/tenants/me/support-settings",
-            headers=headers,
-            json={"l2_email": "support@acme.example.com"},
-        ),
-        tenant.get("/tenants/members", headers=headers),
-        tenant.post(
-            "/tenants/members/invite",
-            headers=headers,
-            json={"email": "third@acme.example.com"},
-        ),
-        tenant.delete(f"/tenants/members/{ws.owner_id}", headers=headers),
-    ]
-    assert [r.status_code for r in refusals] == [403] * len(refusals)
-
-    # Readable, though: these are the support contacts the bot hands to
-    # visitors, and the operator working the inbox is who gets asked.
-    assert (
-        tenant.get("/tenants/me/support-settings", headers=headers).status_code == 200
-    )
+    resp = tenant.request(method.upper(), resolved_path, headers=headers, json=body)
+    assert resp.status_code == 403, resp.text
 
     # The workspace is untouched by the attempt.
     me = tenant.get("/tenants/me", headers=ws.auth)
     assert me.json()["name"] == "Acme"
 
 
-def test_operator_cannot_edit_the_knowledge_base(
+def test_operator_may_still_read_the_support_settings(
     tenant: TestClient, db_session: Session
 ) -> None:
+    """Readable, unlike the write above: these are the support contacts the
+    bot hands to visitors, and the operator working the inbox is who gets
+    asked.
+    """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
     op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-    headers = _auth(op_token)
 
     assert (
-        tenant.post(
-            "/documents/sources/url",
-            headers=headers,
-            json={"url": "https://acme.example.com/docs"},
+        tenant.get(
+            "/tenants/me/support-settings", headers=_auth(op_token)
         ).status_code
-        == 403
-    )
-    assert (
-        tenant.delete(f"/documents/{uuid.uuid4()}", headers=headers).status_code == 403
-    )
-    assert (
-        tenant.patch(
-            "/api/v1/knowledge/profile", headers=headers, json={"topics": ["billing"]}
-        ).status_code
-        == 403
-    )
-    assert (
-        tenant.post("/api/v1/knowledge/faq/approve-all", headers=headers).status_code == 403
+        == 200
     )
 
 
@@ -511,35 +521,46 @@ def test_removing_a_member_deletes_the_account_and_kills_their_session(
     assert [row["email"] for row in listing] == ["owner@acme.example.com"]
 
 
-def test_removal_keeps_the_signature_on_the_history(
+def test_removing_a_member_cleans_up_after_them(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """The account goes; who did the work stays.
+    """Everything a removal has to do behind the scenes, in one pass:
 
-    ``SET NULL`` on every FK into ``users`` would erase authorship silently,
-    and nothing reads these fields yet (the console is phase 2), so the loss
-    would surface only when someone asked who handled a ticket.
+    * a chat they were holding live is released back to the bot, its stretch
+      closed — a chat left held by a deleted account would answer with
+      neither a human nor the bot until the sweeper's idle release, up to an
+      hour later, with nobody told;
+    * a chat they never touched is left alone;
+    * the API key they issued keeps working, signed to a label instead of a
+      dangling id — ``SET NULL`` on every FK into ``users`` would erase
+      authorship silently;
+    * their operator messages, stretches, and gap dismissals keep the same
+      signature: the id is gone with the account, the label is not, and a
+      dismissed gap must not come back just because the person who dismissed
+      it left.
     """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
+    op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
     member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
     member_id = member.id
 
-    chat = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
-    db_session.add(chat)
+    held = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
+    untouched = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
+    db_session.add_all([held, untouched])
     db_session.commit()
-    db_session.refresh(chat)
+    db_session.refresh(held)
+    db_session.refresh(untouched)
+    assert (
+        tenant.post(f"/operator/chats/{held.id}/take", headers=_auth(op_token)).status_code
+        == 200
+    )
+    db_session.expire_all()
+
     reply = Message(
-        chat_id=chat.id,
+        chat_id=held.id,
         role=MessageRole.operator,
         content="Refunds take 14 days.",
         operator_user_id=member_id,
-    )
-    stretch = OperatorSession(
-        tenant_id=ws.tenant_id,
-        chat_id=chat.id,
-        operator_user_id=member_id,
-        joined_at=_utcnow(),
     )
     dismissal = GapDismissal(
         tenant_id=ws.tenant_id,
@@ -548,33 +569,52 @@ def test_removal_keeps_the_signature_on_the_history(
         reason="not_relevant",
         dismissed_by=member_id,
     )
-    db_session.add_all([reply, stretch, dismissal])
+    db_session.add_all([reply, dismissal])
+    db_session.commit()
+    stretch = (
+        db_session.query(OperatorSession).filter(OperatorSession.chat_id == held.id).one()
+    )
+
+    rotated = tenant.post(
+        "/tenants/me/api-keys/rotate",
+        headers=ws.auth,
+        json={"reason": "scheduled", "revoke_old_immediately": False},
+    )
+    assert rotated.status_code == 201, rotated.text
+    key_id = uuid.UUID(rotated.json()["key"]["id"])
+    key = db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
+    key.created_by_user_id = member_id
     db_session.commit()
 
     assert (
-        tenant.delete(
-            f"/tenants/members/{member_id}", headers=ws.auth
-        ).status_code
+        tenant.delete(f"/tenants/members/{member_id}", headers=ws.auth).status_code
         == 204
     )
 
     db_session.expire_all()
-    reply = db_session.query(Message).filter(Message.id == reply.id).one()
-    stretch = db_session.query(OperatorSession).filter(
-        OperatorSession.id == stretch.id
-    ).one()
-    dismissal = db_session.query(GapDismissal).filter(
-        GapDismissal.id == dismissal.id
-    ).one()
+    freed = db_session.query(Chat).filter(Chat.id == held.id).one()
+    assert freed.operator_state is OperatorState.bot
+    assert freed.assigned_operator_id is None
+    assert freed.operator_released_at is not None
+    assert (
+        db_session.query(Chat).filter(Chat.id == untouched.id).one().operator_state
+        is OperatorState.bot
+    )
 
-    # The id is gone with the account, the signature is not.
+    stretch = db_session.query(OperatorSession).filter(OperatorSession.id == stretch.id).one()
+    assert stretch.ended_at is not None
+    assert stretch.operator_label == "ops@acme.example.com"
+
+    key = db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
+    assert key.created_by_user_id is None
+    assert key.created_by_label == "ops@acme.example.com"
+
+    reply = db_session.query(Message).filter(Message.id == reply.id).one()
     assert reply.operator_user_id is None
     assert reply.operator_label == "ops@acme.example.com"
     assert reply.content == "Refunds take 14 days."
-    assert stretch.operator_user_id is None
-    assert stretch.operator_label == "ops@acme.example.com"
-    # SET NULL rather than CASCADE: a dismissed gap must not come back just
-    # because the person who dismissed it left.
+
+    dismissal = db_session.query(GapDismissal).filter(GapDismissal.id == dismissal.id).one()
     assert dismissal.dismissed_by is None
     assert dismissal.dismissed_by_label == "ops@acme.example.com"
 
@@ -718,106 +758,6 @@ def test_a_principal_without_a_workspace_is_refused(
 # ---------------------------------------------------------------------------
 
 
-def test_removal_hands_back_the_chats_the_member_was_holding(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """A live chat with no operator is a visitor typing into nothing.
-
-    ``OperatorHandler`` swallows every visitor turn while a chat is ``live``,
-    so a chat left held by a deleted account answers with neither a human nor
-    the bot until the sweeper's idle release fires — up to an hour later, with
-    nobody told.
-    """
-    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-    member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    member_id = member.id
-
-    held = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
-    untouched = Chat(tenant_id=ws.tenant_id, session_id=uuid.uuid4())
-    db_session.add_all([held, untouched])
-    db_session.commit()
-    db_session.refresh(held)
-    db_session.refresh(untouched)
-
-    assert (
-        tenant.post(f"/operator/chats/{held.id}/take", headers=_auth(op_token)).status_code
-        == 200
-    )
-    db_session.expire_all()
-    assert db_session.query(Chat).filter(Chat.id == held.id).one().operator_state is (
-        OperatorState.live
-    )
-    stretch = (
-        db_session.query(OperatorSession)
-        .filter(OperatorSession.chat_id == held.id)
-        .one()
-    )
-    assert stretch.ended_at is None
-
-    assert (
-        tenant.delete(f"/tenants/members/{member_id}", headers=ws.auth).status_code
-        == 204
-    )
-
-    db_session.expire_all()
-    freed = db_session.query(Chat).filter(Chat.id == held.id).one()
-    assert freed.operator_state is OperatorState.bot
-    assert freed.assigned_operator_id is None
-    assert freed.operator_released_at is not None
-    # The open stretch is closed too, not left dangling for the reconciliation
-    # pass to find.
-    stretch = (
-        db_session.query(OperatorSession)
-        .filter(OperatorSession.chat_id == held.id)
-        .one()
-    )
-    assert stretch.ended_at is not None
-    assert stretch.operator_label == "ops@acme.example.com"
-    # A chat they never held is not touched.
-    assert (
-        db_session.query(Chat).filter(Chat.id == untouched.id).one().operator_state
-        is OperatorState.bot
-    )
-
-
-def test_removal_signs_the_api_keys_the_member_issued(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """Who issued a widget key is the first question when one leaks.
-
-    The attribution is written onto a row this build can no longer produce
-    through the API: issuing a key is owner-only, there is one owner, and the
-    owner cannot be removed. It is still reachable for a row that predates the
-    role model being frozen, which is exactly the row somebody will be asking
-    about years later — so the key is pointed at the departing member
-    directly, and what is under test is the stamping, not the route that used
-    to create the state.
-    """
-    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-    leaver = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    rotated = tenant.post(
-        "/tenants/me/api-keys/rotate",
-        headers=ws.auth,
-        json={"reason": "scheduled", "revoke_old_immediately": False},
-    )
-    assert rotated.status_code == 201, rotated.text
-    key_id = uuid.UUID(rotated.json()["key"]["id"])
-    key = db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
-    key.created_by_user_id = leaver.id
-    db_session.commit()
-
-    assert (
-        tenant.delete(f"/tenants/members/{leaver.id}", headers=ws.auth).status_code
-        == 204
-    )
-    db_session.expire_all()
-    key = db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
-    assert key.created_by_user_id is None
-    assert key.created_by_label == "ops@acme.example.com"
-
-
 def test_deleting_a_workspace_deletes_its_members(
     tenant: TestClient, db_session: Session
 ) -> None:
@@ -848,61 +788,47 @@ def test_deleting_a_workspace_deletes_its_members(
 # ---------------------------------------------------------------------------
 
 
-def test_forgot_password_resends_the_invite_instead_of_voiding_it(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize("membership", ["pending_invitee", "active_member"])
+def test_forgot_password_resends_the_right_link_for_membership_state(
+    tenant: TestClient, db_session: Session, membership: str
 ) -> None:
-    """The two acts are the same wish — let me in — so they must not fight.
-
-    A pending invitee cannot log in, so "Forgot password" is exactly what they
-    press. Issuing a reset would overwrite the invite token and cut its life
-    to an hour, after which the invite link they eventually find reports
-    "invalid or expired" and the owner starts re-inviting in a loop.
+    """The two acts — accepting an invite and resetting a password — are the
+    same wish, "let me in", and must not fight: a pending invitee pressing
+    "forgot password" must get their invite resent, not a reset that overwrites
+    the invite token and cuts its life to an hour. An already-active member
+    pressing the same button must still get an ordinary reset — the invite
+    branch must not swallow it.
     """
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    assert _invite(tenant, ws, email="ops@acme.example.com")[0].status_code == 201
-    original_expiry = (
-        db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    ).reset_password_expires_at
+    if membership == "pending_invitee":
+        assert _invite(tenant, ws, email="ops@acme.example.com")[0].status_code == 201
+    else:
+        _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
 
-    with patch("backend.tenants.members_service.send_email") as invite_mail, patch(
-        "backend.auth.routes.send_email"
-    ) as reset_mail:
+    with (
+        patch("backend.tenants.members_service.send_email") as invite_mail,
+        patch("backend.auth.routes.send_email") as reset_mail,
+    ):
         resp = tenant.post(
             "/auth/forgot-password", json={"email": "ops@acme.example.com"}
         )
     assert resp.status_code == 200, resp.text
-    # An invite went out, not a reset.
-    assert invite_mail.call_count == 1
-    assert reset_mail.call_count == 0
-    assert "/accept-invite?token=" in invite_mail.call_args.kwargs["body"]
 
-    db_session.expire_all()
-    invitee = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
-    # Re-issued on the invite's own clock, not shortened to the reset's hour.
-    assert invitee.reset_password_expires_at > _utcnow() + timedelta(days=6)
-    assert original_expiry is not None
-    # And the link in that mail is the one that works.
-    token = invite_mail.call_args.kwargs["body"].split("token=")[1].split()[0]
-    assert _accept(tenant, token).status_code == 200
-
-
-def test_forgot_password_still_resets_for_a_real_member(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """The invite branch must not swallow ordinary password resets."""
-    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
-    _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-
-    with patch("backend.tenants.members_service.send_email") as invite_mail, patch(
-        "backend.auth.routes.send_email"
-    ) as reset_mail:
-        resp = tenant.post(
-            "/auth/forgot-password", json={"email": "ops@acme.example.com"}
-        )
-    assert resp.status_code == 200
-    assert invite_mail.call_count == 0
-    assert reset_mail.call_count == 1
-    assert "/reset-password?token=" in reset_mail.call_args.kwargs["body"]
+    if membership == "pending_invitee":
+        assert invite_mail.call_count == 1
+        assert reset_mail.call_count == 0
+        assert "/accept-invite?token=" in invite_mail.call_args.kwargs["body"]
+        db_session.expire_all()
+        invitee = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+        # Re-issued on the invite's own clock, not shortened to the reset's hour.
+        assert invitee.reset_password_expires_at > _utcnow() + timedelta(days=6)
+        # And the link in that mail is the one that works.
+        token = invite_mail.call_args.kwargs["body"].split("token=")[1].split()[0]
+        assert _accept(tenant, token).status_code == 200
+    else:
+        assert invite_mail.call_count == 0
+        assert reset_mail.call_count == 1
+        assert "/reset-password?token=" in reset_mail.call_args.kwargs["body"]
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import uuid
 from datetime import timedelta
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -127,36 +128,33 @@ def _operator_calls(client: TestClient, chat_id: uuid.UUID, headers: dict[str, s
 # ---------------------------------------------------------------------------
 
 
-def test_seatless_owner_is_refused_on_every_operator_route(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize("caller_role", ["owner", "operator"])
+def test_seatless_caller_is_refused_on_every_operator_route(
+    tenant: TestClient, db_session: Session, caller_role: str
 ) -> None:
-    """Administering everything is not the same as being allowed to answer."""
-    ws = _make_workspace(tenant, db_session, email="seatless-owner@example.com")
+    """The refusal is about the seat, not the role — administering everything
+    (owner) or already being an operator is not the same as being allowed to
+    answer. Every deny case ``user_holds_seat`` is sold on, in one test.
+    """
+    ws = _make_workspace(tenant, db_session, email=f"seatless-{caller_role}@example.com")
     chat = _make_chat(db_session, ws.tenant_id)
 
-    for name, resp in _operator_calls(tenant, chat.id, ws.auth):
+    if caller_role == "owner":
+        headers = ws.auth
+    else:
+        member_token = _onboard(tenant, db_session, ws, email=f"{caller_role}@example.com")
+        member = db_session.query(User).filter(User.email == f"{caller_role}@example.com").one()
+        release_seat(member)
+        db_session.commit()
+        headers = _auth(member_token)
+
+    for name, resp in _operator_calls(tenant, chat.id, headers):
         assert resp.status_code == 403, (name, resp.text)
         assert "seat" in resp.json()["detail"].lower(), name
 
     # And nothing happened to the conversation on the way out.
     db_session.expire_all()
     assert db_session.get(Chat, chat.id).operator_state is OperatorState.bot
-
-
-def test_seatless_operator_is_refused_on_every_operator_route(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """The refusal is about the seat, not the role: both roles meet it."""
-    ws = _make_workspace(tenant, db_session, email="owner-op@example.com")
-    member_token = _onboard(tenant, db_session, ws, email="op@example.com")
-    member = db_session.query(User).filter(User.email == "op@example.com").one()
-    release_seat(member)
-    db_session.commit()
-    chat = _make_chat(db_session, ws.tenant_id)
-
-    for name, resp in _operator_calls(tenant, chat.id, _auth(member_token)):
-        assert resp.status_code == 403, (name, resp.text)
-        assert "seat" in resp.json()["detail"].lower(), name
 
 
 def test_seated_operator_reaches_every_operator_route(
@@ -295,33 +293,28 @@ def test_the_seat_routes_need_authentication(tenant: TestClient) -> None:
     assert tenant.delete("/tenants/members/me/seat").status_code in (401, 403)
 
 
-def test_taking_a_seat_twice_keeps_the_date_it_was_taken(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize("method,expect_after", [("put", "same_date"), ("delete", None)])
+def test_repeating_a_seat_change_is_idempotent(
+    tenant: TestClient, db_session: Session, method: str, expect_after: str | None
 ) -> None:
-    """Idempotent: a repeated grant is the same seat, not a newer one."""
-    ws = _make_workspace(tenant, db_session, email="idem@example.com")
+    """A repeated grant is the same seat, not a newer one; a repeated release
+    stays a no-op rather than erroring on an already-empty seat.
+    """
+    ws = _make_workspace(tenant, db_session, email=f"idem-{method}@example.com")
+    verb = tenant.delete if method == "delete" else tenant.put
+    if method == "delete":
+        tenant.put("/tenants/members/me/seat", headers=ws.auth)
 
-    first = tenant.put("/tenants/members/me/seat", headers=ws.auth)
-    second = tenant.put("/tenants/members/me/seat", headers=ws.auth)
+    first = verb("/tenants/members/me/seat", headers=ws.auth)
+    second = verb("/tenants/members/me/seat", headers=ws.auth)
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
-    assert first.json()["seat_granted_at"] == second.json()["seat_granted_at"]
-
-
-def test_giving_up_a_seat_twice_is_a_no_op(
-    tenant: TestClient, db_session: Session
-) -> None:
-    ws = _make_workspace(tenant, db_session, email="idem-release@example.com")
-    tenant.put("/tenants/members/me/seat", headers=ws.auth)
-
-    first = tenant.delete("/tenants/members/me/seat", headers=ws.auth)
-    second = tenant.delete("/tenants/members/me/seat", headers=ws.auth)
-
-    assert first.status_code == 200, first.text
-    assert second.status_code == 200, second.text
-    assert first.json()["seat_granted_at"] is None
-    assert second.json()["seat_granted_at"] is None
+    if expect_after == "same_date":
+        assert first.json()["seat_granted_at"] == second.json()["seat_granted_at"]
+    else:
+        assert first.json()["seat_granted_at"] is None
+        assert second.json()["seat_granted_at"] is None
 
 
 # ---------------------------------------------------------------------------

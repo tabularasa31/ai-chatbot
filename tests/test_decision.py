@@ -90,14 +90,19 @@ def _ctx(
 # Block rule 1: Guard failure → reject
 # ---------------------------------------------------------------------------
 
-def test_guard_failure_returns_reject() -> None:
-    d = decide(_ctx(guard_failed=True, guard_reason="injection"))
-    assert d.kind == DecisionKind.reject
-
-
-def test_guard_failure_beats_human_request() -> None:
+@pytest.mark.parametrize(
+    "ctx_kwargs",
+    [
+        pytest.param({"guard_failed": True, "guard_reason": "injection"}, id="alone"),
+        pytest.param(
+            {"guard_failed": True, "explicit_human_request": True},
+            id="beats_human_request",
+        ),
+    ],
+)
+def test_guard_failure_returns_reject(ctx_kwargs: dict) -> None:
     """Guard failure is checked first — even explicit human request does not override."""
-    d = decide(_ctx(guard_failed=True, explicit_human_request=True))
+    d = decide(_ctx(**ctx_kwargs))
     assert d.kind == DecisionKind.reject
 
 
@@ -115,13 +120,17 @@ def test_explicit_human_request_escalates() -> None:
 # Block rule 3: Active escalation → forward_to_active_ticket; no clarify
 # ---------------------------------------------------------------------------
 
-def test_active_escalation_forwards_to_ticket() -> None:
-    d = decide(_ctx(active_escalation=True))
-    assert d.kind == DecisionKind.forward_to_active_ticket
-
-
-def test_active_escalation_beats_faq_hit() -> None:
-    d = decide(_ctx(active_escalation=True, faq_direct_hit=True))
+@pytest.mark.parametrize(
+    "ctx_kwargs",
+    [
+        pytest.param({"active_escalation": True}, id="alone"),
+        pytest.param(
+            {"active_escalation": True, "faq_direct_hit": True}, id="beats_faq_hit"
+        ),
+    ],
+)
+def test_active_escalation_forwards_to_ticket(ctx_kwargs: dict) -> None:
+    d = decide(_ctx(**ctx_kwargs))
     assert d.kind == DecisionKind.forward_to_active_ticket
 
 
@@ -129,69 +138,75 @@ def test_active_escalation_beats_faq_hit() -> None:
 # Block rule 4: Clarification budget exhausted → answer_with_caveat or escalate
 # ---------------------------------------------------------------------------
 
-def test_budget_exhausted_with_partial_answer_returns_caveat() -> None:
-    """When budget is spent and KB has a partial answer, fall back to caveat answer."""
-    d = decide(
-        _ctx(
-            clarification_count=1,
-            max_clarifications=1,
-            kb_confidence="low",
-            kb_has_partial_answer=True,
-            kb_contradiction_detected=True,  # would otherwise clarify
-        )
-    )
-    assert d.kind == DecisionKind.answer_with_caveat
-    assert d.budget_blocked is True
-
-
-def test_budget_exhausted_no_partial_answer_escalates() -> None:
-    """When budget is spent and no partial answer, escalate with clarify_loop_limit."""
-    d = decide(
-        _ctx(
-            clarification_count=1,
-            max_clarifications=1,
-            kb_confidence="low",
-            kb_has_partial_answer=False,
-            kb_contradiction_detected=True,
-        )
-    )
-    assert d.kind == DecisionKind.escalate
-    assert d.escalate_reason == "clarify_loop_limit"
-    assert d.budget_blocked is True
-
-
-def test_budget_not_yet_exhausted_allows_clarify() -> None:
-    d = decide(
-        _ctx(
-            clarification_count=0,
-            max_clarifications=1,
-            kb_confidence="low",
-            kb_contradiction_detected=True,
-        )
-    )
-    assert d.kind == DecisionKind.clarify
-    assert d.clarify_type == "blocking"
+@pytest.mark.parametrize(
+    ("ctx_kwargs", "expected_kind", "expected_extra"),
+    [
+        pytest.param(
+            {
+                "clarification_count": 1,
+                "max_clarifications": 1,
+                "kb_confidence": "low",
+                "kb_has_partial_answer": True,
+                "kb_contradiction_detected": True,  # would otherwise clarify
+            },
+            DecisionKind.answer_with_caveat,
+            {"budget_blocked": True},
+            id="partial_answer_returns_caveat",
+        ),
+        pytest.param(
+            {
+                "clarification_count": 1,
+                "max_clarifications": 1,
+                "kb_confidence": "low",
+                "kb_has_partial_answer": False,
+                "kb_contradiction_detected": True,
+            },
+            DecisionKind.escalate,
+            {"escalate_reason": "clarify_loop_limit", "budget_blocked": True},
+            id="no_partial_answer_escalates",
+        ),
+        pytest.param(
+            {
+                "clarification_count": 0,
+                "max_clarifications": 1,
+                "kb_confidence": "low",
+                "kb_contradiction_detected": True,
+            },
+            DecisionKind.clarify,
+            {"clarify_type": "blocking"},
+            id="not_yet_exhausted_allows_clarify",
+        ),
+    ],
+)
+def test_budget_exhaustion(ctx_kwargs: dict, expected_kind, expected_extra: dict) -> None:
+    d = decide(_ctx(**ctx_kwargs))
+    assert d.kind == expected_kind
+    for attr, value in expected_extra.items():
+        assert getattr(d, attr) == value
 
 
 # ---------------------------------------------------------------------------
 # Block rule 5: FAQ direct hit → answer_from_faq; no clarify
 # ---------------------------------------------------------------------------
 
-def test_faq_direct_hit_returns_answer_from_faq() -> None:
-    d = decide(_ctx(faq_direct_hit=True, faq_top_score=0.95))
-    assert d.kind == DecisionKind.answer_from_faq
-
-
-def test_faq_direct_hit_not_blocked_by_budget() -> None:
+@pytest.mark.parametrize(
+    "ctx_kwargs",
+    [
+        pytest.param({"faq_direct_hit": True, "faq_top_score": 0.95}, id="alone"),
+        pytest.param(
+            {
+                "faq_direct_hit": True,
+                "faq_top_score": 0.95,
+                "clarification_count": 99,
+                "max_clarifications": 1,
+            },
+            id="not_blocked_by_budget",
+        ),
+    ],
+)
+def test_faq_direct_hit_returns_answer_from_faq(ctx_kwargs: dict) -> None:
     """FAQ direct hit short-circuits before the budget check — always allowed."""
-    d = decide(
-        _ctx(
-            faq_direct_hit=True,
-            faq_top_score=0.95,
-            clarification_count=99,
-            max_clarifications=1,
-        )
-    )
+    d = decide(_ctx(**ctx_kwargs))
     assert d.kind == DecisionKind.answer_from_faq
 
 
@@ -199,22 +214,24 @@ def test_faq_direct_hit_not_blocked_by_budget() -> None:
 # Block rule 6: Partial answer + non-critical slot → inline clarify (budget-free)
 # ---------------------------------------------------------------------------
 
-def test_partial_answer_with_medium_confidence_returns_inline_clarify() -> None:
-    d = decide(_ctx(kb_confidence="medium", kb_has_partial_answer=True))
-    assert d.kind == DecisionKind.answer_with_caveat_and_inline_clarify
-    assert d.clarify_type == "inline"
-
-
-def test_inline_clarify_not_blocked_by_exhausted_budget() -> None:
+@pytest.mark.parametrize(
+    "ctx_kwargs",
+    [
+        pytest.param({"kb_confidence": "medium", "kb_has_partial_answer": True}, id="plain"),
+        pytest.param(
+            {
+                "kb_confidence": "medium",
+                "kb_has_partial_answer": True,
+                "clarification_count": 1,
+                "max_clarifications": 1,
+            },
+            id="not_blocked_by_exhausted_budget",
+        ),
+    ],
+)
+def test_inline_clarify(ctx_kwargs: dict) -> None:
     """Inline clarify must not be suppressed by the blocking-clarify budget rule."""
-    d = decide(
-        _ctx(
-            kb_confidence="medium",
-            kb_has_partial_answer=True,
-            clarification_count=1,
-            max_clarifications=1,
-        )
-    )
+    d = decide(_ctx(**ctx_kwargs))
     assert d.kind == DecisionKind.answer_with_caveat_and_inline_clarify
     assert d.clarify_type == "inline"
     assert d.budget_blocked is False
@@ -224,170 +241,189 @@ def test_inline_clarify_not_blocked_by_exhausted_budget() -> None:
 # Counter semantics: trace_dict increments only for blocking clarify
 # ---------------------------------------------------------------------------
 
-def test_trace_dict_increments_for_blocking_clarify() -> None:
-    d = decide(
-        _ctx(
-            kb_confidence="low",
-            kb_contradiction_detected=True,
-            clarification_count=0,
-            max_clarifications=1,
-        )
-    )
-    assert d.kind == DecisionKind.clarify
+@pytest.mark.parametrize(
+    ("ctx_kwargs", "expected_after"),
+    [
+        pytest.param(
+            {
+                "kb_confidence": "low",
+                "kb_contradiction_detected": True,
+                "clarification_count": 0,
+                "max_clarifications": 1,
+            },
+            1,
+            id="blocking_clarify_increments",
+        ),
+        pytest.param({"kb_confidence": "high"}, 0, id="non_clarify_does_not_increment"),
+        pytest.param(
+            {"kb_confidence": "medium", "kb_has_partial_answer": True},
+            0,
+            id="inline_clarify_does_not_increment",
+        ),
+    ],
+)
+def test_trace_dict_counter_semantics(ctx_kwargs: dict, expected_after: int) -> None:
+    d = decide(_ctx(**ctx_kwargs))
     td = d.trace_dict(clarification_count_before=0)
     assert td["clarification_count_before"] == 0
-    assert td["clarification_count_after"] == 1
-
-
-def test_trace_dict_does_not_increment_for_non_clarify() -> None:
-    d = decide(_ctx(kb_confidence="high"))
-    td = d.trace_dict(clarification_count_before=0)
-    assert td["clarification_count_before"] == 0
-    assert td["clarification_count_after"] == 0
-
-
-def test_trace_dict_does_not_increment_for_inline_clarify() -> None:
-    d = decide(_ctx(kb_confidence="medium", kb_has_partial_answer=True))
-    assert d.clarify_type == "inline"
-    td = d.trace_dict(clarification_count_before=0)
-    assert td["clarification_count_after"] == 0
+    assert td["clarification_count_after"] == expected_after
 
 
 # ---------------------------------------------------------------------------
 # High-confidence KB → answer_with_citations (no clarify, no budget concern)
 # ---------------------------------------------------------------------------
 
-def test_high_kb_confidence_returns_citations() -> None:
-    d = decide(_ctx(kb_confidence="high"))
+@pytest.mark.parametrize(
+    "ctx_kwargs",
+    [
+        pytest.param({"kb_confidence": "high"}, id="alone"),
+        pytest.param(
+            {"kb_confidence": "high", "clarification_count": 99, "max_clarifications": 1},
+            id="not_affected_by_budget",
+        ),
+    ],
+)
+def test_high_kb_confidence_returns_citations(ctx_kwargs: dict) -> None:
+    d = decide(_ctx(**ctx_kwargs))
     assert d.kind == DecisionKind.answer_with_citations
 
 
-def test_high_kb_confidence_not_affected_by_budget() -> None:
-    d = decide(
-        _ctx(
-            kb_confidence="high",
-            clarification_count=99,
-            max_clarifications=1,
-        )
-    )
-    assert d.kind == DecisionKind.answer_with_citations
-
-
 # ---------------------------------------------------------------------------
-# Low confidence with no allowed reason → escalate(low_confidence_no_path)
+# Low confidence: escalate when no allowed reason, clarify when one applies
 # ---------------------------------------------------------------------------
 
-def test_low_confidence_no_chunks_escalates() -> None:
-    """Zero-chunk retrieval → low_retrieval_no_chunks=True → no clarify reason."""
-    d = decide(_ctx(kb_confidence="low", low_retrieval_no_chunks=True))
-    assert d.kind == DecisionKind.escalate
-    assert d.escalate_reason == "low_confidence_no_path"
-
-
-def test_low_confidence_no_signal_escalates() -> None:
-    """Low confidence with no contradiction and chunks present but no allowed reason."""
-    d = decide(
-        _ctx(
-            kb_confidence="low",
-            kb_contradiction_detected=False,
-            low_retrieval_no_chunks=False,
-        )
-    )
-    # low_retrieval_confidence reason applies because chunks exist and no contradiction
-    assert d.kind == DecisionKind.clarify
-    assert d.clarify_reason == "low_retrieval_confidence"
-
-
-# ---------------------------------------------------------------------------
-# Multiple conflicting matches → clarify(multiple_conflicting_matches)
-# ---------------------------------------------------------------------------
-
-def test_contradiction_detected_triggers_clarify() -> None:
-    d = decide(
-        _ctx(
-            kb_confidence="low",
-            kb_contradiction_detected=True,
-            clarification_count=0,
-            max_clarifications=1,
-        )
-    )
-    assert d.kind == DecisionKind.clarify
-    assert d.clarify_reason == "multiple_conflicting_matches"
+@pytest.mark.parametrize(
+    ("ctx_kwargs", "expected_kind", "expected_attr", "expected_value"),
+    [
+        pytest.param(
+            {"kb_confidence": "low", "low_retrieval_no_chunks": True},
+            DecisionKind.escalate,
+            "escalate_reason",
+            "low_confidence_no_path",
+            id="no_chunks_escalates",
+        ),
+        pytest.param(
+            {
+                "kb_confidence": "low",
+                "kb_contradiction_detected": False,
+                "low_retrieval_no_chunks": False,
+            },
+            DecisionKind.clarify,
+            "clarify_reason",
+            "low_retrieval_confidence",
+            id="no_signal_clarifies",
+        ),
+        pytest.param(
+            {
+                "kb_confidence": "low",
+                "kb_contradiction_detected": True,
+                "clarification_count": 0,
+                "max_clarifications": 1,
+            },
+            DecisionKind.clarify,
+            "clarify_reason",
+            "multiple_conflicting_matches",
+            id="contradiction_clarifies",
+        ),
+    ],
+)
+def test_low_confidence_routing(
+    ctx_kwargs: dict, expected_kind, expected_attr: str, expected_value: str
+) -> None:
+    d = decide(_ctx(**ctx_kwargs))
+    assert d.kind == expected_kind
+    assert getattr(d, expected_attr) == expected_value
 
 
 # ---------------------------------------------------------------------------
 # Decision.is_blocking_clarify() helper
 # ---------------------------------------------------------------------------
 
-def test_is_blocking_clarify_true_for_clarify_decision() -> None:
-    d = decide(
-        _ctx(
-            kb_confidence="low",
-            kb_contradiction_detected=True,
-            clarification_count=0,
-            max_clarifications=1,
-        )
-    )
-    assert d.is_blocking_clarify() is True
-
-
-def test_is_blocking_clarify_false_for_inline() -> None:
-    d = decide(_ctx(kb_confidence="medium", kb_has_partial_answer=True))
-    assert d.is_blocking_clarify() is False
-
-
-def test_is_blocking_clarify_false_for_escalate() -> None:
-    d = decide(_ctx(explicit_human_request=True))
-    assert d.is_blocking_clarify() is False
+@pytest.mark.parametrize(
+    ("ctx_kwargs", "expected"),
+    [
+        pytest.param(
+            {
+                "kb_confidence": "low",
+                "kb_contradiction_detected": True,
+                "clarification_count": 0,
+                "max_clarifications": 1,
+            },
+            True,
+            id="true_for_clarify_decision",
+        ),
+        pytest.param(
+            {"kb_confidence": "medium", "kb_has_partial_answer": True},
+            False,
+            id="false_for_inline",
+        ),
+        pytest.param({"explicit_human_request": True}, False, id="false_for_escalate"),
+    ],
+)
+def test_is_blocking_clarify(ctx_kwargs: dict, expected: bool) -> None:
+    d = decide(_ctx(**ctx_kwargs))
+    assert d.is_blocking_clarify() is expected
 
 
 # ---------------------------------------------------------------------------
 # Loop detection (block rule 5b)
 # ---------------------------------------------------------------------------
 
-
-def test_loop_detected_escalates_even_with_high_kb_confidence() -> None:
-    """Loop signal must override the high-confidence answer path — the user
-    is stuck on one topic and re-answering won't help."""
-    d = decide(
-        _ctx(
-            kb_confidence="high",
-            loop_detected=True,
-            loop_overlap_ratio=0.75,
-            loop_window_size=3,
-        )
-    )
-    assert d.kind == DecisionKind.escalate
-    assert d.escalate_reason == "loop_detected_repeat_source_docs"
-
-
-def test_loop_detected_does_not_override_active_escalation() -> None:
-    """Block rule 3 (active escalation) is checked before loop — an existing
-    ticket flow must not be hijacked by a loop signal."""
-    d = decide(
-        _ctx(
-            active_escalation=True,
-            loop_detected=True,
-            loop_overlap_ratio=1.0,
-            loop_window_size=3,
-        )
-    )
-    assert d.kind == DecisionKind.forward_to_active_ticket
-
-
-def test_loop_detected_does_not_override_faq_direct_hit() -> None:
-    """FAQ direct hit is a fast, deterministic path that must short-circuit
-    even when source docs happen to repeat across recent turns."""
-    d = decide(
-        _ctx(
-            faq_direct_hit=True,
-            faq_top_score=0.95,
-            loop_detected=True,
-            loop_overlap_ratio=0.8,
-            loop_window_size=3,
-        )
-    )
-    assert d.kind == DecisionKind.answer_from_faq
+@pytest.mark.parametrize(
+    ("ctx_kwargs", "expected_kind", "expected_escalate_reason"),
+    [
+        pytest.param(
+            {
+                "kb_confidence": "high",
+                "loop_detected": True,
+                "loop_overlap_ratio": 0.75,
+                "loop_window_size": 3,
+            },
+            DecisionKind.escalate,
+            "loop_detected_repeat_source_docs",
+            id="overrides_high_kb_confidence",
+        ),
+        pytest.param(
+            {
+                "active_escalation": True,
+                "loop_detected": True,
+                "loop_overlap_ratio": 1.0,
+                "loop_window_size": 3,
+            },
+            DecisionKind.forward_to_active_ticket,
+            None,
+            id="does_not_override_active_escalation",
+        ),
+        pytest.param(
+            {
+                "faq_direct_hit": True,
+                "faq_top_score": 0.95,
+                "loop_detected": True,
+                "loop_overlap_ratio": 0.8,
+                "loop_window_size": 3,
+            },
+            DecisionKind.answer_from_faq,
+            None,
+            id="does_not_override_faq_direct_hit",
+        ),
+        pytest.param(
+            {"kb_confidence": "high", "loop_detected": False},
+            DecisionKind.answer_with_citations,
+            None,
+            id="not_detected_falls_through_to_normal_routing",
+        ),
+    ],
+)
+def test_loop_detection_precedence(
+    ctx_kwargs: dict, expected_kind, expected_escalate_reason: str | None
+) -> None:
+    """Loop signal must override the high-confidence answer path — the user is
+    stuck on one topic and re-answering won't help — but block rules 3 (active
+    escalation) and 5 (FAQ direct hit) are still checked first."""
+    d = decide(_ctx(**ctx_kwargs))
+    assert d.kind == expected_kind
+    if expected_escalate_reason is not None:
+        assert d.escalate_reason == expected_escalate_reason
 
 
 def test_trace_dict_carries_loop_fields() -> None:
@@ -408,13 +444,6 @@ def test_trace_dict_carries_loop_fields() -> None:
     assert loop_trace["loop_docs_repeat"] is True
     assert loop_trace["loop_questions_repeat"] is True
     assert loop_trace["loop_question_similarity"] == 0.9
-
-
-def test_loop_not_detected_falls_through_to_normal_routing() -> None:
-    """When loop_detected=False the block rule must not fire, and the turn
-    routes via normal kb_confidence rules."""
-    d = decide(_ctx(kb_confidence="high", loop_detected=False))
-    assert d.kind == DecisionKind.answer_with_citations
 
 
 def test_docs_only_repeat_answers_normally_and_is_traceable() -> None:

@@ -79,9 +79,19 @@ def test_skip_ignores_pure_numeric_tokens(question: str) -> None:
 @pytest.mark.parametrize(
     "question",
     [
-        "how do I reset my password from the settings page",
-        "where can I find the invoice for last month",
-        "explain how to switch my subscription plan",
+        pytest.param("how do I reset my password from the settings page", id="plain"),
+        pytest.param("where can I find the invoice for last month", id="plain2"),
+        pytest.param("explain how to switch my subscription plan", id="plain3"),
+        # "api" is not all-caps — must not block the skip.
+        pytest.param(
+            "where can I find the api documentation page", id="lowercase_acronym"
+        ),
+        # The abbreviation regex is bounded to 2-5 chars; a 6-letter shout is
+        # just emphasis, not an acronym.
+        pytest.param(
+            "PLEASE help me reset the user password right now",
+            id="six_letter_uppercase_not_abbreviation",
+        ),
     ],
 )
 def test_skip_skips_eligible_native_long_no_abbr(question: str) -> None:
@@ -113,48 +123,24 @@ def test_min_words_threshold_is_inclusive() -> None:
     assert reason == "short_query"
 
 
-def test_dialog_context_forces_rewrite_even_when_otherwise_eligible() -> None:
-    # A turn with prior dialog can always be a continuation ("да, а как
-    # именно проверить делегацию?") — no surface feature of the message can
-    # rule that out, so the rewrite must run to resolve it.
+@pytest.mark.parametrize(
+    ("has_dialog_context", "expected_skip", "expected_reason"),
+    [
+        # A turn with prior dialog can always be a continuation ("да, а как
+        # именно проверить делегацию?") — no surface feature of the message
+        # can rule that out, so the rewrite must run to resolve it.
+        pytest.param(True, False, "has_dialog_context", id="forces_rewrite"),
+        pytest.param(False, True, "eligible_to_skip", id="keeps_skip_without_context"),
+    ],
+)
+def test_dialog_context_gates_the_skip(
+    has_dialog_context: bool, expected_skip: bool, expected_reason: str
+) -> None:
     skip, reason = _should_skip_query_rewrite(
         "how do I reset my password from the settings page",
         language_match="native",
         min_words=4,
-        has_dialog_context=True,
+        has_dialog_context=has_dialog_context,
     )
-    assert skip is False
-    assert reason == "has_dialog_context"
-
-
-def test_no_dialog_context_keeps_skip_for_eligible_query() -> None:
-    skip, reason = _should_skip_query_rewrite(
-        "how do I reset my password from the settings page",
-        language_match="native",
-        min_words=4,
-        has_dialog_context=False,
-    )
-    assert skip is True
-    assert reason == "eligible_to_skip"
-
-
-def test_lowercase_acronym_does_not_trigger_abbreviation_branch() -> None:
-    # ``api`` is not all-caps — must not block the skip.
-    skip, reason = _should_skip_query_rewrite(
-        "where can I find the api documentation page",
-        language_match="native",
-        min_words=4,
-    )
-    assert skip is True
-    assert reason == "eligible_to_skip"
-
-
-def test_six_letter_uppercase_does_not_trigger_abbreviation_branch() -> None:
-    # The regex is bounded to 2–5 chars; a 6-letter shout is just emphasis.
-    skip, reason = _should_skip_query_rewrite(
-        "PLEASE help me reset the user password right now",
-        language_match="native",
-        min_words=4,
-    )
-    assert skip is True
-    assert reason == "eligible_to_skip"
+    assert skip is expected_skip
+    assert reason == expected_reason

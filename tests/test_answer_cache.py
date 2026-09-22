@@ -642,43 +642,20 @@ def test_repeated_question_is_served_from_cache_without_openai(
     assert "answer-cache" in trace.spans
 
 
-def test_knowledge_base_or_bot_change_invalidates_cached_answer(
+def test_knowledge_base_or_agent_layer_change_invalidates_cached_answer(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     fake_redis: dict[str, str],
 ) -> None:
+    """The fingerprint must hash every input that can change the answer:
+    - a new document indexed for the tenant
+    - the preset text changing in code (the effective agent layer)
+    - the bot's custom_instructions changing
+    Each must invalidate the cache and force a fresh generation.
+    """
     cl_row, api_key = _create_client(tenant, db_session, email="answer-cache-kb@example.com")
-    _insert_single_chunk(db_session, tenant_id=cl_row.id)
-    counters = _patch_pipeline_fakes(monkeypatch, answer="Answer")
-    bot = db_session.query(Bot).filter(Bot.tenant_id == cl_row.id).first()
-
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 1
-
-    _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="New doc")
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 2
-
-    bot.custom_instructions = "Answer only in bullet points."
-    db_session.commit()
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 3
-
-
-def test_preset_or_custom_instructions_change_invalidates_cached_answer(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-    fake_redis: dict[str, str],
-) -> None:
-    """The fingerprint must hash the *effective* agent layer: a preset text
-    change in code, or a tenant's custom_instructions change, both need to
-    invalidate cached answers."""
-    cl_row, api_key = _create_client(tenant, db_session, email="answer-cache-preset@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
     counters = _patch_pipeline_fakes(monkeypatch, answer="Answer")
     bot = db_session.query(Bot).filter(Bot.tenant_id == cl_row.id).first()
@@ -689,16 +666,20 @@ def test_preset_or_custom_instructions_change_invalidates_cached_answer(
     _ask(cl_row, api_key, db_session, bot_id=bot.id)
     assert counters["generate"] == 1
 
+    _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="New doc")
+    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    assert counters["generate"] == 2
+
     import backend.chat.presets as presets_module
 
     monkeypatch.setitem(presets_module.PRESETS, "support_agent", "Replaced preset text.")
     _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 2
+    assert counters["generate"] == 3
 
-    bot.custom_instructions = "Always mention the trial period."
+    bot.custom_instructions = "Answer only in bullet points."
     db_session.commit()
     _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 3
+    assert counters["generate"] == 4
 
 
 def test_language_switch_does_not_serve_cached_answer(

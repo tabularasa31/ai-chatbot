@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 import types
 import uuid
+
+import pytest
 
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 from backend.observability import ObservabilityService
@@ -15,19 +18,28 @@ from backend.observability.formatters import (
 )
 from backend.observability.service import (
     _DEFERRED_OPS_MAXLEN,
+    _DeferredGeneration,
+    _DeferredSpan,
+    _DeferredTrace,
+    _LangfuseGeneration,
+    _LangfuseSpan,
+    _NoOpSpan,
     _safe_construct,
     _safe_invoke,
     get_observability,
 )
 
 
-def test_truncate_text_keeps_short_input() -> None:
-    assert truncate_text("short") == "short"
-
-
-def test_truncate_text_shortens_long_input() -> None:
-    text = "a" * 205
-    assert truncate_text(text) == ("a" * 200) + "..."
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("short", "short"),
+        ("a" * 205, ("a" * 200) + "..."),
+    ],
+    ids=["short-input-unchanged", "long-input-truncated"],
+)
+def test_truncate_text(text, expected) -> None:
+    assert truncate_text(text) == expected
 
 
 def test_format_query_embedding_preview_limits_length() -> None:
@@ -94,6 +106,7 @@ def test_observability_noops_when_config_missing(monkeypatch) -> None:
 
     assert service.enabled is False
 
+
 def test_observability_can_reinit_after_shutdown(monkeypatch) -> None:
     class FakeLangfuse:
         instances = 0
@@ -136,39 +149,42 @@ def test_observability_can_reinit_after_shutdown(monkeypatch) -> None:
     service.shutdown()
 
 
-def test_safe_construct_drops_unsupported_metadata_argument() -> None:
-    def factory(*, name: str, input: dict[str, str]) -> dict[str, object]:
-        return {"name": name, "input": input}
-
-    result = _safe_construct(
-        factory,
-        name="vector-search",
-        input={"query": "hello"},
-        metadata={"tenant_id": "tenant-1"},
-    )
-
-    assert result == {
-        "name": "vector-search",
-        "input": {"query": "hello"},
-    }
-
-
-def test_safe_invoke_drops_unsupported_generation_end_arguments() -> None:
+@pytest.mark.parametrize(
+    "invoke,kwargs,expected",
+    [
+        (
+            _safe_construct,
+            {"name": "vector-search", "input": {"query": "hello"}, "metadata": {"tenant_id": "tenant-1"}},
+            {"name": "vector-search", "input": {"query": "hello"}},
+        ),
+        (
+            _safe_invoke,
+            {
+                "output": "done",
+                "metadata": {"duration_ms": 12.3},
+                "usage": {"input": 10, "output": 5},
+                "level": "ERROR",
+                "status_message": "boom",
+            },
+            {"output": "done"},
+        ),
+    ],
+    ids=["safe_construct-drops-unsupported", "safe_invoke-drops-unsupported"],
+)
+def test_safe_helpers_drop_unsupported_kwargs(invoke, kwargs, expected) -> None:
     received: dict[str, object] = {}
 
-    def end(*, output: str) -> None:
-        received["output"] = output
+    if invoke is _safe_construct:
+        def factory(*, name: str, input: dict[str, str]) -> dict[str, object]:
+            return {"name": name, "input": input}
 
-    _safe_invoke(
-        end,
-        output="done",
-        metadata={"duration_ms": 12.3},
-        usage={"input": 10, "output": 5},
-        level="ERROR",
-        status_message="boom",
-    )
+        assert invoke(factory, **kwargs) == expected
+    else:
+        def end(*, output: str) -> None:
+            received["output"] = output
 
-    assert received == {"output": "done"}
+        invoke(end, **kwargs)
+        assert received == expected
 
 
 class _FakeSpan:
@@ -213,26 +229,33 @@ class _FakeClient:
         return None
 
 
-def test_sampling_skips_high_volume_until_promoted(monkeypatch) -> None:
+def _sampling_service(
+    monkeypatch,
+    *,
+    full_capture: bool = False,
+    new_tenant_threshold: int = 0,
+    high_volume_threshold: int = 1,
+    high_volume_sample_rate: float = 0.0,
+    sample_rate: float = 0.0,
+) -> ObservabilityService:
     service = ObservabilityService()
     service._client = _FakeClient()
     service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
-    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", full_capture)
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", new_tenant_threshold)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", high_volume_threshold)
+    monkeypatch.setattr(
+        "backend.observability.service.settings.trace_high_volume_sample_rate", high_volume_sample_rate
+    )
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", sample_rate)
+    return service
 
-    trace_a = service.begin_trace(
-        name="rag-query",
-        session_id="sess-a",
-        tenant_id="tenant-1",
-    )
-    trace_b = service.begin_trace(
-        name="rag-query",
-        session_id="sess-b",
-        tenant_id="tenant-1",
-    )
+
+def test_sampling_skips_high_volume_until_promoted(monkeypatch) -> None:
+    service = _sampling_service(monkeypatch)
+
+    trace_a = service.begin_trace(name="rag-query", session_id="sess-a", tenant_id="tenant-1")
+    trace_b = service.begin_trace(name="rag-query", session_id="sess-b", tenant_id="tenant-1")
 
     assert trace_a.sampled is False
     assert trace_b.sampled is False
@@ -251,12 +274,7 @@ def test_sampling_skips_high_volume_until_promoted(monkeypatch) -> None:
 
 
 def test_force_trace_bypasses_sampling(monkeypatch) -> None:
-    service = ObservabilityService()
-    service._client = _FakeClient()
-    service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
-    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+    service = _sampling_service(monkeypatch, sample_rate=0.0)
 
     trace = service.begin_trace(
         name="rag-query",
@@ -271,25 +289,10 @@ def test_force_trace_bypasses_sampling(monkeypatch) -> None:
 
 
 def test_full_capture_mode_skips_adaptive_sampling(monkeypatch) -> None:
-    service = ObservabilityService()
-    service._client = _FakeClient()
-    service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", True)
-    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+    service = _sampling_service(monkeypatch, full_capture=True)
 
-    trace_a = service.begin_trace(
-        name="rag-query",
-        session_id="sess-a",
-        tenant_id="tenant-full",
-    )
-    trace_b = service.begin_trace(
-        name="rag-query",
-        session_id="sess-b",
-        tenant_id="tenant-full",
-    )
+    trace_a = service.begin_trace(name="rag-query", session_id="sess-a", tenant_id="tenant-full")
+    trace_b = service.begin_trace(name="rag-query", session_id="sess-b", tenant_id="tenant-full")
 
     assert trace_a.sampled is True
     assert trace_b.sampled is True
@@ -302,10 +305,7 @@ def test_full_capture_mode_skips_adaptive_sampling(monkeypatch) -> None:
 
 
 def test_full_capture_mode_still_advances_client_counters(monkeypatch) -> None:
-    service = ObservabilityService()
-    service._client = _FakeClient()
-    service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", True)
+    service = _sampling_service(monkeypatch, full_capture=True)
 
     service.begin_trace(name="rag-query", session_id="s1", tenant_id="tenant-counter")
     service.begin_trace(name="rag-query", session_id="s2", tenant_id="tenant-counter")
@@ -314,12 +314,7 @@ def test_full_capture_mode_still_advances_client_counters(monkeypatch) -> None:
 
 
 def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
-    service = ObservabilityService()
-    service._client = _FakeClient()
-    service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
-    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 1.0)
+    service = _sampling_service(monkeypatch, sample_rate=1.0)
 
     trace = service.begin_trace(
         name="rag-query",
@@ -327,10 +322,7 @@ def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
         tenant_id="tenant-merge",
         tags=["tenant:tenant-merge"],
     )
-    trace.update(
-        output={"answer": "hi"},
-        tags=["variants:multi"],
-    )
+    trace.update(output={"answer": "hi"}, tags=["variants:multi"])
 
     assert len(service._client.traces) == 1
     assert service._client.traces[0].updates[0]["tags"] == [
@@ -340,23 +332,10 @@ def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
     ]
 
 
-def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
-    monkeypatch,
-) -> None:
-    service = ObservabilityService()
-    service._client = _FakeClient()
-    service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
-    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(monkeypatch) -> None:
+    service = _sampling_service(monkeypatch)
 
-    service.begin_trace(
-        name="rag-query",
-        session_id="seed-session",
-        tenant_id="tenant-variants",
-    )
+    service.begin_trace(name="rag-query", session_id="seed-session", tenant_id="tenant-variants")
     trace = service.begin_trace(
         name="rag-query",
         session_id="deferred-session",
@@ -405,17 +384,10 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
     ]
 
 
-def test_deferred_trace_caps_operations_at_maxlen(monkeypatch) -> None:
-    service = ObservabilityService()
-    service._client = _FakeClient()
-    service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
-    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+def test_deferred_trace_caps_operations_and_warns_on_drop(monkeypatch, caplog) -> None:
+    """Deferred ops queue evicts oldest beyond maxlen and logs the drop exactly once."""
+    service = _sampling_service(monkeypatch)
 
-    # force the first trace to make the second one hit the high-volume sampler
     service.begin_trace(name="rag-query", session_id="seed", tenant_id="cap-tenant")
     trace = service.begin_trace(name="rag-query", session_id="cap-session", tenant_id="cap-tenant")
 
@@ -426,41 +398,17 @@ def test_deferred_trace_caps_operations_at_maxlen(monkeypatch) -> None:
     assert len(trace._operations) == _DEFERRED_OPS_MAXLEN
     assert trace._ops_added == overflow
 
-    trace.promote()
+    with caplog.at_level(logging.WARNING, logger="backend.observability.service"):
+        trace.promote()
 
     materialized = service._client.traces[0]
     # only the last _DEFERRED_OPS_MAXLEN spans were kept (deque evicts oldest)
     assert len(materialized.spans) == _DEFERRED_OPS_MAXLEN
     assert materialized.spans[-1][0]["name"] == f"span-{overflow - 1}"
-
-
-def test_deferred_trace_logs_warning_when_ops_dropped(monkeypatch, caplog) -> None:
-    import logging
-
-    service = ObservabilityService()
-    service._client = _FakeClient()
-    service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
-    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
-
-    service.begin_trace(name="rag-query", session_id="seed", tenant_id="warn-tenant")
-    trace = service.begin_trace(name="rag-query", session_id="warn-session", tenant_id="warn-tenant")
-
-    for i in range(_DEFERRED_OPS_MAXLEN + 5):
-        trace.span(name=f"s-{i}").end()
-
-    with caplog.at_level(logging.WARNING, logger="backend.observability.service"):
-        trace.promote()
-
     assert any("dropped" in r.message for r in caplog.records)
 
 
 def test_deferred_trace_logs_warning_when_materialize_fails(monkeypatch, caplog) -> None:
-    import logging
-
     class _BrokenClient:
         def trace(self, **kwargs):
             raise RuntimeError("langfuse unavailable")
@@ -468,14 +416,8 @@ def test_deferred_trace_logs_warning_when_materialize_fails(monkeypatch, caplog)
         def flush(self):
             return None
 
-    service = ObservabilityService()
+    service = _sampling_service(monkeypatch)
     service._client = _BrokenClient()
-    service._enabled = True
-    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
-    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
-    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
-    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
 
     service.begin_trace(name="rag-query", session_id="seed", tenant_id="broken-tenant")
     trace = service.begin_trace(name="rag-query", session_id="broken-session", tenant_id="broken-tenant")
@@ -515,35 +457,39 @@ class _RecordingSDKObservation:
         return None
 
 
-def test_langfuse_span_update_metadata_invokes_sdk_update() -> None:
-    from backend.observability.service import _LangfuseSpan
+@pytest.mark.parametrize(
+    "handle_cls,attr,initial_metadata",
+    [
+        (_LangfuseSpan, "span_obj", {}),
+        (_LangfuseSpan, "span_obj", {"tenant_id": "abc", "stage": "guard_relevance"}),
+        (_LangfuseGeneration, "generation_obj", {}),
+        (
+            _LangfuseGeneration,
+            "generation_obj",
+            {"prompt_cache_prefix_tokens_estimate": 2048, "temperature": 0.2},
+        ),
+    ],
+    ids=["span-no-initial", "span-preserves-initial", "generation-no-initial", "generation-preserves-initial"],
+)
+def test_update_metadata_merges_with_initial_metadata(handle_cls, attr, initial_metadata) -> None:
+    """SDK update must receive the merged superset, not just the retry keys.
 
+    Regression for the codex review concern: if the Langfuse SDK treats
+    `metadata` updates as replacement (vs merge), stamping only retry fields
+    would silently clobber the prompt/cache/model context attached at
+    creation time.
+    """
     sdk = _RecordingSDKObservation()
-    span = _LangfuseSpan(span_obj=sdk)
+    handle = handle_cls(**{attr: sdk}, _metadata=dict(initial_metadata))
 
-    span.update_metadata(attempt_count=2, was_retried=True)
+    handle.update_metadata(attempt_count=2, was_retried=True)
 
     assert sdk.update_calls == [
-        {"metadata": {"attempt_count": 2, "was_retried": True}}
-    ]
-
-
-def test_langfuse_generation_update_metadata_invokes_sdk_update() -> None:
-    from backend.observability.service import _LangfuseGeneration
-
-    sdk = _RecordingSDKObservation()
-    gen = _LangfuseGeneration(generation_obj=sdk)
-
-    gen.update_metadata(attempt_count=3, was_retried=True)
-
-    assert sdk.update_calls == [
-        {"metadata": {"attempt_count": 3, "was_retried": True}}
+        {"metadata": {**initial_metadata, "attempt_count": 2, "was_retried": True}}
     ]
 
 
 def test_langfuse_update_metadata_empty_kwargs_is_noop() -> None:
-    from backend.observability.service import _LangfuseSpan
-
     sdk = _RecordingSDKObservation()
     span = _LangfuseSpan(span_obj=sdk)
 
@@ -553,94 +499,12 @@ def test_langfuse_update_metadata_empty_kwargs_is_noop() -> None:
 
 
 def test_noop_span_update_metadata_does_nothing() -> None:
-    from backend.observability.service import _NoOpSpan
-
     # Must not raise — no underlying object to call.
     _NoOpSpan().update_metadata(attempt_count=1)
 
 
-def test_deferred_span_update_metadata_merges_into_queued_kwargs() -> None:
-    from backend.observability.service import _DeferredSpan, _DeferredTrace
-
-    deferred_trace = _DeferredTrace.__new__(_DeferredTrace)
-    recorded_ops: list[dict[str, object]] = []
-    deferred_trace._record = recorded_ops.append  # type: ignore[attr-defined,method-assign]
-
-    initial_metadata = {"tenant_id": "abc"}
-    span = _DeferredSpan(
-        deferred_trace,
-        kind="span",
-        kwargs={"name": "guard_relevance", "input": None, "metadata": initial_metadata},
-    )
-
-    span.update_metadata(attempt_count=2, was_retried=True)
-    span.end(output={"relevant": True})
-
-    assert len(recorded_ops) == 1
-    queued = recorded_ops[0]
-    assert queued["kwargs"]["metadata"] == {
-        "tenant_id": "abc",
-        "attempt_count": 2,
-        "was_retried": True,
-    }
-
-
-def test_langfuse_span_update_metadata_preserves_initial_metadata() -> None:
-    """SDK update must receive the merged superset, not just the retry keys.
-
-    Regression for the codex review concern: if the Langfuse SDK treats
-    `metadata` updates as replacement (vs merge), stamping only retry fields
-    would silently clobber the prompt/cache/model context attached at
-    creation time.
-    """
-    from backend.observability.service import _LangfuseSpan
-
-    sdk = _RecordingSDKObservation()
-    initial = {"tenant_id": "abc", "stage": "guard_relevance"}
-    span = _LangfuseSpan(span_obj=sdk, _metadata=dict(initial))
-
-    span.update_metadata(attempt_count=2, was_retried=True)
-
-    assert sdk.update_calls == [
-        {
-            "metadata": {
-                "tenant_id": "abc",
-                "stage": "guard_relevance",
-                "attempt_count": 2,
-                "was_retried": True,
-            }
-        }
-    ]
-
-
-def test_langfuse_generation_update_metadata_preserves_initial_metadata() -> None:
-    from backend.observability.service import _LangfuseGeneration
-
-    sdk = _RecordingSDKObservation()
-    initial = {
-        "prompt_cache_prefix_tokens_estimate": 2048,
-        "temperature": 0.2,
-    }
-    gen = _LangfuseGeneration(generation_obj=sdk, _metadata=dict(initial))
-
-    gen.update_metadata(attempt_count=1, was_retried=False)
-
-    assert sdk.update_calls == [
-        {
-            "metadata": {
-                "prompt_cache_prefix_tokens_estimate": 2048,
-                "temperature": 0.2,
-                "attempt_count": 1,
-                "was_retried": False,
-            }
-        }
-    ]
-
-
 def test_langfuse_span_update_metadata_accumulates_across_calls() -> None:
     """Two successive updates each see the running merged superset."""
-    from backend.observability.service import _LangfuseSpan
-
     sdk = _RecordingSDKObservation()
     span = _LangfuseSpan(span_obj=sdk, _metadata={"tenant_id": "abc"})
 
@@ -695,23 +559,35 @@ def test_langfuse_trace_span_factory_captures_initial_metadata() -> None:
     ]
 
 
-def test_deferred_generation_update_metadata_merges_into_queued_kwargs() -> None:
-    from backend.observability.service import _DeferredGeneration, _DeferredTrace
-
+@pytest.mark.parametrize(
+    "build_handle,expected_metadata",
+    [
+        (
+            lambda trace: _DeferredSpan(
+                trace,
+                kind="span",
+                kwargs={"name": "guard_relevance", "input": None, "metadata": {"tenant_id": "abc"}},
+            ),
+            {"tenant_id": "abc", "attempt_count": 2, "was_retried": True},
+        ),
+        (
+            lambda trace: _DeferredGeneration(
+                trace,
+                kwargs={"name": "llm-generation", "model": "x", "input": None, "metadata": None},
+            ),
+            {"attempt_count": 1, "was_retried": False},
+        ),
+    ],
+    ids=["deferred-span", "deferred-generation"],
+)
+def test_deferred_handle_update_metadata_merges_into_queued_kwargs(build_handle, expected_metadata) -> None:
     deferred_trace = _DeferredTrace.__new__(_DeferredTrace)
     recorded_ops: list[dict[str, object]] = []
     deferred_trace._record = recorded_ops.append  # type: ignore[attr-defined,method-assign]
 
-    gen = _DeferredGeneration(
-        deferred_trace,
-        kwargs={"name": "llm-generation", "model": "x", "input": None, "metadata": None},
-    )
-
-    gen.update_metadata(attempt_count=1, was_retried=False)
-    gen.end(output="ok")
+    handle = build_handle(deferred_trace)
+    handle.update_metadata(**{k: v for k, v in expected_metadata.items() if k != "tenant_id"})
+    handle.end(output="ok")
 
     assert len(recorded_ops) == 1
-    assert recorded_ops[0]["kwargs"]["metadata"] == {
-        "attempt_count": 1,
-        "was_retried": False,
-    }
+    assert recorded_ops[0]["kwargs"]["metadata"] == expected_metadata

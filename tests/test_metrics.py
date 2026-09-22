@@ -17,21 +17,18 @@ def _reset_metrics_singleton():
     svc.reset()
 
 
-def test_init_noop_in_test_environment(monkeypatch):
-    monkeypatch.setattr("backend.observability.metrics.settings.environment", "test")
+@pytest.mark.parametrize(
+    ("environment", "posthog_api_key"),
+    [
+        pytest.param("test", "phc_real", id="test_environment"),
+        pytest.param("development", None, id="no_api_key"),
+    ],
+)
+def test_init_noop_when_disabled(monkeypatch, environment, posthog_api_key):
+    monkeypatch.setattr("backend.observability.metrics.settings.environment", environment)
     monkeypatch.setattr(
-        "backend.observability.metrics.settings.posthog_api_key", "phc_real"
+        "backend.observability.metrics.settings.posthog_api_key", posthog_api_key
     )
-    svc = MetricsService()
-    svc.init()
-    assert svc.enabled is False
-
-
-def test_init_noop_without_api_key(monkeypatch):
-    monkeypatch.setattr(
-        "backend.observability.metrics.settings.environment", "development"
-    )
-    monkeypatch.setattr("backend.observability.metrics.settings.posthog_api_key", None)
     svc = MetricsService()
     svc.init()
     assert svc.enabled is False

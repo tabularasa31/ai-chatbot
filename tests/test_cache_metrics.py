@@ -53,12 +53,17 @@ def test_embedding_cache_get_records_metrics() -> None:
     assert snap["embedding"]["misses"] == 1
 
 
-def test_admin_cache_stats_endpoint_requires_admin(
+def test_admin_cache_stats_endpoint_requires_admin_then_returns_snapshot(
     tenant: TestClient, db_session: Session
 ) -> None:
-    # Non-admin user → 403
+    """403 for a non-admin caller; 200 with the real snapshot once promoted."""
+    cache_metrics.reset()
+    cache_metrics.record_hit("relevance_guard")
+    cache_metrics.record_miss("relevance_guard")
+    cache_metrics.record_miss("embedding")
+
     token = register_and_verify_user(
-        tenant, db_session, email="cache-stats-user@example.com"
+        tenant, db_session, email="cache-stats-admin@example.com"
     )
     resp = tenant.get(
         "/admin/metrics/cache-stats",
@@ -66,20 +71,6 @@ def test_admin_cache_stats_endpoint_requires_admin(
     )
     assert resp.status_code == 403
 
-
-def test_admin_cache_stats_endpoint_returns_snapshot(
-    tenant: TestClient, db_session: Session
-) -> None:
-    cache_metrics.reset()
-    cache_metrics.record_hit("relevance_guard")
-    cache_metrics.record_miss("relevance_guard")
-    cache_metrics.record_miss("embedding")
-
-    token = register_and_verify_user(
-        tenant,
-        db_session,
-        email="cache-stats-admin@example.com",
-    )
     from backend.models import User
 
     user = (
@@ -90,6 +81,7 @@ def test_admin_cache_stats_endpoint_returns_snapshot(
     assert user is not None
     user.is_admin = True
     db_session.commit()
+
     resp = tenant.get(
         "/admin/metrics/cache-stats",
         headers={"Authorization": f"Bearer {token}"},

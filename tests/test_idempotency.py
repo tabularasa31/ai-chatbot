@@ -105,25 +105,32 @@ def _request(idempotency_key: str | None) -> Request:
 
 
 @pytest.mark.asyncio
-async def test_missing_header_is_noop(fake_redis: _FakeRedis) -> None:
-    request = _request(None)
+@pytest.mark.parametrize(
+    ("key", "make_redis_unusable"),
+    [
+        pytest.param(None, None, id="missing_header"),
+        pytest.param("   ", None, id="empty_header"),
+        pytest.param(
+            "x" * (idempotency.MAX_KEY_LENGTH + 1), None, id="oversized_header"
+        ),
+        pytest.param("abc", lambda r: setattr(r, "enabled", False), id="redis_disabled"),
+        pytest.param("k1", lambda r: setattr(r, "alive", False), id="redis_outage"),
+    ],
+)
+async def test_degrades_to_noop_without_replay_or_lock(
+    fake_redis: _FakeRedis, key, make_redis_unusable
+) -> None:
+    """Missing/empty/oversized key, Redis disabled, or Redis unreachable must
+    all run the handler unguarded rather than replay or 409."""
+    if make_redis_unusable is not None:
+        make_redis_unusable(fake_redis)
+    request = _request(key)
     async with idempotent_section(request, tenant_id="t1", scope="chat") as section:
         assert section.cached is None
         assert section.active is False
         await section.record(status_code=200, body={"ok": True})
     assert fake_redis.store == {}
     assert fake_redis.locks == {}
-
-
-@pytest.mark.asyncio
-async def test_redis_disabled_is_noop(fake_redis: _FakeRedis) -> None:
-    fake_redis.enabled = False
-    request = _request("abc")
-    async with idempotent_section(request, tenant_id="t1", scope="chat") as section:
-        assert section.cached is None
-        assert section.active is False
-        await section.record(status_code=200, body={"ok": True})
-    assert fake_redis.store == {}
 
 
 @pytest.mark.asyncio
@@ -182,22 +189,23 @@ async def test_body_fingerprint_isolates_replay(fake_redis: _FakeRedis) -> None:
 
 
 @pytest.mark.asyncio
-async def test_keys_scoped_per_tenant(fake_redis: _FakeRedis) -> None:
+@pytest.mark.parametrize(
+    ("second_tenant_id", "second_scope"),
+    [
+        pytest.param("t2", "chat", id="different_tenant"),
+        pytest.param("t1", "escalate", id="different_scope"),
+    ],
+)
+async def test_keys_scoped_per_tenant_and_scope(
+    fake_redis: _FakeRedis, second_tenant_id: str, second_scope: str
+) -> None:
     async with idempotent_section(_request("k1"), tenant_id="t1", scope="chat") as section:
         await section.record(status_code=200, body={"who": "tenant-1"})
 
-    async with idempotent_section(_request("k1"), tenant_id="t2", scope="chat") as section:
-        # Same Idempotency-Key, different tenant — must not replay.
-        assert section.cached is None
-
-
-@pytest.mark.asyncio
-async def test_keys_scoped_per_scope(fake_redis: _FakeRedis) -> None:
-    async with idempotent_section(_request("k1"), tenant_id="t1", scope="chat") as section:
-        await section.record(status_code=200, body={"scope": "chat"})
-
-    async with idempotent_section(_request("k1"), tenant_id="t1", scope="escalate") as section:
-        # Same key + tenant, different scope — independent.
+    async with idempotent_section(
+        _request("k1"), tenant_id=second_tenant_id, scope=second_scope
+    ) as section:
+        # Same Idempotency-Key, different tenant or scope — must not replay.
         assert section.cached is None
 
 
@@ -267,22 +275,6 @@ async def test_parallel_duplicate_replays_when_sibling_finishes(
 
 
 @pytest.mark.asyncio
-async def test_oversized_header_treated_as_missing(fake_redis: _FakeRedis) -> None:
-    request = _request("x" * (idempotency.MAX_KEY_LENGTH + 1))
-    async with idempotent_section(request, tenant_id="t1", scope="chat") as section:
-        assert section.active is False
-        await section.record(status_code=200, body={"ok": True})
-    assert fake_redis.store == {}
-
-
-@pytest.mark.asyncio
-async def test_empty_header_treated_as_missing(fake_redis: _FakeRedis) -> None:
-    request = _request("   ")
-    async with idempotent_section(request, tenant_id="t1", scope="chat") as section:
-        assert section.active is False
-
-
-@pytest.mark.asyncio
 async def test_corrupt_cache_value_is_treated_as_miss(
     fake_redis: _FakeRedis,
 ) -> None:
@@ -294,26 +286,6 @@ async def test_corrupt_cache_value_is_treated_as_miss(
         # Corrupt cache → cache miss → handler runs again.
         assert section.cached is None
         assert section.active is True
-
-
-@pytest.mark.asyncio
-async def test_redis_outage_after_enabled_degrades_to_noop(
-    fake_redis: _FakeRedis,
-) -> None:
-    """When Redis is configured but unreachable, the helper must run the
-    handler unguarded rather than fail keyed requests with 409."""
-    fake_redis.alive = False  # is_enabled stays True; Redis is "down".
-
-    async with idempotent_section(
-        _request("k1"), tenant_id="t1", scope="chat"
-    ) as section:
-        # Degraded mode: no replay, no lock, but we still let the handler run.
-        assert section.cached is None
-        assert section.active is False
-        await section.record(status_code=200, body={"ok": True})
-
-    assert fake_redis.store == {}
-    assert fake_redis.locks == {}
 
 
 @pytest.mark.asyncio

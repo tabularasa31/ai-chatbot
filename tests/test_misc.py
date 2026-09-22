@@ -6,7 +6,6 @@ import datetime as dt
 import importlib.util
 import uuid
 from pathlib import Path
-from typing import Generator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,7 +16,6 @@ from backend.models import Tenant, TenantFaq, User
 from backend.tenant_knowledge import faq_service
 from backend.tenant_knowledge.schemas import FaqCandidate
 from backend.tenants.service import get_tenant_by_user
-from tests.conftest import register_and_verify_user
 
 
 # ---------------------------------------------------------------------------
@@ -136,25 +134,20 @@ def _load_revision(path: Path) -> str | None:
     return getattr(module, "revision", None)
 
 
-def test_alembic_revisions_fit_version_num_limit() -> None:
-    too_long = [
-        (p.name, len(r))
-        for p in sorted(_MIGRATIONS_DIR.glob("*.py"))
-        if (r := _load_revision(p)) is not None and len(r) > _MAX_REVISION_LEN
-    ]
-    assert not too_long, f"Revision ids too long: {too_long}"
-
-
-def test_alembic_revisions_are_unique() -> None:
+def test_alembic_revisions_fit_limit_and_are_unique() -> None:
     seen: dict[str, str] = {}
     duplicates: list[tuple[str, str]] = []
+    too_long: list[tuple[str, int]] = []
     for path in sorted(_MIGRATIONS_DIR.glob("*.py")):
         revision = _load_revision(path)
         assert revision is not None, f"{path.name} must define revision"
+        if len(revision) > _MAX_REVISION_LEN:
+            too_long.append((path.name, len(revision)))
         if revision in seen:
             duplicates.append((revision, path.name))
         else:
             seen[revision] = path.name
+    assert not too_long, f"Revision ids too long: {too_long}"
     assert not duplicates, f"Duplicate revision ids: {duplicates}"
 
 
@@ -163,19 +156,25 @@ def test_alembic_revisions_are_unique() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_signup_sets_verification_token(
+def test_email_verification_journey(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str, str]] = []
+    """Failure modes: verification token/email not set on signup; a valid
+    token doesn't verify or doesn't provision a tenant; an expired token is
+    accepted; an unknown token is accepted.
+    """
+    from backend.core.security import hash_password
 
+    calls: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
         auth_routes,
         "send_email",
         lambda to, subject, body: calls.append((to, subject, body)),
     )
 
+    # Signup sends the verification email and stores a pending token.
     response = tenant.post(
         "/auth/register",
         json={"email": "verify@example.com", "password": "SecurePass1!"},
@@ -190,23 +189,8 @@ def test_signup_sets_verification_token(
     assert user.verification_token is not None
     assert user.verification_expires_at > dt.datetime.utcnow()
 
-
-def test_verify_email_success(tenant: TestClient, db_session: Session) -> None:
-    from backend.core.security import hash_password
-
-    token = "abc123validtoken"
-    user = User(
-        email="toverify@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=False,
-        verification_token=token,
-        verification_expires_at=dt.datetime.utcnow() + dt.timedelta(days=1),
-    )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-
-    response = tenant.post("/auth/verify-email", json={"token": token})
+    # A valid token verifies the user and provisions their workspace tenant.
+    response = tenant.post("/auth/verify-email", json={"token": user.verification_token})
     assert response.status_code == 200
     data = response.json()
     assert "token" in data
@@ -219,33 +203,29 @@ def test_verify_email_success(tenant: TestClient, db_session: Session) -> None:
     assert provisioned is not None
     assert provisioned.name == "My Workspace"
 
+    # An expired token is rejected, and the user is left unverified.
+    expired_token = "expiredtoken123"
+    expired_user = User(
+        email="expired@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        is_verified=False,
+        verification_token=expired_token,
+        verification_expires_at=dt.datetime.utcnow() - dt.timedelta(hours=1),
+    )
+    db_session.add(expired_user)
+    db_session.commit()
 
-def test_verify_email_invalid_token(tenant: TestClient) -> None:
+    response = tenant.post("/auth/verify-email", json={"token": expired_token})
+    assert response.status_code == 400
+
+    db_session.refresh(expired_user)
+    assert expired_user.is_verified is False
+    assert expired_user.verification_token == expired_token
+
+    # An unknown token is rejected outright.
     response = tenant.post(
         "/auth/verify-email", json={"token": "nonexistent-token-12345"}
     )
     assert response.status_code == 400
     detail = response.json()["detail"].lower()
     assert "invalid" in detail or "expired" in detail
-
-
-def test_verify_email_expired_token(tenant: TestClient, db_session: Session) -> None:
-    from backend.core.security import hash_password
-
-    token = "expiredtoken123"
-    user = User(
-        email="expired@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=False,
-        verification_token=token,
-        verification_expires_at=dt.datetime.utcnow() - dt.timedelta(hours=1),
-    )
-    db_session.add(user)
-    db_session.commit()
-
-    response = tenant.post("/auth/verify-email", json={"token": token})
-    assert response.status_code == 400
-
-    db_session.refresh(user)
-    assert user.is_verified is False
-    assert user.verification_token == token

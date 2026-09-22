@@ -726,6 +726,7 @@ def test_chat_legacy_ended_at_chat_is_answered_normally(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.smoke
 @pytest.mark.escalation
 def test_explicit_human_request_with_content_bypasses_pre_confirm_and_escalates(
     tenant: TestClient,
@@ -1675,6 +1676,7 @@ def test_manual_escalate_success_for_both_triggers(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.smoke
 @pytest.mark.escalation
 def test_new_ticket_notify_routes_to_l2_email_then_falls_back_to_owner(
     tenant: TestClient,
@@ -1780,6 +1782,7 @@ def test_new_ticket_notify_failure_reports_metric_and_leaves_ticket_retryable(
     assert ticket.notification_message_id is None
 
 
+@pytest.mark.smoke
 @pytest.mark.escalation
 def test_new_ticket_notify_email_is_pii_safe_in_body_and_carries_context_in_headers(
     tenant: TestClient,
@@ -2106,6 +2109,7 @@ def test_ticket_update_notify_failure_reports_metric_and_preserves_marker(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.smoke
 @pytest.mark.escalation
 def test_manual_escalate_sets_awaiting_ticket_when_email_missing_else_followup(
     tenant: TestClient,

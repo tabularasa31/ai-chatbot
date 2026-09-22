@@ -515,25 +515,34 @@ def test_bm25_signal_uses_overlap_fallback_when_raw_scores_are_flat() -> None:
     assert results[0][1] == 1.0
 
 
-def test_normalize_scored_results_flat_multi_doc_returns_zero() -> None:
-    """Multiple docs with identical scores: must return 0.0, not 1.0.
-
-    Returning 1.0 artificially inflates every document's fusion contribution
-    when the BM25 signal cannot distinguish between them.
+@pytest.mark.parametrize(
+    "raw_scores, expected",
+    [
+        pytest.param([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], id="flat_multi_doc_at_zero_returns_zero"),
+        pytest.param([0.5, 0.5, 0.5], [0.0, 0.0, 0.0], id="flat_multi_doc_at_half_returns_zero"),
+        pytest.param([1.0, 1.0, 1.0], [0.0, 0.0, 0.0], id="flat_multi_doc_at_one_returns_zero"),
+        pytest.param([42.0, 42.0, 42.0], [0.0, 0.0, 0.0], id="flat_multi_doc_at_large_value_returns_zero"),
+        pytest.param([3.0, 2.0, 1.0], [1.0, 0.5, 0.0], id="distinct_scores_are_scaled_order_preserved"),
+        pytest.param([], [], id="empty_list_returns_empty"),
+    ],
+)
+def test_normalize_scored_results(raw_scores: list[float], expected: list[float]) -> None:
+    """Flat scores across multiple docs must return 0.0, not 1.0 — returning 1.0
+    would artificially inflate every document's fusion contribution when the
+    BM25 signal cannot distinguish between them. Distinct scores rescale to
+    [0, 1] with order preserved; a single unique match is always 1.0.
     """
     from backend.models import Embedding
     from backend.search.service import _normalize_scored_results
 
-    emb_a = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="a", metadata_json={})
-    emb_b = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="b", metadata_json={})
-    emb_c = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="c", metadata_json={})
+    scored = [
+        (Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text=str(i), metadata_json={}), score)
+        for i, score in enumerate(raw_scores)
+    ]
 
-    for flat_score in (0.0, 0.5, 1.0, 42.0):
-        result = _normalize_scored_results([(emb_a, flat_score), (emb_b, flat_score), (emb_c, flat_score)])
-        scores = [s for _, s in result]
-        assert scores == [0.0, 0.0, 0.0], (
-            f"Expected all 0.0 when max==min=={flat_score} across multiple docs, got {scores}"
-        )
+    result = _normalize_scored_results(scored)
+
+    assert [s for _, s in result] == pytest.approx(expected)
 
 
 def test_normalize_scored_results_single_item_returns_one() -> None:
@@ -548,29 +557,6 @@ def test_normalize_scored_results_single_item_returns_one() -> None:
         assert result[0][1] == 1.0, (
             f"Expected 1.0 for single-item list with score {raw_score}, got {result[0][1]}"
         )
-
-
-def test_normalize_scored_results_distinct_scores_are_scaled() -> None:
-    """Normal case: scores are rescaled to [0, 1] with order preserved."""
-    from backend.models import Embedding
-    from backend.search.service import _normalize_scored_results
-
-    emb_high = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="hi", metadata_json={})
-    emb_mid = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="mid", metadata_json={})
-    emb_low = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="lo", metadata_json={})
-
-    result = _normalize_scored_results([(emb_high, 3.0), (emb_mid, 2.0), (emb_low, 1.0)])
-    scores = [s for _, s in result]
-
-    assert scores[0] == pytest.approx(1.0)
-    assert scores[1] == pytest.approx(0.5)
-    assert scores[2] == pytest.approx(0.0)
-
-
-def test_normalize_scored_results_empty_list_returns_empty() -> None:
-    from backend.search.service import _normalize_scored_results
-
-    assert _normalize_scored_results([]) == []
 
 
 # ── Parallel NER (Step 5+ latency fix) ──────────────────────────────────────

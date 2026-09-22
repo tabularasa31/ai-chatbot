@@ -569,30 +569,6 @@ async def test_embed_queries_with_stats_reports_actual_request_count(
     mock_openai_client.embeddings.create.assert_called_once()
 
 
-def test_search_no_embeddings(
-    mock_openai_client: Mock, tenant: TestClient, db_session: Session
-) -> None:
-    """Given no embeddings in DB, POST /search → returns empty results list."""
-    token = register_and_verify_user(tenant, db_session, email="noemb@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "No Emb Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "anything", "top_k": 3},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["results"] == []
-
-
 def test_search_route_traces_variant_summary(
     tenant: TestClient,
     db_session: Session,
@@ -764,12 +740,15 @@ def test_search_single_embedding_match(
     assert "Relevant content" in data["results"][0]["chunk_text"]
 
 
-def test_search_multiple_results_sorted(
+def test_search_sorts_by_similarity_desc_and_respects_top_k(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """3 embeddings with different similarity scores; results sorted DESC by similarity."""
+    """Journey over one embedding set, guarding two failure modes:
+    - results are sorted DESC by similarity
+    - top_k truncates the result count even when more embeddings exist
+    """
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     token = register_and_verify_user(tenant, db_session, email="multi@example.com")
@@ -786,20 +765,23 @@ def test_search_multiple_results_sorted(
         filename="multi.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
-        parsed_text="chunk0 chunk1 chunk2",
+        parsed_text="chunk0 chunk1 chunk2 chunk3 chunk4",
     )
     db_session.add(doc)
     db_session.commit()
     db_session.refresh(doc)
 
     # Vectors in different directions for distinct similarity scores
-    # query: [1,0,0,...]; high: same direction; mid: 45°; low: orthogonal
+    # query: [1,0,0,...]; each successive vector is further from it.
     query_vec = [1.0] + [0.0] * 1535
-    high_vec = [0.99, 0.1] + [0.0] * 1534
-    mid_vec = [0.5, 0.5] + [0.0] * 1534
-    low_vec = [0.0, 1.0] + [0.0] * 1534
-
-    for i, v in enumerate([high_vec, mid_vec, low_vec]):
+    vectors = [
+        [0.99, 0.1] + [0.0] * 1534,
+        [0.9, 0.3] + [0.0] * 1534,
+        [0.5, 0.5] + [0.0] * 1534,
+        [0.1, 0.9] + [0.0] * 1534,
+        [0.0, 1.0] + [0.0] * 1534,
+    ]
+    for i, v in enumerate(vectors):
         emb = Embedding(
             document_id=doc.id,
             chunk_text=f"chunk{i}",
@@ -811,67 +793,28 @@ def test_search_multiple_results_sorted(
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    response = tenant.post(
+    all_response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"query": "search", "top_k": 3},
+        json={"query": "search", "top_k": 5},
     )
-    assert response.status_code == 200
-    results = response.json()["results"]
-    assert len(results) == 3
-    sims = [r["similarity"] for r in results]
+    assert all_response.status_code == 200
+    all_results = all_response.json()["results"]
+    assert len(all_results) == 5
+    sims = [r["similarity"] for r in all_results]
     assert sims == sorted(sims, reverse=True)
-    assert sims[0] > sims[1] > sims[2]
 
-
-def test_search_respects_top_k(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """Have > top_k embeddings, request top_k=2, only 2 results returned."""
-    from backend.models import Document, DocumentStatus, DocumentType, Embedding
-
-    token = register_and_verify_user(tenant, db_session, email="topk@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "TopK Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    doc = Document(
-        tenant_id=tenant_id,
-        filename="topk.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-        parsed_text="a b c d e",
-    )
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    vec = [0.1] * 1536
-    for i in range(5):
-        emb = Embedding(
-            document_id=doc.id,
-            chunk_text=f"chunk{i}",
-            vector=None,
-            metadata_json={"chunk_index": i, "vector": vec},
-        )
-        db_session.add(emb)
-    db_session.commit()
-
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
-
-    response = tenant.post(
+    truncated_response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"query": "x", "top_k": 2},
+        json={"query": "search", "top_k": 2},
     )
-    assert response.status_code == 200
-    assert len(response.json()["results"]) == 2
+    assert truncated_response.status_code == 200
+    truncated_results = truncated_response.json()["results"]
+    assert len(truncated_results) == 2
+    assert [r["chunk_text"] for r in truncated_results] == [
+        r["chunk_text"] for r in all_results[:2]
+    ]
 
 
 def test_search_other_client_isolated(
@@ -970,8 +913,16 @@ def test_search_requires_client(tenant: TestClient, db_session: Session) -> None
     assert response.status_code == 404
 
 
-def test_search_invalid_top_k(tenant: TestClient, db_session: Session) -> None:
-    """top_k <= 0 → 422."""
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"query": "test", "top_k": 0}, id="top_k_zero_rejected"),
+        pytest.param({"query": "", "top_k": 3}, id="empty_query_rejected"),
+    ],
+)
+def test_search_input_validation_rejected(
+    tenant: TestClient, db_session: Session, payload: dict
+) -> None:
     token = register_and_verify_user(tenant, db_session, email="invalid@example.com")
     tenant.post(
         "/tenants",
@@ -983,35 +934,22 @@ def test_search_invalid_top_k(tenant: TestClient, db_session: Session) -> None:
     response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"query": "test", "top_k": 0},
+        json=payload,
     )
     assert response.status_code == 422
 
 
-def test_search_empty_query_rejected(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"query": "test"}, id="omitted_top_k_defaults"),
+        pytest.param({"query": "anything", "top_k": 3}, id="explicit_top_k_no_embeddings"),
+    ],
+)
+def test_search_no_embeddings_returns_empty_results(
+    mock_openai_client: Mock, tenant: TestClient, db_session: Session, payload: dict
 ) -> None:
-    """Empty query → 422."""
-    token = register_and_verify_user(tenant, db_session, email="emptyq@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "", "top_k": 3},
-    )
-    assert response.status_code == 422
-
-
-def test_search_default_top_k(
-    mock_openai_client: Mock, tenant: TestClient, db_session: Session
-) -> None:
-    """Omit top_k → defaults to 3."""
+    """No embeddings in DB, regardless of top_k being omitted or explicit → empty results, 200."""
     token = register_and_verify_user(tenant, db_session, email="default@example.com")
     tenant.post(
         "/tenants",
@@ -1024,10 +962,10 @@ def test_search_default_top_k(
     response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"query": "test"},
+        json=payload,
     )
     assert response.status_code == 200
-    assert "results" in response.json()
+    assert response.json()["results"] == []
 
 
 # --- BM25 search unit tests ---
@@ -1152,13 +1090,25 @@ def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_purer_co
 
 
 @pytest.mark.rag_edge
-def test_search_openai_unavailable_returns_503(
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        pytest.param(
+            lambda: __import__("openai").APIError("Service unavailable", request=Mock(), body=None),
+            id="openai_api_error",
+        ),
+        pytest.param(
+            lambda: __import__("openai").APITimeoutError(request=Mock()),
+            id="openai_timeout_error",
+        ),
+    ],
+)
+def test_search_openai_failure_returns_503(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
+    make_error,
 ) -> None:
-    from openai import APIError
-
     token = register_and_verify_user(tenant, db_session, email="search503@example.com")
     tenant.post(
         "/tenants",
@@ -1166,35 +1116,7 @@ def test_search_openai_unavailable_returns_503(
         json={"name": "Search 503 Tenant"},
     )
     set_client_openai_key(tenant, token)
-    mock_openai_client.embeddings.create.side_effect = APIError(
-        "Service unavailable",
-        request=Mock(),
-        body=None,
-    )
-
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "hello", "top_k": 3},
-    )
-    assert response.status_code == 503
-
-
-def test_search_openai_timeout_returns_503(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    from openai import APITimeoutError
-
-    token = register_and_verify_user(tenant, db_session, email="search-timeout@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Search Timeout Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    mock_openai_client.embeddings.create.side_effect = APITimeoutError(request=Mock())
+    mock_openai_client.embeddings.create.side_effect = make_error()
 
     response = tenant.post(
         "/search",
@@ -1205,18 +1127,27 @@ def test_search_openai_timeout_returns_503(
 
 
 @pytest.mark.rag_edge
-def test_search_skips_malformed_metadata_vectors(
+@pytest.mark.parametrize(
+    "bad_vectors",
+    [
+        pytest.param(["not-a-list", []], id="malformed_metadata_vectors_string_and_empty"),
+        pytest.param([[0.1] * 10], id="vector_with_wrong_dimension"),
+    ],
+)
+def test_search_skips_unusable_vectors(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
+    bad_vectors: list,
 ) -> None:
+    """A malformed or wrong-dimension vector in metadata_json must be skipped, not crash the search."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(tenant, db_session, email="malformedvec@example.com")
+    token = register_and_verify_user(tenant, db_session, email="badvec@example.com")
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Malformed Vec Tenant"},
+        json={"name": "Bad Vec Tenant"},
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
@@ -1236,16 +1167,11 @@ def test_search_skips_malformed_metadata_vectors(
         [
             Embedding(
                 document_id=doc.id,
-                chunk_text="bad vector string",
+                chunk_text=f"bad vector chunk {i}",
                 vector=None,
-                metadata_json={"chunk_index": 0, "vector": "not-a-list"},
-            ),
-            Embedding(
-                document_id=doc.id,
-                chunk_text="bad vector empty",
-                vector=None,
-                metadata_json={"chunk_index": 1, "vector": []},
-            ),
+                metadata_json={"chunk_index": i, "vector": v},
+            )
+            for i, v in enumerate(bad_vectors)
         ]
     )
     db_session.commit()
@@ -1260,109 +1186,56 @@ def test_search_skips_malformed_metadata_vectors(
     assert response.json()["results"] == []
 
 
-@pytest.mark.rag_edge
-def test_search_skips_vector_with_wrong_dimension(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    from backend.models import Document, DocumentStatus, DocumentType, Embedding
-
-    token = register_and_verify_user(tenant, db_session, email="wrongdim@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Wrong Dim Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    doc = Document(
-        tenant_id=tenant_id,
-        filename="wrongdim.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-        parsed_text="content",
-    )
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    emb = Embedding(
-        document_id=doc.id,
-        chunk_text="wrong dim chunk",
-        vector=None,
-        metadata_json={"chunk_index": 0, "vector": [0.1] * 10},
-    )
-    db_session.add(emb)
-    db_session.commit()
-
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "anything", "top_k": 3},
-    )
-    assert response.status_code == 200
-    assert response.json()["results"] == []
-
-
 # --- Unit tests for cross-lingual query expansion ---
 
 
 @pytest.mark.asyncio
-async def test_rewrite_query_for_retrieval_returns_rewritten_query() -> None:
-    """Happy path: LLM returns a documentation-style keyword phrase in the same language."""
+@pytest.mark.parametrize(
+    "query, llm_content, side_effect, expected",
+    [
+        pytest.param(
+            "Почему бот не отвечает на русском?",
+            "определение языка мультиязычная поддержка",
+            None,
+            "определение языка мультиязычная поддержка",
+            id="happy_path_returns_rewritten_query",
+        ),
+        pytest.param(
+            "Почему бот не отвечает на русском?",
+            None,
+            RuntimeError("timeout"),
+            None,
+            id="llm_failure_degrades_to_none",
+        ),
+        pytest.param(
+            "",
+            "",
+            None,
+            None,
+            id="empty_llm_response_does_not_yield_blank_variant",
+        ),
+    ],
+)
+async def test_rewrite_query_for_retrieval(
+    query: str, llm_content: str | None, side_effect: Exception | None, expected: str | None
+) -> None:
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = "определение языка мультиязычная поддержка"
+    if side_effect is not None:
+        call_mock = AsyncMock(side_effect=side_effect)
+    else:
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = llm_content
+        call_mock = AsyncMock(return_value=mock_response)
 
     with patch("backend.search.service.get_async_openai_client") as mock_client_factory, patch(
         "backend.search.service.async_call_openai_with_retry",
-        new=AsyncMock(return_value=mock_response),
+        new=call_mock,
     ):
         mock_client_factory.return_value = MagicMock()
-        result = await _async_rewrite_query_for_retrieval(
-            "Почему бот не отвечает на русском?", api_key="test-key"
-        )
+        result = await _async_rewrite_query_for_retrieval(query, api_key="test-key")
 
-    assert result == "определение языка мультиязычная поддержка"
-
-
-@pytest.mark.asyncio
-async def test_rewrite_query_for_retrieval_returns_none_on_error() -> None:
-    """Rewrite failures degrade gracefully — None means caller skips the variant."""
-    from unittest.mock import AsyncMock, MagicMock, patch
-
-    with patch("backend.search.service.get_async_openai_client") as mock_client_factory, patch(
-        "backend.search.service.async_call_openai_with_retry",
-        new=AsyncMock(side_effect=RuntimeError("timeout")),
-    ):
-        mock_client_factory.return_value = MagicMock()
-        result = await _async_rewrite_query_for_retrieval(
-            "Почему бот не отвечает на русском?", api_key="test-key"
-        )
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_rewrite_query_for_retrieval_returns_none_on_empty_response() -> None:
-    """Empty LLM output does not yield a blank variant."""
-    from unittest.mock import AsyncMock, MagicMock, patch
-
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = ""
-
-    with patch("backend.search.service.get_async_openai_client") as mock_client_factory, patch(
-        "backend.search.service.async_call_openai_with_retry",
-        new=AsyncMock(return_value=mock_response),
-    ):
-        mock_client_factory.return_value = MagicMock()
-        result = await _async_rewrite_query_for_retrieval("", api_key="test-key")
-
-    assert result is None
+    assert result == expected
 
 
 @pytest.mark.asyncio

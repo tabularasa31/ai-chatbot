@@ -20,12 +20,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.decision import MAX_CLARIFICATIONS_PER_SESSION
-from backend.chat.handlers.rag import LoopSignal
+from backend.chat.handlers.rag import (
+    LoopSignal,
+)
 from backend.chat.language import LanguageDetectionResult
 from backend.chat.service import (
+    process_chat_message,
+)
+from backend.chat.types import (
     ChatPipelineResult,
     RetrievalContext,
-    process_chat_message,
 )
 from backend.models import Chat, EscalationTrigger
 from backend.search.service import build_reliability_assessment

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from backend.chat.steps import generate as generate_step
+
 import asyncio
 import hashlib
 import uuid
@@ -15,17 +17,27 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers import rag as rag_handler
-from backend.chat.handlers.rag import async_generate_answer
+from backend.chat.steps.generate import (
+    async_generate_answer,
+)
 from backend.chat.language import LanguageDetectionResult, LocalizationResult
 from backend.chat.service import (
+    process_chat_message,
+)
+from backend.chat.types import (
     ChatPipelineResult,
     RetrievalContext,
+)
+from backend.chat.steps.pre_retrieval import (
     _quick_answer_keys_for_question,
     _quick_answers_context,
+)
+from backend.chat.steps.retrieval import (
     async_retrieve_context,
+)
+from backend.chat.prompts import (
     build_rag_messages,
     build_rag_prompt,
-    process_chat_message,
 )
 from backend.chat.types import QuestionIntentResult
 from backend.core.config import settings
@@ -404,9 +416,8 @@ def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
     trace = FakeTrace()
-    from backend.chat import service as chat_service
 
-    assert chat_service.settings.observability_capture_full_prompts is False
+    assert settings.observability_capture_full_prompts is False
 
     asyncio.run(
         async_generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
@@ -451,7 +462,7 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
     trace = FakeTrace()
 
     monkeypatch.setattr(
-        "backend.chat.service.settings.observability_capture_full_prompts",
+        "backend.core.config.settings.observability_capture_full_prompts",
         True,
     )
 
@@ -626,9 +637,7 @@ def test_generate_answer_logs_tokens_with_operation_generate(
     async def _identity_enforce(text, *, response_language, api_key):
         return (text, 0)
 
-    monkeypatch.setattr(
-        rag_handler,
-        "_enforce_response_language",
+    monkeypatch.setattr(generate_step, "_enforce_response_language",
         _identity_enforce,
     )
     with caplog.at_level("INFO"):
@@ -722,7 +731,7 @@ def test_enforce_response_language_translates_when_language_drifts(
         return LocalizationResult(text="TRANSLATED-EN", tokens_used=12)
 
     monkeypatch.setattr(rag_handler, "translate_text_result", _fake_translate)
-    text, extra_tokens = asyncio.run(rag_handler._enforce_response_language(
+    text, extra_tokens = asyncio.run(generate_step._enforce_response_language(
         russian_answer, response_language="en", api_key="sk-test"
     ))
     assert text == "TRANSLATED-EN"
@@ -742,7 +751,7 @@ def test_enforce_response_language_noop_when_languages_match(
 
     monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
     russian = "Я покажу вам, как настроить SSL-сертификат для основного домена."
-    text, extra_tokens = asyncio.run(rag_handler._enforce_response_language(
+    text, extra_tokens = asyncio.run(generate_step._enforce_response_language(
         russian, response_language="ru", api_key="sk-test"
     ))
     assert text == russian
@@ -752,7 +761,7 @@ def test_enforce_response_language_noop_when_languages_match(
 def test_enforce_response_language_skips_without_api_key() -> None:
     """No api_key → cannot translate → return original text unchanged, 0 tokens."""
     russian = "Я не знаю, как ответить на этот вопрос."
-    text, extra_tokens = asyncio.run(rag_handler._enforce_response_language(
+    text, extra_tokens = asyncio.run(generate_step._enforce_response_language(
         russian, response_language="en", api_key=None
     ))
     assert text == russian
@@ -769,7 +778,7 @@ def test_enforce_response_language_skips_unreliable_detection(
         raise AssertionError("translate_text_result must not be called for unreliable detection")
 
     monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
-    text, extra_tokens = asyncio.run(rag_handler._enforce_response_language(
+    text, extra_tokens = asyncio.run(generate_step._enforce_response_language(
         "OK.", response_language="ru", api_key="sk-test"
     ))
     assert text == "OK."
@@ -938,7 +947,7 @@ def test_classified_intent_reaches_generation_as_quick_answers(
     The unit tests above cover the verdict-to-keys mapping in isolation; this one
     fails if the verdict is dropped anywhere on the way to the prompt.
     """
-    from backend.chat.service import RetrievalContext
+    from backend.chat.types import RetrievalContext
     from backend.search.service import build_reliability_assessment
 
     token = register_and_verify_user(tenant, db_session, email="intent-e2e@example.com")
@@ -1231,7 +1240,9 @@ class _StubMessage:
 
 
 def test_assemble_chat_messages_inserts_prior_between_system_and_user() -> None:
-    from backend.chat.handlers.rag import _assemble_chat_messages
+    from backend.chat.steps.generate import (
+        _assemble_chat_messages,
+    )
 
     prior = [
         {"role": "user", "content": "как настроить виджет"},
@@ -1250,7 +1261,9 @@ def test_assemble_chat_messages_inserts_prior_between_system_and_user() -> None:
 
 
 def test_assemble_chat_messages_without_prior_keeps_legacy_shape() -> None:
-    from backend.chat.handlers.rag import _assemble_chat_messages
+    from backend.chat.steps.generate import (
+        _assemble_chat_messages,
+    )
 
     out = _assemble_chat_messages(
         system_prompt="SYS",
@@ -1261,7 +1274,9 @@ def test_assemble_chat_messages_without_prior_keeps_legacy_shape() -> None:
 
 
 def test_assemble_chat_messages_empty_prior_treated_as_none() -> None:
-    from backend.chat.handlers.rag import _assemble_chat_messages
+    from backend.chat.steps.generate import (
+        _assemble_chat_messages,
+    )
 
     out = _assemble_chat_messages(
         system_prompt="SYS",
@@ -1279,7 +1294,9 @@ def test_assemble_chat_messages_empty_prior_treated_as_none() -> None:
 def test_build_prior_messages_for_llm_trims_to_max_messages_and_caps_chars() -> None:
     from datetime import datetime, timedelta
 
-    from backend.chat.handlers.rag import _build_prior_messages_for_llm
+    from backend.chat.steps.generate import (
+        _build_prior_messages_for_llm,
+    )
 
     base = datetime(2026, 1, 1, 12, 0, 0)
     msgs = []
@@ -1309,7 +1326,9 @@ def test_build_prior_messages_for_llm_trims_to_max_messages_and_caps_chars() -> 
 
 
 def test_build_prior_messages_for_llm_returns_none_for_empty_chat() -> None:
-    from backend.chat.handlers.rag import _build_prior_messages_for_llm
+    from backend.chat.steps.generate import (
+        _build_prior_messages_for_llm,
+    )
 
     assert _build_prior_messages_for_llm(None, max_messages=6, char_cap=1500) is None
     chat_stub = SimpleNamespace(messages=[])
@@ -1319,7 +1338,9 @@ def test_build_prior_messages_for_llm_returns_none_for_empty_chat() -> None:
 def test_build_prior_messages_for_llm_skips_empty_content() -> None:
     from datetime import datetime
 
-    from backend.chat.handlers.rag import _build_prior_messages_for_llm
+    from backend.chat.steps.generate import (
+        _build_prior_messages_for_llm,
+    )
 
     base = datetime(2026, 1, 1)
     blank = _StubMessage(MessageRole.user, "   ", idx=1)

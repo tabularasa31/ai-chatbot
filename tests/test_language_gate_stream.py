@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from backend.chat.language import LanguageDetectionResult
-from backend.chat.handlers.rag import (
+from backend.chat.streaming import (
     LanguageGateStreamFilter,
     LanguageMismatchStreamAbortError,
 )

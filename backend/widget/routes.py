@@ -15,13 +15,17 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.chat.handlers.base import ChatTurnOutcome
-from backend.chat.handlers.rag import _CitationStreamFilter
 from backend.chat.language import async_localize_text_to_language_result
 from backend.chat.llm_unavailable import classify_llm_failure
 from backend.chat.llm_unavailable_copy import fallback_text
 from backend.chat.rotation import should_rotate
 from backend.chat.schemas import WidgetChatTurnResponse
-from backend.chat.service import async_process_chat_message
+from backend.chat.service import (
+    async_process_chat_message,
+)
+from backend.chat.streaming import (
+    _CitationStreamFilter,
+)
 from backend.contact_sessions.service import (
     start_user_session,
     sync_user_session_identity,

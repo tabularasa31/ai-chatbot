@@ -557,10 +557,8 @@ async def _async_generate_answer_native(
         # the streaming path the answer was already emitted to the client
         # chunk-by-chunk via ``stream_callback``; rewriting the final text
         # here would produce a UI/history mismatch.
-        # Resolved via the rag module: tests monkeypatch
-        # ``backend.chat.handlers.rag._enforce_response_language``.
         if stream_callback is None:
-            final_text, extra_tokens = await _rag_module()._enforce_response_language(
+            final_text, extra_tokens = await _enforce_response_language(
                 answer_text.strip(),
                 response_language=response_language,
                 api_key=api_key,

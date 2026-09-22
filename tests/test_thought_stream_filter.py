@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from backend.chat.handlers.rag import ThoughtStreamFilter
+from backend.chat.streaming import (
+    ThoughtStreamFilter,
+)
 
 
 def _collect(chunks: list[str]) -> str:

@@ -227,7 +227,9 @@ def ingest_from_operator(
       escalations inbox stops showing a request someone is already holding as
       untouched. Status only; the ticket is otherwise left alone.
     """
-    from backend.chat.service import _persist_operator_message
+    from backend.chat.persistence import (
+        _persist_operator_message,
+    )
 
     # ``session_ended_event_at`` is deliberately not in ``taken_over_values``:
     # re-arming that marker would make the sweeper emit a second

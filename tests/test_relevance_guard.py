@@ -8,7 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import RetrievalContext, process_chat_message
+from backend.chat.types import (
+    RetrievalContext,
+)
+from backend.chat.service import (
+    process_chat_message,
+)
 from backend.guards.reject_response import (
     RejectReason,
     _build_canonical_reject_response,

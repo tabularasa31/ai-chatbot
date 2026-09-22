@@ -4,6 +4,7 @@ assessment/projection, and the contradiction-adjudication layer.
 
 from __future__ import annotations
 
+
 import uuid
 from unittest.mock import Mock
 

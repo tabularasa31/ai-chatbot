@@ -9,7 +9,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import ChatTurnOutcome
+from backend.chat.service import (
+    ChatTurnOutcome,
+)
 from backend.models import Bot, Chat, ContactSession, Document, DocumentStatus, DocumentType, Embedding
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -623,9 +625,11 @@ def test_widget_stream_language_mismatch_aborts_before_client_sees_it(
     generation running to completion)."""
     import uuid as _uuid
 
-    from backend.chat.handlers.rag import detect_language as _real_detect
+    from backend.chat.handlers.rag import (
+        detect_language as _real_detect,
+    )
     from backend.chat.language import LanguageDetectionResult
-    from backend.chat.service import RetrievalContext
+    from backend.chat.types import RetrievalContext
     from backend.search.service import build_reliability_assessment
     from tests._async_utils import as_async as _as_async
 

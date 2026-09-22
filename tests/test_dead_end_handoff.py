@@ -276,7 +276,7 @@ def _tenant_api_key(tenant: TestClient, db_session: Session, email: str, name: s
 
 
 def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
-    from backend.chat.service import RetrievalContext
+    from backend.chat.types import RetrievalContext
     from backend.search.service import build_reliability_assessment
 
     def _fake_retrieve(*_args, **_kwargs) -> RetrievalContext:

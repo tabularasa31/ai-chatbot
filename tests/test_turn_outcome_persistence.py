@@ -29,7 +29,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.handlers.rag import REJECT_REASON_TURN_OUTCOME
+from backend.chat.handlers.rag import (
+    REJECT_REASON_TURN_OUTCOME,
+)
 from backend.chat.persistence import (
     _persist_assistant_message,
     _persist_assistant_message_with_response_language,

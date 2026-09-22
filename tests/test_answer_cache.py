@@ -23,9 +23,16 @@ from backend.chat.answer_cache import (
     CachedAnswer,
     normalize_question,
 )
-from backend.chat.handlers.rag import RagHandler
+from backend.chat.handlers.rag import (
+    RagHandler,
+)
 from backend.chat.language import ResolvedLanguageContext
-from backend.chat.service import RetrievalContext, process_chat_message
+from backend.chat.types import (
+    RetrievalContext,
+)
+from backend.chat.service import (
+    process_chat_message,
+)
 from backend.chat.steps import answer_cache as cache_steps
 from backend.chat.types import ChatPipelineResult, PipelineRun
 from backend.core import redis as redis_mod

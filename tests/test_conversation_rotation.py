@@ -22,7 +22,9 @@ from backend.chat.history_service import (
     list_chat_sessions,
 )
 from backend.chat.rotation import should_rotate
-from backend.chat.service import _ensure_chat_async
+from backend.chat.service import (
+    _ensure_chat_async,
+)
 from backend.models import (
     Chat,
     EscalationStatus,

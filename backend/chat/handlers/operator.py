@@ -199,7 +199,9 @@ class OperatorHandler(PipelineHandler):
     def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome | None:
         # Lazy import: service.py imports the router at module load, so
         # importing the persistence helpers at module top would cycle.
-        from backend.chat.service import _persist_user_only_turn
+        from backend.chat.persistence import (
+            _persist_user_only_turn,
+        )
         from backend.escalation.service import notify_support_of_visitor_turn
         from backend.operator.sessions import emit_operator_session_ended
 

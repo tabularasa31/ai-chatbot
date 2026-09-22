@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.chat.service import _emit_quick_answer_lookup_event
+from backend.chat.events import _emit_quick_answer_lookup_event
 
 
 @pytest.fixture

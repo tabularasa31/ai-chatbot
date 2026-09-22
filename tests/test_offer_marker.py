@@ -7,7 +7,7 @@ the natural-language regex on the live request path.
 
 import pytest
 
-from backend.chat.handlers.rag import (
+from backend.chat.streaming import (
     OFFER_MARKER,
     OfferMarkerStreamFilter,
     _scrub_offer_marker_literal,

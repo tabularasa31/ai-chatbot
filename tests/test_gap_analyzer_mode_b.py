@@ -7,7 +7,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import _start_mode_b_followup, _try_ingest_gap_signal
+from backend.chat.service import (
+    _start_mode_b_followup,
+    _try_ingest_gap_signal,
+)
 from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer._math import _tokenize
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator

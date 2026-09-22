@@ -89,7 +89,7 @@ def test_disclosure_level_lifecycle_through_the_api(
     ],
 )
 def test_build_rag_prompt_disclosure_block(disclosure_config: dict | None, expected: str) -> None:
-    from backend.chat.service import build_rag_prompt
+    from backend.chat.prompts import build_rag_prompt
 
     p = build_rag_prompt("Q?", ["c"], disclosure_config=disclosure_config)
     assert expected in p

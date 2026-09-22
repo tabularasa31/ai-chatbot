@@ -246,7 +246,9 @@ def test_widget_llm_failure_alert_lifecycle(
     - a canned greeting turn (tokens_used == 0) does not clear the alert
     - a real successful turn (tokens_used > 0) clears the alert
     """
-    from backend.chat.service import ChatTurnOutcome
+    from backend.chat.service import (
+        ChatTurnOutcome,
+    )
 
     sent: list[dict] = []
     monkeypatch.setattr(

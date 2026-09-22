@@ -14,6 +14,8 @@ tests/test_prompt_layers.py.
 
 from __future__ import annotations
 
+from backend.core.config import settings
+
 import uuid
 from unittest.mock import Mock
 
@@ -22,7 +24,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.presets import PRESET_SUPPORT_AGENT, PRESETS
-from backend.chat.service import process_chat_message
+from backend.chat.service import (
+    process_chat_message,
+)
 from backend.models import Bot
 from tests.test_rag_pipeline import _FakeTrace, _create_client, _insert_single_chunk
 
@@ -36,9 +40,8 @@ def test_chat_pipeline_system_message_contains_bot_custom_and_preset_text(
     """Full pipeline (no handler-level patch of async_generate_answer): the
     bot's custom_instructions and the code preset both reach the system
     message actually sent to the (mocked) OpenAI client."""
-    from backend.chat import service as chat_service
 
-    monkeypatch.setattr(chat_service.settings, "observability_capture_full_prompts", True)
+    monkeypatch.setattr(settings, "observability_capture_full_prompts", True)
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
@@ -75,9 +78,8 @@ def test_chat_pipeline_picks_up_preset_change_on_next_turn_no_snapshot(
     """Editing the code preset must change what the *same* bot sends on its
     very next turn — proving there is no per-bot snapshot of the preset text
     stored anywhere in the pipeline."""
-    from backend.chat import service as chat_service
 
-    monkeypatch.setattr(chat_service.settings, "observability_capture_full_prompts", True)
+    monkeypatch.setattr(settings, "observability_capture_full_prompts", True)
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))

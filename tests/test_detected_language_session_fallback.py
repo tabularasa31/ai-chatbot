@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session
 
 from backend.chat.language import ResolvedLanguageContext
 from backend.chat.language_context import _apply_detected_language_session_fallback
-from backend.chat.service import process_chat_message
+from backend.chat.service import (
+    process_chat_message,
+)
 from backend.models import Chat
 from tests.test_language_sticky import (
     _chat_test_setup,

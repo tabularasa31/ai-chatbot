@@ -152,8 +152,10 @@ class GreetingHandler(PipelineHandler):
     ) -> ChatTurnOutcome:
         # Lazy import: service.py imports the router at module load, so importing
         # the persistence helpers at module top would create a cycle.
-        from backend.chat.service import (
+        from backend.chat.persistence import (
             _persist_assistant_message_with_response_language,
+        )
+        from backend.chat.service import (
             _persist_turn_with_response_language,
         )
 

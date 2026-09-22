@@ -41,85 +41,38 @@ from sqlalchemy.util import await_only
 from backend.chat.decision import (
     KB_HIGH_CONFIDENCE_THRESHOLD,
     KB_LOW_CONFIDENCE_THRESHOLD,
-    KbConfidence,  # noqa: F401  (re-export)
     classify_kb_confidence,
     floor_kb_confidence,
 )
 
 # --- Pipeline surface (moved out of this module; re-exported for callers) ---
-from backend.chat.events import (
-    _emit_no_rag_hits_event,  # noqa: F401  (re-export)
-    _emit_quick_answer_lookup_event,  # noqa: F401  (re-export)
-    _emit_speculative_retrieval_event,  # noqa: F401  (re-export)
-    _metrics_distinct_id,  # noqa: F401  (re-export)
-)
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
+
+# Looked up late as ``rag.<name>`` by chat/steps/generate.py and chat/streaming.py
+# to break the import cycle; not dead imports.
+from backend.chat.language import (
+    detect_language,
+    translate_text_result,
+)
+from backend.chat.steps.generate import (
+    async_generate_answer,
+)
 
 # Language helpers: imported here (not only in the language module) because
 # this module is the monkeypatch surface for detect_language /
 # translate_text_result — see the module docstring.
-from backend.chat.language import (
-    LangDetectError,  # noqa: F401  (re-export)
-    ResolvedLanguageContext,  # noqa: F401  (re-export)
-    _language_root,  # noqa: F401  (re-export)
-    async_localize_text_to_language_result,  # noqa: F401  (re-export)
-    detect_language,  # noqa: F401  (test seam + re-export)
-    language_display_name,  # noqa: F401  (re-export)
-    log_llm_tokens,  # noqa: F401  (re-export)
-    render_direct_faq_answer_result,  # noqa: F401  (re-export)
-    translate_text_result,  # noqa: F401  (test seam + re-export)
-)
-from backend.chat.pipeline import async_run_chat_pipeline  # noqa: F401  (re-export)
-from backend.chat.prompts import (
-    CLARIFICATION_POLICY,  # noqa: F401  (re-export)
-    CONTEXT_FORMAT_NOTE,  # noqa: F401  (re-export)
-    DISCLOSURE_HARD_LIMITS,  # noqa: F401  (re-export)
-    DISCLOSURE_LEVEL_INSTRUCTIONS,  # noqa: F401  (re-export)
-    OUTPUT_LANGUAGE_POLICY,  # noqa: F401  (re-export)
-    _user_context_prompt_line,  # noqa: F401  (re-export)
-    build_rag_messages,  # noqa: F401  (re-export)
-    build_rag_prompt,  # noqa: F401  (re-export)
-)
-from backend.chat.steps.generate import (
-    _assemble_chat_messages,  # noqa: F401  (re-export)
-    _async_generate_answer_native,  # noqa: F401  (re-export)
-    _build_prior_messages_for_llm,  # noqa: F401  (re-export)
-    _enforce_response_language,  # noqa: F401  (re-export)
-    _safe_int,  # noqa: F401  (re-export)
-    async_generate_answer,  # noqa: F401  (test seam + re-export)
-)
-from backend.chat.steps.pre_retrieval import (
-    _async_lookup_quick_answers,  # noqa: F401  (re-export)
-    _lookup_quick_answers,  # noqa: F401  (re-export)
-    _quick_answer_keys_for_question,  # noqa: F401  (re-export)
-    _quick_answer_quality_score,  # noqa: F401  (re-export)
-    _quick_answers_context,  # noqa: F401  (re-export)
-    _should_skip_query_rewrite,  # noqa: F401  (re-export)
-)
-from backend.chat.steps.retrieval import async_retrieve_context  # noqa: F401  (re-export)
-from backend.chat.streaming import (
-    OFFER_MARKER,  # noqa: F401  (re-export)
-    LanguageGateStreamFilter,  # noqa: F401  (re-export)
-    LanguageMismatchStreamAbortError,  # noqa: F401  (re-export)
-    OfferMarkerStreamFilter,  # noqa: F401  (re-export)
-    ThoughtStreamFilter,  # noqa: F401  (re-export)
-    _CitationStreamFilter,  # noqa: F401  (re-export)
-    _scrub_offer_marker_literal,  # noqa: F401  (re-export)
-    _strip_and_detect_offer_marker,  # noqa: F401  (re-export)
-    _strip_inline_citations,  # noqa: F401  (re-export)
-    _strip_thought_tags,  # noqa: F401  (re-export)
-)
 from backend.chat.types import (
     ChatPipelineResult,
-    RetrievalContext,  # noqa: F401  (re-export)
-    _empty_retrieval_context,  # noqa: F401  (re-export)
-)
-from backend.chat.types import (
-    PipelineState as _PipelineState,  # noqa: F401  (re-export, legacy name)
 )
 from backend.core.config import settings
 from backend.models import Chat, EscalationTrigger, MessageRole, TurnOutcome
 from backend.observability import record_stage_ms
+
+__all__ = (
+    "async_generate_answer",
+    "detect_language",
+    "translate_text_result",
+)
 
 logger = logging.getLogger(__name__)
 

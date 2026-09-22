@@ -17,7 +17,7 @@ from backend.chat.language import (
     render_direct_faq_answer_result,
     resolve_language_context,
 )
-from backend.chat.service import (
+from backend.chat.language_context import (
     _resolve_fallback_locale,
 )
 from backend.core.config import Settings, settings

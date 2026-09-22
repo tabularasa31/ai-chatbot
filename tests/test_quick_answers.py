@@ -7,7 +7,7 @@ import pytest
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.chat.service import _quick_answer_quality_score
+from backend.chat.steps.pre_retrieval import _quick_answer_quality_score
 from backend.documents.quick_answers import (
     _extract_documentation_url,
     _extract_support_email,

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from backend.chat.handlers.rag import _should_skip_query_rewrite
+from backend.chat.steps.pre_retrieval import (
+    _should_skip_query_rewrite,
+)
 
 
 @pytest.mark.parametrize(

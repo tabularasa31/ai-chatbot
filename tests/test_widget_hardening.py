@@ -7,7 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import ChatTurnOutcome
+from backend.chat.service import (
+    ChatTurnOutcome,
+)
 from backend.models import Chat, Tenant
 from backend.widget.service import apply_identity_context_patch, sanitize_locale
 from tests.conftest import register_and_verify_user, set_client_openai_key

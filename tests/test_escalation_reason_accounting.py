@@ -20,8 +20,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.decision import MAX_CLARIFICATIONS_PER_SESSION
-from backend.chat.handlers.rag import LoopSignal
-from backend.chat.service import process_chat_message
+from backend.chat.handlers.rag import (
+    LoopSignal,
+)
+from backend.chat.service import (
+    process_chat_message,
+)
 from backend.models import EscalationTicket, EscalationTrigger
 from tests.test_clarifying_reply_survives_handoff import (
     CLARIFYING_ANSWER,

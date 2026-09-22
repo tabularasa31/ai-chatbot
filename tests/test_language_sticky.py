@@ -14,11 +14,15 @@ from backend.chat.language import (
     _weighted_vote,
     resolve_language_context,
 )
+from backend.chat.language_context import (
+    _load_recent_user_turn_texts,
+)
 from backend.chat.service import (
+    process_chat_message,
+)
+from backend.chat.types import (
     ChatPipelineResult,
     RetrievalContext,
-    _load_recent_user_turn_texts,
-    process_chat_message,
 )
 from backend.models import Chat, EscalationTicket, EscalationTrigger, Message, MessageRole
 from backend.search.service import build_reliability_assessment

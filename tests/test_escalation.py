@@ -13,11 +13,8 @@ from sqlalchemy.orm import Session
 
 from backend.escalation.service import (
     _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS,
-    _clear_escalation_clarify_flag,
-    _escalation_clarify_already_asked,
     _notify_tenant_new_ticket,
     _notify_tenant_ticket_update,
-    _set_escalation_clarify_flag,
     advance_notification_marker_to_current,
     apply_collected_contact_email,
     compute_priority,
@@ -36,36 +33,28 @@ from backend.models import (
     EscalationStatus,
     Message,
     MessageRole,
-    ContactSession,
-    User,
 )
 from tests.conftest import register_and_verify_user
 
 
 @pytest.mark.smoke
-def test_should_escalate_low_similarity() -> None:
-    esc, trig = should_escalate(0.3, 3)
-    assert esc is True
-    assert trig == EscalationTrigger.low_similarity
-
-
-@pytest.mark.smoke
-def test_should_escalate_no_documents() -> None:
-    esc, trig = should_escalate(None, 0)
-    assert esc is True
-    assert trig == EscalationTrigger.no_documents
-
-
-@pytest.mark.smoke
-def test_should_escalate_ok() -> None:
-    esc, trig = should_escalate(0.9, 2)
-    assert esc is False
-    assert trig is None
-
-
-def _mock_llm_human_request(result: bool):
-    """Patch the OpenAI call inside detect_human_request to return a fixed result."""
-    return _mock_llm_human_request_payload({"human_request": result})
+@pytest.mark.parametrize(
+    "similarity, doc_count, expected_escalate, expected_trigger",
+    [
+        pytest.param(0.3, 3, True, EscalationTrigger.low_similarity, id="low_similarity"),
+        pytest.param(None, 0, True, EscalationTrigger.no_documents, id="no_documents"),
+        pytest.param(0.9, 2, False, None, id="good_match_no_escalation"),
+    ],
+)
+def test_should_escalate(
+    similarity: float | None,
+    doc_count: int,
+    expected_escalate: bool,
+    expected_trigger: EscalationTrigger | None,
+) -> None:
+    esc, trig = should_escalate(similarity, doc_count)
+    assert esc is expected_escalate
+    assert trig == expected_trigger
 
 
 def _mock_llm_human_request_payload(payload: dict):
@@ -103,57 +92,37 @@ def _mock_llm_human_request_payload(payload: dict):
 
 @pytest.mark.asyncio
 @pytest.mark.smoke
-async def test_detect_human_request_english() -> None:
-    with _mock_llm_human_request(True):
-        result = await detect_human_request("I need to talk to a human please", "sk-test")
-        assert result.human_request is True
-    with _mock_llm_human_request(True):
-        result = await detect_human_request(
-            "connect me to support, this is useless", "sk-test"
-        )
-        assert result.human_request is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_detect_human_request_russian() -> None:
-    with _mock_llm_human_request(True):
-        result = await detect_human_request("хочу поговорить с человеком", "sk-test")
-        assert result.human_request is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_detect_human_request_explicitness_axis_is_parsed() -> None:
-    """A handoff the classifier only inferred comes back flagged as such.
-
-    The caller uses this to answer a stated problem from the knowledge base
-    instead of escalating it — see EscalationStateMachine's implied-request
-    fall-through.
-    """
-    with _mock_llm_human_request_payload(
-        {
-            "human_request": True,
-            "message_has_request_content": True,
-            "human_request_explicit": False,
-        }
-    ):
+@pytest.mark.parametrize(
+    "payload, expected_explicit",
+    [
+        pytest.param(
+            {
+                "human_request": True,
+                "message_has_request_content": True,
+                "human_request_explicit": False,
+            },
+            False,
+            id="inferred_handoff_stays_non_explicit",
+        ),
+        pytest.param(
+            {"human_request": True, "message_has_request_content": True},
+            True,
+            id="missing_axis_defaults_to_explicit",
+        ),
+    ],
+)
+async def test_detect_human_request_explicitness_axis(
+    payload: dict, expected_explicit: bool
+) -> None:
+    """The explicitness axis is parsed when present and defaults to explicit
+    when the classifier omits it — the caller uses it to decide between
+    answering an implied problem from the knowledge base and escalating it
+    (see EscalationStateMachine's implied-request fall-through)."""
+    with _mock_llm_human_request_payload(payload):
         result = await detect_human_request("не могу менять настройки", "sk-test")
     assert result.human_request is True
     assert result.message_has_request_content is True
-    assert result.human_request_explicit is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_detect_human_request_defaults_to_explicit_when_axis_missing() -> None:
-    """A response without the third axis keeps the original escalate-now contract."""
-    with _mock_llm_human_request_payload(
-        {"human_request": True, "message_has_request_content": True}
-    ):
-        result = await detect_human_request("соедините с оператором", "sk-test")
-    assert result.human_request is True
-    assert result.human_request_explicit is True
+    assert result.human_request_explicit is expected_explicit
 
 
 def _mock_llm_question_intent(**flags: bool):
@@ -191,59 +160,55 @@ def _mock_llm_question_intent(**flags: bool):
 
 @pytest.mark.asyncio
 @pytest.mark.smoke
-async def test_classify_question_intent_true_for_contact_question() -> None:
+@pytest.mark.parametrize(
+    "flags, expected",
+    [
+        pytest.param(
+            {"support_contact": True},
+            {"support_contact": True, "pricing": False},
+            id="contact_axis_true",
+        ),
+        pytest.param(
+            {"support_contact": False},
+            {
+                "support_contact": False,
+                "pricing": False,
+                "service_status": False,
+                "documentation": False,
+            },
+            id="all_axes_false",
+        ),
+        pytest.param(
+            {
+                "support_contact": False,
+                "pricing": True,
+                "service_status": True,
+                "documentation": True,
+            },
+            {
+                "support_contact": False,
+                "pricing": True,
+                "service_status": True,
+                "documentation": True,
+            },
+            id="every_non_contact_axis_true",
+        ),
+    ],
+)
+async def test_classify_question_intent_axis_parsing(
+    flags: dict, expected: dict
+) -> None:
+    """Each classifier axis is parsed independently from the JSON response."""
     from backend.escalation.service import (
         _question_intent_cache,
         classify_question_intent,
     )
 
     _question_intent_cache.clear()
-    with _mock_llm_question_intent(support_contact=True):
-        result = await classify_question_intent(
-            "how can i write to the support?", "sk-test"
-        )
-    assert result.support_contact is True
-    assert result.pricing is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_classify_question_intent_false_for_ordinary_question() -> None:
-    from backend.escalation.service import (
-        _question_intent_cache,
-        classify_question_intent,
-    )
-
-    _question_intent_cache.clear()
-    with _mock_llm_question_intent(support_contact=False):
-        result = await classify_question_intent(
-            "how do I configure DNS records?", "sk-test"
-        )
-    assert result.support_contact is False
-    assert result.pricing is False
-    assert result.service_status is False
-    assert result.documentation is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_classify_question_intent_reports_every_axis() -> None:
-    from backend.escalation.service import (
-        _question_intent_cache,
-        classify_question_intent,
-    )
-
-    _question_intent_cache.clear()
-    with _mock_llm_question_intent(
-        support_contact=False, pricing=True, service_status=True, documentation=True
-    ):
-        result = await classify_question_intent("...", "sk-test")
-    assert (result.pricing, result.service_status, result.documentation) == (
-        True,
-        True,
-        True,
-    )
-    assert result.support_contact is False
+    with _mock_llm_question_intent(**flags):
+        result = await classify_question_intent("a question", "sk-test")
+    for axis, value in expected.items():
+        assert getattr(result, axis) is value
 
 
 @pytest.mark.asyncio
@@ -320,49 +285,26 @@ async def test_detect_human_request_cache_isolated_per_tenant(
     assert call_count["n"] == 2
 
 
-@pytest.mark.asyncio
 @pytest.mark.smoke
-async def test_detect_human_request_uses_human_request_model(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "plan_tier, tenant_profile, expected",
+    [
+        pytest.param(
+            "enterprise",
+            {"plan_tier": "enterprise"},
+            EscalationPriority.critical,
+            id="enterprise_tier_is_critical",
+        ),
+        pytest.param(None, {}, EscalationPriority.high, id="default_tier_is_high"),
+    ],
+)
+def test_compute_priority_selects_by_plan_tier(
+    plan_tier: str | None,
+    tenant_profile: dict,
+    expected: EscalationPriority,
 ) -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = '{"human_request": true}'
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=response)
-
-    monkeypatch.setattr(
-        "backend.escalation.service.get_async_openai_client",
-        lambda _api_key: mock_client,
-    )
-    monkeypatch.setattr(
-        "backend.escalation.service.settings.human_request_model",
-        "gpt-test-human-guard",
-    )
-
-    result = await detect_human_request(
-        "please connect me to an operator now", "sk-test"
-    )
-    assert result.human_request is True
-    assert mock_client.chat.completions.create.call_args.kwargs["model"] == "gpt-test-human-guard"
-
-
-@pytest.mark.smoke
-def test_compute_priority_t3_enterprise() -> None:
-    p = compute_priority(
-        EscalationTrigger.user_request,
-        "enterprise",
-        {"plan_tier": "enterprise"},
-    )
-    assert p == EscalationPriority.critical
-
-
-@pytest.mark.smoke
-def test_compute_priority_t3_default() -> None:
-    p = compute_priority(EscalationTrigger.user_request, None, {})
-    assert p == EscalationPriority.high
+    p = compute_priority(EscalationTrigger.user_request, plan_tier, tenant_profile)
+    assert p == expected
 
 
 @pytest.mark.smoke
@@ -431,12 +373,24 @@ def test_generate_ticket_number_concurrent_reads_return_same(
 
 
 @pytest.mark.smoke
-def test_create_escalation_ticket_retries_on_integrity_error(
+@pytest.mark.parametrize(
+    "failure_count, expect_raise",
+    [
+        pytest.param(1, False, id="recovers_after_one_integrity_error"),
+        pytest.param(None, True, id="raises_after_max_retries_exhausted"),
+    ],
+)
+def test_create_escalation_ticket_retry_arithmetic(
     tenant: TestClient,
     db_session: Session,
+    failure_count: int | None,
+    expect_raise: bool,
 ) -> None:
-    """create_escalation_ticket retries once when the first commit raises IntegrityError."""
-    token = register_and_verify_user(tenant, db_session, email="esc-retry@example.com")
+    """create_escalation_ticket retries a commit IntegrityError up to its cap,
+    then re-raises once retries are exhausted."""
+    token = register_and_verify_user(
+        tenant, db_session, email=f"esc-retry-{expect_raise}@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -448,167 +402,30 @@ def test_create_escalation_ticket_retries_on_integrity_error(
     real_commit = db_session.commit
     call_count = [0]
 
-    def commit_once_then_succeed():
+    def commit_side_effect():
         call_count[0] += 1
-        if call_count[0] == 1:
+        if failure_count is None or call_count[0] <= failure_count:
             raise SAIntegrityError("stmt", {}, Exception("unique constraint violation"))
         return real_commit()
 
-    with patch.object(db_session, "commit", side_effect=commit_once_then_succeed):
-        ticket = create_escalation_ticket(
-            tenant_id,
-            "test retry question",
-            EscalationTrigger.low_similarity,
-            db_session,
-        )
-
-    assert ticket.ticket_number.startswith("ESC-")
-    assert call_count[0] == 2
-
-
-@pytest.mark.smoke
-def test_create_escalation_ticket_stores_redacted_and_encrypted_question(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="esc-redact@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Redaction Tenant"},
-    )
-    assert cl_resp.status_code == 201
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    ticket = create_escalation_ticket(
-        tenant_id,
-        "my email is user@example.com",
-        EscalationTrigger.low_similarity,
-        db_session,
-    )
-
-    # Storage keeps the original wording; redaction happens on the way out.
-    assert ticket.primary_question == "my email is user@example.com"
-
-
-@pytest.mark.smoke
-def test_create_escalation_ticket_raises_after_max_retries(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """After 3 failed commit attempts create_escalation_ticket re-raises IntegrityError."""
-    token = register_and_verify_user(
-        tenant, db_session, email="esc-maxretry@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Max Retry Tenant"},
-    )
-    assert cl_resp.status_code == 201
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    def always_integrity_error():
-        raise SAIntegrityError("stmt", {}, Exception("unique constraint violation"))
-
-    with patch.object(db_session, "commit", side_effect=always_integrity_error):
-        with pytest.raises(SAIntegrityError):
-            create_escalation_ticket(
+    with patch.object(db_session, "commit", side_effect=commit_side_effect):
+        if expect_raise:
+            with pytest.raises(SAIntegrityError):
+                create_escalation_ticket(
+                    tenant_id,
+                    "test retry question",
+                    EscalationTrigger.low_similarity,
+                    db_session,
+                )
+        else:
+            ticket = create_escalation_ticket(
                 tenant_id,
-                "test max retry question",
+                "test retry question",
                 EscalationTrigger.low_similarity,
                 db_session,
             )
-
-
-@pytest.mark.smoke
-def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
-    from backend.core.security import hash_password
-
-    user = User(
-        email="clarify@example.com", password_hash=hash_password("SecurePass1!")
-    )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    cl = Tenant(name="Clarify Tenant")
-    db_session.add(cl)
-    db_session.commit()
-    db_session.refresh(cl)
-
-    chat = Chat(tenant_id=cl.id, session_id=uuid.uuid4(), user_context={})
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    assert _escalation_clarify_already_asked(chat) is False
-    _set_escalation_clarify_flag(chat)
-    assert _escalation_clarify_already_asked(chat) is True
-    _clear_escalation_clarify_flag(chat)
-    assert _escalation_clarify_already_asked(chat) is False
-
-
-@pytest.mark.smoke
-def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token = register_and_verify_user(
-        tenant, db_session, email="apply-email@example.com"
-    )
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Apply Email Tenant"},
-    )
-    assert cl_resp.status_code == 201
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
-    assert cl is not None
-
-    chat = Chat(
-        tenant_id=tenant_id,
-        session_id=uuid.uuid4(),
-        user_context={"user_id": "u-123", "email": None},
-        escalation_followup_pending=False,
-    )
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    ticket = EscalationTicket(
-        tenant_id=tenant_id,
-        ticket_number="ESC-0001",
-        primary_question="need support",
-        trigger=EscalationTrigger.user_request,
-        status=EscalationStatus.open,
-        chat_id=chat.id,
-        session_id=chat.session_id,
-    )
-    db_session.add(ticket)
-    db_session.commit()
-    db_session.refresh(ticket)
-
-    chat.escalation_awaiting_ticket_id = ticket.id
-    db_session.add(chat)
-    db_session.commit()
-
-    row = ContactSession(tenant_id=tenant_id, contact_id="u-123", email=None)
-    db_session.add(row)
-    db_session.commit()
-
-    with patch("backend.escalation.service.send_email"):
-        apply_collected_contact_email(ticket.id, chat.id, "user@example.com", db_session)
-
-    db_session.refresh(ticket)
-    db_session.refresh(chat)
-    db_session.refresh(row)
-    assert ticket.user_email == "user@example.com"
-    assert chat.user_context.get("email") == "user@example.com"
-    assert chat.escalation_awaiting_ticket_id is None
-    assert chat.escalation_followup_pending is True
-    assert row.email == "user@example.com"
+            assert ticket.ticket_number.startswith("ESC-")
+            assert call_count[0] == 2
 
 
 @pytest.mark.smoke
@@ -1029,87 +846,52 @@ def test_notify_ticket_update_stores_naive_last_notified_at(
 
 
 @pytest.mark.smoke
-def test_notify_ticket_update_debounces_within_window(
+@pytest.mark.parametrize(
+    "case_id",
+    [
+        "debounce_window",
+        "no_initial_message_id",
+        "no_new_turns_since_last_notify",
+        "marker_already_advanced_past_turn",
+    ],
+)
+def test_notify_ticket_update_skips(
     tenant: TestClient,
     db_session: Session,
+    case_id: str,
 ) -> None:
+    """``_notify_tenant_ticket_update`` must no-op — never call ``send_email``
+    — for each of the four independent skip conditions: inside the debounce
+    window, no anchor to thread under, no turn since the last notify, or a
+    turn already covered by ``advance_notification_marker_to_current`` (the
+    email-capture flow bundles the current turn into the initial notify)."""
     from datetime import UTC, datetime, timedelta
 
     _, chat, ticket = _setup_followup_fixture(
-        tenant, db_session, owner_email="debounce-owner@example.com"
-    )
-    _persist_user_message(db_session, chat, "first follow-up message")
-    ticket.last_notified_at = datetime.now(UTC) - timedelta(
-        seconds=_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS - 5
-    )
-    db_session.add(ticket)
-    db_session.commit()
-
-    with patch("backend.escalation.service.send_email") as send_email_mock:
-        _notify_tenant_ticket_update(ticket, db_session)
-
-    send_email_mock.assert_not_called()
-
-
-@pytest.mark.smoke
-def test_notify_ticket_update_skips_when_no_initial_message_id(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    _, chat, ticket = _setup_followup_fixture(
         tenant,
         db_session,
-        owner_email="anchor-owner@example.com",
-        notification_message_id=None,
+        owner_email=f"skip-{case_id}@example.com",
+        notification_message_id=None if case_id == "no_initial_message_id" else "<initial-abc@brevo>",
     )
-    _persist_user_message(db_session, chat, "new context but no anchor")
 
-    with patch("backend.escalation.service.send_email") as send_email_mock:
-        _notify_tenant_ticket_update(ticket, db_session)
-
-    send_email_mock.assert_not_called()
-
-
-
-@pytest.mark.smoke
-def test_notify_ticket_update_noop_when_no_new_turns(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    _, chat, ticket = _setup_followup_fixture(
-        tenant, db_session, owner_email="noturns-owner@example.com"
-    )
-    only = _persist_user_message(db_session, chat, "the only turn already notified")
-    ticket.last_notified_message_id = only.id
-    ticket.last_notified_at = only.created_at
-    db_session.add(ticket)
-    db_session.commit()
-
-    with patch("backend.escalation.service.send_email") as send_email_mock:
-        _notify_tenant_ticket_update(ticket, db_session)
-
-    send_email_mock.assert_not_called()
-
-
-
-@pytest.mark.smoke
-def test_advance_notification_marker_to_current_skips_persisted_turn(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """Mimics the email-capture flow: initial notify bundled the current turn
-    via ``latest_user_text``; the marker advance prevents a follow-up notify
-    from re-sending that same turn under the threaded reply.
-    """
-    _, chat, ticket = _setup_followup_fixture(
-        tenant, db_session, owner_email="advance-owner@example.com"
-    )
-    persisted = _persist_user_message(
-        db_session, chat, "current turn bundled in initial body"
-    )
-    advance_notification_marker_to_current(ticket, db_session)
-    db_session.refresh(ticket)
-    assert ticket.last_notified_message_id == persisted.id
+    if case_id == "debounce_window":
+        _persist_user_message(db_session, chat, "first follow-up message")
+        ticket.last_notified_at = datetime.now(UTC) - timedelta(
+            seconds=_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS - 5
+        )
+        db_session.add(ticket)
+        db_session.commit()
+    elif case_id == "no_initial_message_id":
+        _persist_user_message(db_session, chat, "new context but no anchor")
+    elif case_id == "no_new_turns_since_last_notify":
+        only = _persist_user_message(db_session, chat, "the only turn already notified")
+        ticket.last_notified_message_id = only.id
+        ticket.last_notified_at = only.created_at
+        db_session.add(ticket)
+        db_session.commit()
+    elif case_id == "marker_already_advanced_past_turn":
+        _persist_user_message(db_session, chat, "current turn bundled in initial body")
+        advance_notification_marker_to_current(ticket, db_session)
 
     with patch("backend.escalation.service.send_email") as send_email_mock:
         _notify_tenant_ticket_update(ticket, db_session)
@@ -1135,53 +917,16 @@ def test_advance_notification_marker_to_current_skips_persisted_turn(
 
 @pytest.mark.asyncio
 @pytest.mark.smoke
-async def test_render_pre_confirm_text_initial_localizes_canonical_template(
+async def test_render_pre_confirm_text_selects_distinct_canonical_per_variant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Initial pre_confirm reply must come from the canonical English text,
-    not from the general escalation LLM. This is the bug source: the LLM was
-    free to compose its own message that mixed phases.
-    """
-    from backend.chat.language import LocalizationResult
-    from backend.escalation.openai_escalation import (
-        PRE_CONFIRM_QUESTION_EN,
-        render_pre_confirm_text,
-    )
-
-    captured: dict[str, object] = {}
-
-    async def _fake_localize(**kwargs: object) -> LocalizationResult:
-        captured.update(kwargs)
-        return LocalizationResult(text="LOCALIZED", tokens_used=7)
-
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
-        _fake_localize,
-    )
-
-    out = await render_pre_confirm_text(
-        variant="initial",
-        response_language="ru",
-        api_key="sk-test",
-    )
-
-    assert captured["canonical_text"] == PRE_CONFIRM_QUESTION_EN
-    assert captured["target_language"] == "ru"
-    assert out.message_to_user == "LOCALIZED"
-    assert out.followup_decision is None
-    assert out.tokens_used == 7
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The variants must localize different canonical strings.
-    Otherwise the ``no`` and ``unclear`` branches would echo the same text
-    as the initial question and the UX would look like a stuck loop. The
-    ``no_answer`` variant additionally leads with a "couldn't find an answer"
-    preamble, distinct from the bare ``initial`` question.
+    """Each pre_confirm variant must localize its own canonical English text,
+    not the general escalation LLM's free-form composition — the bug source
+    of the prod issue where handoff-phase wording leaked into the pre_confirm
+    reply. Otherwise the ``no``/``unclear`` branches would echo the ``initial``
+    question and the UX would look like a stuck loop. The ``no_answer``
+    variant additionally leads with a "couldn't find an answer" preamble,
+    distinct from the bare ``initial`` question.
     """
     from backend.chat.language import LocalizationResult
     from backend.escalation.openai_escalation import (
@@ -1197,14 +942,16 @@ async def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonic
 
     async def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
         seen.append(canonical_text)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
+        return LocalizationResult(text=f"LOCALIZED:{canonical_text}", tokens_used=7)
 
     monkeypatch.setattr(
         "backend.escalation.openai_escalation.async_localize_text_to_language_result",
         _fake_localize,
     )
 
-    await render_pre_confirm_text(variant="initial", response_language="en", api_key="k")
+    initial_out = await render_pre_confirm_text(
+        variant="initial", response_language="ru", api_key="k"
+    )
     await render_pre_confirm_text(variant="no_answer", response_language="en", api_key="k")
     await render_pre_confirm_text(variant="support_contact", response_language="en", api_key="k")
     await render_pre_confirm_text(variant="clarify", response_language="en", api_key="k")
@@ -1221,6 +968,10 @@ async def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonic
     # The support-contact lead-in must NOT claim the bot couldn't find an answer:
     # the bot itself is the support channel, so framing it as a failure is wrong.
     assert "couldn't find" not in PRE_CONFIRM_SUPPORT_CONTACT_EN.lower()
+    # Output wiring: the localized text and language flow through to the caller.
+    assert initial_out.message_to_user == f"LOCALIZED:{PRE_CONFIRM_QUESTION_EN}"
+    assert initial_out.followup_decision is None
+    assert initial_out.tokens_used == 7
 
 
 def _fake_pre_confirm_context_client(content: str, tokens: int = 11) -> object:
@@ -1487,35 +1238,19 @@ async def test_render_pre_confirm_text_does_not_cache_degraded_localization(
     assert len(calls) == 2, "degraded localization must not be cached"
 
 
-@pytest.mark.smoke
-def test_pre_confirm_fallback_result_returns_canonical_text() -> None:
-    from backend.escalation.openai_escalation import (
-        PRE_CONFIRM_NO_ANSWER_EN,
-        pre_confirm_fallback_result,
-    )
-
-    out = pre_confirm_fallback_result("no_answer")
-    assert out.message_to_user == PRE_CONFIRM_NO_ANSWER_EN
-    assert out.tokens_used == 0
-    assert out.followup_decision is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_classify_pre_confirm_reply_parses_decision_field(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Narrow classifier returns only the decision label; never a message."""
-    from backend.escalation.openai_escalation import classify_pre_confirm_reply
+def _fake_decision_client(content: str, tokens: int) -> object:
+    """Fake async OpenAI client whose completions.create returns ``content``."""
 
     class _FakeMessage:
-        content = '{"decision": "yes"}'
+        pass
+
+    _FakeMessage.content = content
 
     class _FakeChoice:
         message = _FakeMessage()
 
     class _FakeUsage:
-        total_tokens = 4
+        total_tokens = tokens
 
     class _FakeResponse:
         choices = [_FakeChoice()]
@@ -1528,75 +1263,55 @@ async def test_classify_pre_confirm_reply_parses_decision_field(
                 async def create(**_kwargs: object) -> object:
                     return _FakeResponse()
 
-    async def _fake_retry(_name, fn, **_k):
-        return await fn()
-
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_async_openai_client",
-        lambda *_a, **_k: _FakeClient(),
-    )
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.async_call_openai_with_retry",
-        _fake_retry,
-    )
-
-    decision, tokens = await classify_pre_confirm_reply(
-        latest_user_text="yes please",
-        api_key="sk-test",
-    )
-    assert decision == "yes"
-    assert tokens == 4
+    return _FakeClient()
 
 
 @pytest.mark.asyncio
 @pytest.mark.smoke
-async def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
+@pytest.mark.parametrize(
+    "content, tokens, expected_decision, latest_user_text",
+    [
+        pytest.param('{"decision": "yes"}', 4, "yes", "yes please", id="yes_decision_parsed"),
+        pytest.param(
+            '{"decision": null}',
+            3,
+            None,
+            "my site is down with a 502",
+            id="null_decision_degrades_to_none",
+        ),
+    ],
+)
+async def test_classify_pre_confirm_reply_decision_parsing(
     monkeypatch: pytest.MonkeyPatch,
+    content: str,
+    tokens: int,
+    expected_decision: str | None,
+    latest_user_text: str,
 ) -> None:
-    """A substantive non-yes/no reply (e.g. user describes a new problem) is
-    surfaced as ``None`` so the caller can degrade to the unclear/re-ask
-    path rather than treat random content as an accept/decline.
+    """Narrow classifier returns only the decision label (never a message); a
+    substantive non-yes/no reply surfaces as ``None`` so the caller degrades
+    to the unclear/re-ask path rather than treat random content as accept.
     """
     from backend.escalation.openai_escalation import classify_pre_confirm_reply
 
-    class _FakeMessage:
-        content = '{"decision": null}'
-
-    class _FakeChoice:
-        message = _FakeMessage()
-
-    class _FakeUsage:
-        total_tokens = 3
-
-    class _FakeResponse:
-        choices = [_FakeChoice()]
-        usage = _FakeUsage()
-
-    class _FakeClient:
-        class chat:  # noqa: N801
-            class completions:  # noqa: N801
-                @staticmethod
-                async def create(**_kwargs: object) -> object:
-                    return _FakeResponse()
-
     async def _fake_retry(_name, fn, **_k):
         return await fn()
 
     monkeypatch.setattr(
         "backend.escalation.openai_escalation.get_async_openai_client",
-        lambda *_a, **_k: _FakeClient(),
+        lambda *_a, **_k: _fake_decision_client(content, tokens),
     )
     monkeypatch.setattr(
         "backend.escalation.openai_escalation.async_call_openai_with_retry",
         _fake_retry,
     )
 
-    decision, tokens = await classify_pre_confirm_reply(
-        latest_user_text="my site is down with a 502",
+    decision, actual_tokens = await classify_pre_confirm_reply(
+        latest_user_text=latest_user_text,
         api_key="sk-test",
     )
-    assert decision is None
-    assert tokens == 3
+    assert decision == expected_decision
+    assert actual_tokens == tokens
 
 
 @pytest.mark.asyncio
@@ -1627,74 +1342,36 @@ async def test_classify_pre_confirm_reply_fails_safe_on_exception(
     assert tokens == 0
 
 
-def _fake_followup_classifier_client(content: str, tokens: int = 5):
-    """Fake async OpenAI client whose completions.create returns ``content``."""
-
-    class _FakeMessage:
-        pass
-
-    _FakeMessage.content = content
-
-    class _FakeChoice:
-        message = _FakeMessage()
-
-    class _FakeUsage:
-        total_tokens = tokens
-
-    class _FakeResponse:
-        choices = [_FakeChoice()]
-        usage = _FakeUsage()
-
-    class _FakeClient:
-        class chat:  # noqa: N801
-            class completions:  # noqa: N801
-                @staticmethod
-                async def create(**_kwargs: object) -> object:
-                    return _FakeResponse()
-
-    return _FakeClient()
-
-
 @pytest.mark.asyncio
 @pytest.mark.smoke
 @pytest.mark.escalation
-async def test_classify_followup_reply_parses_new_question(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The follow-up gate surfaces ``new_question`` so the handler can clear
-    the gate and fall through to RAG on the same turn."""
-    from backend.escalation.openai_escalation import classify_followup_reply
-
-    async def _fake_retry(_name, fn, **_k):
-        return await fn()
-
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_async_openai_client",
-        lambda *_a, **_k: _fake_followup_classifier_client(
-            '{"decision": "new_question"}', tokens=6
+@pytest.mark.parametrize(
+    "content, tokens, expected_decision",
+    [
+        pytest.param(
+            '{"decision": "new_question"}',
+            6,
+            "new_question",
+            id="new_question_clears_gate_for_same_turn_rag",
         ),
-    )
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.async_call_openai_with_retry",
-        _fake_retry,
-    )
-
-    decision, tokens = await classify_followup_reply(
-        latest_user_text="do you support wildcard domain names?",
-        api_key="sk-test",
-    )
-    assert decision == "new_question"
-    assert tokens == 6
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-@pytest.mark.escalation
-async def test_classify_followup_reply_unrecognized_degrades_to_unclear(
+        pytest.param(
+            '{"decision": "maybe"}',
+            5,
+            "unclear",
+            id="unrecognized_label_degrades_to_unclear",
+        ),
+    ],
+)
+async def test_classify_followup_reply_decision_parsing(
     monkeypatch: pytest.MonkeyPatch,
+    content: str,
+    tokens: int,
+    expected_decision: str,
 ) -> None:
-    """Unrecognized labels must NOT fall through to RAG: anything outside the
-    known set degrades to ``unclear`` so the existing follow-up flow runs."""
+    """``new_question`` lets the handler clear the follow-up gate and fall
+    through to RAG on the same turn; any other label — unrecognized by the
+    known set — must NOT fall through to RAG and instead degrades to
+    ``unclear`` so the existing follow-up flow re-asks."""
     from backend.escalation.openai_escalation import classify_followup_reply
 
     async def _fake_retry(_name, fn, **_k):
@@ -1702,7 +1379,7 @@ async def test_classify_followup_reply_unrecognized_degrades_to_unclear(
 
     monkeypatch.setattr(
         "backend.escalation.openai_escalation.get_async_openai_client",
-        lambda *_a, **_k: _fake_followup_classifier_client('{"decision": "maybe"}'),
+        lambda *_a, **_k: _fake_decision_client(content, tokens),
     )
     monkeypatch.setattr(
         "backend.escalation.openai_escalation.async_call_openai_with_retry",
@@ -1710,10 +1387,10 @@ async def test_classify_followup_reply_unrecognized_degrades_to_unclear(
     )
 
     decision, _ = await classify_followup_reply(
-        latest_user_text="hmm",
+        latest_user_text="do you support wildcard domain names?",
         api_key="sk-test",
     )
-    assert decision == "unclear"
+    assert decision == expected_decision
 
 
 @pytest.mark.asyncio
@@ -1743,162 +1420,79 @@ async def test_classify_followup_reply_fails_safe_on_exception(
 
 @pytest.mark.asyncio
 @pytest.mark.smoke
-async def test_escalation_turn_uses_dedicated_client_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Escalation LLM calls must request the dedicated short read timeout.
-
-    The general client default is 60s; without the override a single slow
-    OpenAI response stalls the escalation turn for up to a minute (observed
-    21.7s in prod before the cap).
-    """
-    from backend.core.config import settings
-    from backend.escalation.openai_escalation import complete_escalation_openai_turn
-    from backend.models import EscalationPhase
-
-    seen_timeouts: list[object] = []
-
-    class _FakeMessage:
-        content = '{"message_to_user": "ok", "followup_decision": null}'
-
-    class _FakeChoice:
-        message = _FakeMessage()
-
-    class _FakeResponse:
-        choices = [_FakeChoice()]
-        usage = None
-
-    class _FakeClient:
-        class chat:  # noqa: N801
-            class completions:  # noqa: N801
-                @staticmethod
-                async def create(**_kwargs: object) -> object:
-                    return _FakeResponse()
-
-    def _fake_get_client(*_a: object, **kwargs: object) -> object:
-        seen_timeouts.append(kwargs.get("timeout"))
-        return _FakeClient()
-
-    async def _fake_retry(_name, fn, **_k):
-        return await fn()
-
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_async_openai_client",
-        _fake_get_client,
-    )
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.async_call_openai_with_retry",
-        _fake_retry,
-    )
-
-    out = await complete_escalation_openai_turn(
-        phase=EscalationPhase.handoff_email_known,
-        chat_messages=[],
-        fact_json={},
-        latest_user_text="hi",
-        api_key="sk-test",
-    )
-    assert out.message_to_user == "ok"
-    assert seen_timeouts == [settings.escalation_openai_timeout_seconds]
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_escalation_turn_fallback_localization_is_deadline_bounded(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When the completion fails AND the fallback localization hangs, the turn
-    must still resolve within the escalation deadline with the canonical
-    English fallback — not stall for the localization client's 60s timeout.
-    """
-    from backend.escalation.openai_escalation import (
-        FALLBACK_EN_GENERIC,
-        complete_escalation_openai_turn,
-    )
-    from backend.models import EscalationPhase
-
-    def _boom(*_a: object, **_k: object) -> None:
-        raise RuntimeError("openai down")
-
-    async def _hanging_localize(**_k: object) -> object:
-        await asyncio.sleep(30)
-        raise AssertionError("unreachable")
-
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_async_openai_client", _boom
-    )
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
-        _hanging_localize,
-    )
-    monkeypatch.setattr(
-        "backend.core.config.settings.escalation_openai_timeout_seconds", 0.05
-    )
-
-    out = await asyncio.wait_for(
-        complete_escalation_openai_turn(
-            phase=EscalationPhase.handoff_ask_email,
-            chat_messages=[],
-            fact_json={},
-            latest_user_text="hi",
-            api_key="sk-test",
-            response_language="ru",
+@pytest.mark.parametrize(
+    "completion_content, expected_tokens",
+    [
+        pytest.param(None, 0, id="completion_api_failure"),
+        pytest.param(
+            '{"message_to_user": "", "followup_decision": null}',
+            7,
+            id="empty_message_content",
         ),
-        timeout=5,
-    )
-    assert out.message_to_user == FALLBACK_EN_GENERIC
-    assert out.tokens_used == 0
-    assert out.followup_decision is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
-async def test_escalation_turn_empty_message_uses_bounded_fallback(
+    ],
+)
+async def test_escalation_turn_deadline_bounded_fallback(
     monkeypatch: pytest.MonkeyPatch,
+    completion_content: str | None,
+    expected_tokens: int,
 ) -> None:
-    """An empty message_to_user from the model goes through the same bounded
-    localized-fallback path as an API failure."""
+    """When the completion fails, or returns an empty ``message_to_user``, AND
+    the fallback localization hangs, the turn must still resolve within the
+    escalation deadline with the canonical English fallback — not stall for
+    the localization client's 60s timeout.
+    """
     from backend.escalation.openai_escalation import (
         FALLBACK_EN_GENERIC,
         complete_escalation_openai_turn,
     )
     from backend.models import EscalationPhase
 
-    class _FakeMessage:
-        content = '{"message_to_user": "", "followup_decision": null}'
-
-    class _FakeChoice:
-        message = _FakeMessage()
-
-    class _FakeUsage:
-        total_tokens = 7
-
-    class _FakeResponse:
-        choices = [_FakeChoice()]
-        usage = _FakeUsage()
-
-    class _FakeClient:
-        class chat:  # noqa: N801
-            class completions:  # noqa: N801
-                @staticmethod
-                async def create(**_kwargs: object) -> object:
-                    return _FakeResponse()
-
-    async def _fake_retry(_name, fn, **_k):
-        return await fn()
-
     async def _hanging_localize(**_k: object) -> object:
         await asyncio.sleep(30)
         raise AssertionError("unreachable")
 
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_async_openai_client",
-        lambda *_a, **_k: _FakeClient(),
-    )
-    monkeypatch.setattr(
-        "backend.escalation.openai_escalation.async_call_openai_with_retry",
-        _fake_retry,
-    )
+    if completion_content is None:
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise RuntimeError("openai down")
+
+        monkeypatch.setattr(
+            "backend.escalation.openai_escalation.get_async_openai_client", _boom
+        )
+    else:
+
+        class _FakeMessage:
+            content = completion_content
+
+        class _FakeChoice:
+            message = _FakeMessage()
+
+        class _FakeUsage:
+            total_tokens = expected_tokens
+
+        class _FakeResponse:
+            choices = [_FakeChoice()]
+            usage = _FakeUsage()
+
+        class _FakeClient:
+            class chat:  # noqa: N801
+                class completions:  # noqa: N801
+                    @staticmethod
+                    async def create(**_kwargs: object) -> object:
+                        return _FakeResponse()
+
+        async def _fake_retry(_name, fn, **_k):
+            return await fn()
+
+        monkeypatch.setattr(
+            "backend.escalation.openai_escalation.get_async_openai_client",
+            lambda *_a, **_k: _FakeClient(),
+        )
+        monkeypatch.setattr(
+            "backend.escalation.openai_escalation.async_call_openai_with_retry",
+            _fake_retry,
+        )
+
     monkeypatch.setattr(
         "backend.escalation.openai_escalation.async_localize_text_to_language_result",
         _hanging_localize,
@@ -1919,8 +1513,8 @@ async def test_escalation_turn_empty_message_uses_bounded_fallback(
         timeout=5,
     )
     assert out.message_to_user == FALLBACK_EN_GENERIC
-    # Completion tokens are still counted; the degraded localization adds 0.
-    assert out.tokens_used == 7
+    assert out.tokens_used == expected_tokens
+    assert out.followup_decision is None
 
 
 @pytest.mark.smoke

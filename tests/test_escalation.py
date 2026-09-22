@@ -118,6 +118,9 @@ async def test_detect_human_request_explicitness_axis(
     when the classifier omits it — the caller uses it to decide between
     answering an implied problem from the knowledge base and escalating it
     (see EscalationStateMachine's implied-request fall-through)."""
+    import backend.escalation.service as escalation_service
+
+    escalation_service._human_request_cache.clear()
     with _mock_llm_human_request_payload(payload):
         result = await detect_human_request("не могу менять настройки", "sk-test")
     assert result.human_request is True

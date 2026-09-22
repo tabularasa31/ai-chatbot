@@ -12,9 +12,11 @@ persisted dangling foreign key, which the test database's FK enforcement
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import HandlerContext
@@ -126,75 +128,59 @@ def test_handle_falls_through_when_awaiting_ticket_vanished_and_no_human_request
     assert chat.escalation_awaiting_ticket_id is None
 
 
-def test_can_handle_returns_true_for_explicit_request_when_no_state_set(
+@pytest.mark.parametrize(
+    "chat_attrs, explicit_human_request, expected",
+    [
+        pytest.param({}, True, True, id="explicit_request_with_no_state_dispatches"),
+        pytest.param({}, False, False, id="no_state_and_no_human_request_declines"),
+        pytest.param(
+            {"ended_at": lambda: datetime.now(UTC)},
+            False,
+            False,
+            id="legacy_ended_at_is_ignored",
+        ),
+        pytest.param(
+            {"escalation_awaiting_ticket_id": lambda: uuid.uuid4()},
+            False,
+            True,
+            id="awaiting_ticket_id_dispatches",
+        ),
+        pytest.param(
+            {"escalation_followup_pending": True},
+            False,
+            True,
+            id="followup_pending_dispatches",
+        ),
+        pytest.param(
+            {"escalation_awaiting_request": True},
+            False,
+            True,
+            id="awaiting_request_dispatches",
+        ),
+    ],
+)
+def test_can_handle_dispatch(
     db_session: Session,
+    chat_attrs: dict[str, Any],
+    explicit_human_request: bool,
+    expected: bool,
 ) -> None:
+    """``can_handle`` dispatches on any deterministic escalation state flag
+    (awaiting-ticket, followup-pending, awaiting-request) or an explicit
+    human request when no state is set; a legacy ``ended_at`` is not itself
+    a dispatch signal."""
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
+    for attr, value in chat_attrs.items():
+        setattr(chat, attr, value() if callable(value) else value)
+    if "escalation_awaiting_ticket_id" not in chat_attrs:
+        # A random ticket id has no matching row — flushing it would trip the
+        # FK constraint. Other attrs are plain columns, safe to flush.
+        db_session.flush()
     ctx = _make_handler_context(
         db=db_session,
         tenant=tenant,
         chat=chat,
-        question_text="i need a human",
-        explicit_human_request=True,
+        explicit_human_request=explicit_human_request,
     )
-    assert EscalationStateMachine().can_handle(ctx) is True
-
-
-def test_can_handle_returns_false_when_no_state_and_no_human_request(
-    db_session: Session,
-) -> None:
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(
-        db=db_session,
-        tenant=tenant,
-        chat=chat,
-        question_text="what is your price",
-        explicit_human_request=False,
-    )
-    assert EscalationStateMachine().can_handle(ctx) is False
-
-
-def test_can_handle_ignores_legacy_ended_at(db_session: Session) -> None:
-    from datetime import UTC, datetime
-
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    chat.ended_at = datetime.now(UTC)
-    db_session.flush()
-    ctx = _make_handler_context(
-        db=db_session,
-        tenant=tenant,
-        chat=chat,
-        question_text="what is your price",
-        explicit_human_request=False,
-    )
-    assert EscalationStateMachine().can_handle(ctx) is False
-
-
-def test_can_handle_returns_true_when_awaiting_ticket_id(db_session: Session) -> None:
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    # In-memory only — handler treats stale pointer as escalation state.
-    chat.escalation_awaiting_ticket_id = uuid.uuid4()
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
-    assert EscalationStateMachine().can_handle(ctx) is True
-
-
-def test_can_handle_returns_true_when_followup_pending(db_session: Session) -> None:
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    chat.escalation_followup_pending = True
-    db_session.flush()
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
-    assert EscalationStateMachine().can_handle(ctx) is True
-
-
-def test_can_handle_true_when_awaiting_request(db_session: Session) -> None:
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    chat.escalation_awaiting_request = True
-    db_session.flush()
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
-    assert EscalationStateMachine().can_handle(ctx) is True
+    assert EscalationStateMachine().can_handle(ctx) is expected

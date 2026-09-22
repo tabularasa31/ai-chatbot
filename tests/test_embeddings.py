@@ -6,7 +6,6 @@ import json
 import uuid
 from unittest.mock import Mock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -88,12 +87,17 @@ def test_chunk_text_oversized_single_sentence_stays_one_chunk() -> None:
 
 
 @patch("backend.embeddings.service.get_openai_client")
-def test_create_embeddings_success(
+def test_create_list_rerun_and_delete_embeddings_journey(
     mock_get_openai: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """Mock OpenAI, create embeddings for ready doc → chunks saved."""
+    """Full lifecycle of a document's embeddings through the API, one step at a time:
+    - create: chunks are saved with the expected metadata fields
+    - list: total_chunks and per-row shape match what was created
+    - rerun: calling create again replaces (not duplicates) the old chunks
+    - delete: removes every chunk and the list endpoint reflects zero afterward
+    """
     token = register_and_verify_user(tenant, db_session, email="emb@example.com")
     tenant.post(
         "/tenants",
@@ -117,24 +121,16 @@ def test_create_embeddings_success(
     )
     mock_get_openai.return_value = mock_client
 
-    response = tenant.post(
+    # Step 1: create
+    create_resp = tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 202
-    data = response.json()
+    assert create_resp.status_code == 202
+    data = create_resp.json()
     assert data["document_id"] == doc_id
     assert data["status"] == "embedding"
 
-    # Background task ran synchronously; verify chunks were created via the list endpoint
-    list_resp = tenant.get(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert list_resp.status_code == 200
-    assert list_resp.json()["total_chunks"] == len(chunks)
-
-    # Verify metadata fields via a fresh session (background task uses its own session)
     from backend.core.db import SessionLocal
     with SessionLocal() as fresh_db:
         rows = (
@@ -160,6 +156,45 @@ def test_create_embeddings_success(
         # metadata for callers, not a retrieval input.
         assert m.get("language") is not None
         assert m["embedding_model"] == settings.embedding_model
+
+    # Step 2: list
+    list_resp = tenant.get(
+        f"/embeddings/documents/{doc_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert list_resp.status_code == 200
+    list_data = list_resp.json()
+    assert list_data["total_chunks"] == len(chunks)
+    for emb in list_data["embeddings"]:
+        assert "id" in emb
+        assert emb["document_id"] == doc_id
+        assert "chunk_text" in emb
+        assert "created_at" in emb
+
+    # Step 3: rerun — old embeddings are replaced, not duplicated
+    rerun_resp = tenant.post(
+        f"/embeddings/documents/{doc_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert rerun_resp.status_code == 202
+    list_after_rerun = tenant.get(
+        f"/embeddings/documents/{doc_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert list_after_rerun.json()["total_chunks"] == len(chunks)
+
+    # Step 4: delete
+    delete_resp = tenant.delete(
+        f"/embeddings/documents/{doc_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["deleted"] == len(chunks)
+    list_after_delete = tenant.get(
+        f"/embeddings/documents/{doc_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert list_after_delete.json()["total_chunks"] == 0
 
 
 def test_create_embeddings_document_not_found(
@@ -564,102 +599,6 @@ def test_create_embeddings_openai_error(
 
 
 @patch("backend.embeddings.service.get_openai_client")
-def test_create_embeddings_reruns_delete_old(
-    mock_get_openai: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """Call twice → old embeddings replaced."""
-    token = register_and_verify_user(tenant, db_session, email="rerun@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Rerun Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    md_content = b"# Doc\n\n" + b"x" * 600
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("rerun.md", md_content, "text/markdown")},
-    )
-    doc_id = upload_resp.json()["id"]
-
-    chunks = get_chunker("markdown")(md_content.decode())
-    mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(
-        data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
-    )
-    mock_get_openai.return_value = mock_client
-
-    r1 = tenant.post(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert r1.status_code == 202
-
-    r2 = tenant.post(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert r2.status_code == 202
-    list_resp = tenant.get(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert list_resp.json()["total_chunks"] == len(chunks)
-
-
-@patch("backend.embeddings.service.get_openai_client")
-def test_get_embeddings_success(
-    mock_get_openai: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """Get embeddings list for document."""
-    token = register_and_verify_user(tenant, db_session, email="get@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Get Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    md_content = b"# Get\n\nContent for embeddings."
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("get.md", md_content, "text/markdown")},
-    )
-    doc_id = upload_resp.json()["id"]
-
-    chunks = get_chunker("markdown")(md_content.decode())
-    mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(
-        data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
-    )
-    mock_get_openai.return_value = mock_client
-    tenant.post(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    response = tenant.get(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert "embeddings" in data
-    assert "total_chunks" in data
-    assert data["total_chunks"] == len(chunks)
-    for emb in data["embeddings"]:
-        assert "id" in emb
-        assert emb["document_id"] == doc_id
-        assert "chunk_text" in emb
-        assert "created_at" in emb
-
-
-@patch("backend.embeddings.service.get_openai_client")
 def test_get_embeddings_wrong_client(
     mock_get_openai: Mock,
     tenant: TestClient,
@@ -699,51 +638,3 @@ def test_get_embeddings_wrong_client(
         headers={"Authorization": f"Bearer {token_b}"},
     )
     assert response.status_code == 404
-
-
-@patch("backend.embeddings.service.get_openai_client")
-def test_delete_embeddings_success(
-    mock_get_openai: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """Delete all embeddings → returns count."""
-    token = register_and_verify_user(tenant, db_session, email="del@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Del Emb Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    md_content = b"# To delete\n\nContent."
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("del.md", md_content, "text/markdown")},
-    )
-    doc_id = upload_resp.json()["id"]
-
-    chunks = get_chunker("markdown")(md_content.decode())
-    mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(
-        data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
-    )
-    mock_get_openai.return_value = mock_client
-    tenant.post(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    response = tenant.delete(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["deleted"] == len(chunks)
-
-    list_resp = tenant.get(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert list_resp.json()["total_chunks"] == 0

@@ -540,19 +540,37 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
     async def _no_rewrite(*_args, **_kwargs):
         return None
 
+    def _unit_vector_for(text: str) -> list[float]:
+        rng = random.Random(normalize_question(text))
+        raw = [rng.gauss(0.0, 1.0) for _ in range(1536)]
+        norm = sum(v * v for v in raw) ** 0.5
+        return [v / norm for v in raw]
+
     async def _embed(texts: list[str], **_kwargs) -> list[list[float]]:
         # Text-dependent vectors: the shared mock returns one constant vector
         # for every input, which would make every question a semantic hit.
         counters["embed"] += 1
-        vectors = []
-        for text in texts:
-            rng = random.Random(normalize_question(text))
-            raw = [rng.gauss(0.0, 1.0) for _ in range(1536)]
-            norm = sum(v * v for v in raw) ** 0.5
-            vectors.append([v / norm for v in raw])
-        return vectors
+        return [_unit_vector_for(text) for text in texts]
+
+    async def _guard_embed_query(text: str, **_kwargs) -> list[float]:
+        # Level 2 injection guard is unconditional now — give it text-dependent
+        # vectors too, or every question would score as an identical (and
+        # therefore "detected") match against the reference seed embeddings.
+        return _unit_vector_for(text)
+
+    async def _guard_embed_queries(texts: list[str], **_kwargs) -> list[list[float]]:
+        return [_unit_vector_for(text) for text in texts]
 
     monkeypatch.setattr("backend.chat.service.async_embed_queries", _embed)
+    monkeypatch.setattr(
+        "backend.guards.injection_detector.async_embed_query", _guard_embed_query
+    )
+    monkeypatch.setattr(
+        "backend.guards.injection_detector.async_embed_queries", _guard_embed_queries
+    )
+    # Force the lazily-cached seed embeddings to recompute with the patched
+    # embedder above instead of reusing whatever another test cached first.
+    monkeypatch.setattr("backend.guards.injection_detector._reference_embeddings", None)
     monkeypatch.setattr("backend.chat.handlers.rag.async_generate_answer", _generate)
     monkeypatch.setattr("backend.chat.service.async_retrieve_context", _retrieve)
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
@@ -741,7 +759,9 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
     _ask(cl_row, api_key, db_session, user_context=identified)
     _ask(cl_row, api_key, db_session, "Reset the password for john.doe@example.com please")
     assert cache_lookups() == 0
-    assert fake_redis == {}
+    # No answer-cache key was written (the injection guard's own semantic
+    # verdict cache is unrelated and may still populate `fake_redis`).
+    assert not any(key.startswith("cache:answer:") for key in fake_redis)
     assert db_session.query(AnswerCacheEntry).count() == 0
 
     # Anonymous first turn is cached; the identified visitor still gets a fresh answer.

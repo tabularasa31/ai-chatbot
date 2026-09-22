@@ -324,18 +324,13 @@ def test_the_semantic_level_stays_out_of_the_handoff_path(
     The handoff turn is the one turn that talks to no model at all. Monitoring
     it must not change that, so the check is the regex sweep and nothing more.
 
-    ``INJECTION_SEMANTIC_ENABLED`` is turned on for this test alone. The suite
-    runs with it off (``tests/conftest.py``), and ``async_detect_injection``
-    gates level 2 on it — so without this the assertions below would hold even
-    if the full two-level guard were wired onto the handoff path, and the
-    invariant in the name would not be pinned at all. With the flag on, the
-    only thing keeping level 2 out is the handoff path calling the structural
-    check directly, which is exactly what this is here to protect.
+    Level 2 (semantic) is unconditional in ``async_detect_injection`` — the
+    only thing keeping it out of the handoff path is the handoff path calling
+    the structural check directly, which is exactly what this is here to
+    protect.
     """
-    from backend.core.config import settings
     from backend.guards import injection_detector
 
-    monkeypatch.setattr(settings, "injection_semantic_enabled", True)
     semantic_calls: list[str] = []
 
     async def _spy(text: str, *args: object, **kwargs: object):

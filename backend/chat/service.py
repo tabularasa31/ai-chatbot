@@ -111,6 +111,7 @@ from backend.escalation.service import (
     detect_human_request,
     fact_from_ticket,  # noqa: F401
     should_escalate,  # noqa: F401
+    visitor_identity_context,
 )
 from backend.faq.faq_matcher import async_match_faq, match_faq  # noqa: F401
 from backend.gap_analyzer.enums import GapJobKind
@@ -476,7 +477,7 @@ async def _ensure_chat_async(
     elif rotated_from is not None and rotated_from.user_context:
         # The visitor identity survives rotation even though the conversation
         # state does not.
-        effective_user_ctx = dict(rotated_from.user_context)
+        effective_user_ctx = visitor_identity_context(rotated_from.user_context)
     elif user_context:
         effective_user_ctx = dict(user_context)
     if rotated_from is not None:

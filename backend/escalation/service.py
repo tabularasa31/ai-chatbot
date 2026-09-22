@@ -1881,6 +1881,15 @@ def _set_escalation_clarify_flag(chat: Chat) -> None:
     chat.user_context = ctx
 
 
+def visitor_identity_context(user_context: dict | None) -> dict | None:
+    """The part of ``user_context`` that describes the visitor, not the
+    conversation: what a rotated chat may inherit."""
+    if not user_context:
+        return None
+    ctx = {k: v for k, v in user_context.items() if k != _CLARIFY_KEY}
+    return ctx or None
+
+
 def _clear_escalation_clarify_flag(chat: Chat) -> None:
     ctx = dict(chat.user_context or {})
     ctx.pop(_CLARIFY_KEY, None)

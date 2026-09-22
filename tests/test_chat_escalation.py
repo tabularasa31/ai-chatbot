@@ -834,6 +834,7 @@ def test_stale_followup_falls_through_to_rag_after_session_ended(
     served = _latest_chat_for_session(db_session, chat.session_id)
     assert served.id != chat.id, "ended session must rotate to a fresh chat"
     assert served.escalation_followup_pending is False
+    assert (served.user_context or {}).get("escalation_followup_clarify") is None
 
 
 @pytest.mark.escalation

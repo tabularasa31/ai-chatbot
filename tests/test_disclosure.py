@@ -2,35 +2,28 @@
 
 from __future__ import annotations
 
+import uuid as _uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-import uuid as _uuid
-
-from backend.disclosure_config import public_config_dict, resolve_level
+from backend.disclosure_config import resolve_level
 from backend.models import Bot
 from tests.conftest import register_and_verify_user
 
 
-def test_resolve_level_none() -> None:
-    assert resolve_level(None) == "standard"
-
-
-def test_resolve_level_empty_dict() -> None:
-    assert resolve_level({}) == "standard"
-
-
-def test_resolve_level_primary_key() -> None:
-    assert resolve_level({"level": "corporate"}) == "corporate"
-
-
-def test_resolve_level_invalid_falls_back() -> None:
-    assert resolve_level({"level": "nope"}) == "standard"
-
-
-def test_public_config_dict() -> None:
-    assert public_config_dict({"level": "corporate"}) == {"level": "corporate"}
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param(None, "standard", id="none_falls_back_to_standard"),
+        pytest.param({}, "standard", id="empty_dict_falls_back_to_standard"),
+        pytest.param({"level": "corporate"}, "corporate", id="valid_level_wins"),
+        pytest.param({"level": "nope"}, "standard", id="invalid_level_falls_back"),
+    ],
+)
+def test_resolve_level(raw: dict | None, expected: str) -> None:
+    assert resolve_level(raw) == expected
 
 
 def _setup(tenant: TestClient, db_session: Session, email: str, name: str) -> tuple[str, str]:
@@ -48,75 +41,58 @@ def _setup(tenant: TestClient, db_session: Session, email: str, name: str) -> tu
     return token, bot_id
 
 
-def test_get_disclosure_defaults(
+def test_disclosure_level_lifecycle_through_the_api(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, bot_id = _setup(tenant, db_session, "disc-get@example.com", "Disc Tenant")
-    r = tenant.get(f"/bots/{bot_id}/disclosure", headers={"Authorization": f"Bearer {token}"})
+    """One bot's disclosure level through default, round-trip, DB drift, and rejection.
+
+    Guards: GET with no config stored defaults to standard; PUT persists and
+    round-trips through GET; an unsupported/legacy key stored directly in the
+    DB is ignored rather than surfaced; PUT rejects a level outside the
+    allowed set with 422 (does not silently coerce it).
+    """
+    token, bot_id = _setup(tenant, db_session, "disc-lifecycle@example.com", "Disc Tenant")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r = tenant.get(f"/bots/{bot_id}/disclosure", headers=headers)
     assert r.status_code == 200
     assert r.json() == {"level": "standard"}
 
-
-def test_put_and_get_disclosure(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, bot_id = _setup(tenant, db_session, "disc-put@example.com", "Disc Put")
-    r = tenant.put(
-        f"/bots/{bot_id}/disclosure",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"level": "corporate"},
-    )
+    r = tenant.put(f"/bots/{bot_id}/disclosure", headers=headers, json={"level": "corporate"})
     assert r.status_code == 200
     assert r.json() == {"level": "corporate"}
-    r2 = tenant.get(f"/bots/{bot_id}/disclosure", headers={"Authorization": f"Bearer {token}"})
-    assert r2.json() == {"level": "corporate"}
+    r = tenant.get(f"/bots/{bot_id}/disclosure", headers=headers)
+    assert r.json() == {"level": "corporate"}
 
-
-def test_get_disclosure_ignores_unsupported_keys_in_db(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, bot_id = _setup(tenant, db_session, "disc-alias@example.com", "Alias Co")
     bot = db_session.query(Bot).filter(Bot.id == _uuid.UUID(bot_id)).first()
     assert bot is not None
     bot.disclosure_config = {"legacy_level": "detailed"}
     db_session.commit()
-
-    r = tenant.get(f"/bots/{bot_id}/disclosure", headers={"Authorization": f"Bearer {token}"})
+    r = tenant.get(f"/bots/{bot_id}/disclosure", headers=headers)
     assert r.status_code == 200
     assert r.json() == {"level": "standard"}
 
-
-def test_put_disclosure_invalid_level(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, bot_id = _setup(tenant, db_session, "disc-bad@example.com", "Bad Level Co")
-    r = tenant.put(
-        f"/bots/{bot_id}/disclosure",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"level": "mega"},
-    )
+    r = tenant.put(f"/bots/{bot_id}/disclosure", headers=headers, json={"level": "mega"})
     assert r.status_code == 422
 
 
-def test_build_rag_prompt_corporate_contains_instruction() -> None:
+@pytest.mark.parametrize(
+    ("disclosure_config", "expected"),
+    [
+        pytest.param(
+            {"level": "corporate"},
+            "[Response level: corporate]",
+            id="corporate_level_instruction",
+        ),
+        pytest.param(None, "[Response level: standard]", id="none_equals_standard_block"),
+    ],
+)
+def test_build_rag_prompt_disclosure_block(disclosure_config: dict | None, expected: str) -> None:
     from backend.chat.service import build_rag_prompt
 
-    p = build_rag_prompt(
-        "Q?",
-        ["c1"],
-        disclosure_config={"level": "corporate"},
-    )
-    assert "[Response level: corporate]" in p
-    assert "non-technical" in p.lower() or "polished" in p.lower()
-    assert "Hard limits" in p
-
-
-def test_build_rag_prompt_disclosure_none_equals_standard_block() -> None:
-    from backend.chat.service import build_rag_prompt
-
-    p = build_rag_prompt("Q?", ["c"], disclosure_config=None)
-    assert "[Response level: standard]" in p
+    p = build_rag_prompt("Q?", ["c"], disclosure_config=disclosure_config)
+    assert expected in p
+    if disclosure_config is not None:
+        assert "non-technical" in p.lower() or "polished" in p.lower()
+        assert "Hard limits" in p

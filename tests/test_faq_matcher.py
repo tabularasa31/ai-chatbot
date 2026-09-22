@@ -6,14 +6,19 @@ from unittest.mock import Mock
 import pytest
 
 from backend.core.config import settings
-from backend.faq.faq_matcher import FAQRow, direct_applicability_guard, match_faq
+from backend.faq.faq_matcher import FAQRow, async_match_faq, direct_applicability_guard
 
 
 def _fake_rows(*rows: FAQRow) -> list[FAQRow]:
     return list(rows)
 
 
-def test_faq_direct_hit_guard_passed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def _async_fake_rows(*rows: FAQRow) -> list[FAQRow]:
+    return list(rows)
+
+
+@pytest.mark.asyncio
+async def test_faq_direct_hit_guard_passed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
     monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
@@ -34,15 +39,15 @@ def test_faq_direct_hit_guard_passed(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     monkeypatch.setattr(
-        "backend.faq.faq_matcher._fetch_top_faq_rows",
-        lambda **_: _fake_rows(top, other),
+        "backend.faq.faq_matcher._async_fetch_top_faq_rows",
+        lambda **_: _async_fake_rows(top, other),
     )
     monkeypatch.setattr(
         "backend.faq.faq_matcher.direct_applicability_guard",
         lambda **_: True,
     )
 
-    result = match_faq(
+    result = await async_match_faq(
         tenant_id=uuid.uuid4(),
         question="How do I reset my password?",
         question_embedding=[0.1] * 1536,
@@ -57,7 +62,8 @@ def test_faq_direct_hit_guard_passed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.selected_faq_id == str(top.id)
 
 
-def test_faq_direct_not_approved(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_faq_direct_not_approved(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
     monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
@@ -70,15 +76,15 @@ def test_faq_direct_not_approved(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     monkeypatch.setattr(
-        "backend.faq.faq_matcher._fetch_top_faq_rows",
-        lambda **_: _fake_rows(top),
+        "backend.faq.faq_matcher._async_fetch_top_faq_rows",
+        lambda **_: _async_fake_rows(top),
     )
     monkeypatch.setattr(
         "backend.faq.faq_matcher.direct_applicability_guard",
         lambda **_: (_ for _ in ()).throw(AssertionError("guard must not run")),
     )
 
-    result = match_faq(
+    result = await async_match_faq(
         tenant_id=uuid.uuid4(),
         question="How do I reset my password?",
         question_embedding=[0.1] * 1536,
@@ -93,7 +99,8 @@ def test_faq_direct_not_approved(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.decision_reason == "high_score_not_approved"
 
 
-def test_faq_direct_guard_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_faq_direct_guard_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
     monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
@@ -106,15 +113,15 @@ def test_faq_direct_guard_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     monkeypatch.setattr(
-        "backend.faq.faq_matcher._fetch_top_faq_rows",
-        lambda **_: _fake_rows(top),
+        "backend.faq.faq_matcher._async_fetch_top_faq_rows",
+        lambda **_: _async_fake_rows(top),
     )
     monkeypatch.setattr(
         "backend.faq.faq_matcher.direct_applicability_guard",
         lambda **_: False,
     )
 
-    result = match_faq(
+    result = await async_match_faq(
         tenant_id=uuid.uuid4(),
         question="How do I reset my password?",
         question_embedding=[0.1] * 1536,
@@ -129,7 +136,8 @@ def test_faq_direct_guard_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.decision_reason == "high_score_guard_failed_or_error"
 
 
-def test_faq_context_adds_top_n(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_faq_context_adds_top_n(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
     monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
     monkeypatch.setattr(settings, "faq_context_max_items", 2)
@@ -157,8 +165,8 @@ def test_faq_context_adds_top_n(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     monkeypatch.setattr(
-        "backend.faq.faq_matcher._fetch_top_faq_rows",
-        lambda **_: _fake_rows(top, second, third),
+        "backend.faq.faq_matcher._async_fetch_top_faq_rows",
+        lambda **_: _async_fake_rows(top, second, third),
     )
 
     # Guard not expected in this score band.
@@ -167,7 +175,7 @@ def test_faq_context_adds_top_n(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda **_: (_ for _ in ()).throw(AssertionError("guard must not run")),
     )
 
-    result = match_faq(
+    result = await async_match_faq(
         tenant_id=uuid.uuid4(),
         question="reset password",
         question_embedding=[0.1] * 1536,
@@ -180,7 +188,8 @@ def test_faq_context_adds_top_n(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.faq_items[1] == second
 
 
-def test_faq_ignored_below_context_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_faq_ignored_below_context_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
     monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
@@ -193,11 +202,11 @@ def test_faq_ignored_below_context_threshold(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     monkeypatch.setattr(
-        "backend.faq.faq_matcher._fetch_top_faq_rows",
-        lambda **_: _fake_rows(top),
+        "backend.faq.faq_matcher._async_fetch_top_faq_rows",
+        lambda **_: _async_fake_rows(top),
     )
 
-    result = match_faq(
+    result = await async_match_faq(
         tenant_id=uuid.uuid4(),
         question="Something else",
         question_embedding=[0.1] * 1536,
@@ -209,7 +218,8 @@ def test_faq_ignored_below_context_threshold(monkeypatch: pytest.MonkeyPatch) ->
     assert result.decision_reason == "score_below_context_threshold"
 
 
-def test_match_result_contains_decision_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_match_result_contains_decision_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
     monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
@@ -222,15 +232,15 @@ def test_match_result_contains_decision_reason(monkeypatch: pytest.MonkeyPatch) 
     )
 
     monkeypatch.setattr(
-        "backend.faq.faq_matcher._fetch_top_faq_rows",
-        lambda **_: _fake_rows(top),
+        "backend.faq.faq_matcher._async_fetch_top_faq_rows",
+        lambda **_: _async_fake_rows(top),
     )
     monkeypatch.setattr(
         "backend.faq.faq_matcher.direct_applicability_guard",
         lambda **_: True,
     )
 
-    result = match_faq(
+    result = await async_match_faq(
         tenant_id=uuid.uuid4(),
         question="How do I reset my password?",
         question_embedding=[0.1] * 1536,
@@ -242,7 +252,10 @@ def test_match_result_contains_decision_reason(monkeypatch: pytest.MonkeyPatch) 
     assert result.direct_guard_passed is True
 
 
-def test_approved_candidate_can_be_promoted_for_direct(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_approved_candidate_can_be_promoted_for_direct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
     monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
     monkeypatch.setattr(settings, "faq_approved_promotion_delta", 0.02)
@@ -263,15 +276,15 @@ def test_approved_candidate_can_be_promoted_for_direct(monkeypatch: pytest.Monke
     )
 
     monkeypatch.setattr(
-        "backend.faq.faq_matcher._fetch_top_faq_rows",
-        lambda **_: _fake_rows(top_unapproved, second_approved),
+        "backend.faq.faq_matcher._async_fetch_top_faq_rows",
+        lambda **_: _async_fake_rows(top_unapproved, second_approved),
     )
     monkeypatch.setattr(
         "backend.faq.faq_matcher.direct_applicability_guard",
         lambda **_: True,
     )
 
-    result = match_faq(
+    result = await async_match_faq(
         tenant_id=uuid.uuid4(),
         question="How can I reset password?",
         question_embedding=[0.1] * 1536,

@@ -93,12 +93,19 @@ def _patch_guard_clear() -> patch:
     )
 
 
-def test_generate_persists_draft_and_marks_in_review(
+def test_mode_b_draft_lifecycle_generate_refine_conflict_publish(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
+    """Drives the real Mode B draft sequence through one cluster, asserting
+    state after each step:
+      - generate persists the draft and marks the cluster in_review
+      - refine updates the persisted draft in place
+      - a stale If-Match on update is rejected with 409 (no lost updates)
+      - publish creates the FAQ and resolves the gap
+    """
     token, tenant_id = _bootstrap_tenant(
-        tenant, db_session, email="drafts-generate@example.com", name="Drafts Generate"
+        tenant, db_session, email="drafts-lifecycle@example.com", name="Drafts Lifecycle"
     )
     cluster = _make_cluster(db_session, tenant_id, label="Invoice exports")
 
@@ -108,17 +115,17 @@ def test_generate_persists_draft_and_marks_in_review(
         markdown="Direct answer.\n\nUse the export menu.",
     )
     with _patch_llm_generate(draft), _patch_guard_clear():
-        response = tenant.post(
+        generate_response = tenant.post(
             f"/gap-analyzer/mode_b/{cluster.id}/draft",
             headers={"Authorization": f"Bearer {token}"},
         )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["title"] == "Invoice exports"
-    assert body["question"] == "How do invoice exports work?"
-    assert body["markdown"].startswith("Direct answer.")
-    assert body["status"] == "in_review"
-    assert body["language"] == "en"
+    assert generate_response.status_code == 200, generate_response.text
+    generated = generate_response.json()
+    assert generated["title"] == "Invoice exports"
+    assert generated["question"] == "How do invoice exports work?"
+    assert generated["markdown"].startswith("Direct answer.")
+    assert generated["status"] == "in_review"
+    assert generated["language"] == "en"
 
     db_session.expire_all()
     persisted = db_session.get(GapCluster, cluster.id)
@@ -129,6 +136,58 @@ def test_generate_persists_draft_and_marks_in_review(
     assert persisted.published_faq_id is None
     # No FAQ has been published yet.
     assert db_session.query(TenantFaq).filter(TenantFaq.tenant_id == tenant_id).count() == 0
+
+    refined = DraftContent(
+        title="Invoice exports (short)",
+        question="How do invoice exports work?",
+        markdown="Refined shorter answer.",
+    )
+    with _patch_llm_refine(refined), _patch_guard_clear():
+        refine_response = tenant.post(
+            f"/gap-analyzer/mode_b/{cluster.id}/draft/refine",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"guidance": "Make it shorter"},
+        )
+    assert refine_response.status_code == 200, refine_response.text
+    assert refine_response.json()["markdown"] == "Refined shorter answer."
+    assert refine_response.json()["title"] == "Invoice exports (short)"
+
+    stale = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    conflict_response = tenant.patch(
+        f"/gap-analyzer/mode_b/{cluster.id}/draft",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "title": "Edited under a stale If-Match",
+            "question": "How do invoice exports work?",
+            "markdown": "edited",
+            "if_match": stale,
+        },
+    )
+    assert conflict_response.status_code == 409, conflict_response.text
+
+    publish_response = tenant.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert publish_response.status_code == 200, publish_response.text
+    result = publish_response.json()
+    assert result["status"] == "resolved"
+    faq_id = uuid.UUID(result["faq_id"])
+
+    db_session.expire_all()
+    faq = db_session.get(TenantFaq, faq_id)
+    assert faq is not None
+    assert faq.tenant_id == tenant_id
+    assert faq.source == "gap_analyzer"
+    assert faq.approved is True
+    assert faq.gap_source_id == cluster.id
+    assert faq.question == refined.question
+    assert faq.answer == refined.markdown
+
+    persisted_cluster = db_session.get(GapCluster, cluster.id)
+    assert persisted_cluster is not None
+    assert persisted_cluster.status == GapClusterStatus.resolved
+    assert persisted_cluster.published_faq_id == faq_id
 
 
 def test_generate_without_openai_key_returns_409(
@@ -157,122 +216,6 @@ def test_generate_without_openai_key_returns_409(
     assert persisted.draft_markdown is None
 
 
-def test_refine_updates_draft(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, tenant_id = _bootstrap_tenant(
-        tenant, db_session, email="drafts-refine@example.com", name="Drafts Refine"
-    )
-    cluster = _make_cluster(db_session, tenant_id, label="Webhook retries")
-
-    initial = DraftContent(
-        title="Webhook retries",
-        question="How do webhook retries work?",
-        markdown="Initial answer.",
-    )
-    refined = DraftContent(
-        title="Webhook retries (short)",
-        question="How do webhook retries work?",
-        markdown="Refined shorter answer.",
-    )
-    with _patch_llm_generate(initial), _patch_guard_clear():
-        tenant.post(
-            f"/gap-analyzer/mode_b/{cluster.id}/draft",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    with _patch_llm_refine(refined), _patch_guard_clear():
-        response = tenant.post(
-            f"/gap-analyzer/mode_b/{cluster.id}/draft/refine",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"guidance": "Make it shorter"},
-        )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["markdown"] == "Refined shorter answer."
-    assert body["title"] == "Webhook retries (short)"
-
-
-def test_publish_creates_faq_and_resolves_gap(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, tenant_id = _bootstrap_tenant(
-        tenant, db_session, email="drafts-publish@example.com", name="Drafts Publish"
-    )
-    cluster = _make_cluster(db_session, tenant_id, label="SAML metadata")
-
-    draft = DraftContent(
-        title="SAML metadata refresh",
-        question="How do I refresh SAML metadata?",
-        markdown="Open settings → SSO → click Refresh metadata.",
-    )
-    with _patch_llm_generate(draft), _patch_guard_clear():
-        tenant.post(
-            f"/gap-analyzer/mode_b/{cluster.id}/draft",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    response = tenant.post(
-        f"/gap-analyzer/mode_b/{cluster.id}/publish",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200, response.text
-    result = response.json()
-    assert result["status"] == "resolved"
-    faq_id = uuid.UUID(result["faq_id"])
-
-    db_session.expire_all()
-    faq = db_session.get(TenantFaq, faq_id)
-    assert faq is not None
-    assert faq.tenant_id == tenant_id
-    assert faq.source == "gap_analyzer"
-    assert faq.approved is True
-    assert faq.gap_source_id == cluster.id
-    assert faq.question == draft.question
-    assert faq.answer == draft.markdown
-
-    persisted_cluster = db_session.get(GapCluster, cluster.id)
-    assert persisted_cluster is not None
-    assert persisted_cluster.status == GapClusterStatus.resolved
-    assert persisted_cluster.published_faq_id == faq_id
-
-
-def test_update_draft_returns_409_on_stale_if_match(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, tenant_id = _bootstrap_tenant(
-        tenant, db_session, email="drafts-conflict@example.com", name="Drafts Conflict"
-    )
-    cluster = _make_cluster(db_session, tenant_id, label="Conflict topic")
-
-    draft = DraftContent(
-        title="Conflict topic",
-        question="Q?",
-        markdown="initial",
-    )
-    with _patch_llm_generate(draft), _patch_guard_clear():
-        tenant.post(
-            f"/gap-analyzer/mode_b/{cluster.id}/draft",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    stale = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
-    response = tenant.patch(
-        f"/gap-analyzer/mode_b/{cluster.id}/draft",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "title": "Conflict topic edited",
-            "question": "Q?",
-            "markdown": "edited",
-            "if_match": stale,
-        },
-    )
-    assert response.status_code == 409, response.text
-
-
 def test_mark_resolved_does_not_create_faq(
     tenant: TestClient,
     db_session: Session,
@@ -297,7 +240,7 @@ def test_mark_resolved_does_not_create_faq(
     assert db_session.query(TenantFaq).filter(TenantFaq.tenant_id == tenant_id).count() == 0
 
 
-def test_discard_clears_draft_and_returns_to_active(
+def test_update_draft_rejects_empty_fields_then_discard_returns_to_active(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -308,10 +251,18 @@ def test_discard_clears_draft_and_returns_to_active(
 
     draft = DraftContent(title="Discard topic", question="Q?", markdown="x")
     with _patch_llm_generate(draft), _patch_guard_clear():
-        tenant.post(
+        gen = tenant.post(
             f"/gap-analyzer/mode_b/{cluster.id}/draft",
             headers={"Authorization": f"Bearer {token}"},
         )
+    if_match = gen.json()["draft_updated_at"]
+
+    empty_field_response = tenant.patch(
+        f"/gap-analyzer/mode_b/{cluster.id}/draft",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"title": "", "question": "Q?", "markdown": "body", "if_match": if_match},
+    )
+    assert empty_field_response.status_code == 422, empty_field_response.text
 
     response = tenant.delete(
         f"/gap-analyzer/mode_b/{cluster.id}/draft",
@@ -374,68 +325,6 @@ def test_generate_returns_422_when_injection_guard_rejects(
     assert persisted.draft_markdown is None
 
 
-def test_publish_is_idempotent_returns_409_on_second_call(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, tenant_id = _bootstrap_tenant(
-        tenant, db_session, email="drafts-double-publish@example.com", name="Drafts Double Publish"
-    )
-    cluster = _make_cluster(db_session, tenant_id, label="Double publish topic")
-
-    draft = DraftContent(title="x", question="Q?", markdown="A.")
-    with _patch_llm_generate(draft), _patch_guard_clear():
-        tenant.post(
-            f"/gap-analyzer/mode_b/{cluster.id}/draft",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    first = tenant.post(
-        f"/gap-analyzer/mode_b/{cluster.id}/publish",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert first.status_code == 200, first.text
-
-    second = tenant.post(
-        f"/gap-analyzer/mode_b/{cluster.id}/publish",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert second.status_code == 409, second.text
-
-    # Exactly one FAQ row exists — the second call must NOT have inserted a duplicate.
-    faq_count = (
-        db_session.query(TenantFaq)
-        .filter(TenantFaq.tenant_id == tenant_id, TenantFaq.gap_source_id == cluster.id)
-        .count()
-    )
-    assert faq_count == 1
-
-
-def test_update_draft_rejects_empty_fields(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, tenant_id = _bootstrap_tenant(
-        tenant, db_session, email="drafts-empty@example.com", name="Drafts Empty"
-    )
-    cluster = _make_cluster(db_session, tenant_id, label="Empty fields topic")
-
-    draft = DraftContent(title="t", question="q", markdown="m")
-    with _patch_llm_generate(draft), _patch_guard_clear():
-        gen = tenant.post(
-            f"/gap-analyzer/mode_b/{cluster.id}/draft",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    if_match = gen.json()["draft_updated_at"]
-
-    response = tenant.patch(
-        f"/gap-analyzer/mode_b/{cluster.id}/draft",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"title": "", "question": "Q?", "markdown": "body", "if_match": if_match},
-    )
-    assert response.status_code == 422, response.text
-
-
 def test_publish_race_blocked_by_unique_index(
     tenant: TestClient,
     db_session: Session,
@@ -490,7 +379,8 @@ def test_resolved_cluster_rejects_draft_mutations(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """A stale tab cannot Save / Refine / Discard / Generate after publish."""
+    """A stale tab cannot Save / Refine / Discard / Generate after publish,
+    and a second publish call is rejected instead of minting a duplicate FAQ."""
     token, tenant_id = _bootstrap_tenant(
         tenant, db_session, email="drafts-reopen@example.com", name="Drafts Reopen"
     )
@@ -509,6 +399,13 @@ def test_resolved_cluster_rejects_draft_mutations(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert publish.status_code == 200
+
+    # Publish is idempotent: the second call must not insert a duplicate FAQ.
+    second_publish = tenant.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second_publish.status_code == 409, second_publish.text
 
     # Save against a resolved gap must fail.
     save = tenant.patch(

@@ -738,44 +738,6 @@ def test_implied_human_request_after_prior_substantive_content_falls_through_to_
 
 
 @pytest.mark.escalation
-def test_explicit_request_without_content_opens_awaiting_request_elicitation(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bare "connect me to a human" with nothing to forward yet asks for the
-    actual question instead of minting an empty ticket."""
-    from backend.chat.handlers.escalation import _AWAITING_REQUEST_CANONICAL_TEXT
-    from backend.models import EscalationTicket
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="explicit-no-content@example.com", name="Explicit No Content"
-    )
-    chat = _make_chat(db_session, tenant_id)
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(
-                human_request=True,
-                message_has_request_content=False,
-                human_request_explicit=True,
-            )
-        ),
-    )
-
-    [resp] = drive(tenant, api_key, chat.session_id, "connect me to a human")
-
-    assert resp["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
-    assert resp["chat_ended"] is False
-    db_session.refresh(chat)
-    assert chat.escalation_awaiting_request is True
-    assert (
-        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
-        == 0
-    )
-
-
-@pytest.mark.escalation
 def test_pre_confirm_null_reply_with_explicit_human_request_still_escalates(
     tenant: TestClient,
     db_session: Session,
@@ -1194,75 +1156,59 @@ def test_human_request_after_greeting_only_elicits_not_escalates(
 
 
 @pytest.mark.escalation
-def test_awaiting_request_then_substantive_message_escalates(
+def test_awaiting_request_journey_elicit_then_reping_then_substantive_escalates(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Once the user supplies the concrete question, the parked awaiting-request
-    state escalates with that content and clears the flag."""
-    from backend.models import EscalationTicket
+    """Multi-turn awaiting-request journey:
 
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="awaiting-then-content@example.com", name="Awaiting Then Content"
-    )
-    chat = _make_chat(db_session, tenant_id, escalation_awaiting_request=True)
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(human_request=False, message_has_request_content=True)
-        ),
-    )
-
-    [resp] = drive(tenant, api_key, chat.session_id, "my invoice shows the wrong amount")
-
-    assert resp["chat_ended"] is False
-    ticket = (
-        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
-    )
-    assert ticket.primary_question == "my invoice shows the wrong amount"
-    db_session.refresh(chat)
-    assert chat.escalation_awaiting_request is False
-
-
-@pytest.mark.escalation
-def test_awaiting_request_repeated_bare_ping_re_elicits(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Still no concrete question, still asking for a human: re-ask and stay
-    parked, never mint a ticket."""
+    - a bare "connect me to a human" with nothing to forward opens
+      awaiting-request elicitation instead of minting an empty ticket
+    - a repeated bare ping while parked re-elicits and stays parked, never
+      mints a ticket
+    - once the user supplies the concrete question, the parked state
+      escalates with that content and clears the flag
+    """
     from backend.chat.handlers.escalation import _AWAITING_REQUEST_CANONICAL_TEXT
     from backend.models import EscalationTicket
 
     api_key, tenant_id = _register_tenant_with_key(
-        tenant,
-        db_session,
-        email="awaiting-repeated-ping@example.com",
-        name="Awaiting Repeated Ping",
+        tenant, db_session, email="awaiting-journey@example.com", name="Awaiting Journey"
     )
-    chat = _make_chat(db_session, tenant_id, escalation_awaiting_request=True)
+    chat = _make_chat(db_session, tenant_id)
     monkeypatch.setattr(
         "backend.chat.service.detect_human_request",
         _human_request_sequence(
             HumanRequestResult(
-                human_request=True,
-                message_has_request_content=False,
-                human_request_explicit=True,
-            )
+                human_request=True, message_has_request_content=False, human_request_explicit=True
+            ),
+            HumanRequestResult(
+                human_request=True, message_has_request_content=False, human_request_explicit=True
+            ),
+            HumanRequestResult(human_request=False, message_has_request_content=True),
         ),
     )
 
-    [resp] = drive(tenant, api_key, chat.session_id, "is anyone there??")
-
-    assert resp["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
+    r1, r2 = drive(tenant, api_key, chat.session_id, "connect me to a human", "is anyone there??")
+    assert r1["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
+    assert r1["chat_ended"] is False
+    assert r2["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
     db_session.refresh(chat)
     assert chat.escalation_awaiting_request is True
     assert (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
         == 0
     )
+
+    [r3] = drive(tenant, api_key, chat.session_id, "my invoice shows the wrong amount")
+    assert r3["chat_ended"] is False
+    ticket = (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
+    )
+    assert ticket.primary_question == "my invoice shows the wrong amount"
+    db_session.refresh(chat)
+    assert chat.escalation_awaiting_request is False
 
 
 @pytest.mark.escalation

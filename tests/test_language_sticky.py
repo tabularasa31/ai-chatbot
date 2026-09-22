@@ -127,34 +127,18 @@ def test_sticky_switches_on_two_consecutive_new_language(monkeypatch: pytest.Mon
     assert context.response_language_resolution_reason == "sticky_switched"
 
 
-def test_sticky_no_signal_keeps_previous(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "backend.chat.language.detect_language",
-        _detect_from_map(
-            {
-                "?": _detection("unknown"),
-                "ok": _detection("unknown"),
-                ".": _detection("unknown"),
-            }
-        ),
-    )
-
-    context = resolve_language_context(
-        current_turn_text="?",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
-        tenant_escalation_language=None,
-        previous_response_language="ru",
-        recent_user_turn_texts=["?", "ok", "."],
-    )
-
-    assert context.response_language == "ru"
-    assert context.response_language_resolution_reason == "sticky_no_signal"
-
-
-def test_sticky_no_signal_falls_back_english_when_no_previous(
+@pytest.mark.parametrize(
+    "previous_response_language, expected_language, expected_reason",
+    [
+        pytest.param("ru", "ru", "sticky_no_signal", id="keeps_previous_language"),
+        pytest.param(None, "en", "detector_unknown", id="falls_back_to_english_without_previous"),
+    ],
+)
+def test_sticky_no_signal(
     monkeypatch: pytest.MonkeyPatch,
+    previous_response_language: str | None,
+    expected_language: str,
+    expected_reason: str,
 ) -> None:
     monkeypatch.setattr(
         "backend.chat.language.detect_language",
@@ -173,64 +157,64 @@ def test_sticky_no_signal_falls_back_english_when_no_previous(
         bootstrap_user_locale=None,
         browser_locale=None,
         tenant_escalation_language=None,
-        previous_response_language=None,
+        previous_response_language=previous_response_language,
         recent_user_turn_texts=["?", "ok", "."],
     )
 
-    assert context.response_language == "en"
-    assert context.response_language_resolution_reason == "detector_unknown"
+    assert context.response_language == expected_language
+    assert context.response_language_resolution_reason == expected_reason
 
 
-def test_margin_exactly_at_threshold_switches(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "backend.chat.language.detect_language",
-        _detect_from_map(
-            {
-                "Bonjour": _detection("fr"),
-                "Hola": _detection("unknown"),
-                "Hello": _detection("es"),
-            }
+@pytest.mark.parametrize(
+    "current_text, detection_map, previous_response_language, recent_texts, expected_language, expected_reason",
+    [
+        pytest.param(
+            "Bonjour",
+            {"Bonjour": _detection("fr"), "Hola": _detection("unknown"), "Hello": _detection("es")},
+            "es",
+            ["Bonjour", "Hola", "Hello"],
+            "fr",
+            "sticky_switched",
+            id="margin_at_threshold_switches",
         ),
-    )
+        pytest.param(
+            "Как дела",
+            {"Как дела": _detection("ru"), "Hello": _detection("en")},
+            "en",
+            ["Как дела", "Hello"],
+            "en",
+            "sticky_retained",
+            id="margin_below_threshold_keeps_previous",
+        ),
+    ],
+)
+def test_sticky_switch_margin(
+    monkeypatch: pytest.MonkeyPatch,
+    current_text: str,
+    detection_map: dict[str, LanguageDetectionResult],
+    previous_response_language: str,
+    recent_texts: list[str],
+    expected_language: str,
+    expected_reason: str,
+) -> None:
+    monkeypatch.setattr("backend.chat.language.detect_language", _detect_from_map(detection_map))
 
     context = resolve_language_context(
-        current_turn_text="Bonjour",
+        current_turn_text=current_text,
         is_bootstrap_turn=False,
         bootstrap_user_locale=None,
         browser_locale=None,
         tenant_escalation_language=None,
-        previous_response_language="es",
-        recent_user_turn_texts=["Bonjour", "Hola", "Hello"],
+        previous_response_language=previous_response_language,
+        recent_user_turn_texts=recent_texts,
     )
 
-    assert context.response_language == "fr"
-    assert context.response_language_resolution_reason == "sticky_switched"
-    assert 3 - 1 == _STICKY_SWITCH_MARGIN
+    assert context.response_language == expected_language
+    assert context.response_language_resolution_reason == expected_reason
 
 
-def test_margin_just_below_threshold_keeps_previous(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "backend.chat.language.detect_language",
-        _detect_from_map(
-            {
-                "Как дела": _detection("ru"),
-                "Hello": _detection("en"),
-            }
-        ),
-    )
-
-    context = resolve_language_context(
-        current_turn_text="Как дела",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
-        tenant_escalation_language=None,
-        previous_response_language="en",
-        recent_user_turn_texts=["Как дела", "Hello"],
-    )
-
-    assert context.response_language == "en"
-    assert context.response_language_resolution_reason == "sticky_retained"
+def test_sticky_switch_margin_constant_is_two() -> None:
+    assert _STICKY_SWITCH_MARGIN == 2
 
 
 def test_language_root_collapse_zh_variants(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -392,66 +376,82 @@ def _patch_process_chat_dependencies(
     )
 
 
-def test_chat_persists_last_response_language(
+def test_chat_locks_on_first_high_confidence_non_english_turn_and_stays_locked(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-persist@example.com")
-    session_id = uuid.uuid4()
-    _patch_process_chat_dependencies(
-        monkeypatch,
-        {"Нужна помощь": _detection("ru")},
-    )
-
-    outcome = process_chat_message(
-        tenant_id,
-        "Нужна помощь",
-        session_id,
-        db_session,
-        api_key=api_key,
-    )
-
-    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
-    assert outcome.text == "lang=ru"
-    assert chat.last_response_language == "ru"
-
-
-def test_chat_sticky_survives_outlier_turn(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-outlier@example.com")
+    """Guards:
+    - a high-confidence non-English first turn locks the chat immediately
+    - the resolved language and last_response_language persist to the chat row
+    - once locked, a later off-language (English) turn keeps answering in the
+      locked language instead of switching
+    """
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "lock-first-ru@example.com")
     session_id = uuid.uuid4()
     _patch_process_chat_dependencies(
         monkeypatch,
         {
             "Привет мир": _detection("ru"),
-            "Traceback: ValueError": _detection("en"),
+            "Hello there everyone": _detection("en"),
         },
     )
 
     first = process_chat_message(tenant_id, "Привет мир", session_id, db_session, api_key=api_key)
-    second = process_chat_message(
-        tenant_id,
-        "Traceback: ValueError",
-        session_id,
-        db_session,
-        api_key=api_key,
-    )
-
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert first.text == "lang=ru"
+    assert chat.last_response_language == "ru"
+    assert chat.language_locked is True
+
+    second = process_chat_message(
+        tenant_id, "Hello there everyone", session_id, db_session, api_key=api_key
+    )
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert second.text == "lang=ru"
+    assert chat.language_locked is True
     assert chat.last_response_language == "ru"
 
 
-def test_chat_switches_language_after_two_consistent_turns(
+def test_chat_does_not_lock_on_first_english_turn_but_locks_after_second(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Guards:
+    - English on the first turn does not lock (too easy for the heuristic to
+      claim by accident: any pure-ASCII multi-token text falls back to en)
+    - a second consecutive English turn locks the chat
+    """
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "lock-two-en@example.com")
+    session_id = uuid.uuid4()
+    _patch_process_chat_dependencies(
+        monkeypatch,
+        {"Hello there": _detection("en"), "How are you": _detection("en")},
+    )
+
+    process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
+    chat_after_first = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat_after_first.last_response_language == "en"
+    assert chat_after_first.language_locked is False
+
+    process_chat_message(tenant_id, "How are you", session_id, db_session, api_key=api_key)
+    chat_after_second = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat_after_second.language_locked is True
+    assert chat_after_second.last_response_language == "en"
+
+
+def test_chat_switches_language_after_two_consistent_turns_and_logs_it(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Guards:
+    - the sticky window keeps answering in the prior language after a single
+      contrary turn (switch margin not yet met)
+    - it switches once two consecutive turns agree on the new language
+    - the switch is logged as response_language_changed with reason=sticky_switched
+    """
     tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-switch@example.com")
     session_id = uuid.uuid4()
     _patch_process_chat_dependencies(
@@ -463,38 +463,16 @@ def test_chat_switches_language_after_two_consistent_turns(
         },
     )
 
-    first = process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
-    second = process_chat_message(tenant_id, "Как дела", session_id, db_session, api_key=api_key)
-    third = process_chat_message(tenant_id, "Нужна помощь", session_id, db_session, api_key=api_key)
+    with caplog.at_level("INFO"):
+        first = process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
+        second = process_chat_message(tenant_id, "Как дела", session_id, db_session, api_key=api_key)
+        third = process_chat_message(tenant_id, "Нужна помощь", session_id, db_session, api_key=api_key)
 
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert first.text == "lang=en"
     assert second.text == "lang=en"
     assert third.text == "lang=ru"
     assert chat.last_response_language == "ru"
-
-
-def test_chat_logs_response_language_changed_on_switch(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-log@example.com")
-    session_id = uuid.uuid4()
-    _patch_process_chat_dependencies(
-        monkeypatch,
-        {
-            "Hello there": _detection("en"),
-            "Как дела": _detection("ru"),
-            "Нужна помощь": _detection("ru"),
-        },
-    )
-
-    with caplog.at_level("INFO"):
-        process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
-        process_chat_message(tenant_id, "Как дела", session_id, db_session, api_key=api_key)
-        process_chat_message(tenant_id, "Нужна помощь", session_id, db_session, api_key=api_key)
 
     records = [record for record in caplog.records if record.msg == "response_language_changed"]
     assert any(
@@ -702,112 +680,6 @@ def test_rag_escalation_engages_pre_confirm_fsm(
     )
     assert any(m.content == "PRE_CONFIRM_QUESTION" for m in assistant_msgs)
     assert all("RAG VERDICT" not in m.content for m in assistant_msgs)
-
-
-# ---------------------------------------------------------------------------
-# Language lock — regression suite for the "lock after 2 consistent turns +
-# confidence gate on first turn (non-English only)" rule.
-# ---------------------------------------------------------------------------
-
-
-def test_chat_locks_on_first_high_confidence_non_english_turn(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """High-confidence non-English first turn locks immediately."""
-    tenant_id, api_key = _chat_test_setup(tenant, db_session, "lock-first-ru@example.com")
-    session_id = uuid.uuid4()
-    _patch_process_chat_dependencies(
-        monkeypatch,
-        {"Привет мир": _detection("ru")},
-    )
-
-    process_chat_message(tenant_id, "Привет мир", session_id, db_session, api_key=api_key)
-
-    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
-    assert chat.last_response_language == "ru"
-    assert chat.language_locked is True
-
-
-def test_chat_does_not_lock_on_first_english_turn(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """English on the first turn is too easy for the heuristic to claim
-    by accident (any pure-ASCII multi-token text falls back to en).
-    Don't lock until a second consistent turn confirms English.
-    """
-    tenant_id, api_key = _chat_test_setup(tenant, db_session, "lock-first-en@example.com")
-    session_id = uuid.uuid4()
-    _patch_process_chat_dependencies(
-        monkeypatch,
-        {"Hello there": _detection("en")},
-    )
-
-    process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
-
-    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
-    assert chat.last_response_language == "en"
-    assert chat.language_locked is False
-
-
-def test_chat_locks_after_two_consistent_english_turns(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """English locks on the second consecutive English turn."""
-    tenant_id, api_key = _chat_test_setup(tenant, db_session, "lock-two-en@example.com")
-    session_id = uuid.uuid4()
-    _patch_process_chat_dependencies(
-        monkeypatch,
-        {"Hello there": _detection("en"), "How are you": _detection("en")},
-    )
-
-    process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
-    chat_after_first = db_session.query(Chat).filter(Chat.session_id == session_id).one()
-    assert chat_after_first.language_locked is False
-
-    process_chat_message(tenant_id, "How are you", session_id, db_session, api_key=api_key)
-    chat_after_second = db_session.query(Chat).filter(Chat.session_id == session_id).one()
-    assert chat_after_second.language_locked is True
-    assert chat_after_second.last_response_language == "en"
-
-
-def test_chat_locked_chat_keeps_language_against_off_language_turn(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Once locked, the chat sticks to its language even if the user
-    sends a clear off-language message. This is the intended trade-off
-    of the lock rule — bilingual mid-session switches require a new
-    chat session.
-    """
-    tenant_id, api_key = _chat_test_setup(tenant, db_session, "locked-keeps@example.com")
-    session_id = uuid.uuid4()
-    _patch_process_chat_dependencies(
-        monkeypatch,
-        {
-            "Привет мир": _detection("ru"),
-            "Hello there everyone": _detection("en"),
-        },
-    )
-
-    first = process_chat_message(tenant_id, "Привет мир", session_id, db_session, api_key=api_key)
-    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
-    assert chat.language_locked is True
-    assert first.text == "lang=ru"
-
-    second = process_chat_message(
-        tenant_id, "Hello there everyone", session_id, db_session, api_key=api_key
-    )
-    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
-    assert chat.language_locked is True
-    assert chat.last_response_language == "ru"
-    assert second.text == "lang=ru"
 
 
 def test_resolve_language_context_skips_detection_when_locked(

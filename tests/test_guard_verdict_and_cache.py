@@ -10,11 +10,7 @@ import pytest
 from backend.core import redis as redis_mod
 from backend.guards import events as guard_events
 from backend.guards import injection_detector as det
-from backend.guards.injection_detector import (
-    _reset_circuit_breaker,
-    _reset_reference_embeddings,
-    async_detect_injection_semantic,
-)
+from backend.guards.injection_detector import async_detect_injection_semantic
 from backend.guards.types import (
     FAIL_OPEN_REASONS,
     Verdict,
@@ -80,12 +76,10 @@ async def _fake_embed_queries(
 
 
 @pytest.fixture(autouse=True)
-def _reset_detector_state():
-    _reset_reference_embeddings()
-    _reset_circuit_breaker()
+def _reset_detector_state(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(det, "_reference_embeddings", None)
+    monkeypatch.setattr(det, "_cb_states", {})
     yield
-    _reset_reference_embeddings()
-    _reset_circuit_breaker()
 
 
 @pytest.fixture

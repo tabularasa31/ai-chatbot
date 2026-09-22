@@ -671,7 +671,6 @@ def test_search_route_traces_variant_summary(
                 "contradiction_count": 0,
                 "contradiction_pair_count": 0,
                 "contradiction_basis_types": [],
-                "contradiction_adjudication_enabled": False,
                 "contradiction_adjudication_applied_to_any_fact": False,
                 "contradiction_adjudication_status": "disabled",
                 "contradiction_adjudication_candidate_count": 0,

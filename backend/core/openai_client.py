@@ -94,15 +94,6 @@ def _cache_put(key: tuple[str, float, str], client: OpenAI | AsyncOpenAI) -> Non
         _close_client_best_effort(old)
 
 
-def _reset_cache() -> None:
-    """Test hook: drop all cached clients and close their httpx pools."""
-    with _client_cache_lock:
-        evicted = list(_client_cache.values())
-        _client_cache.clear()
-    for old in evicted:
-        _close_client_best_effort(old)
-
-
 def _decrypt_or_raise(encrypted_key: str | None) -> str:
     if not encrypted_key:
         raise HTTPException(

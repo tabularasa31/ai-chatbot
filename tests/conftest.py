@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Any, Generator, Optional
 import json
 import os
@@ -13,7 +14,6 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:?check_same_thread=Fals
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
-os.environ.setdefault("INJECTION_SEMANTIC_ENABLED", "false")
 # Valid Fernet key for tests (generate with Fernet.generate_key())
 os.environ.setdefault("ENCRYPTION_KEY", "7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=")
 
@@ -543,7 +543,7 @@ async def async_engine_fx():
 
 
 @pytest.fixture(autouse=True)
-def _reset_escalation_rate_window() -> Generator[None, None, None]:
+def _reset_escalation_rate_window(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Reset the module-level escalation sliding-window deque before every test.
 
     The deque accumulates timestamps across the entire process lifetime.  Without
@@ -551,8 +551,9 @@ def _reset_escalation_rate_window() -> Generator[None, None, None]:
     already at/above the threshold, causing _check_escalation_rate to fire an extra
     event and break assertions that expect exactly one captured event.
     """
-    from backend.chat.events import _reset_escalation_rate_for_tests
-    _reset_escalation_rate_for_tests()
+    from backend.chat import events
+
+    monkeypatch.setattr(events, "_escalation_times", deque())
     yield
 
 

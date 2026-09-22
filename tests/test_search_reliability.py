@@ -585,29 +585,22 @@ def _two_facts_same_pair() -> tuple[ContradictionPair, ContradictionPair]:
 
 
 @pytest.mark.parametrize(
-    "filter_cap_enabled, verdicts, status, sent_count, skip_reasons, expected_cap_reason",
+    "verdicts, status, sent_count, skip_reasons, expected_cap_reason",
     [
-        pytest.param(False, ("rejected", "rejected"), "completed", None, None, "contradiction", id="filter_disabled_keeps_cap_even_if_all_rejected"),
-        pytest.param(True, ("rejected", "rejected"), "completed", None, None, None, id="filter_enabled_drops_cap_when_all_rejected"),
-        pytest.param(True, ("rejected", "confirmed"), "completed", None, None, "contradiction", id="any_confirmed_verdict_keeps_cap"),
-        pytest.param(True, ("rejected", "inconclusive"), "completed", None, None, "contradiction", id="any_inconclusive_verdict_keeps_cap"),
-        pytest.param(True, ("rejected", "rejected"), "failed_open", None, None, "contradiction", id="failed_open_status_keeps_cap"),
-        pytest.param(True, ("rejected", None), "completed", 1, (None, "fact_limit"), "contradiction", id="partial_unjudged_fact_keeps_cap"),
+        pytest.param(("rejected", "rejected"), "completed", None, None, None, id="filter_drops_cap_when_all_rejected"),
+        pytest.param(("rejected", "confirmed"), "completed", None, None, "contradiction", id="any_confirmed_verdict_keeps_cap"),
+        pytest.param(("rejected", "inconclusive"), "completed", None, None, "contradiction", id="any_inconclusive_verdict_keeps_cap"),
+        pytest.param(("rejected", "rejected"), "failed_open", None, None, "contradiction", id="failed_open_status_keeps_cap"),
+        pytest.param(("rejected", None), "completed", 1, (None, "fact_limit"), "contradiction", id="partial_unjudged_fact_keeps_cap"),
     ],
 )
 def test_adjudication_cap_suppression_matrix(
-    monkeypatch: pytest.MonkeyPatch,
-    filter_cap_enabled: bool,
     verdicts: tuple[str | None, ...],
     status: str,
     sent_count: int | None,
     skip_reasons: tuple[str | None, ...] | None,
     expected_cap_reason: str | None,
 ) -> None:
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
-        filter_cap_enabled,
-    )
     pairs = _two_facts_same_pair()
     evidence = _build_adjudication_evidence(
         pairs, verdicts, status=status, sent_count=sent_count, skip_reasons=skip_reasons
@@ -752,7 +745,6 @@ def test_build_reliability_projection_is_stable_for_empty_default_object() -> No
     assert projection["contradiction_count"] == 0
     assert projection["contradiction_pair_count"] == 0
     assert projection["contradiction_basis_types"] == []
-    assert projection["contradiction_adjudication_enabled"] is False
     assert projection["contradiction_adjudication_applied_to_any_fact"] is False
     assert projection["contradiction_adjudication_status"] == "disabled"
     assert projection["contradiction_adjudication_candidate_count"] == 0
@@ -859,7 +851,6 @@ def test_build_reliability_projection_includes_adjudication_execution_and_verdic
             },
         },
     ]
-    assert projection["contradiction_adjudication_enabled"] is True
     assert projection["contradiction_adjudication_applied_to_any_fact"] is True
     assert projection["contradiction_adjudication_status"] == "completed_with_errors"
     assert projection["contradiction_adjudication_candidate_count"] == 2
@@ -881,133 +872,6 @@ def test_search_result_bundle_default_reliability_matches_canonical_empty_state(
     )
 
 
-def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting_disables_layer(
-    monkeypatch: pytest.MonkeyPatch,
-    db_session: Session,
-) -> None:
-    from backend.models import Embedding
-    from backend.search.service import _build_contradiction_adjudication_evidence
-    from tests.test_models import _create_client, _create_user
-
-    user = _create_user(db_session, email="adj-disabled@example.com")
-    tenant = _create_client(db_session, user, name="Adj Disabled")
-    tenant.settings = {
-        "retrieval": {
-            "contradiction_adjudication": {
-                "enabled": True,
-            }
-        }
-    }
-    db_session.commit()
-
-    first = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="Reset password effective date March 2024.",
-        metadata_json={"chunk_index": 0, "effective_date": "2024-03-01"},
-    )
-    second = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="Reset password effective date March 2025.",
-        metadata_json={"chunk_index": 1, "effective_date": "2025-03-01"},
-    )
-    pair = ContradictionPair(
-        chunk_a_id=str(first.id),
-        chunk_b_id=str(second.id),
-        basis="effective_date",
-        value_a="2024-03-01",
-        value_b="2025-03-01",
-    )
-
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_enabled",
-        False,
-    )
-
-    _canonical, obs = _build_contradiction_adjudication_evidence(
-        contradiction_pairs=(pair,),
-        final_results=[(first, 0.9), (second, 0.88)],
-        tenant=tenant,
-        api_key="sk-test",
-    )
-
-    assert _canonical is None
-    assert obs.status == "skipped_global_config"
-    assert obs.enabled is False
-    assert obs.candidate_count == 1
-
-    # Tenant gate is default-on: only an explicit `enabled: false` opts the
-    # tenant out. Missing subkey / malformed shape keeps adjudication enabled.
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_enabled",
-        True,
-    )
-    tenant.settings = {
-        "retrieval": {
-            "contradiction_adjudication": {
-                "enabled": False,
-            }
-        }
-    }
-    db_session.commit()
-
-    _canonical, obs = _build_contradiction_adjudication_evidence(
-        contradiction_pairs=(pair,),
-        final_results=[(first, 0.9), (second, 0.88)],
-        tenant=tenant,
-        api_key="sk-test",
-    )
-
-    assert _canonical is None
-    assert obs.status == "skipped_client_setting"
-    assert obs.enabled is False
-
-
-def test_tenant_contradiction_adjudication_enabled_defaults_to_true_for_missing_settings() -> None:
-    """A tenant without the contradiction_adjudication subkey is gated ON by default.
-
-    The tenant flag is a temporary stop-gap; pending its full removal, the
-    default-on behavior keeps adjudication usable for every tenant without
-    requiring manual JSON edits to ``tenant.settings``.
-    """
-    from backend.search.service import _tenant_contradiction_adjudication_enabled
-
-    class _Stub:
-        def __init__(self, settings: object) -> None:
-            self.settings = settings
-
-    assert _tenant_contradiction_adjudication_enabled(_Stub(None)) is True
-    assert _tenant_contradiction_adjudication_enabled(_Stub({})) is True
-    assert _tenant_contradiction_adjudication_enabled(_Stub({"retrieval": {}})) is True
-    assert (
-        _tenant_contradiction_adjudication_enabled(
-            _Stub({"retrieval": {"contradiction_adjudication": {}}})
-        )
-        is True
-    )
-    assert (
-        _tenant_contradiction_adjudication_enabled(
-            _Stub(
-                {"retrieval": {"contradiction_adjudication": {"enabled": True}}}
-            )
-        )
-        is True
-    )
-    # Only an explicit false opts the tenant out.
-    assert (
-        _tenant_contradiction_adjudication_enabled(
-            _Stub(
-                {"retrieval": {"contradiction_adjudication": {"enabled": False}}}
-            )
-        )
-        is False
-    )
-    # `None` tenant (no row loaded) also defaults to True so retrieval that is
-    # not tenant-scoped does not silently disable the layer.
-    assert _tenant_contradiction_adjudication_enabled(None) is True
-
-
 def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact_limit_skip(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
@@ -1017,15 +881,7 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="adj-enabled@example.com")
-    tenant = _create_client(db_session, user, name="Adj Enabled")
-    tenant.settings = {
-        "retrieval": {
-            "contradiction_adjudication": {
-                "enabled": True,
-            }
-        }
-    }
-    db_session.commit()
+    _create_client(db_session, user, name="Adj Enabled")
 
     first = Embedding(
         id=uuid.uuid4(),
@@ -1056,10 +912,6 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
         ),
     )
 
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_enabled",
-        True,
-    )
     monkeypatch.setattr(
         "backend.search.service.settings.contradiction_adjudication_max_facts",
         1,
@@ -1094,7 +946,6 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
     canonical, _obs = _build_contradiction_adjudication_evidence(
         contradiction_pairs=pairs,
         final_results=[(first, 0.9), (second, 0.88)],
-        tenant=tenant,
         api_key="sk-test",
     )
 

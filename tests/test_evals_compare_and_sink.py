@@ -193,12 +193,10 @@ def _clear_langfuse_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
-def test_upload_dataset_is_no_op_without_creds() -> None:
+def test_upload_dataset_and_run_are_no_ops_without_creds() -> None:
     ds = Dataset(name="t", cases=[GoldenCase(id="x", category="happy_path", lang="en", input="Q")])
     assert upload_dataset(ds) is False
 
-
-def test_upload_run_is_no_op_without_creds() -> None:
     report = RunReport(
         dataset="t",
         tag="unit",
@@ -211,8 +209,18 @@ def test_upload_run_is_no_op_without_creds() -> None:
     assert upload_run(report) is False
 
 
-def test_upload_dataset_creates_dataset_then_items_when_client_provided() -> None:
+@pytest.mark.parametrize(
+    "create_dataset_side_effect",
+    [
+        pytest.param(None, id="creates_dataset_then_items"),
+        # If the dataset already exists Langfuse may raise — the sink should
+        # still proceed to upsert items.
+        pytest.param(RuntimeError("already exists"), id="tolerates_create_dataset_error"),
+    ],
+)
+def test_upload_dataset_upserts_items_when_client_provided(create_dataset_side_effect) -> None:
     client = MagicMock()
+    client.create_dataset.side_effect = create_dataset_side_effect
     ds = Dataset(
         name="t",
         description="hello",
@@ -228,25 +236,15 @@ def test_upload_dataset_creates_dataset_then_items_when_client_provided() -> Non
         ],
     )
     assert upload_dataset(ds, client=client) is True
-    client.create_dataset.assert_called_once_with(name="t", description="hello")
     client.create_dataset_item.assert_called_once()
-    args, kwargs = client.create_dataset_item.call_args
-    assert kwargs["dataset_name"] == "t"
-    assert kwargs["id"] == "x"
-    assert kwargs["input"] == {"question": "Q", "lang": "en"}
-    assert kwargs["expected_output"] == {"judge_rubric": "be helpful"}
-    assert kwargs["metadata"]["category"] == "happy_path"
-
-
-def test_upload_dataset_tolerates_create_dataset_error() -> None:
-    """If the dataset already exists Langfuse may raise — the sink should
-    still proceed to upsert items."""
-
-    client = MagicMock()
-    client.create_dataset.side_effect = RuntimeError("already exists")
-    ds = Dataset(name="t", cases=[GoldenCase(id="x", category="happy_path", lang="en", input="Q")])
-    assert upload_dataset(ds, client=client) is True
-    client.create_dataset_item.assert_called_once()
+    if create_dataset_side_effect is None:
+        client.create_dataset.assert_called_once_with(name="t", description="hello")
+        _, kwargs = client.create_dataset_item.call_args
+        assert kwargs["dataset_name"] == "t"
+        assert kwargs["id"] == "x"
+        assert kwargs["input"] == {"question": "Q", "lang": "en"}
+        assert kwargs["expected_output"] == {"judge_rubric": "be helpful"}
+        assert kwargs["metadata"]["category"] == "happy_path"
 
 
 def test_upload_run_emits_a_trace_and_scores_per_case() -> None:

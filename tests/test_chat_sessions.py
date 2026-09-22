@@ -6,7 +6,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 

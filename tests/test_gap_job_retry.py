@@ -60,149 +60,103 @@ def _status_value(job: GapAnalyzerJob) -> str:
     return value.value if hasattr(value, "value") else str(value)
 
 
-def test_transient_failure_retries_with_backoff(
+@pytest.mark.parametrize(
+    ("failure_kind", "attempt_count", "max_attempts", "retry_after_seconds", "jitter", "expected_status", "min_delay", "max_delay"),
+    [
+        pytest.param(
+            OpenAIFailureKind.TRANSIENT, 1, 3, None, 0.0, "retry", 30.0, 30.5, id="transient_backs_off"
+        ),
+        pytest.param(
+            OpenAIFailureKind.PERMANENT, 1, 5, None, 0.0, "failed", None, None, id="permanent_goes_straight_to_failed"
+        ),
+        pytest.param(
+            OpenAIFailureKind.RATE_LIMIT, 1, 3, 60.0, 6.0, "retry", 60.0, 72.5, id="rate_limit_honors_retry_after"
+        ),
+        pytest.param(
+            OpenAIFailureKind.RATE_LIMIT, 2, 3, None, 0.0, "retry", 60.0, 61.0, id="rate_limit_falls_back_to_backoff"
+        ),
+    ],
+)
+def test_fail_gap_job_delay_by_failure_kind(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
+    failure_kind: OpenAIFailureKind,
+    attempt_count: int,
+    max_attempts: int,
+    retry_after_seconds: float | None,
+    jitter: float,
+    expected_status: str,
+    min_delay: float | None,
+    max_delay: float | None,
 ) -> None:
     tenant_id = _create_client(db_session)
-    job = _create_job(db_session, tenant_id=tenant_id, attempt_count=1, max_attempts=3)
+    job = _create_job(db_session, tenant_id=tenant_id, attempt_count=attempt_count, max_attempts=max_attempts)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
     monkeypatch.setattr(
-        "backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 0.0
+        "backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: jitter
     )
 
     before = datetime.now(UTC)
     repository.fail_gap_job(
         job_id=job.id,
         tenant_id=tenant_id,
-        error_message="temporary",
-        failure_kind=OpenAIFailureKind.TRANSIENT,
-    )
-    db_session.commit()
-    db_session.refresh(job)
-    after = datetime.now(UTC)
-
-    assert job.status == "retry"
-    min_expected = before.timestamp() + 30.0
-    max_expected = after.timestamp() + 30.0
-    assert (
-        min_expected <= job.available_at.replace(tzinfo=UTC).timestamp() <= max_expected
-    )
-
-
-def test_permanent_failure_goes_straight_to_failed(db_session: Session) -> None:
-    tenant_id = _create_client(db_session)
-    job = _create_job(db_session, tenant_id=tenant_id, attempt_count=1, max_attempts=5)
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-
-    repository.fail_gap_job(
-        job_id=job.id,
-        tenant_id=tenant_id,
-        error_message="auth",
-        failure_kind=OpenAIFailureKind.PERMANENT,
+        error_message="boom",
+        failure_kind=failure_kind,
+        retry_after_seconds=retry_after_seconds,
     )
     db_session.commit()
     db_session.refresh(job)
 
-    assert job.status == "failed"
-    assert job.finished_at is not None
+    assert job.status == expected_status
+    if expected_status == "failed":
+        assert job.finished_at is not None
+    else:
+        delay = job.available_at.replace(tzinfo=UTC).timestamp() - before.timestamp()
+        assert min_delay <= delay <= max_delay
 
 
-def test_rate_limit_honors_retry_after(
+@pytest.mark.parametrize(
+    ("failure_kind", "max_attempts", "attempts_tried", "expected_statuses"),
+    [
+        # Transient failures get their own cap (5 attempts), independent of
+        # the job's configured max_attempts.
+        pytest.param(
+            OpenAIFailureKind.TRANSIENT, 3, 5, ["retry", "retry", "retry", "retry", "failed"],
+            id="transient_attempts_extend_to_five",
+        ),
+        # Unrecognised failures fall back to the job's own max_attempts cap.
+        pytest.param(
+            OpenAIFailureKind.UNKNOWN, 5, 3, ["retry", "retry", "failed"],
+            id="unknown_error_capped_at_three_attempts",
+        ),
+    ],
+)
+def test_fail_gap_job_attempt_cap_by_failure_kind(
     db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: OpenAIFailureKind,
+    max_attempts: int,
+    attempts_tried: int,
+    expected_statuses: list[str],
 ) -> None:
-    tenant_id = _create_client(db_session)
-    job = _create_job(db_session, tenant_id=tenant_id, attempt_count=1, max_attempts=3)
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    monkeypatch.setattr(
-        "backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 6.0
-    )
-
-    before = datetime.now(UTC)
-    repository.fail_gap_job(
-        job_id=job.id,
-        tenant_id=tenant_id,
-        error_message="rate limited",
-        failure_kind=OpenAIFailureKind.RATE_LIMIT,
-        retry_after_seconds=60.0,
-    )
-    db_session.commit()
-    db_session.refresh(job)
-
-    delay = job.available_at.replace(tzinfo=UTC).timestamp() - before.timestamp()
-    assert 60.0 <= delay <= 72.5
-
-
-def test_rate_limit_falls_back_to_backoff_when_no_hint(
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    tenant_id = _create_client(db_session)
-    job = _create_job(db_session, tenant_id=tenant_id, attempt_count=2, max_attempts=3)
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    monkeypatch.setattr(
-        "backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 0.0
-    )
-
-    before = datetime.now(UTC)
-    repository.fail_gap_job(
-        job_id=job.id,
-        tenant_id=tenant_id,
-        error_message="rate limited",
-        failure_kind=OpenAIFailureKind.RATE_LIMIT,
-        retry_after_seconds=None,
-    )
-    db_session.commit()
-    db_session.refresh(job)
-
-    delay = job.available_at.replace(tzinfo=UTC).timestamp() - before.timestamp()
-    assert 60.0 <= delay <= 61.0
-
-
-def test_transient_attempts_extend_to_five(db_session: Session) -> None:
     tenant_id = _create_client(db_session)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
     statuses: list[str] = []
 
-    for attempt in range(1, 6):
+    for attempt in range(1, attempts_tried + 1):
         job = _create_job(
-            db_session, tenant_id=tenant_id, attempt_count=attempt, max_attempts=3
+            db_session, tenant_id=tenant_id, attempt_count=attempt, max_attempts=max_attempts
         )
         repository.fail_gap_job(
             job_id=job.id,
             tenant_id=tenant_id,
             error_message=f"attempt {attempt}",
-            failure_kind=OpenAIFailureKind.TRANSIENT,
+            failure_kind=failure_kind,
         )
         db_session.commit()
         db_session.refresh(job)
         statuses.append(_status_value(job))
 
-    assert statuses[:4] == ["retry", "retry", "retry", "retry"]
-    assert statuses[4] == "failed"
-
-
-def test_unknown_error_capped_at_three_attempts(db_session: Session) -> None:
-    tenant_id = _create_client(db_session)
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    statuses: list[str] = []
-
-    for attempt in range(1, 4):
-        job = _create_job(
-            db_session, tenant_id=tenant_id, attempt_count=attempt, max_attempts=5
-        )
-        repository.fail_gap_job(
-            job_id=job.id,
-            tenant_id=tenant_id,
-            error_message=f"attempt {attempt}",
-            failure_kind=OpenAIFailureKind.UNKNOWN,
-        )
-        db_session.commit()
-        db_session.refresh(job)
-        statuses.append(_status_value(job))
-
-    assert statuses == ["retry", "retry", "failed"]
+    assert statuses == expected_statuses
 
 
 def test_retry_delays_monotonic(monkeypatch: pytest.MonkeyPatch) -> None:

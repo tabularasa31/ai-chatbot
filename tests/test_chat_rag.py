@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -15,14 +16,23 @@ from backend.chat.handlers import rag as rag_handler
 from backend.chat.handlers.rag import async_generate_answer
 from backend.chat.language import LocalizationResult
 from backend.chat.service import (
+    RetrievalContext,
     _quick_answer_keys_for_question,
     _quick_answers_context,
+    async_retrieve_context,
     build_rag_messages,
     build_rag_prompt,
 )
 from backend.chat.types import QuestionIntentResult
 from backend.core.config import settings
-from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource
+from backend.models import (
+    MessageRole,
+    QuickAnswer,
+    SourceSchedule,
+    SourceStatus,
+    UrlSource,
+)
+from tests._async_utils import as_async
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -245,50 +255,34 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
 
 
 def test_build_rag_prompt_includes_structured_quick_answers() -> None:
+    """STRUCTURED QUICK ANSWERS rules are static template text — both the
+    section marker and the "prefer" instruction render together whenever any
+    quick-answer items are supplied, regardless of which items they are."""
     prompt = build_rag_prompt(
         "Where is the documentation?",
         ["Chunk about setup."],
-        quick_answer_items=["Documentation: https://docs.example.com/"],
+        quick_answer_items=[
+            "Documentation: https://docs.example.com/",
+            "Pricing: https://example.com/pricing",
+        ],
     )
 
     assert "STRUCTURED QUICK ANSWERS" in prompt
+    assert "prefer STRUCTURED QUICK ANSWERS when relevant" in prompt
     assert "Documentation: https://docs.example.com/" in prompt
+    assert "Pricing: https://example.com/pricing" in prompt
 
-def test_build_rag_prompt_requires_exact_setting_names_from_docs() -> None:
+
+def test_build_rag_prompt_static_answer_rules() -> None:
+    """These instructions are static template text, present in every prompt
+    regardless of the question or chunks — asserted together in one call."""
     prompt = build_rag_prompt(
         "Which setting should I use?",
         ["Use the setting named API Base URL in the Connection section."],
     )
 
     assert "name the exact setting or field as written in the documentation" in prompt
-
-
-def test_build_rag_prompt_prefers_quick_answers_for_short_facts() -> None:
-    prompt = build_rag_prompt(
-        "Where can I find pricing?",
-        ["Pricing details are available in the docs."],
-        quick_answer_items=["Pricing: https://example.com/pricing"],
-    )
-
-    assert "prefer STRUCTURED QUICK ANSWERS when relevant" in prompt
-    assert "Pricing: https://example.com/pricing" in prompt
-
-
-def test_build_rag_prompt_disallows_saying_unknown_when_context_has_answer() -> None:
-    prompt = build_rag_prompt(
-        "How do I reset my password?",
-        ["Go to Settings > Security and click Reset password."],
-    )
-
     assert "Do not say you do not know when relevant evidence is present" in prompt
-
-
-def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
-    prompt = build_rag_prompt(
-        "What is the file limit?",
-        ["The file limit is 10 MB.", "The file limit is 20 MB."],
-    )
-
     assert "If sources in the provided context appear inconsistent" in prompt
     assert "answer conservatively from the clearest supported part only" in prompt
 
@@ -1010,3 +1004,397 @@ def test_classified_intent_reaches_generation_as_quick_answers(
 
     assert response.status_code == 200
     assert seen == [["Pricing: https://example.com/pricing"]]
+
+
+# ---------------------------------------------------------------------------
+# async_retrieve_context — absorbed from the deleted test_chat_retrieval.py
+# ---------------------------------------------------------------------------
+
+def test_retrieve_context_propagates_reliability_cap_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import SearchResultBundle, build_reliability_assessment
+
+    embedding = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.search_similar_chunks_detailed_async",
+        as_async(lambda *args, **kwargs: SearchResultBundle(
+            results=[(embedding, 0.88)],
+            best_vector_similarity=0.88,
+            query_variants=["reset password"],
+            reliability=build_reliability_assessment(
+                top_score=0.88,
+                result_count=5,
+                source_overlap_detected=True,
+            ),
+        )),
+    )
+
+    class FakeBind:
+        url = "postgresql://test"
+
+    class FakeDB:
+        bind = FakeBind()
+
+    context = asyncio.run(
+        async_retrieve_context(
+            tenant_id=uuid.uuid4(),
+            question="reset password",
+            db=FakeDB(),
+            api_key="sk-test",
+        )
+    )
+
+    assert context.reliability.source_overlap_detected is True
+    assert context.reliability.source_overlap_pairs == []
+    assert context.reliability.score == "medium"
+    assert context.reliability.cap_reason == "source_overlap"
+
+
+def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import SearchResultBundle
+
+    embedding = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="secret number explanation",
+        metadata_json={"chunk_index": 0},
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.search_similar_chunks_detailed_async",
+        as_async(lambda *args, **kwargs: SearchResultBundle(
+            results=[(embedding, 0.77)],
+            best_vector_similarity=0.0,
+            best_keyword_score=1.0,
+            has_lexical_signal=True,
+            query_variants=["secret number"],
+        )),
+    )
+
+    class FakeBind:
+        url = "sqlite://test"
+
+    class FakeDB:
+        bind = FakeBind()
+
+    context = asyncio.run(
+        async_retrieve_context(
+            tenant_id=uuid.uuid4(),
+            question="secret number",
+            db=FakeDB(),
+            api_key="sk-test",
+        )
+    )
+
+    assert context.mode == "hybrid"
+    assert context.best_rank_score == 0.77
+    assert context.best_confidence_score == 0.0
+    assert context.confidence_source == "vector_similarity"
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI schema contract for /chat vs /widget/chat -- absorbed from the
+# deleted test_chat_schema_unified.py
+# ---------------------------------------------------------------------------
+
+def _component_ref_for(spec: dict, path: str, method: str, media_type: str) -> str | None:
+    operation = spec["paths"][path][method]
+    response = operation["responses"]["200"]
+    schema = response.get("content", {}).get(media_type, {}).get("schema")
+    if schema is None:
+        return None
+    if "$ref" in schema:
+        return schema["$ref"]
+    if "items" in schema and "$ref" in schema["items"]:
+        return schema["items"]["$ref"]
+    return None
+
+
+def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestClient) -> None:
+    """Private /chat and widget /chat must expose schemas that match their wire payloads.
+
+    Each endpoint advertises the schema under the media type it actually serves —
+    `application/json` for the private API, `text/event-stream` for the widget —
+    so OpenAPI client generators see the right wire protocol on each side.
+    """
+    spec = tenant.get("/openapi.json").json()
+
+    private_ref = _component_ref_for(spec, "/chat", "post", "application/json")
+    widget_ref = _component_ref_for(spec, "/widget/chat", "post", "text/event-stream")
+
+    assert private_ref is not None, "private /chat should advertise an application/json schema"
+    assert widget_ref is not None, (
+        "widget /chat should advertise a text/event-stream schema for the SSE done payload"
+    )
+    assert private_ref.endswith("/ChatTurnResponse"), (
+        f"private /chat must reference ChatTurnResponse, got {private_ref}"
+    )
+    assert widget_ref.endswith("/WidgetChatTurnResponse"), (
+        f"widget /chat must reference WidgetChatTurnResponse, got {widget_ref}"
+    )
+
+    # Widget must NOT advertise itself as application/json (it streams SSE).
+    widget_json_ref = _component_ref_for(spec, "/widget/chat", "post", "application/json")
+    assert widget_json_ref is None, (
+        "widget /chat must not advertise application/json — it streams SSE; "
+        f"got {widget_json_ref}"
+    )
+
+    private_schema = spec["components"]["schemas"]["ChatTurnResponse"]
+    private_properties = private_schema["properties"]
+    # delivered_to_operator is on BOTH contours, unlike source_documents /
+    # tokens_used. It is not a trace field: without it this contour cannot
+    # tell "a human is handling this" (empty text by design) from "the turn
+    # broke", and custom server-side integrations need that as much as the
+    # widget does.
+    assert set(private_properties.keys()) == {
+        "text",
+        "session_id",
+        "chat_ended",
+        "ticket_number",
+        "delivered_to_operator",
+        "source_documents",
+        "tokens_used",
+    }
+    # `validation` was removed — guard against accidental reintroduction.
+    assert "validation" not in private_properties
+
+    widget_schema = spec["components"]["schemas"]["WidgetChatTurnResponse"]
+    widget_properties = widget_schema["properties"]
+    # outcome + failure_state are degraded-state extensions for the
+    # LLM-unavailable path; populated only when the OpenAI provider fails
+    # mid-turn. Old widgets that ignore them still render `text`.
+    # delivered_to_operator marks the muted path — a human operator holds the
+    # chat, so the visitor's message was recorded and handed on and `text` is
+    # empty by design. Old widgets that ignore it render nothing, which is the
+    # correct behaviour anyway.
+    # escalation_offered says the reply put a handoff offer on the table and is
+    # waiting for a yes/no. It is the backend's own record (the pre-confirm
+    # gate), which is what lets any consumer — the widget, the eval driver —
+    # score an offer without matching the reply text per language.
+    assert set(widget_properties.keys()) == {
+        "text",
+        "session_id",
+        "chat_ended",
+        "ticket_number",
+        "outcome",
+        "failure_state",
+        "delivered_to_operator",
+        "escalation_offered",
+    }
+    assert "source_documents" not in widget_properties
+    assert "tokens_used" not in widget_properties
+
+
+# ---------------------------------------------------------------------------
+# Dialog-context bridge (_assemble_chat_messages, _build_prior_messages_for_llm,
+# build_dialog_context) -- absorbed from the deleted test_chat_followup.py
+# ---------------------------------------------------------------------------
+
+class _StubMessage:
+    def __init__(self, role: MessageRole, content: str, *, idx: int = 0):
+        self.role = role
+        self.content = content
+        self.id = idx
+        self.created_at = None
+
+
+# ---------------------------------------------------------------------------
+# _assemble_chat_messages: system → prior_messages → current user
+# ---------------------------------------------------------------------------
+
+
+def test_assemble_chat_messages_inserts_prior_between_system_and_user() -> None:
+    from backend.chat.handlers.rag import _assemble_chat_messages
+
+    prior = [
+        {"role": "user", "content": "как настроить виджет"},
+        {"role": "assistant", "content": "вот как — хотите помогу с темой?"},
+    ]
+    out = _assemble_chat_messages(
+        system_prompt="SYS",
+        user_message="Question: да",
+        prior_messages=prior,
+    )
+    assert [m["role"] for m in out] == ["system", "user", "assistant", "user"]
+    assert out[0] == {"role": "system", "content": "SYS"}
+    assert out[1] == prior[0]
+    assert out[2] == prior[1]
+    assert out[-1] == {"role": "user", "content": "Question: да"}
+
+
+def test_assemble_chat_messages_without_prior_keeps_legacy_shape() -> None:
+    from backend.chat.handlers.rag import _assemble_chat_messages
+
+    out = _assemble_chat_messages(
+        system_prompt="SYS",
+        user_message="Question: цена?",
+        prior_messages=None,
+    )
+    assert [m["role"] for m in out] == ["system", "user"]
+
+
+def test_assemble_chat_messages_empty_prior_treated_as_none() -> None:
+    from backend.chat.handlers.rag import _assemble_chat_messages
+
+    out = _assemble_chat_messages(
+        system_prompt="SYS",
+        user_message="Q",
+        prior_messages=[],
+    )
+    assert [m["role"] for m in out] == ["system", "user"]
+
+
+# ---------------------------------------------------------------------------
+# _build_prior_messages_for_llm: trims, caps, filters empties
+# ---------------------------------------------------------------------------
+
+
+def test_build_prior_messages_for_llm_trims_to_max_messages_and_caps_chars() -> None:
+    from datetime import datetime, timedelta
+
+    from backend.chat.handlers.rag import _build_prior_messages_for_llm
+
+    base = datetime(2026, 1, 1, 12, 0, 0)
+    msgs = []
+    for i, role in enumerate(
+        [
+            MessageRole.user,
+            MessageRole.assistant,
+            MessageRole.user,
+            MessageRole.assistant,
+        ]
+    ):
+        # Plain prose, not a 200-char alphanumeric blob: the egress redactor
+        # this function now runs would mask the latter as an [API_KEY] and the
+        # cap would have nothing left to trim.
+        long_text = "the quick brown fox jumps over the lazy dog. " * 6
+        m = _StubMessage(role, long_text if i == 3 else f"msg{i}", idx=i + 1)
+        m.created_at = base + timedelta(seconds=i)
+        msgs.append(m)
+    chat_stub = SimpleNamespace(messages=msgs)
+    out = _build_prior_messages_for_llm(chat_stub, max_messages=2, char_cap=50)
+    # Last 2 (msg2 and the long assistant text) win; long one is capped.
+    assert len(out) == 2
+    assert out[0]["role"] == "user" and out[0]["content"] == "msg2"
+    assert out[1]["role"] == "assistant"
+    assert out[1]["content"].endswith("…")
+    assert len(out[1]["content"]) <= 51  # 50 chars + ellipsis
+
+
+def test_build_prior_messages_for_llm_returns_none_for_empty_chat() -> None:
+    from backend.chat.handlers.rag import _build_prior_messages_for_llm
+
+    assert _build_prior_messages_for_llm(None, max_messages=6, char_cap=1500) is None
+    chat_stub = SimpleNamespace(messages=[])
+    assert _build_prior_messages_for_llm(chat_stub, max_messages=6, char_cap=1500) is None
+
+
+def test_build_prior_messages_for_llm_skips_empty_content() -> None:
+    from datetime import datetime
+
+    from backend.chat.handlers.rag import _build_prior_messages_for_llm
+
+    base = datetime(2026, 1, 1)
+    blank = _StubMessage(MessageRole.user, "   ", idx=1)
+    blank.created_at = base
+    real = _StubMessage(MessageRole.assistant, "real reply", idx=2)
+    real.created_at = base
+    chat_stub = SimpleNamespace(messages=[blank, real])
+    out = _build_prior_messages_for_llm(chat_stub, max_messages=6, char_cap=1500)
+    assert out == [{"role": "assistant", "content": "real reply"}]
+
+
+# ---------------------------------------------------------------------------
+# build_dialog_context
+# ---------------------------------------------------------------------------
+
+
+def test_build_dialog_context_renders_last_turns_in_order() -> None:
+    from backend.chat.followup import build_dialog_context
+
+    messages = [
+        _StubMessage(MessageRole.user, "old question", idx=1),
+        _StubMessage(MessageRole.assistant, "old answer", idx=2),
+        _StubMessage(MessageRole.user, "how do I set up SSL?", idx=3),
+        _StubMessage(MessageRole.assistant, "Upload a certificate.", idx=4),
+    ]
+    ctx = build_dialog_context(messages, max_turns=1)
+    assert ctx == "User: how do I set up SSL?\nAssistant: Upload a certificate."
+
+
+def test_build_dialog_context_caps_message_length() -> None:
+    from backend.chat.followup import build_dialog_context
+
+    messages = [
+        _StubMessage(MessageRole.user, "q", idx=1),
+        _StubMessage(MessageRole.assistant, "a" * 1000, idx=2),
+    ]
+    ctx = build_dialog_context(messages, char_cap=50)
+    assert ctx is not None
+    for line in ctx.splitlines():
+        assert len(line) <= 50 + len("Assistant: ")
+
+
+def test_build_dialog_context_keeps_assistant_tail_question() -> None:
+    # The bot's follow-up question sits at the END of its reply; truncation
+    # must keep the tail, or continuation resolution ("да, как проверить?")
+    # loses exactly the sentence it needs.
+    from backend.chat.followup import build_dialog_context
+
+    long_answer = "x" * 2000 + " Хотите помогу с настройкой делегации?"
+    messages = [
+        _StubMessage(MessageRole.user, "как подключить домен?", idx=1),
+        _StubMessage(MessageRole.assistant, long_answer, idx=2),
+    ]
+    ctx = build_dialog_context(messages)
+    assert ctx is not None
+    assert "Хотите помогу с настройкой делегации?" in ctx
+
+
+def test_build_dialog_context_keeps_user_head() -> None:
+    # User messages state the topic up front — keep the head on truncation.
+    from backend.chat.followup import build_dialog_context
+
+    long_question = "как подключить домен к виджету " + "и " * 500
+    messages = [
+        _StubMessage(MessageRole.user, long_question, idx=1),
+        _StubMessage(MessageRole.assistant, "ответ", idx=2),
+    ]
+    ctx = build_dialog_context(messages)
+    assert ctx is not None
+    assert "как подключить домен к виджету" in ctx
+
+
+def test_build_dialog_context_orders_by_created_at_not_list_order() -> None:
+    # Chat.messages has no DB ``order_by``; the helper must sort by
+    # created_at instead of trusting iteration order.
+    from datetime import datetime, timedelta
+
+    from backend.chat.followup import build_dialog_context
+
+    base = datetime(2026, 1, 1, 12, 0, 0)
+    newer = _StubMessage(MessageRole.assistant, "свежий ответ", idx=2)
+    newer.created_at = base + timedelta(minutes=5)
+    older = _StubMessage(MessageRole.user, "старый вопрос", idx=1)
+    older.created_at = base
+    ctx = build_dialog_context([newer, older])  # intentionally reversed
+    assert ctx == "User: старый вопрос\nAssistant: свежий ответ"
+
+
+def test_build_dialog_context_empty_history_returns_none() -> None:
+    from backend.chat.followup import build_dialog_context
+
+    assert build_dialog_context([]) is None
+    assert build_dialog_context([_StubMessage(MessageRole.user, "   ", idx=1)]) is None

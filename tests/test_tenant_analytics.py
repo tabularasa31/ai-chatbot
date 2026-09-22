@@ -45,7 +45,7 @@ def _public_id(db: Session, tenant_id: uuid.UUID) -> str:
     return str(db.query(Tenant).filter(Tenant.id == tenant_id).one().public_id)
 
 
-def test_ensure_tenant_for_user_emits_once(
+def test_ensure_tenant_for_user_emits_once_then_nothing_on_repeat(
     tenant: TestClient, db_session: Session, tenant_events: dict[str, list[dict]]
 ) -> None:
     token = register_and_verify_user(db_session=db_session, test_client=tenant, email="ensure1@example.com")
@@ -68,16 +68,7 @@ def test_ensure_tenant_for_user_emits_once(
     assert identified[0]["properties"] == {"name": "Ensure Co"}
     assert token  # sanity: user was actually registered
 
-
-def test_ensure_tenant_for_user_existing_tenant_emits_nothing(
-    tenant: TestClient, db_session: Session, tenant_events: dict[str, list[dict]]
-) -> None:
-    register_and_verify_user(db_session=db_session, test_client=tenant, email="ensure2@example.com")
-    user = db_session.query(User).filter(User.email == "ensure2@example.com").one()
-
-    ensure_tenant_for_user(user.id, db_session, name="Ensure Co")
-    assert len(tenant_events["captured"]) == 1
-
+    # An already-provisioned user emits neither event on a repeat call.
     ensure_tenant_for_user(user.id, db_session, name="Ensure Co")
     assert len(tenant_events["captured"]) == 1
     assert len(tenant_events["identified"]) == 1

@@ -530,122 +530,6 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
 
 
 @pytest.mark.escalation
-def test_chat_followup_new_question_gets_rag_answer_same_turn(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1:
-    a new question during ``escalation_followup_pending`` must get a real
-    RAG answer this same turn, not the canned handoff reply."""
-    from backend.models import (
-        Chat,
-        Document,
-        DocumentStatus,
-        DocumentType,
-        Embedding,
-        EscalationStatus,
-        EscalationTicket,
-        EscalationTrigger,
-    )
-
-    token = register_and_verify_user(tenant, db_session, email="follow-newq@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Follow NewQ Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
-
-    chat = Chat(
-        tenant_id=tenant_id,
-        session_id=uuid.uuid4(),
-        user_context={},
-        escalation_followup_pending=True,
-    )
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    ticket = EscalationTicket(
-        tenant_id=tenant_id,
-        ticket_number="ESC-0001",
-        primary_question="Need support",
-        trigger=EscalationTrigger.user_request,
-        status=EscalationStatus.open,
-        chat_id=chat.id,
-        session_id=chat.session_id,
-    )
-    db_session.add(ticket)
-    db_session.commit()
-
-    doc = Document(
-        tenant_id=tenant_id,
-        filename="wildcards.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-        parsed_text="content",
-    )
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-    emb = Embedding(
-        document_id=doc.id,
-        chunk_text="Wildcard domains are supported on all plans",
-        vector=None,
-        metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
-    )
-    db_session.add(emb)
-    db_session.commit()
-
-    mock_openai_client.embeddings.create.return_value.data = [
-        Mock(embedding=[0.1] * 1536)
-    ]
-    mock_openai_client.chat.completions.create.side_effect = (
-        _chat_completion_side_effect("Yes, wildcard domains are supported.")
-    )
-
-    async def _gate_new_question(**kwargs):
-        return ("new_question", 7)
-
-    monkeypatch.setattr(
-        "backend.chat.service.classify_followup_reply", _gate_new_question
-    )
-
-    async def _fail_full_turn(**kwargs):
-        raise AssertionError(
-            "new-question follow-up must be answered by RAG, not the "
-            "full-turn escalation LLM"
-        )
-
-    monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn", _fail_full_turn
-    )
-
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={
-            "session_id": str(chat.session_id),
-            "question": "do you support wildcard domain names?",
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["text"] == "Yes, wildcard domains are supported."
-    assert data.get("chat_ended") is False
-    # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
-    assert data["tokens_used"] == 7
-
-    db_session.refresh(chat)
-    assert chat.escalation_followup_pending is False
-    assert chat.ended_at is None
-
-
-@pytest.mark.escalation
 def test_chat_legacy_ended_at_chat_is_answered_normally(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -892,50 +776,6 @@ def test_explicit_request_without_content_opens_awaiting_request_elicitation(
 
 
 @pytest.mark.escalation
-def test_pre_confirm_repeated_unclear_never_auto_escalates(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression for 86exn3x7c: a second consecutive "unclear" reply to the
-    pre_confirm offer must re-ask, never get silently promoted to a "yes" and
-    mint a ticket."""
-    from backend.models import EscalationTicket
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant,
-        db_session,
-        email="pre-confirm-unclear-twice@example.com",
-        name="Pre Confirm Unclear Twice",
-    )
-    chat = _make_chat(
-        db_session,
-        tenant_id,
-        escalation_pre_confirm_pending=True,
-        escalation_pre_confirm_context={
-            "trigger": "low_similarity",
-            "primary_question": "my widget won't render",
-            "best_similarity_score": 0.31,
-            "retrieved_chunks": None,
-        },
-        user_context={"escalation_followup_clarify": True},
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.classify_pre_confirm_reply", _async_esc_stub(("unclear", 0))
-    )
-
-    [resp] = drive(tenant, api_key, chat.session_id, "wait, what do you mean by forwarding?")
-
-    assert resp["chat_ended"] is False
-    db_session.refresh(chat)
-    assert chat.escalation_pre_confirm_pending is True
-    assert (
-        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
-        == 0
-    )
-
-
-@pytest.mark.escalation
 def test_pre_confirm_null_reply_with_explicit_human_request_still_escalates(
     tenant: TestClient,
     db_session: Session,
@@ -1086,18 +926,26 @@ def test_stale_followup_with_explicit_human_request_still_escalates(
 
 @pytest.mark.smoke
 @pytest.mark.escalation
-def test_pre_confirm_yes_creates_ticket(
+def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
+    mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An explicit "yes" on the pre_confirm offer must actually create the
-    ticket and hand off — the one branch of the pre_confirm gate this file did
-    not exercise through the app at all before this test."""
+    """Multi-turn pre_confirm -> followup journey from a low_similarity offer:
+
+    - regression for 86exn3x7c: a second consecutive "unclear" reply to the
+      pre_confirm offer re-asks, never gets silently promoted to "yes"
+    - an explicit "yes" actually creates the ticket, hands off, and flips the
+      chat into followup_pending
+    - regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1: the
+      very next new question is answered by RAG in the same turn, not the
+      canned followup handoff reply
+    """
     from backend.models import EscalationTicket, EscalationTrigger
 
     api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="pre-confirm-yes@example.com", name="Pre Confirm Yes"
+        tenant, db_session, email="pre-confirm-journey@example.com", name="Pre Confirm Journey"
     )
     chat = _make_chat(
         db_session,
@@ -1109,15 +957,36 @@ def test_pre_confirm_yes_creates_ticket(
             "best_similarity_score": 0.31,
             "retrieved_chunks": None,
         },
+        # A known contact email means the ticket goes straight to
+        # followup_pending on creation instead of parking in awaiting_ticket.
+        user_context={"email": "user@example.com"},
     )
-    monkeypatch.setattr(
-        "backend.chat.service.classify_pre_confirm_reply", _async_esc_stub(("yes", 5))
+    pre_confirm_replies = iter([("unclear", 0), ("unclear", 0), ("yes", 5)])
+
+    async def _pre_confirm_stub(**kwargs):
+        return next(pre_confirm_replies)
+
+    monkeypatch.setattr("backend.chat.service.classify_pre_confirm_reply", _pre_confirm_stub)
+
+    r1, r2 = drive(
+        tenant,
+        api_key,
+        chat.session_id,
+        "wait, what do you mean by forwarding?",
+        "still not sure what you mean",
+    )
+    assert r1["chat_ended"] is False
+    assert r2["chat_ended"] is False
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is True
+    assert (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
+        == 0
     )
 
-    [resp] = drive(tenant, api_key, chat.session_id, "yes please")
-
-    assert resp["chat_ended"] is False
-    assert resp.get("ticket_number")
+    [r3] = drive(tenant, api_key, chat.session_id, "yes please")
+    assert r3["chat_ended"] is False
+    assert r3.get("ticket_number")
     ticket = (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     )
@@ -1125,6 +994,33 @@ def test_pre_confirm_yes_creates_ticket(
     assert ticket.primary_question == "my widget won't render"
     db_session.refresh(chat)
     assert chat.escalation_pre_confirm_pending is False
+    assert chat.escalation_followup_pending is True
+
+    _seed_rag_answer(
+        mock_openai_client, db_session, tenant_id, answer="Yes, wildcard domains are supported."
+    )
+
+    async def _gate_new_question(**kwargs):
+        return ("new_question", 7)
+
+    monkeypatch.setattr("backend.chat.service.classify_followup_reply", _gate_new_question)
+
+    async def _fail_full_turn(**kwargs):
+        raise AssertionError(
+            "new-question follow-up must be answered by RAG, not the full-turn escalation LLM"
+        )
+
+    monkeypatch.setattr("backend.chat.service.complete_escalation_openai_turn", _fail_full_turn)
+
+    [r4] = drive(tenant, api_key, chat.session_id, "do you support wildcard domain names?")
+    assert r4["text"] == "Yes, wildcard domains are supported."
+    assert r4.get("chat_ended") is False
+    # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
+    assert r4["tokens_used"] == 7
+
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is False
+    assert chat.ended_at is None
 
 
 @pytest.mark.smoke

@@ -29,42 +29,59 @@ from backend.guards.reject_response import RejectReason, build_reject_response_r
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_build_reject_response_not_relevant_no_profile() -> None:
-    result = await build_reject_response_result(reason=RejectReason.NOT_RELEVANT, profile=None)
-    assert "Sorry" in result.text
-    assert "this product" in result.text
-    assert "Я отвечаю только" not in result.text
-
-
-@pytest.mark.asyncio
-async def test_build_reject_response_not_relevant_with_product_name() -> None:
+def _profile(product_name: str, topics: list[str]) -> Mock:
     profile = Mock()
-    profile.product_name = "WidgetPro"
-    profile.topics = []
-    result = await build_reject_response_result(reason=RejectReason.NOT_RELEVANT, profile=profile)
-    assert "WidgetPro" in result.text
-    assert "Sorry" in result.text
-    assert "Я отвечаю только" not in result.text
+    profile.product_name = product_name
+    profile.topics = topics
+    return profile
 
 
+@pytest.mark.parametrize(
+    "reason, profile, required, any_of, forbidden",
+    [
+        pytest.param(
+            RejectReason.NOT_RELEVANT, None, ["Sorry", "this product"], [], ["Я отвечаю только"],
+            id="not_relevant_no_profile",
+        ),
+        pytest.param(
+            RejectReason.NOT_RELEVANT, _profile("WidgetPro", []), ["WidgetPro", "Sorry"], [], ["Я отвечаю только"],
+            id="not_relevant_with_product_name",
+        ),
+        pytest.param(
+            RejectReason.NOT_RELEVANT, _profile("WidgetPro", ["API", "Billing", "Auth"]), ["WidgetPro"], ["API", "Billing"], [],
+            id="not_relevant_with_topic_hint",
+        ),
+        pytest.param(
+            RejectReason.INJECTION_DETECTED, None, ["Sorry"], [], ["Я не могу выполнить"],
+            id="injection_detected",
+        ),
+        pytest.param(
+            RejectReason.INSUFFICIENT_CONFIDENCE, None,
+            ["don't have enough information", "clarify your question"], [], [],
+            id="insufficient_confidence_no_profile",
+        ),
+        pytest.param(
+            RejectReason.INSUFFICIENT_CONFIDENCE, _profile("WidgetPro", ["Webhooks", "Auth"]),
+            ["don't have enough information"], ["Webhooks", "Auth"], [],
+            id="insufficient_confidence_with_hint",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_build_reject_response_not_relevant_with_topic_hint() -> None:
-    profile = Mock()
-    profile.product_name = "WidgetPro"
-    profile.topics = ["API", "Billing", "Auth"]
-    result = await build_reject_response_result(reason=RejectReason.NOT_RELEVANT, profile=profile)
-    assert "API" in result.text or "Billing" in result.text
-    assert "WidgetPro" in result.text
-
-
-@pytest.mark.asyncio
-async def test_build_reject_response_injection_detected() -> None:
-    result = await build_reject_response_result(
-        reason=RejectReason.INJECTION_DETECTED, profile=None
-    )
-    assert "Sorry" in result.text
-    assert "Я не могу выполнить" not in result.text
+async def test_build_reject_response_canonical_formulations(
+    reason: RejectReason,
+    profile: Mock | None,
+    required: list[str],
+    any_of: list[str],
+    forbidden: list[str],
+) -> None:
+    result = await build_reject_response_result(reason=reason, profile=profile)
+    for substring in required:
+        assert substring in result.text
+    if any_of:
+        assert any(substring in result.text for substring in any_of)
+    for substring in forbidden:
+        assert substring not in result.text
 
 
 @pytest.mark.asyncio
@@ -91,37 +108,6 @@ async def test_build_reject_response_localizes_to_question_language(
         api_key="sk-test",
     )
     assert result.text == "Je ne peux pas aider avec cette demande."
-
-
-@pytest.mark.asyncio
-async def test_build_reject_response_insufficient_confidence_no_profile() -> None:
-    result = await build_reject_response_result(
-        reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=None
-    )
-    assert "don't have enough information" in result.text
-    assert "clarify your question" in result.text
-
-
-@pytest.mark.asyncio
-async def test_build_reject_response_insufficient_confidence_with_hint() -> None:
-    profile = Mock()
-    profile.product_name = "WidgetPro"
-    profile.topics = ["Webhooks", "Auth"]
-    result = await build_reject_response_result(
-        reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=profile
-    )
-    assert "don't have enough information" in result.text
-    assert "Webhooks" in result.text or "Auth" in result.text
-
-
-@pytest.mark.asyncio
-async def test_build_reject_response_uses_canonical_english_without_question() -> None:
-    result = await build_reject_response_result(
-        reason=RejectReason.NOT_RELEVANT,
-        profile=None,
-    )
-    assert "Sorry" in result.text
-    assert "this product" in result.text
 
 
 # ---------------------------------------------------------------------------

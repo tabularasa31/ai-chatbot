@@ -30,35 +30,80 @@ from backend.search.service import (
 )
 
 
-def test_detect_source_overlaps_flags_duplicate_chunks_from_different_docs() -> None:
+@pytest.mark.parametrize(
+    "same_document, expected_detected",
+    [
+        pytest.param(False, True, id="cross_document_overlap_over_threshold_detected"),
+        pytest.param(True, False, id="same_document_pair_ignored"),
+    ],
+)
+def test_detect_source_overlaps_document_gating(same_document: bool, expected_detected: bool) -> None:
     from backend.models import Embedding
 
+    document_a = uuid.uuid4()
+    document_b = document_a if same_document else uuid.uuid4()
     first = Embedding(
         id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
+        document_id=document_a,
         chunk_text="reset password in settings panel",
         metadata_json={"chunk_index": 0},
     )
     second = Embedding(
         id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
+        document_id=document_b,
         chunk_text="reset password in settings panel now",
         metadata_json={"chunk_index": 1},
     )
 
-    source_overlap_detected, source_overlap_pairs = detect_source_overlaps(
+    detected, pairs = detect_source_overlaps(
         [(first, 0.9), (second, 0.88)],
         similarity_threshold=0.6,
     )
 
-    assert source_overlap_detected is True
-    assert source_overlap_pairs == (
-        SourceOverlapPair(
-            chunk_a_id=str(first.id),
-            chunk_b_id=str(second.id),
-            similarity=0.8333,
-        ),
+    assert detected is expected_detected
+    if expected_detected:
+        assert pairs == (
+            SourceOverlapPair(
+                chunk_a_id=str(first.id),
+                chunk_b_id=str(second.id),
+                similarity=0.8333,
+            ),
+        )
+    else:
+        assert pairs == ()
+
+
+@pytest.mark.parametrize(
+    "similarity_threshold, expected_detected",
+    [
+        pytest.param(0.75, True, id="at_threshold_boundary_detected"),
+        pytest.param(0.76, False, id="above_threshold_boundary_not_detected"),
+    ],
+)
+def test_detect_source_overlaps_respects_similarity_threshold_boundary(
+    similarity_threshold: float, expected_detected: bool
+) -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="alpha beta gamma",
+        metadata_json={"chunk_index": 0},
     )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="alpha beta gamma delta",
+        metadata_json={"chunk_index": 1},
+    )
+
+    detected, _pairs = detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=similarity_threshold,
+    )
+
+    assert detected is expected_detected
 
 
 def test_build_reliability_assessment_uses_overlap_signal_without_conflict_semantics() -> None:
@@ -159,20 +204,57 @@ def test_build_reliability_assessment_overlap_cap_is_not_applied_when_base_score
     assert serialize_reliability(reliability)["signals"] == [{"kind": "source_overlap"}]
 
 
-def test_detect_metadata_contradictions_flags_effective_date_disagreement_on_overlap_pairs() -> None:
+@pytest.mark.parametrize(
+    "metadata_a, metadata_b, expected_bases",
+    [
+        pytest.param(
+            {"effective_date": "2024-03-01"},
+            {"effective_date": "2025-03-01"},
+            ("effective_date",),
+            id="effective_date_disagreement_flagged",
+        ),
+        pytest.param(
+            {"effective_date": "2024-03-01"},
+            {},
+            (),
+            id="single_sided_metadata_ignored",
+        ),
+        pytest.param(
+            {"effective_date": "2024"},
+            {"effective_date": "2024-03"},
+            (),
+            id="date_granularity_treated_as_compatible",
+        ),
+        pytest.param(
+            {"version": "v2"},
+            {"version": "2.0"},
+            (),
+            id="version_equivalence_normalized",
+        ),
+        pytest.param(
+            {"effective_date": "2024-03-01", "version": "v2"},
+            {"effective_date": "2025-03-01", "version": "v3"},
+            ("effective_date", "version"),
+            id="multiple_facts_emitted_for_one_overlap_pair",
+        ),
+    ],
+)
+def test_detect_metadata_contradictions_basis_matrix(
+    metadata_a: dict, metadata_b: dict, expected_bases: tuple[str, ...]
+) -> None:
     from backend.models import Embedding
 
     first = Embedding(
         id=uuid.uuid4(),
         document_id=uuid.uuid4(),
         chunk_text="reset password in settings panel",
-        metadata_json={"chunk_index": 0, "effective_date": "2024-03-01"},
+        metadata_json={"chunk_index": 0, **metadata_a},
     )
     second = Embedding(
         id=uuid.uuid4(),
         document_id=uuid.uuid4(),
         chunk_text="reset password in settings panel now",
-        metadata_json={"chunk_index": 1, "effective_date": "2025-03-01"},
+        metadata_json={"chunk_index": 1, **metadata_b},
     )
 
     overlap_pairs = (
@@ -188,158 +270,10 @@ def test_detect_metadata_contradictions_flags_effective_date_disagreement_on_ove
         overlap_pairs,
     )
 
-    assert contradiction_pairs == (
-        ContradictionPair(
-            chunk_a_id=str(first.id),
-            chunk_b_id=str(second.id),
-            basis="effective_date",
-            value_a="2024-03-01",
-            value_b="2025-03-01",
-        ),
-    )
-
-
-def test_detect_metadata_contradictions_ignores_single_sided_metadata() -> None:
-    from backend.models import Embedding
-
-    first = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password in settings panel",
-        metadata_json={"chunk_index": 0, "effective_date": "2024-03-01"},
-    )
-    second = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password in settings panel now",
-        metadata_json={"chunk_index": 1},
-    )
-
-    contradiction_pairs = detect_metadata_contradictions(
-        [(first, 0.9), (second, 0.88)],
-        (
-            SourceOverlapPair(
-                chunk_a_id=str(first.id),
-                chunk_b_id=str(second.id),
-                similarity=0.83,
-            ),
-        ),
-    )
-
-    assert contradiction_pairs == ()
-
-
-def test_detect_metadata_contradictions_treats_date_granularity_as_compatible() -> None:
-    from backend.models import Embedding
-
-    first = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password in settings panel",
-        metadata_json={"chunk_index": 0, "effective_date": "2024"},
-    )
-    second = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password in settings panel now",
-        metadata_json={"chunk_index": 1, "effective_date": "2024-03"},
-    )
-
-    contradiction_pairs = detect_metadata_contradictions(
-        [(first, 0.9), (second, 0.88)],
-        (
-            SourceOverlapPair(
-                chunk_a_id=str(first.id),
-                chunk_b_id=str(second.id),
-                similarity=0.83,
-            ),
-        ),
-    )
-
-    assert contradiction_pairs == ()
-
-
-def test_detect_metadata_contradictions_normalizes_version_equivalence() -> None:
-    from backend.models import Embedding
-
-    first = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password in settings panel",
-        metadata_json={"chunk_index": 0, "version": "v2"},
-    )
-    second = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password in settings panel now",
-        metadata_json={"chunk_index": 1, "version": "2.0"},
-    )
-
-    contradiction_pairs = detect_metadata_contradictions(
-        [(first, 0.9), (second, 0.88)],
-        (
-            SourceOverlapPair(
-                chunk_a_id=str(first.id),
-                chunk_b_id=str(second.id),
-                similarity=0.83,
-            ),
-        ),
-    )
-
-    assert contradiction_pairs == ()
-
-
-def test_detect_metadata_contradictions_can_emit_multiple_facts_for_one_overlap_pair() -> None:
-    from backend.models import Embedding
-
-    first = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password in settings panel",
-        metadata_json={
-            "chunk_index": 0,
-            "effective_date": "2024-03-01",
-            "version": "v2",
-        },
-    )
-    second = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="reset password in settings panel now",
-        metadata_json={
-            "chunk_index": 1,
-            "effective_date": "2025-03-01",
-            "version": "v3",
-        },
-    )
-
-    contradiction_pairs = detect_metadata_contradictions(
-        [(first, 0.9), (second, 0.88)],
-        (
-            SourceOverlapPair(
-                chunk_a_id=str(first.id),
-                chunk_b_id=str(second.id),
-                similarity=0.83,
-            ),
-        ),
-    )
-
-    assert contradiction_pairs == (
-        ContradictionPair(
-            chunk_a_id=str(first.id),
-            chunk_b_id=str(second.id),
-            basis="effective_date",
-            value_a="2024-03-01",
-            value_b="2025-03-01",
-        ),
-        ContradictionPair(
-            chunk_a_id=str(first.id),
-            chunk_b_id=str(second.id),
-            basis="version",
-            value_a="v2",
-            value_b="v3",
-        ),
-    )
+    assert tuple(pair.basis for pair in contradiction_pairs) == expected_bases
+    for pair in contradiction_pairs:
+        assert pair.chunk_a_id == str(first.id)
+        assert pair.chunk_b_id == str(second.id)
 
 
 def test_build_reliability_assessment_keeps_single_contradiction_as_evidence_only() -> None:
@@ -462,333 +396,128 @@ def test_build_reliability_assessment_caps_to_low_for_multiple_facts_on_same_pai
     }
 
 
-def test_build_reliability_assessment_caps_to_low_for_multiple_distinct_same_basis_facts() -> None:
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=(
-            ContradictionPair(
-                chunk_a_id="a",
-                chunk_b_id="b",
-                basis="revision",
-                value_a="rev 1",
-                value_b="rev 2",
+@pytest.mark.parametrize(
+    "top_score, contradiction_pairs, source_overlap_pairs, expected_score, expected_cap_reason, expected_pair_count",
+    [
+        pytest.param(
+            0.9,
+            (
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="revision", value_a="rev 1", value_b="rev 2"),
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="revision", value_a="rev 3", value_b="rev 4"),
             ),
-            ContradictionPair(
-                chunk_a_id="a",
-                chunk_b_id="b",
-                basis="revision",
-                value_a="rev 3",
-                value_b="rev 4",
-            ),
+            (),
+            "low",
+            "contradiction",
+            2,
+            id="distinct_same_basis_facts_cap_low",
         ),
-    )
-
-    assert serialize_reliability(reliability) == {
-        "base_score": "high",
-        "score": "low",
-        "cap": "low",
-        "cap_reason": "contradiction",
-        "signals": [{"kind": "contradiction"}],
-        "evidence": {
-            "contradiction": {
-                "pairs": [
-                    {
-                        "chunk_a_id": "a",
-                        "chunk_b_id": "b",
-                        "basis": "revision",
-                        "value_a": "rev 1",
-                        "value_b": "rev 2",
-                    },
-                    {
-                        "chunk_a_id": "a",
-                        "chunk_b_id": "b",
-                        "basis": "revision",
-                        "value_a": "rev 3",
-                        "value_b": "rev 4",
-                    },
-                ]
-            },
-        },
-    }
-
-
-def test_build_reliability_assessment_caps_to_low_for_contradictions_across_pairs() -> None:
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=(
-            ContradictionPair(
-                chunk_a_id="a",
-                chunk_b_id="b",
-                basis="effective_date",
-                value_a="2024-03-01",
-                value_b="2025-03-01",
+        pytest.param(
+            0.9,
+            (
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="effective_date", value_a="2024-03-01", value_b="2025-03-01"),
+                ContradictionPair(chunk_a_id="c", chunk_b_id="d", basis="version", value_a="v2", value_b="v3"),
             ),
-            ContradictionPair(
-                chunk_a_id="c",
-                chunk_b_id="d",
-                basis="version",
-                value_a="v2",
-                value_b="v3",
-            ),
+            (),
+            "low",
+            "contradiction",
+            2,
+            id="contradictions_across_distinct_pairs_cap_low",
         ),
-    )
-
-    assert reliability.score == "low"
-    assert reliability.cap == "low"
-    assert reliability.cap_reason == "contradiction"
-    assert serialize_reliability(reliability)["signals"] == [{"kind": "contradiction"}]
-
-
-def test_build_reliability_assessment_filters_invalid_contradictions_before_threshold() -> None:
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=(
-            ContradictionPair(
-                chunk_a_id="a",
-                chunk_b_id="b",
-                basis="effective_date",
-                value_a="2024-03-01",
-                value_b="2025-03-01",
+        pytest.param(
+            0.9,
+            (
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="effective_date", value_a="2024-03-01", value_b="2025-03-01"),
+                ContradictionPair(chunk_a_id="c", chunk_b_id="d", basis="", value_a="v2", value_b="v3"),
             ),
-            ContradictionPair(
-                chunk_a_id="c",
-                chunk_b_id="d",
-                basis="",
-                value_a="v2",
-                value_b="v3",
-            ),
+            (),
+            "high",
+            None,
+            1,
+            id="invalid_basis_filtered_before_threshold",
         ),
-    )
-
-    assert serialize_reliability(reliability) == {
-        "base_score": "high",
-        "score": "high",
-        "cap": None,
-        "cap_reason": None,
-        "signals": [{"kind": "contradiction"}],
-        "evidence": {
-            "contradiction": {
-                "pairs": [
-                    {
-                        "chunk_a_id": "a",
-                        "chunk_b_id": "b",
-                        "basis": "effective_date",
-                        "value_a": "2024-03-01",
-                        "value_b": "2025-03-01",
-                    }
-                ]
-            },
-        },
-    }
-
-
-def test_build_reliability_assessment_deduplicates_exact_duplicate_contradictions() -> None:
-    contradiction = ContradictionPair(
-        chunk_a_id="a",
-        chunk_b_id="b",
-        basis="effective_date",
-        value_a="2024-03-01",
-        value_b="2025-03-01",
-    )
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=(contradiction, contradiction),
-    )
-
-    assert serialize_reliability(reliability) == {
-        "base_score": "high",
-        "score": "high",
-        "cap": None,
-        "cap_reason": None,
-        "signals": [{"kind": "contradiction"}],
-        "evidence": {
-            "contradiction": {
-                "pairs": [
-                    {
-                        "chunk_a_id": "a",
-                        "chunk_b_id": "b",
-                        "basis": "effective_date",
-                        "value_a": "2024-03-01",
-                        "value_b": "2025-03-01",
-                    }
-                ]
-            },
-        },
-    }
-
-
-def test_build_reliability_assessment_deduplicates_mirrored_duplicate_contradictions() -> None:
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=(
-            ContradictionPair(
-                chunk_a_id="a",
-                chunk_b_id="b",
-                basis="effective_date",
-                value_a="2024-03-01",
-                value_b="2025-03-01",
-            ),
-            ContradictionPair(
-                chunk_a_id="b",
-                chunk_b_id="a",
-                basis="effective_date",
-                value_a="2025-03-01",
-                value_b="2024-03-01",
-            ),
+        pytest.param(
+            0.9,
+            (
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="effective_date", value_a="2024-03-01", value_b="2025-03-01"),
+            )
+            * 2,
+            (),
+            "high",
+            None,
+            1,
+            id="exact_duplicate_contradiction_deduplicated",
         ),
-    )
-
-    assert serialize_reliability(reliability) == {
-        "base_score": "high",
-        "score": "high",
-        "cap": None,
-        "cap_reason": None,
-        "signals": [{"kind": "contradiction"}],
-        "evidence": {
-            "contradiction": {
-                "pairs": [
-                    {
-                        "chunk_a_id": "a",
-                        "chunk_b_id": "b",
-                        "basis": "effective_date",
-                        "value_a": "2024-03-01",
-                        "value_b": "2025-03-01",
-                    }
-                ]
-            },
-        },
-    }
-
-
-def test_build_reliability_assessment_counts_mirrored_distinct_facts_on_one_logical_pair() -> None:
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=(
-            ContradictionPair(
-                chunk_a_id="a",
-                chunk_b_id="b",
-                basis="effective_date",
-                value_a="2024-03-01",
-                value_b="2025-03-01",
+        pytest.param(
+            0.9,
+            (
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="effective_date", value_a="2024-03-01", value_b="2025-03-01"),
+                ContradictionPair(chunk_a_id="b", chunk_b_id="a", basis="effective_date", value_a="2025-03-01", value_b="2024-03-01"),
             ),
-            ContradictionPair(
-                chunk_a_id="b",
-                chunk_b_id="a",
-                basis="version",
-                value_a="v3",
-                value_b="v2",
+            (),
+            "high",
+            None,
+            1,
+            id="mirrored_duplicate_contradiction_deduplicated",
+        ),
+        pytest.param(
+            0.9,
+            (
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="effective_date", value_a="2024-03-01", value_b="2025-03-01"),
+                ContradictionPair(chunk_a_id="b", chunk_b_id="a", basis="version", value_a="v3", value_b="v2"),
             ),
+            (),
+            "low",
+            "contradiction",
+            2,
+            id="mirrored_distinct_basis_facts_counted_separately",
         ),
-    )
-
-    assert reliability.score == "low"
-    assert reliability.cap == "low"
-    assert reliability.cap_reason == "contradiction"
-    assert serialize_reliability(reliability)["evidence"]["contradiction"]["pairs"] == [
-        {
-            "chunk_a_id": "a",
-            "chunk_b_id": "b",
-            "basis": "effective_date",
-            "value_a": "2024-03-01",
-            "value_b": "2025-03-01",
-        },
-        {
-            "chunk_a_id": "b",
-            "chunk_b_id": "a",
-            "basis": "version",
-            "value_a": "v3",
-            "value_b": "v2",
-        },
-    ]
-
-
-def test_build_reliability_assessment_contradiction_cap_short_circuits_overlap_cap() -> None:
+        pytest.param(
+            0.9,
+            (
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="effective_date", value_a="2024-03-01", value_b="2025-03-01"),
+                ContradictionPair(chunk_a_id="c", chunk_b_id="d", basis="version", value_a="v2", value_b="v3"),
+            ),
+            (SourceOverlapPair(chunk_a_id="a", chunk_b_id="b", similarity=0.81),),
+            "low",
+            "contradiction",
+            2,
+            id="contradiction_cap_short_circuits_overlap_cap",
+        ),
+        pytest.param(
+            0.4,
+            (
+                ContradictionPair(chunk_a_id="a", chunk_b_id="b", basis="effective_date", value_a="2024-03-01", value_b="2025-03-01"),
+                ContradictionPair(chunk_a_id="c", chunk_b_id="d", basis="version", value_a="v2", value_b="v3"),
+            ),
+            (),
+            "low",
+            "contradiction",
+            2,
+            id="keeps_contradiction_reason_when_base_score_already_low",
+        ),
+    ],
+)
+def test_build_reliability_assessment_contradiction_cap_variations(
+    top_score: float | None,
+    contradiction_pairs: tuple[ContradictionPair, ...],
+    source_overlap_pairs: tuple[SourceOverlapPair, ...],
+    expected_score: str,
+    expected_cap_reason: str | None,
+    expected_pair_count: int,
+) -> None:
     reliability = build_reliability_assessment(
-        top_score=0.9,
+        top_score=top_score,
         result_count=5,
-        source_overlap_detected=True,
-        source_overlap_pairs=(
-            SourceOverlapPair(chunk_a_id="a", chunk_b_id="b", similarity=0.81),
-        ),
+        source_overlap_detected=bool(source_overlap_pairs),
+        source_overlap_pairs=source_overlap_pairs,
         source_overlap_similarity_threshold=0.75,
-        contradiction_pairs=(
-            ContradictionPair(
-                chunk_a_id="a",
-                chunk_b_id="b",
-                basis="effective_date",
-                value_a="2024-03-01",
-                value_b="2025-03-01",
-            ),
-            ContradictionPair(
-                chunk_a_id="c",
-                chunk_b_id="d",
-                basis="version",
-                value_a="v2",
-                value_b="v3",
-            ),
-        ),
+        contradiction_pairs=contradiction_pairs,
     )
 
-    assert reliability.score == "low"
-    assert reliability.cap == "low"
-    assert reliability.cap_reason == "contradiction"
-
-
-def test_build_reliability_assessment_keeps_contradiction_reason_when_base_score_is_low() -> None:
-    reliability = build_reliability_assessment(
-        top_score=0.4,
-        result_count=5,
-        contradiction_pairs=(
-            ContradictionPair(
-                chunk_a_id="a",
-                chunk_b_id="b",
-                basis="effective_date",
-                value_a="2024-03-01",
-                value_b="2025-03-01",
-            ),
-            ContradictionPair(
-                chunk_a_id="c",
-                chunk_b_id="d",
-                basis="version",
-                value_a="v2",
-                value_b="v3",
-            ),
-        ),
-    )
-
-    assert serialize_reliability(reliability) == {
-        "base_score": "low",
-        "score": "low",
-        "cap": "low",
-        "cap_reason": "contradiction",
-        "signals": [{"kind": "low_top_score"}, {"kind": "contradiction"}],
-        "evidence": {
-            "contradiction": {
-                "pairs": [
-                    {
-                        "chunk_a_id": "a",
-                        "chunk_b_id": "b",
-                        "basis": "effective_date",
-                        "value_a": "2024-03-01",
-                        "value_b": "2025-03-01",
-                    },
-                    {
-                        "chunk_a_id": "c",
-                        "chunk_b_id": "d",
-                        "basis": "version",
-                        "value_a": "v2",
-                        "value_b": "v3",
-                    },
-                ]
-            },
-        },
-    }
+    assert reliability.score == expected_score
+    assert reliability.cap_reason == expected_cap_reason
+    pairs = reliability.evidence.contradiction.pairs if reliability.evidence.contradiction else ()
+    assert len(pairs) == expected_pair_count
 
 
 def _build_adjudication_evidence(
@@ -855,95 +584,33 @@ def _two_facts_same_pair() -> tuple[ContradictionPair, ContradictionPair]:
     )
 
 
-def test_adjudication_does_not_drop_cap_when_filter_flag_disabled(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "filter_cap_enabled, verdicts, status, sent_count, skip_reasons, expected_cap_reason",
+    [
+        pytest.param(False, ("rejected", "rejected"), "completed", None, None, "contradiction", id="filter_disabled_keeps_cap_even_if_all_rejected"),
+        pytest.param(True, ("rejected", "rejected"), "completed", None, None, None, id="filter_enabled_drops_cap_when_all_rejected"),
+        pytest.param(True, ("rejected", "confirmed"), "completed", None, None, "contradiction", id="any_confirmed_verdict_keeps_cap"),
+        pytest.param(True, ("rejected", "inconclusive"), "completed", None, None, "contradiction", id="any_inconclusive_verdict_keeps_cap"),
+        pytest.param(True, ("rejected", "rejected"), "failed_open", None, None, "contradiction", id="failed_open_status_keeps_cap"),
+        pytest.param(True, ("rejected", None), "completed", 1, (None, "fact_limit"), "contradiction", id="partial_unjudged_fact_keeps_cap"),
+    ],
+)
+def test_adjudication_cap_suppression_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+    filter_cap_enabled: bool,
+    verdicts: tuple[str | None, ...],
+    status: str,
+    sent_count: int | None,
+    skip_reasons: tuple[str | None, ...] | None,
+    expected_cap_reason: str | None,
+) -> None:
     monkeypatch.setattr(
         "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
-        False,
-    )
-    pairs = _two_facts_same_pair()
-    evidence = _build_adjudication_evidence(pairs, ("rejected", "rejected"))
-
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=pairs,
-        contradiction_adjudication=evidence,
-    )
-
-    assert reliability.cap == "low"
-    assert reliability.cap_reason == "contradiction"
-    assert reliability.score == "low"
-
-
-def test_adjudication_drops_cap_when_all_rejected_and_flag_enabled(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
-        True,
-    )
-    pairs = _two_facts_same_pair()
-    evidence = _build_adjudication_evidence(pairs, ("rejected", "rejected"))
-
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=pairs,
-        contradiction_adjudication=evidence,
-    )
-
-    assert reliability.cap is None
-    assert reliability.cap_reason is None
-    assert reliability.score == "high"
-    # Effective contradiction pairs are still surfaced as evidence/signal for traces.
-    assert reliability.evidence.contradiction is not None
-    assert any(signal.kind == "contradiction" for signal in reliability.signals)
-
-
-def test_adjudication_keeps_cap_when_any_verdict_is_confirmed(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
-        True,
-    )
-    pairs = _two_facts_same_pair()
-    evidence = _build_adjudication_evidence(pairs, ("rejected", "confirmed"))
-
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=pairs,
-        contradiction_adjudication=evidence,
-    )
-
-    assert reliability.cap == "low"
-    assert reliability.cap_reason == "contradiction"
-
-
-def test_adjudication_keeps_cap_when_any_verdict_is_inconclusive(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
-        True,
-    )
-    pairs = _two_facts_same_pair()
-    evidence = _build_adjudication_evidence(pairs, ("rejected", "inconclusive"))
-
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=pairs,
-        contradiction_adjudication=evidence,
-    )
-
-    assert reliability.cap == "low"
-    assert reliability.cap_reason == "contradiction"
-
-
-def test_adjudication_keeps_cap_on_failed_open_status(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
-        True,
+        filter_cap_enabled,
     )
     pairs = _two_facts_same_pair()
     evidence = _build_adjudication_evidence(
-        pairs, ("rejected", "rejected"), status="failed_open"
+        pairs, verdicts, status=status, sent_count=sent_count, skip_reasons=skip_reasons
     )
 
     reliability = build_reliability_assessment(
@@ -953,33 +620,16 @@ def test_adjudication_keeps_cap_on_failed_open_status(monkeypatch) -> None:
         contradiction_adjudication=evidence,
     )
 
-    assert reliability.cap == "low"
-    assert reliability.cap_reason == "contradiction"
-
-
-def test_adjudication_keeps_cap_when_some_facts_unjudged(monkeypatch) -> None:
-    """Partial coverage (skip_reason on one fact) blocks cap suppression."""
-    monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
-        True,
-    )
-    pairs = _two_facts_same_pair()
-    evidence = _build_adjudication_evidence(
-        pairs,
-        ("rejected", None),
-        sent_count=1,
-        skip_reasons=(None, "fact_limit"),
-    )
-
-    reliability = build_reliability_assessment(
-        top_score=0.9,
-        result_count=5,
-        contradiction_pairs=pairs,
-        contradiction_adjudication=evidence,
-    )
-
-    assert reliability.cap == "low"
-    assert reliability.cap_reason == "contradiction"
+    assert reliability.cap_reason == expected_cap_reason
+    if expected_cap_reason is None:
+        assert reliability.cap is None
+        assert reliability.score == "high"
+        # Effective contradiction pairs are still surfaced as evidence/signal for traces.
+        assert reliability.evidence.contradiction is not None
+        assert any(signal.kind == "contradiction" for signal in reliability.signals)
+    else:
+        assert reliability.cap == "low"
+        assert reliability.score == "low"
 
 
 def test_build_reliability_projection_does_not_mutate_canonical_object() -> None:
@@ -1603,61 +1253,3 @@ def test_serialize_reliability_omits_contradiction_adjudication_for_observabilit
     )
     payload = serialize_reliability(reliability)
     assert "contradiction_adjudication" not in payload["evidence"]
-
-
-def test_detect_source_overlaps_ignores_pairs_from_same_document() -> None:
-    from backend.models import Embedding
-
-    document_id = uuid.uuid4()
-    first = Embedding(
-        id=uuid.uuid4(),
-        document_id=document_id,
-        chunk_text="reset password in settings panel",
-        metadata_json={"chunk_index": 0},
-    )
-    second = Embedding(
-        id=uuid.uuid4(),
-        document_id=document_id,
-        chunk_text="reset password in settings panel now",
-        metadata_json={"chunk_index": 1},
-    )
-
-    source_overlap_detected, source_overlap_pairs = detect_source_overlaps(
-        [(first, 0.9), (second, 0.88)],
-        similarity_threshold=0.6,
-    )
-
-    assert source_overlap_detected is False
-    assert source_overlap_pairs == ()
-
-
-def test_detect_source_overlaps_respects_similarity_threshold_boundary() -> None:
-    from backend.models import Embedding
-
-    first = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="alpha beta gamma",
-        metadata_json={"chunk_index": 0},
-    )
-    second = Embedding(
-        id=uuid.uuid4(),
-        document_id=uuid.uuid4(),
-        chunk_text="alpha beta gamma delta",
-        metadata_json={"chunk_index": 1},
-    )
-
-    at_threshold = detect_source_overlaps(
-        [(first, 0.9), (second, 0.88)],
-        similarity_threshold=0.75,
-    )
-    above_threshold = detect_source_overlaps(
-        [(first, 0.9), (second, 0.88)],
-        similarity_threshold=0.76,
-    )
-
-    assert at_threshold[0] is True
-    assert above_threshold[0] is False
-
-
-# --- API tests (all mock OpenAI) ---

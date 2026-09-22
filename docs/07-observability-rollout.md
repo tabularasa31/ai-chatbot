@@ -298,7 +298,7 @@ Since Railway auto-sets `GIT_SHA` on every deploy, `release` always resolves to 
 
 **How to verify it is working.**
 
-- Sentry Crons: monitor `langfuse-trace-retention` (created on the first check-in, project `python-fastapi`) shows a daily `ok`; a missed or `error` check-in alerts. This is the primary signal — a dead worker or an unreachable Langfuse host surfaces here, not as a quietly growing database.
+- Sentry: a failing Langfuse host raises out of the job and lands as a regular error event in the `worker` project. There is no Crons monitor for this job — the plan allows one and it belongs to `scheduled-crawl-tick`, which already covers the "worker is dead" case for every cron in the process. A silently growing database is therefore not alerted on; it is checked by the steps below.
 - Worker logs: one line per night, `langfuse_retention_done cutoff=<iso> traces=<n> backlog_remaining=<bool>`. `backlog_remaining=True` on consecutive nights means the per-run cap is being hit every night — traffic outgrew it, raise `_RETENTION_MAX_PAGES`.
 - Langfuse UI → Traces, filter `Timestamp` before `now − window`: empty. Allow up to ~15 minutes after the run; Langfuse deletes asynchronously, so a just-deleted trace can still be listed briefly.
 - Database size, on the Langfuse Postgres service (not the app database):

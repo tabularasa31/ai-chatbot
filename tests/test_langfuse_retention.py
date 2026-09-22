@@ -106,20 +106,7 @@ def test_cutoff_is_retention_days_before_now(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_cron_tick_deletes_past_cutoff_and_sends_ok_checkin(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import backend.observability as observability_module
-
-    checkins: list[dict[str, Any]] = []
-
-    def _fake_checkin(*, monitor_slug, status, check_in_id=None, **kwargs):
-        checkins.append(
-            {"slug": monitor_slug, "status": status, "check_in_id": check_in_id}
-        )
-        return "cid-1" if status == "in_progress" else check_in_id
-
-    monkeypatch.setattr(observability_module, "capture_cron_checkin", _fake_checkin)
+async def test_cron_tick_deletes_past_cutoff(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "langfuse_trace_retention_days", 60)
     cutoffs: list[datetime] = []
 
@@ -131,28 +118,15 @@ async def test_cron_tick_deletes_past_cutoff_and_sends_ok_checkin(
 
     await langfuse_retention._tick_langfuse_retention({})
 
-    assert [c["status"] for c in checkins] == ["in_progress", "ok"]
-    assert {c["slug"] for c in checkins} == {"langfuse-trace-retention"}
-    assert checkins[1]["check_in_id"] == "cid-1"
     assert len(cutoffs) == 1
     assert cutoffs[0].tzinfo is not None
     assert abs((datetime.now(UTC) - cutoffs[0]) - timedelta(days=60)) < timedelta(minutes=1)
 
 
 @pytest.mark.asyncio
-async def test_cron_tick_sends_error_checkin_and_reraises(
+async def test_cron_tick_propagates_langfuse_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import backend.observability as observability_module
-
-    statuses: list[str] = []
-
-    def _fake_checkin(*, monitor_slug, status, check_in_id=None, **kwargs):
-        statuses.append(status)
-        return "cid-1" if status == "in_progress" else check_in_id
-
-    monkeypatch.setattr(observability_module, "capture_cron_checkin", _fake_checkin)
-
     async def _boom(cutoff: datetime) -> int:
         raise RuntimeError("langfuse down")
 
@@ -161,8 +135,6 @@ async def test_cron_tick_sends_error_checkin_and_reraises(
     with pytest.raises(RuntimeError, match="langfuse down"):
         await langfuse_retention._tick_langfuse_retention({})
 
-    assert statuses == ["in_progress", "error"]
-
 
 def test_retention_cron_is_registered_daily() -> None:
     from backend.core.queue import _CRON_JOBS
@@ -170,7 +142,6 @@ def test_retention_cron_is_registered_daily() -> None:
     job = langfuse_retention.langfuse_retention_cron
     assert job in _CRON_JOBS
     assert job.hour == {3} and job.minute == {17}
-    assert langfuse_retention._CRON_MONITOR_CONFIG["schedule"]["value"] == "17 3 * * *"
 
 
 def test_retention_window_has_langfuse_floor() -> None:

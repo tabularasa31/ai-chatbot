@@ -22,6 +22,7 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 
+@pytest.mark.smoke
 def test_chat_success(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -79,6 +80,7 @@ def test_chat_success(
     assert data.get("chat_ended") is False
 
 
+@pytest.mark.smoke
 def test_chat_creates_messages_in_db(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -141,6 +143,7 @@ def test_chat_creates_messages_in_db(
     assert user_message.content == "Hello"
 
 
+@pytest.mark.smoke
 def test_chat_stamps_default_bot_id_on_persisted_chat(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -187,6 +190,7 @@ def test_chat_stamps_default_bot_id_on_persisted_chat(
     assert chat.bot_id == expected_bot.id
 
 
+@pytest.mark.smoke
 def test_chat_with_explicit_bot_public_id_uses_that_bot(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -473,6 +477,7 @@ def test_chat_forwards_bot_public_id_for_event_attribution(
     assert captured["bot_id"] == default_bot.id
 
 
+@pytest.mark.smoke
 def test_chat_invalid_api_key(tenant: TestClient) -> None:
     """Wrong api_key → 401."""
     response = tenant.post(
@@ -484,6 +489,7 @@ def test_chat_invalid_api_key(tenant: TestClient) -> None:
     assert "Invalid API key" in response.json()["detail"]
 
 
+@pytest.mark.smoke
 def test_chat_missing_api_key(tenant: TestClient) -> None:
     """No X-API-Key header → 401."""
     response = tenant.post(
@@ -493,6 +499,7 @@ def test_chat_missing_api_key(tenant: TestClient) -> None:
     assert response.status_code == 401
 
 
+@pytest.mark.smoke
 def test_chat_without_openai_key(tenant: TestClient, db_session: Session) -> None:
     """400 if tenant has no OpenAI API key configured."""
     token = register_and_verify_user(tenant, db_session, email="nokey@example.com")
@@ -611,6 +618,7 @@ def test_chat_empty_question_uses_browser_locale_for_greeting(
     assert data["tokens_used"] == 9
 
 
+@pytest.mark.escalation
 def test_chat_empty_followup_after_started_session_is_rejected(
     tenant: TestClient,
     db_session: Session,
@@ -691,6 +699,7 @@ def test_chat_no_embeddings(
     assert chat.escalation_pre_confirm_pending is False
 
 
+@pytest.mark.smoke
 def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -852,6 +861,7 @@ def test_chat_uses_context(
     assert "The secret number is 99" in messages[1]["content"]
 
 
+@pytest.mark.smoke
 def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
     tenant: TestClient,
     db_session: Session,
@@ -904,6 +914,7 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
     assert data["source_documents"] == [str(doc_id)]
 
 
+@pytest.mark.rag_edge
 def test_chat_openai_unavailable_503(
     mock_openai_client: Mock,
     tenant: TestClient,

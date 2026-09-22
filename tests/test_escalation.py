@@ -43,18 +43,21 @@ from backend.models import (
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
+@pytest.mark.smoke
 def test_should_escalate_low_similarity() -> None:
     esc, trig = should_escalate(0.3, 3)
     assert esc is True
     assert trig == EscalationTrigger.low_similarity
 
 
+@pytest.mark.smoke
 def test_should_escalate_no_documents() -> None:
     esc, trig = should_escalate(None, 0)
     assert esc is True
     assert trig == EscalationTrigger.no_documents
 
 
+@pytest.mark.smoke
 def test_should_escalate_ok() -> None:
     esc, trig = should_escalate(0.9, 2)
     assert esc is False
@@ -100,6 +103,7 @@ def _mock_llm_human_request_payload(payload: dict):
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_detect_human_request_english() -> None:
     with _mock_llm_human_request(True):
         result = await detect_human_request("I need to talk to a human please", "sk-test")
@@ -112,6 +116,7 @@ async def test_detect_human_request_english() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_detect_human_request_russian() -> None:
     with _mock_llm_human_request(True):
         result = await detect_human_request("хочу поговорить с человеком", "sk-test")
@@ -119,6 +124,7 @@ async def test_detect_human_request_russian() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_detect_human_request_explicitness_axis_is_parsed() -> None:
     """A handoff the classifier only inferred comes back flagged as such.
 
@@ -140,6 +146,7 @@ async def test_detect_human_request_explicitness_axis_is_parsed() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_detect_human_request_defaults_to_explicit_when_axis_missing() -> None:
     """A response without the third axis keeps the original escalate-now contract."""
     with _mock_llm_human_request_payload(
@@ -184,6 +191,7 @@ def _mock_llm_question_intent(**flags: bool):
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_classify_question_intent_true_for_contact_question() -> None:
     from backend.escalation.service import (
         _question_intent_cache,
@@ -200,6 +208,7 @@ async def test_classify_question_intent_true_for_contact_question() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_classify_question_intent_false_for_ordinary_question() -> None:
     from backend.escalation.service import (
         _question_intent_cache,
@@ -218,6 +227,7 @@ async def test_classify_question_intent_false_for_ordinary_question() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_classify_question_intent_reports_every_axis() -> None:
     from backend.escalation.service import (
         _question_intent_cache,
@@ -238,6 +248,7 @@ async def test_classify_question_intent_reports_every_axis() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_classify_question_intent_fails_safe_to_all_false() -> None:
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -261,6 +272,7 @@ async def test_classify_question_intent_fails_safe_to_all_false() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_detect_human_request_cache_isolated_per_tenant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -310,6 +322,7 @@ async def test_detect_human_request_cache_isolated_per_tenant(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_detect_human_request_uses_human_request_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -337,6 +350,7 @@ async def test_detect_human_request_uses_human_request_model(
     assert mock_client.chat.completions.create.call_args.kwargs["model"] == "gpt-test-human-guard"
 
 
+@pytest.mark.smoke
 def test_compute_priority_t3_enterprise() -> None:
     p = compute_priority(
         EscalationTrigger.user_request,
@@ -346,11 +360,13 @@ def test_compute_priority_t3_enterprise() -> None:
     assert p == EscalationPriority.critical
 
 
+@pytest.mark.smoke
 def test_compute_priority_t3_default() -> None:
     p = compute_priority(EscalationTrigger.user_request, None, {})
     assert p == EscalationPriority.high
 
 
+@pytest.mark.smoke
 def test_parse_contact_email() -> None:
     assert (
         parse_contact_email("reach me at user@example.com thanks") == "user@example.com"
@@ -358,6 +374,7 @@ def test_parse_contact_email() -> None:
     assert parse_contact_email("no email here") is None
 
 
+@pytest.mark.smoke
 def test_generate_ticket_number_sequential(
     tenant: TestClient,
     db_session: Session,
@@ -386,6 +403,7 @@ def test_generate_ticket_number_sequential(
     assert generate_ticket_number(tenant_id, db_session) == "ESC-0002"
 
 
+@pytest.mark.smoke
 def test_generate_ticket_number_concurrent_reads_return_same(
     tenant: TestClient,
     db_session: Session,
@@ -413,6 +431,7 @@ def test_generate_ticket_number_concurrent_reads_return_same(
     assert second == "ESC-0001"
 
 
+@pytest.mark.smoke
 def test_create_escalation_ticket_retries_on_integrity_error(
     tenant: TestClient,
     db_session: Session,
@@ -448,6 +467,7 @@ def test_create_escalation_ticket_retries_on_integrity_error(
     assert call_count[0] == 2
 
 
+@pytest.mark.smoke
 def test_create_escalation_ticket_stores_redacted_and_encrypted_question(
     tenant: TestClient,
     db_session: Session,
@@ -472,6 +492,7 @@ def test_create_escalation_ticket_stores_redacted_and_encrypted_question(
     assert ticket.primary_question == "my email is user@example.com"
 
 
+@pytest.mark.smoke
 def test_create_escalation_ticket_raises_after_max_retries(
     tenant: TestClient,
     db_session: Session,
@@ -501,6 +522,7 @@ def test_create_escalation_ticket_raises_after_max_retries(
             )
 
 
+@pytest.mark.smoke
 def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
     from backend.core.security import hash_password
 
@@ -527,6 +549,7 @@ def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
     assert _escalation_clarify_already_asked(chat) is False
 
 
+@pytest.mark.smoke
 def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
     tenant: TestClient,
     db_session: Session,
@@ -589,6 +612,7 @@ def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
     assert row.email == "user@example.com"
 
 
+@pytest.mark.smoke
 def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
     tenant: TestClient,
     db_session: Session,
@@ -649,6 +673,7 @@ def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
     assert chat.escalation_followup_pending is False
 
 
+@pytest.mark.smoke
 def test_notify_tenant_new_ticket_uses_l2_email_when_configured(
     tenant: TestClient,
     db_session: Session,
@@ -691,6 +716,7 @@ def test_notify_tenant_new_ticket_uses_l2_email_when_configured(
     assert send_email_mock.call_args.args[0] == "l2@example.com"
 
 
+@pytest.mark.smoke
 def test_notify_tenant_new_ticket_falls_back_to_owner_email(
     tenant: TestClient,
     db_session: Session,
@@ -726,6 +752,7 @@ def test_notify_tenant_new_ticket_falls_back_to_owner_email(
     assert send_email_mock.call_args.args[0] == "owner-only@example.com"
 
 
+@pytest.mark.smoke
 def test_notify_tenant_new_ticket_reports_failure_when_brevo_refuses(
     tenant: TestClient,
     db_session: Session,
@@ -773,6 +800,7 @@ def test_notify_tenant_new_ticket_reports_failure_when_brevo_refuses(
     assert ticket.last_notified_at is None
 
 
+@pytest.mark.smoke
 def test_notify_tenant_new_ticket_reports_failure_when_send_raises(
     tenant: TestClient,
     db_session: Session,
@@ -840,6 +868,7 @@ def _make_tenant_for_email_test(
     return cl
 
 
+@pytest.mark.smoke
 def test_notify_email_body_contains_full_context_and_reply_to(
     tenant: TestClient,
     db_session: Session,
@@ -990,6 +1019,7 @@ def test_notify_email_body_contains_full_context_and_reply_to(
     assert kyc.get("metadata") == {"source": "widget"}
 
 
+@pytest.mark.smoke
 def test_notify_email_body_carries_the_stored_original(
     tenant: TestClient,
     db_session: Session,
@@ -1065,6 +1095,7 @@ def test_notify_email_body_carries_the_stored_original(
     assert ticket.primary_question == question_original
 
 
+@pytest.mark.smoke
 def test_notify_email_body_handles_already_masked_legacy_question(
     tenant: TestClient,
     db_session: Session,
@@ -1094,6 +1125,7 @@ def test_notify_email_body_handles_already_masked_legacy_question(
     assert "contact me at [EMAIL]" in body
 
 
+@pytest.mark.smoke
 def test_notify_email_skipped_when_no_user_email(
     tenant: TestClient,
     db_session: Session,
@@ -1122,6 +1154,7 @@ def test_notify_email_skipped_when_no_user_email(
     send_email_mock.assert_not_called()
 
 
+@pytest.mark.smoke
 def test_notify_email_skipped_when_user_email_is_malformed(
     tenant: TestClient,
     db_session: Session,
@@ -1151,6 +1184,7 @@ def test_notify_email_skipped_when_user_email_is_malformed(
     send_email_mock.assert_not_called()
 
 
+@pytest.mark.smoke
 def test_apply_collected_contact_email_fires_deferred_notification(
     tenant: TestClient,
     db_session: Session,
@@ -1197,6 +1231,7 @@ def test_apply_collected_contact_email_fires_deferred_notification(
     assert "late@example.com" in args[2]
 
 
+@pytest.mark.smoke
 def test_apply_collected_contact_email_does_not_double_notify(
     tenant: TestClient,
     db_session: Session,
@@ -1240,6 +1275,7 @@ def test_apply_collected_contact_email_does_not_double_notify(
     send_email_mock.assert_not_called()
 
 
+@pytest.mark.smoke
 def test_notify_email_body_appends_latest_user_text_not_yet_in_db(
     tenant: TestClient,
     db_session: Session,
@@ -1313,6 +1349,7 @@ def test_notify_email_body_appends_latest_user_text_not_yet_in_db(
     assert body.count("yes, my invoice is broken", convo_start) == 1
 
 
+@pytest.mark.smoke
 def test_notify_tenant_new_ticket_stores_naive_last_notified_at(
     tenant: TestClient,
     db_session: Session,
@@ -1365,6 +1402,7 @@ def test_notify_tenant_new_ticket_stores_naive_last_notified_at(
     )
 
 
+@pytest.mark.smoke
 def test_advance_notification_marker_stores_naive_last_notified_at(
     tenant: TestClient,
     db_session: Session,
@@ -1408,6 +1446,7 @@ def test_advance_notification_marker_stores_naive_last_notified_at(
     assert ticket.last_notified_at.tzinfo is None
 
 
+@pytest.mark.smoke
 def test_notify_email_subject_omits_priority_tier(
     tenant: TestClient,
     db_session: Session,
@@ -1439,6 +1478,7 @@ def test_notify_email_subject_omits_priority_tier(
         assert forbidden not in subject
 
 
+@pytest.mark.smoke
 def test_notify_email_body_omits_user_note_section_when_absent(
     tenant: TestClient,
     db_session: Session,
@@ -1490,6 +1530,8 @@ def _run_manual_escalation(db_session: Session, *args, **kwargs):
     return result
 
 
+@pytest.mark.smoke
+@pytest.mark.escalation
 def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
     tenant: TestClient,
     db_session: Session,
@@ -1542,6 +1584,8 @@ def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
     assert messages[0].role == MessageRole.assistant
 
 
+@pytest.mark.smoke
+@pytest.mark.escalation
 def test_perform_manual_escalation_sets_followup_when_email_known(
     tenant: TestClient,
     db_session: Session,
@@ -1590,6 +1634,7 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
     assert ticket.trigger == EscalationTrigger.answer_rejected
 
 
+@pytest.mark.smoke
 def test_repeat_manual_escalation_reuses_open_ticket(
     tenant: TestClient,
     db_session: Session,
@@ -1652,6 +1697,7 @@ def test_repeat_manual_escalation_reuses_open_ticket(
     assert len(tickets) == 1
 
 
+@pytest.mark.smoke
 def test_repeat_manual_escalation_after_an_answer_re_enters_the_queue(
     tenant: TestClient,
     db_session: Session,
@@ -1693,6 +1739,7 @@ def test_repeat_manual_escalation_after_an_answer_re_enters_the_queue(
     assert ticket.requested_again_at is not None
 
 
+@pytest.mark.smoke
 def test_manual_escalation_mints_new_ticket_once_previous_resolved(
     tenant: TestClient,
     db_session: Session,
@@ -1760,6 +1807,8 @@ def test_manual_escalation_mints_new_ticket_once_previous_resolved(
     assert len(tickets) == 2
 
 
+@pytest.mark.smoke
+@pytest.mark.escalation
 def test_perform_manual_escalation_emits_chat_escalated_event(
     tenant: TestClient,
     db_session: Session,
@@ -1869,6 +1918,7 @@ def _persist_user_message(db_session: Session, chat: Chat, content: str) -> Mess
     return msg
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_threads_under_initial_notify(
     tenant: TestClient,
     db_session: Session,
@@ -1896,6 +1946,7 @@ def test_notify_ticket_update_threads_under_initial_notify(
     assert ticket.last_notified_message_id == msg.id
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_stores_naive_last_notified_at(
     tenant: TestClient,
     db_session: Session,
@@ -1922,6 +1973,7 @@ def test_notify_ticket_update_stores_naive_last_notified_at(
     assert ticket.last_notified_at.tzinfo is None
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_sends_only_new_turns_as_delta(
     tenant: TestClient,
     db_session: Session,
@@ -1951,6 +2003,7 @@ def test_notify_ticket_update_sends_only_new_turns_as_delta(
     assert "BRAND NEW context turn two" in body
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_debounces_within_window(
     tenant: TestClient,
     db_session: Session,
@@ -1973,6 +2026,7 @@ def test_notify_ticket_update_debounces_within_window(
     send_email_mock.assert_not_called()
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_skips_when_no_initial_message_id(
     tenant: TestClient,
     db_session: Session,
@@ -1991,6 +2045,7 @@ def test_notify_ticket_update_skips_when_no_initial_message_id(
     send_email_mock.assert_not_called()
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_skips_when_ticket_resolved(
     tenant: TestClient,
     db_session: Session,
@@ -2009,6 +2064,7 @@ def test_notify_ticket_update_skips_when_ticket_resolved(
     send_email_mock.assert_not_called()
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_noop_when_no_new_turns(
     tenant: TestClient,
     db_session: Session,
@@ -2028,6 +2084,7 @@ def test_notify_ticket_update_noop_when_no_new_turns(
     send_email_mock.assert_not_called()
 
 
+@pytest.mark.smoke
 def test_notify_new_ticket_captures_message_id_from_send_email(
     tenant: TestClient,
     db_session: Session,
@@ -2048,6 +2105,7 @@ def test_notify_new_ticket_captures_message_id_from_send_email(
     assert ticket.last_notified_at is not None
 
 
+@pytest.mark.smoke
 def test_advance_notification_marker_to_current_skips_persisted_turn(
     tenant: TestClient,
     db_session: Session,
@@ -2072,6 +2130,7 @@ def test_advance_notification_marker_to_current_skips_persisted_turn(
     send_email_mock.assert_not_called()
 
 
+@pytest.mark.smoke
 def test_notify_new_ticket_does_not_advance_markers_on_send_failure(
     tenant: TestClient,
     db_session: Session,
@@ -2100,6 +2159,7 @@ def test_notify_new_ticket_does_not_advance_markers_on_send_failure(
     assert ticket.last_notified_message_id is None
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_does_not_advance_marker_on_send_failure(
     tenant: TestClient,
     db_session: Session,
@@ -2137,6 +2197,7 @@ def test_notify_ticket_update_does_not_advance_marker_on_send_failure(
     assert capture_mock.call_args.kwargs["properties"]["stage"] == "followup"
 
 
+@pytest.mark.smoke
 def test_notify_ticket_update_skips_yes_no_admin_replies_via_handler(
     tenant: TestClient,
     db_session: Session,
@@ -2179,6 +2240,7 @@ def test_notify_ticket_update_skips_yes_no_admin_replies_via_handler(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_render_pre_confirm_text_initial_localizes_canonical_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2217,6 +2279,7 @@ async def test_render_pre_confirm_text_initial_localizes_canonical_template(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2296,6 +2359,7 @@ def _fake_pre_confirm_context_client(content: str, tokens: int = 11) -> object:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_render_pre_confirm_text_context_aware_summarizes_dialog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2355,6 +2419,7 @@ async def test_render_pre_confirm_text_context_aware_summarizes_dialog(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_render_pre_confirm_text_context_failure_degrades_to_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2397,6 +2462,7 @@ async def test_render_pre_confirm_text_context_failure_degrades_to_template(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_render_pre_confirm_text_admin_variants_ignore_transcript(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2446,6 +2512,7 @@ async def test_render_pre_confirm_text_admin_variants_ignore_transcript(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_detect_human_request_empty_message_skips_llm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2468,6 +2535,7 @@ async def test_detect_human_request_empty_message_skips_llm(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_render_pre_confirm_text_caches_localization_per_variant_and_language(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2500,6 +2568,7 @@ async def test_render_pre_confirm_text_caches_localization_per_variant_and_langu
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_render_pre_confirm_text_does_not_cache_degraded_localization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2524,6 +2593,7 @@ async def test_render_pre_confirm_text_does_not_cache_degraded_localization(
     assert len(calls) == 2, "degraded localization must not be cached"
 
 
+@pytest.mark.smoke
 def test_pre_confirm_fallback_result_returns_canonical_text() -> None:
     from backend.escalation.openai_escalation import (
         PRE_CONFIRM_NO_ANSWER_EN,
@@ -2537,6 +2607,7 @@ def test_pre_confirm_fallback_result_returns_canonical_text() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_classify_pre_confirm_reply_parses_decision_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2584,6 +2655,7 @@ async def test_classify_pre_confirm_reply_parses_decision_field(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2634,6 +2706,7 @@ async def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_classify_pre_confirm_reply_fails_safe_on_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2689,6 +2762,8 @@ def _fake_followup_classifier_client(content: str, tokens: int = 5):
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
+@pytest.mark.escalation
 async def test_classify_followup_reply_parses_new_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2719,6 +2794,8 @@ async def test_classify_followup_reply_parses_new_question(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
+@pytest.mark.escalation
 async def test_classify_followup_reply_unrecognized_degrades_to_unclear(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2746,6 +2823,8 @@ async def test_classify_followup_reply_unrecognized_degrades_to_unclear(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
+@pytest.mark.escalation
 async def test_classify_followup_reply_fails_safe_on_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2769,6 +2848,7 @@ async def test_classify_followup_reply_fails_safe_on_exception(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_escalation_turn_uses_dedicated_client_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2829,6 +2909,7 @@ async def test_escalation_turn_uses_dedicated_client_timeout(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_escalation_turn_fallback_localization_is_deadline_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2877,6 +2958,7 @@ async def test_escalation_turn_fallback_localization_is_deadline_bounded(
 
 
 @pytest.mark.asyncio
+@pytest.mark.smoke
 async def test_escalation_turn_empty_message_uses_bounded_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2947,6 +3029,7 @@ async def test_escalation_turn_empty_message_uses_bounded_fallback(
     assert out.tokens_used == 7
 
 
+@pytest.mark.smoke
 def test_late_contact_email_reopens_auto_closed_ticket(
     tenant: TestClient,
     db_session: Session,
@@ -3032,6 +3115,8 @@ def _open_ticket_with_anchor(
     return ticket
 
 
+@pytest.mark.smoke
+@pytest.mark.escalation
 def test_repeat_escalation_notify_bypasses_the_followup_debounce(
     tenant: TestClient,
     db_session: Session,
@@ -3086,6 +3171,7 @@ def test_repeat_escalation_notify_bypasses_the_followup_debounce(
     assert "my invoice for March is wrong" in sent[0][0][2]
 
 
+@pytest.mark.smoke
 def test_repeat_escalation_reattempts_initial_notify_when_anchor_missing(
     tenant: TestClient,
     db_session: Session,
@@ -3135,6 +3221,7 @@ def test_repeat_escalation_reattempts_initial_notify_when_anchor_missing(
     assert ticket.notification_message_id == "<recovered@brevo>"
 
 
+@pytest.mark.smoke
 def test_repeat_escalation_raises_priority_but_never_lowers_it(
     tenant: TestClient,
     db_session: Session,

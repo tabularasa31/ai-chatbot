@@ -6,6 +6,7 @@ import datetime as dt
 from unittest.mock import patch
 
 import jwt
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.core.config import settings
@@ -195,6 +196,8 @@ def test_health(tenant: TestClient) -> None:
     assert body["redis"] in {"ok", "unavailable", "disabled"}
 
 
+@pytest.mark.smoke
+@pytest.mark.auth_reset
 def test_forgot_password_returns_same_message_for_existing_and_missing_email(
     tenant: TestClient,
 ) -> None:
@@ -218,6 +221,8 @@ def test_forgot_password_returns_same_message_for_existing_and_missing_email(
     assert existing.json() == missing.json()
 
 
+@pytest.mark.smoke
+@pytest.mark.auth_reset
 def test_forgot_password_creates_token_only_for_existing_user(
     tenant: TestClient,
     db_session,
@@ -242,6 +247,8 @@ def test_forgot_password_creates_token_only_for_existing_user(
     assert missing_user is None
 
 
+@pytest.mark.smoke
+@pytest.mark.auth_reset
 def test_reset_password_success_updates_password_and_verifies_user(
     tenant: TestClient,
     db_session,
@@ -375,6 +382,8 @@ def test_logout_clears_configured_domain_and_host_cookie(
     assert all("max-age=0" in header or "expires=" in header for header in cookie_headers)
 
 
+@pytest.mark.smoke
+@pytest.mark.auth_reset
 def test_reset_password_invalid_token_returns_400(tenant: TestClient) -> None:
     response = tenant.post(
         "/auth/reset-password",
@@ -383,6 +392,8 @@ def test_reset_password_invalid_token_returns_400(tenant: TestClient) -> None:
     assert response.status_code == 400
 
 
+@pytest.mark.smoke
+@pytest.mark.auth_reset
 def test_reset_password_expired_token_returns_400(
     tenant: TestClient,
     db_session,
@@ -411,6 +422,8 @@ def test_reset_password_expired_token_returns_400(
     assert response.status_code == 400
 
 
+@pytest.mark.smoke
+@pytest.mark.auth_reset
 def test_reset_password_token_cannot_be_reused(
     tenant: TestClient,
     db_session,

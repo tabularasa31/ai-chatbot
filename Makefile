@@ -65,28 +65,16 @@ clean:
 	rm -f .coverage coverage.xml
 
 smoke:
-	PYTHONPATH=. pytest -q -n auto \
-		tests/test_chat_api.py \
-		tests/test_escalation.py \
-		tests/test_auth.py \
-		tests/test_verification_enforcement.py \
-		-k "escalat or verify or forgot_password or reset_password"
+	PYTHONPATH=. pytest -q -n auto tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m smoke
 
 auth-reset:
-	PYTHONPATH=. pytest -q tests/test_auth.py -k "forgot_password or reset_password"
+	PYTHONPATH=. pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m auth_reset
 
 escalation:
-	PYTHONPATH=. pytest -q \
-		tests/test_chat_api.py \
-		tests/test_chat_escalation.py \
-		tests/test_escalation.py \
-		-k "awaiting_email or followup or legacy_ended_at or manual_escalate or perform_manual_escalation"
+	PYTHONPATH=. pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m escalation
 
 rag-edge:
-	PYTHONPATH=. pytest -q \
-		tests/test_search.py \
-		tests/test_chat_api.py \
-		-k "openai_unavailable or malformed or wrong_dimension or low_vector"
+	PYTHONPATH=. pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m rag_edge
 
 pgvector-only: db-up db-ready
 	PG_USER="$(PG_USER)" PG_PASSWORD="$(PG_PASSWORD)" PYTHONPATH=. pytest -q -m pgvector tests/pgvector_tests/

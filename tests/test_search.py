@@ -2565,6 +2565,7 @@ def test_contradiction_adjudication_fail_open_keeps_deterministic_reliability(
     assert projection["contradiction_adjudication_error_count"] == 1
 
 
+@pytest.mark.rag_edge
 def test_adjudicate_contradictions_records_partial_malformed_item_as_error(
     mock_openai_client: Mock,
 ) -> None:
@@ -3273,6 +3274,7 @@ def test_bm25_signal_uses_overlap_fallback_when_raw_scores_are_flat() -> None:
     assert results[0][1] == 1.0
 
 
+@pytest.mark.rag_edge
 def test_search_low_vector_similarity_still_returns_chunk(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -3390,6 +3392,7 @@ def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_purer_co
     assert results[0]["chunk_text"] == "cors configuration settings"
 
 
+@pytest.mark.rag_edge
 def test_search_openai_unavailable_returns_503(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -3442,6 +3445,7 @@ def test_search_openai_timeout_returns_503(
     assert response.status_code == 503
 
 
+@pytest.mark.rag_edge
 def test_search_skips_malformed_metadata_vectors(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -3497,6 +3501,7 @@ def test_search_skips_malformed_metadata_vectors(
     assert response.json()["results"] == []
 
 
+@pytest.mark.rag_edge
 def test_search_skips_vector_with_wrong_dimension(
     mock_openai_client: Mock,
     tenant: TestClient,

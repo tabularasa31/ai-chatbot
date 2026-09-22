@@ -25,6 +25,7 @@ def _async_esc_stub(result):
     return _stub
 
 
+@pytest.mark.escalation
 def test_chat_awaiting_email_valid_email_transitions_to_followup(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -82,6 +83,7 @@ def test_chat_awaiting_email_valid_email_transitions_to_followup(
     assert chat.escalation_followup_pending is True
 
 
+@pytest.mark.escalation
 def test_chat_awaiting_email_invalid_keeps_waiting_ticket(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -133,6 +135,7 @@ def test_chat_awaiting_email_invalid_keeps_waiting_ticket(
     assert ticket.user_email is None
 
 
+@pytest.mark.escalation
 def test_chat_followup_no_keeps_chat_open(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -247,6 +250,7 @@ def test_chat_followup_no_keeps_chat_open(
     assert followup.json()["chat_ended"] is False
 
 
+@pytest.mark.escalation
 def test_chat_followup_no_keeps_active_user_session_open(
     tenant: TestClient,
     db_session: Session,
@@ -319,6 +323,7 @@ def test_chat_followup_no_keeps_active_user_session_open(
     assert row.session_ended_at is None
 
 
+@pytest.mark.escalation
 def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
     tenant: TestClient,
     db_session: Session,
@@ -394,6 +399,7 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
     assert row.session_ended_at is None
 
 
+@pytest.mark.escalation
 def test_chat_followup_unclear_twice_falls_back_to_yes(
     tenant: TestClient,
     db_session: Session,
@@ -467,6 +473,7 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
     assert (chat.user_context or {}).get("escalation_followup_clarify") is None
 
 
+@pytest.mark.escalation
 def test_chat_followup_new_question_gets_rag_answer_same_turn(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -582,6 +589,7 @@ def test_chat_followup_new_question_gets_rag_answer_same_turn(
     assert chat.ended_at is None
 
 
+@pytest.mark.escalation
 def test_chat_legacy_ended_at_chat_is_answered_normally(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -798,6 +806,7 @@ def test_contact_sessions_allow_only_one_active_row_per_contact(
     db_session.rollback()
 
 
+@pytest.mark.escalation
 def test_manual_escalate_requires_api_key(tenant: TestClient) -> None:
     response = tenant.post(
         f"/chat/{uuid.uuid4()}/escalate",
@@ -806,6 +815,7 @@ def test_manual_escalate_requires_api_key(tenant: TestClient) -> None:
     assert response.status_code == 401
 
 
+@pytest.mark.escalation
 def test_manual_escalate_invalid_api_key(tenant: TestClient) -> None:
     response = tenant.post(
         f"/chat/{uuid.uuid4()}/escalate",
@@ -815,6 +825,7 @@ def test_manual_escalate_invalid_api_key(tenant: TestClient) -> None:
     assert response.status_code == 401
 
 
+@pytest.mark.escalation
 def test_manual_escalate_without_openai_key_returns_400(
     tenant: TestClient,
     db_session: Session,
@@ -842,6 +853,7 @@ def test_manual_escalate_without_openai_key_returns_400(
     assert response.status_code == 400
 
 
+@pytest.mark.escalation
 def test_manual_escalate_missing_session_returns_404(
     tenant: TestClient,
     db_session: Session,
@@ -863,6 +875,7 @@ def test_manual_escalate_missing_session_returns_404(
     assert response.status_code == 404
 
 
+@pytest.mark.escalation
 def test_manual_escalate_openai_error_returns_503(
     tenant: TestClient,
     db_session: Session,
@@ -897,6 +910,7 @@ def test_manual_escalate_openai_error_returns_503(
     assert response.status_code == 503
 
 
+@pytest.mark.escalation
 def test_manual_escalate_success_for_both_triggers(
     tenant: TestClient,
     db_session: Session,

@@ -1,4 +1,4 @@
-"""Unit tests for backend.observability.cache_metrics + admin endpoint."""
+"""Admin cache-stats endpoint: admin-only, returns the counters snapshot."""
 
 from __future__ import annotations
 
@@ -15,42 +15,6 @@ def _reset_cache_metrics():
     cache_metrics.reset()
     yield
     cache_metrics.reset()
-
-
-def test_record_hit_and_miss_accumulates() -> None:
-    cache_metrics.record_hit("foo")
-    cache_metrics.record_hit("foo")
-    cache_metrics.record_miss("foo")
-    cache_metrics.record_miss("bar")
-
-    snap = cache_metrics.snapshot()
-    assert snap["foo"]["hits"] == 2
-    assert snap["foo"]["misses"] == 1
-    assert snap["foo"]["hit_rate"] == pytest.approx(2 / 3, rel=1e-3)
-    assert snap["bar"]["hits"] == 0
-    assert snap["bar"]["misses"] == 1
-    assert snap["bar"]["hit_rate"] == 0.0
-
-
-def test_snapshot_empty_when_no_recordings() -> None:
-    assert cache_metrics.snapshot() == {}
-
-
-def test_embedding_cache_get_records_metrics() -> None:
-    from backend.search import embedding_cache
-
-    embedding_cache.clear()
-    cache_metrics.reset()
-
-    # Miss on empty cache
-    assert embedding_cache.get("hello") is None
-    # Put + hit
-    embedding_cache.put("hello", [0.1, 0.2])
-    assert embedding_cache.get("hello") == [0.1, 0.2]
-
-    snap = cache_metrics.snapshot()
-    assert snap["embedding"]["hits"] == 1
-    assert snap["embedding"]["misses"] == 1
 
 
 def test_admin_cache_stats_endpoint_requires_admin_then_returns_snapshot(

@@ -524,7 +524,6 @@ def _emit_first_token_metric(
             bot_id=bot_public_id,
             properties={
                 "ttft_ms": ttft_ms,
-                "chat_first_token_ms": ttft_ms,  # backward-compat alias
                 "session_id": str(sid),
                 "chat_id": chat_id,
                 "is_greeting": is_greeting,

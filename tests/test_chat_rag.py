@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -14,25 +16,38 @@ from sqlalchemy.orm import Session
 
 from backend.chat.handlers import rag as rag_handler
 from backend.chat.handlers.rag import async_generate_answer
-from backend.chat.language import LocalizationResult
+from backend.chat.language import LanguageDetectionResult, LocalizationResult
 from backend.chat.service import (
+    ChatPipelineResult,
     RetrievalContext,
     _quick_answer_keys_for_question,
     _quick_answers_context,
     async_retrieve_context,
     build_rag_messages,
     build_rag_prompt,
+    process_chat_message,
 )
 from backend.chat.types import QuestionIntentResult
 from backend.core.config import settings
+from backend.escalation.openai_escalation import complete_escalation_openai_turn
+from backend.faq.faq_matcher import FAQMatchResult
+from backend.guards.types import Verdict, VerdictReason
 from backend.models import (
+    Chat,
+    Document,
+    DocumentStatus,
+    DocumentType,
+    Embedding,
+    EscalationTrigger,
     MessageRole,
     QuickAnswer,
     SourceSchedule,
     SourceStatus,
+    Tenant,
     UrlSource,
 )
-from tests._async_utils import as_async
+from backend.search.service import build_reliability_assessment
+from tests._async_utils import as_async, as_async as _as_async, as_async_generate
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -1398,3 +1413,1749 @@ def test_build_dialog_context_empty_history_returns_none() -> None:
 
     assert build_dialog_context([]) is None
     assert build_dialog_context([_StubMessage(MessageRole.user, "   ", idx=1)]) is None
+
+
+# ---------------------------------------------------------------------------
+# Strict zero-RAG-hits fast path -- absorbed from the deleted
+# test_chat_zero_hits_fast_path.py
+#
+# Covers:
+# * First zero-hits turn returns a localized "rephrase" prompt instead of
+#   calling the answer LLM, and sets ``chat.last_reply_was_rephrase_prompt``.
+# * Consecutive zero-hits turn + LLM relevance verdict "relevant" triggers
+#   pre-confirm escalation and resets the flag.
+# * Consecutive zero-hits turn + LLM verdict "not relevant" emits the
+#   NOT_RELEVANT off-topic reject and resets the flag.
+# * Any non-zero-hits success resets the flag.
+# * The previously misleading comment in ``relevance_checker.py`` describing
+#   an unimplemented off-topic pattern exception is gone.
+# ---------------------------------------------------------------------------
+
+
+def _as_verdict(v: Verdict | tuple[bool, str, object]) -> Verdict:
+    """Adapt a legacy (relevant, reason, profile) tuple into a guard Verdict.
+
+    Falls back to relevant->RELEVANT / not-relevant->OFFTOPIC for reason tokens
+    that predate the VerdictReason enum (e.g. the old "ok"/"in_domain" stubs).
+    """
+    if isinstance(v, Verdict):
+        return v
+    relevant, reason, _profile = v
+    try:
+        r = VerdictReason(reason)
+    except ValueError:
+        r = VerdictReason.RELEVANT if relevant else VerdictReason.OFFTOPIC
+    return Verdict.of(r)
+
+
+def _rr(verdict: Verdict) -> tuple[bool, str]:
+    return not verdict.blocked, verdict.reason.value
+
+
+def _zh_create_client(http: TestClient, db: Session, *, email: str) -> tuple[Tenant, str]:
+    token = register_and_verify_user(http, db, email=email)
+    cl_resp = http.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Zero Hits Tenant"},
+    )
+    assert cl_resp.status_code in (200, 201), cl_resp.text
+    set_client_openai_key(http, token)
+    api_key = cl_resp.json()["api_key"]
+    client_row = db.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+    return client_row, api_key
+
+
+def _zh_insert_chunk(db: Session, *, tenant_id: uuid.UUID) -> None:
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="kb.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="Doc chunk",
+        vector=None,
+        metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+    )
+    db.add(emb)
+    db.commit()
+
+
+def _zh_empty_retrieval() -> RetrievalContext:
+    return RetrievalContext(
+        chunk_texts=[],
+        document_ids=[],
+        scores=[],
+        mode="none",
+        best_rank_score=None,
+        best_confidence_score=None,
+        confidence_source="none",
+        reliability=build_reliability_assessment(top_score=0.0, result_count=0),
+        vector_similarities=None,
+    )
+
+
+def _zh_nonempty_retrieval() -> RetrievalContext:
+    return RetrievalContext(
+        chunk_texts=["A relevant chunk"],
+        document_ids=[uuid.uuid4()],
+        scores=[0.9],
+        mode="hybrid",
+        best_rank_score=0.9,
+        best_confidence_score=0.9,
+        confidence_source="vector_similarity",
+        reliability=build_reliability_assessment(top_score=0.9, result_count=1),
+        vector_similarities=None,
+    )
+
+
+def _zh_stub_pre_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    relevance: tuple[bool, str, object] = (
+        True,
+        "ok",
+        SimpleNamespace(product_name="Product", topics=["Topic"]),
+    ),
+) -> None:
+    """Common monkeypatches: injection clean, FAQ no-match, no escalation, no rewrites."""
+    monkeypatch.setattr(
+        "backend.chat.service.async_detect_injection",
+        _as_async(lambda *_a, **_kw: Verdict.of(VerdictReason.OK)),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _as_async(lambda **_kw: _as_verdict(relevance)),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *_a, **_kw: (False, None),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **_kw: FAQMatchResult(
+            strategy="rag_only",
+            faq_items=[],
+            top_score=None,
+            selected_score=None,
+            selected_faq_id=None,
+            direct_guard_used=False,
+            direct_guard_passed=False,
+            decision_reason="test",
+        )),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service._start_mode_b_followup",
+        lambda _tenant_id: None,
+    )
+
+    async def _no_rewrite(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_semantic_query_rewrite", _no_rewrite
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_semantic_query_rewrite_for_kb", _no_rewrite
+    )
+
+
+def test_first_zero_hits_emits_soft_reply_and_sets_flag(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cl_row, api_key = _zh_create_client(tenant, db_session, email="zh-first@example.com")
+    _zh_insert_chunk(db_session, tenant_id=cl_row.id)
+
+    _zh_stub_pre_retrieval(monkeypatch)
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
+    )
+    # Asserts the answer LLM is never reached on the zero-hits path.
+    def _fail_generate(*_a, **_kw):  # pragma: no cover - asserts on hit
+        raise AssertionError("answer LLM must not be called on zero hits")
+
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer", as_async_generate(_fail_generate)
+    )
+
+    session_id = uuid.uuid4()
+    outcome = process_chat_message(
+        cl_row.id, "Tell me about borscht recipe", session_id, db_session,
+        api_key=api_key,
+    )
+
+    assert outcome.text  # localized soft-reply, exact wording goes through localization
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.last_reply_was_rephrase_prompt is True
+
+
+def test_consecutive_zero_hits_relevant_escalates(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cl_row, api_key = _zh_create_client(tenant, db_session, email="zh-esc@example.com")
+    _zh_insert_chunk(db_session, tenant_id=cl_row.id)
+
+    profile_stub = SimpleNamespace(product_name="Product", topics=["Topic"])
+    _zh_stub_pre_retrieval(
+        monkeypatch,
+        relevance=(True, "ok", profile_stub),
+    )
+
+    # Distinct stub for the post-retrieval consecutive-failure relevance call:
+    # this is the one that decides escalation. Profile is non-empty so the
+    # guard's no_profile fast-path is skipped.
+    consecutive_calls: list[dict] = []
+
+    async def _post_retrieval_relevance(**kwargs):
+        consecutive_calls.append(kwargs)
+        return Verdict.of(VerdictReason.RELEVANT)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _post_retrieval_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
+    )
+
+    # Seed an existing chat with the rephrase-prompt flag already on.
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    # Pre-confirm rendering hits OpenAI in production; stub it.
+    monkeypatch.setattr(
+        "backend.chat.service.render_pre_confirm_text",
+        _as_async(
+            lambda **_kw: SimpleNamespace(
+                message_to_user="Want me to escalate this to a human?",
+                tokens_used=1,
+            )
+        ),
+    )
+
+    outcome = process_chat_message(
+        cl_row.id, "Question with no docs", session_id, db_session,
+        api_key=api_key,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.escalation_pre_confirm_pending is True
+    assert chat.last_reply_was_rephrase_prompt is False
+    assert "escalate" in (outcome.text or "").lower()
+    # The post-retrieval relevance call must bypass the short-query fast path.
+    assert any(call.get("force_llm_check") is True for call in consecutive_calls)
+
+
+def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow pre-confirm localization call (observed up to 21s in prod) is cut
+    by the hard deadline; the canonical English template is used and the
+    escalation FSM stays armed instead of the turn stalling."""
+    from backend.escalation.openai_escalation import PRE_CONFIRM_NO_ANSWER_EN
+
+    cl_row, api_key = _zh_create_client(tenant, db_session, email="zh-esc-timeout@example.com")
+    _zh_insert_chunk(db_session, tenant_id=cl_row.id)
+
+    profile_stub = SimpleNamespace(product_name="Product", topics=["Topic"])
+    _zh_stub_pre_retrieval(monkeypatch, relevance=(True, "ok", profile_stub))
+
+    async def _post_retrieval_relevance(**_kwargs):
+        return Verdict.of(VerdictReason.RELEVANT)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _post_retrieval_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
+    )
+
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.core.config.settings.escalation_pre_confirm_render_timeout_seconds",
+        0.05,
+    )
+
+    async def _slow_render(**_kw):
+        await asyncio.sleep(0.5)
+        return SimpleNamespace(message_to_user="too late", tokens_used=1)
+
+    monkeypatch.setattr("backend.chat.service.render_pre_confirm_text", _slow_render)
+
+    outcome = process_chat_message(
+        cl_row.id, "Question with no docs", session_id, db_session,
+        api_key=api_key,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.escalation_pre_confirm_pending is True, (
+        "timeout must degrade the text, not drop the escalation"
+    )
+    assert outcome.text == PRE_CONFIRM_NO_ANSWER_EN
+    assert outcome.text != "too late"
+
+
+def test_consecutive_zero_hits_not_relevant_emits_offtopic_reject(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cl_row, api_key = _zh_create_client(tenant, db_session, email="zh-ot@example.com")
+    _zh_insert_chunk(db_session, tenant_id=cl_row.id)
+
+    profile_stub = SimpleNamespace(product_name="Product", topics=["Topic"])
+    _zh_stub_pre_retrieval(monkeypatch, relevance=(True, "ok", profile_stub))
+
+    async def _post_retrieval_relevance(**_kwargs):
+        return Verdict.of(VerdictReason.OFFTOPIC)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _post_retrieval_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
+    )
+
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    outcome = process_chat_message(
+        cl_row.id, "Some unrelated query", session_id, db_session,
+        api_key=api_key,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.last_reply_was_rephrase_prompt is False
+    assert outcome.text
+
+
+def test_successful_turn_resets_rephrase_flag(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cl_row, api_key = _zh_create_client(tenant, db_session, email="zh-reset@example.com")
+    _zh_insert_chunk(db_session, tenant_id=cl_row.id)
+
+    _zh_stub_pre_retrieval(monkeypatch)
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _zh_nonempty_retrieval()),
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        _as_async(lambda *_a, **_kw: ("OK answer", 5, 10, 5, False, False, False)),
+    )
+
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    process_chat_message(
+        cl_row.id, "A real question", session_id, db_session, api_key=api_key,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.last_reply_was_rephrase_prompt is False
+
+
+def test_intervening_non_rag_turn_resets_rephrase_flag(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the codex P1: handlers other than RagHandler (Greeting,
+    Escalation) must also clear ``last_reply_was_rephrase_prompt`` when they
+    persist a turn. Otherwise a one-word "hi" between two unrelated
+    zero-hits turns would mis-classify the second as a *consecutive* miss and
+    trigger forced relevance/escalation.
+
+    Verified by simulating an intervening turn that persists via the same
+    ``_persist_turn_with_response_language`` codepath without touching the
+    flag explicitly: the centralized reset in ``_finalize_persisted_messages``
+    must clear it.
+    """
+    from backend.chat.persistence import _persist_turn_with_response_language
+
+    cl_row, _api_key = _zh_create_client(
+        tenant, db_session, email="zh-intervene@example.com"
+    )
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    # Simulate a non-Rag handler (e.g. Greeting) persisting a turn with the
+    # default ``set_rephrase_flag=False`` — the same call signature these
+    # handlers already use, no opt-in needed.
+    _persist_turn_with_response_language(
+        db=db_session,
+        chat=chat,
+        tenant_id=cl_row.id,
+        response_language="en",
+        resolution_reason="default",
+        user_content="hi",
+        assistant_content="Hello!",
+        document_ids=[],
+        extra_tokens=0,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.last_reply_was_rephrase_prompt is False
+
+
+def test_no_profile_relevance_verdict_does_not_escalate(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Code review #3: ``async_check_relevance_with_profile`` returns
+    ``(True, "no_profile", None)`` for tenants without a profile, even with
+    ``force_llm_check=True``. That fail-open verdict must NOT escalate —
+    fresh tenants without an onboarded profile would otherwise get a support
+    handoff armed on every consecutive zero-hits turn.
+    """
+    cl_row, api_key = _zh_create_client(tenant, db_session, email="zh-nopro@example.com")
+    _zh_insert_chunk(db_session, tenant_id=cl_row.id)
+
+    _zh_stub_pre_retrieval(monkeypatch)
+
+    async def _no_profile_relevance(**_kwargs):
+        return Verdict.of(VerdictReason.NO_PROFILE)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _no_profile_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
+    )
+
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    process_chat_message(
+        cl_row.id, "Q two", session_id, db_session, api_key=api_key,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    # no_profile fail-open must NOT escalate — must fall through to off-topic.
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.last_reply_was_rephrase_prompt is False
+
+
+def test_session_ended_event_stales_rephrase_flag(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Code review #2: a resumed chat session — sweeper has reported it
+    ``session_ended_event_at`` — must treat the persisted rephrase flag as
+    stale, so the user's first question after returning gets a fresh soft
+    reply instead of jumping straight to escalation.
+    """
+    from datetime import datetime
+
+    cl_row, api_key = _zh_create_client(tenant, db_session, email="zh-stale@example.com")
+    _zh_insert_chunk(db_session, tenant_id=cl_row.id)
+
+    _zh_stub_pre_retrieval(monkeypatch)
+
+    # If the stale guard fails, the pipeline would invoke the post-retrieval
+    # relevance check with ``force_llm_check=True`` — assert that never
+    # happens on a freshly resumed session. The pre-retrieval check (called
+    # without ``force_llm_check``) still runs normally and returns relevant.
+    async def _no_force_check_allowed(**kwargs):
+        if kwargs.get("force_llm_check"):
+            raise AssertionError(
+                "Force relevance check must not fire when the previous session "
+                "was already reported ended by the sweeper"
+            )
+        return Verdict.of(VerdictReason.RELEVANT)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _no_force_check_allowed,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
+    )
+
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+        session_ended_event_at=datetime.utcnow(),
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    outcome = process_chat_message(
+        cl_row.id, "Returning question", session_id, db_session, api_key=api_key,
+    )
+
+    # New soft-reply, not escalation. The sweeper marker now triggers
+    # conversation rotation, so the turn lands in a fresh Chat row (same
+    # session) with the rephrase flag re-armed for the freshly observed
+    # zero-hits turn; the stale flag stays behind on the archived chat.
+    assert outcome.text
+    db_session.expire_all()
+    chats = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .order_by(Chat.created_at.asc())
+        .all()
+    )
+    assert len(chats) == 2
+    old_chat, new_chat = chats
+    assert old_chat.session_ended_event_at is not None
+    assert new_chat.last_reply_was_rephrase_prompt is True
+    assert new_chat.escalation_pre_confirm_pending is False
+
+
+def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Code review #4: a timeout on a forced relevance call must not
+    increment the shared circuit-breaker counter — otherwise one tenant's
+    pathological zero-hits stream during an OpenAI outage trips the
+    breaker for every other tenant's regular relevance checks.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from backend.guards import relevance_checker
+    from backend.guards.relevance_checker import (
+        _cache,
+        async_check_relevance_with_profile,
+    )
+
+    _cache.clear()
+
+    # Reset shared CB state.
+    monkeypatch.setattr(relevance_checker, "_consecutive_failures", 0)
+    monkeypatch.setattr(relevance_checker, "_circuit_opened_at", None)
+
+    async def _always_timeout(*_a, **_kw):  # type: ignore[no-untyped-def]
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.async_call_openai_with_retry",
+        _always_timeout,
+    )
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: Mock(chat=Mock(completions=Mock(create=AsyncMock()))),
+    )
+
+    profile = Mock(product_name="Acme", topics=["billing"])
+    tid = uuid.uuid4()
+
+    async def _run():
+        # 10 forced calls all time out — counter must NOT advance.
+        for _ in range(10):
+            relevant, reason = _rr(await async_check_relevance_with_profile(
+                tenant_id=tid,
+                user_question="any short q",
+                profile=profile,
+                api_key="sk-test",
+                force_llm_check=True,
+            ))
+            assert relevant is True
+            assert reason == "timeout"
+
+    asyncio.run(_run())
+
+    # No failures recorded, breaker still closed.
+    assert relevance_checker._consecutive_failures == 0
+    assert relevance_checker._circuit_opened_at is None
+
+
+def test_relevance_checker_comment_hygiene() -> None:
+    """The misleading 'Exception: queries that match an explicit off-topic
+    pattern are still rejected' comment described unimplemented behavior;
+    after the language-agnostic redesign it must be gone.
+    """
+    path = Path("backend/guards/relevance_checker.py")
+    src = path.read_text(encoding="utf-8")
+    assert "Exception: queries that match an explicit off-topic pattern" not in src
+
+
+# ---------------------------------------------------------------------------
+# The slow-path ``no_documents`` verdict gets the same second chance as
+# ``low_similarity`` -- absorbed from the deleted test_no_documents_second_chance.py
+#
+# "Nothing found in the knowledge base" is detected twice: by the zero-hits
+# fast path above, which asks the user to rephrase once before it escalates,
+# and by ``should_escalate``'s ``chunk_count == 0`` on a turn an FAQ or quick
+# answer carried while the document search came back empty. The second one
+# used to offer a support ticket on its very first occurrence. It now shares
+# the ``low_similarity`` two-strike tracker: the first such turn keeps the
+# generated answer, and the handoff waits for a second weak turn of either
+# flavour.
+# ---------------------------------------------------------------------------
+
+_NODOCS_GENERATED_ANSWER = "The FAQ entry says the limit is per workspace."
+_NODOCS_REPHRASE_PROMPT = "REPHRASE_PROMPT"
+_NODOCS_PRE_CONFIRM = "PRE_CONFIRM_QUESTION"
+
+
+class _NoOpFakeSpan:
+    def end(self, **kwargs: object) -> None:
+        return None
+
+
+class _NoOpFakeTrace:
+    def span(self, **kwargs: object) -> _NoOpFakeSpan:
+        return _NoOpFakeSpan()
+
+    def update(self, **kwargs: object) -> None:
+        return None
+
+    def promote(self, **kwargs: object) -> None:
+        return None
+
+
+def _nodocs_empty_retrieval() -> RetrievalContext:
+    """The document search returned no chunks at all."""
+    return RetrievalContext(
+        chunk_texts=[],
+        document_ids=[],
+        scores=[],
+        mode="hybrid",
+        best_rank_score=None,
+        best_confidence_score=None,
+        confidence_source=None,
+        reliability=build_reliability_assessment(top_score=0.0, result_count=0),
+    )
+
+
+def _nodocs_weak_retrieval() -> RetrievalContext:
+    """Chunks came back, but below the handoff floor."""
+    return RetrievalContext(
+        chunk_texts=["tunnels to origin without a public IP are not supported"],
+        document_ids=[uuid.uuid4()],
+        scores=[0.31],
+        mode="hybrid",
+        best_rank_score=0.31,
+        best_confidence_score=0.31,
+        confidence_source="vector_similarity",
+        reliability=build_reliability_assessment(top_score=0.31, result_count=3),
+    )
+
+
+def _nodocs_setup(tenant: TestClient, db_session: Session, email: str) -> tuple[uuid.UUID, str]:
+    token = register_and_verify_user(tenant, db_session, email=email)
+    created = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "No Documents Tenant"},
+    ).json()
+    set_client_openai_key(tenant, token)
+    return uuid.UUID(created["id"]), created["api_key"]
+
+
+def _nodocs_patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: _NoOpFakeTrace())
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda text: LanguageDetectionResult("en", 0.99, True),
+    )
+    monkeypatch.setattr("backend.chat.service._try_ingest_gap_signal", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "backend.chat.service._trigger_log_analysis_threshold",
+        lambda *_a, **_k: None,
+    )
+
+    events: list[dict] = []
+
+    def _record(event: str, **kwargs: Any) -> None:
+        events.append({"event": event, **kwargs})
+
+    monkeypatch.setattr("backend.chat.events.capture_event", _record)
+
+    async def _fake_render_pre_confirm(**kwargs):
+        return type(
+            "EscalationOut", (), {"message_to_user": _NODOCS_PRE_CONFIRM, "tokens_used": 1}
+        )()
+
+    monkeypatch.setattr(
+        "backend.chat.service.render_pre_confirm_text", _fake_render_pre_confirm
+    )
+    return events
+
+
+def _nodocs_patch_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    answer: str = _NODOCS_GENERATED_ANSWER,
+    retrieval: RetrievalContext | None = None,
+    escalation_recommended: bool = True,
+    escalation_trigger: EscalationTrigger | None = EscalationTrigger.no_documents,
+    llm_needs_human: bool = False,
+    is_reject: bool = False,
+    reject_reason: str | None = None,
+) -> None:
+    _retrieval = _nodocs_empty_retrieval() if retrieval is None else retrieval
+
+    async def _pipeline(*args, **kwargs) -> ChatPipelineResult:
+        return ChatPipelineResult(
+            raw_answer=answer,
+            final_answer=answer,
+            tokens_used=3,
+            strategy="rag_only",
+            reject_reason=reject_reason,
+            is_reject=is_reject,
+            is_faq_direct=False,
+            retrieval=_retrieval,
+            escalation_recommended=escalation_recommended,
+            escalation_trigger=escalation_trigger,
+            llm_needs_human=llm_needs_human,
+        )
+
+    monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _pipeline)
+
+
+def _nodocs_turn_props(events: list[dict]) -> dict:
+    return next(e for e in events if e["event"] == "chat.turn")["properties"]
+
+
+def _nodocs_chat(db_session: Session, session_id: uuid.UUID) -> Chat:
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    db_session.refresh(chat)
+    return chat
+
+
+def test_first_zero_chunk_turn_keeps_its_answer(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An FAQ-carried turn with no document chunks answers instead of offering a ticket."""
+    tenant_id, api_key = _nodocs_setup(tenant, db_session, "nodocs-first@example.com")
+    session_id = uuid.uuid4()
+    events = _nodocs_patch_common(monkeypatch)
+    _nodocs_patch_pipeline(monkeypatch)
+
+    outcome = process_chat_message(
+        tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
+    )
+
+    assert outcome.text == _NODOCS_GENERATED_ANSWER
+    chat = _nodocs_chat(db_session, session_id)
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.escalation_pre_confirm_context is None
+    # ...and the shared tracker is armed so the next weak turn escalates.
+    assert chat.last_reply_was_low_confidence is True
+
+    props = _nodocs_turn_props(events)
+    assert props["escalated"] is False
+    assert props["handoff_stood_down"] is False
+
+
+def test_second_zero_chunk_turn_escalates(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id, api_key = _nodocs_setup(tenant, db_session, "nodocs-second@example.com")
+    session_id = uuid.uuid4()
+    events = _nodocs_patch_common(monkeypatch)
+    _nodocs_patch_pipeline(monkeypatch)
+
+    first = process_chat_message(
+        tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
+    )
+    assert first.text == _NODOCS_GENERATED_ANSWER
+    events.clear()
+    outcome = process_chat_message(
+        tenant_id, "and per seat?", session_id, db_session, api_key=api_key
+    )
+
+    assert outcome.text == _NODOCS_PRE_CONFIRM
+    chat = _nodocs_chat(db_session, session_id)
+    assert chat.escalation_pre_confirm_pending is True
+    assert (
+        chat.escalation_pre_confirm_context["trigger"]
+        == EscalationTrigger.no_documents.value
+    )
+    assert _nodocs_turn_props(events)["escalated"] is True
+
+
+def test_zero_chunk_then_weak_turn_escalates(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two strikes count across both weak flavours, not one counter each."""
+    tenant_id, api_key = _nodocs_setup(tenant, db_session, "nodocs-then-weak@example.com")
+    session_id = uuid.uuid4()
+    _nodocs_patch_common(monkeypatch)
+    _nodocs_patch_pipeline(monkeypatch)
+
+    process_chat_message(
+        tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
+    )
+    _nodocs_patch_pipeline(
+        monkeypatch,
+        retrieval=_nodocs_weak_retrieval(),
+        escalation_trigger=EscalationTrigger.low_similarity,
+    )
+    outcome = process_chat_message(
+        tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
+    )
+
+    assert outcome.text == _NODOCS_PRE_CONFIRM
+    chat = _nodocs_chat(db_session, session_id)
+    assert chat.escalation_pre_confirm_pending is True
+    assert (
+        chat.escalation_pre_confirm_context["trigger"]
+        == EscalationTrigger.low_similarity.value
+    )
+
+
+def test_weak_then_zero_chunk_turn_escalates(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same in the other order, so a conversation cannot alternate forever."""
+    tenant_id, api_key = _nodocs_setup(tenant, db_session, "weak-then-nodocs@example.com")
+    session_id = uuid.uuid4()
+    _nodocs_patch_common(monkeypatch)
+    _nodocs_patch_pipeline(
+        monkeypatch,
+        retrieval=_nodocs_weak_retrieval(),
+        escalation_trigger=EscalationTrigger.low_similarity,
+    )
+
+    process_chat_message(
+        tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
+    )
+    _nodocs_patch_pipeline(monkeypatch)
+    outcome = process_chat_message(
+        tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
+    )
+
+    assert outcome.text == _NODOCS_PRE_CONFIRM
+    chat = _nodocs_chat(db_session, session_id)
+    assert chat.escalation_pre_confirm_pending is True
+    assert (
+        chat.escalation_pre_confirm_context["trigger"]
+        == EscalationTrigger.no_documents.value
+    )
+
+
+def test_zero_hits_fast_path_escalation_is_not_deferred(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fast path already spent its own second chance on the rephrase prompt.
+
+    Its escalation reaches the handler with the same shape as the slow path, so
+    the deferral must read ``last_reply_was_rephrase_prompt`` as a strike
+    already taken and let the offer through.
+    """
+    tenant_id, api_key = _nodocs_setup(tenant, db_session, "nodocs-fastpath@example.com")
+    session_id = uuid.uuid4()
+    _nodocs_patch_common(monkeypatch)
+    _nodocs_patch_pipeline(
+        monkeypatch,
+        answer=_NODOCS_REPHRASE_PROMPT,
+        escalation_recommended=False,
+        escalation_trigger=None,
+        is_reject=True,
+        reject_reason="rephrase",
+    )
+
+    first = process_chat_message(
+        tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
+    )
+    assert first.text == _NODOCS_REPHRASE_PROMPT
+    assert _nodocs_chat(db_session, session_id).last_reply_was_rephrase_prompt is True
+
+    _nodocs_patch_pipeline(monkeypatch, answer=_NODOCS_REPHRASE_PROMPT)
+    outcome = process_chat_message(
+        tenant_id, "the workspace limit?", session_id, db_session, api_key=api_key
+    )
+
+    assert outcome.text == _NODOCS_PRE_CONFIRM
+    chat = _nodocs_chat(db_session, session_id)
+    assert chat.escalation_pre_confirm_pending is True
+    assert (
+        chat.escalation_pre_confirm_context["trigger"]
+        == EscalationTrigger.no_documents.value
+    )
+
+
+def test_needs_human_marker_still_offers_the_handoff(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dead-end reply gets its offer on the first zero-chunk turn regardless."""
+    tenant_id, api_key = _nodocs_setup(tenant, db_session, "nodocs-needs-human@example.com")
+    session_id = uuid.uuid4()
+    events = _nodocs_patch_common(monkeypatch)
+    _nodocs_patch_pipeline(monkeypatch, llm_needs_human=True)
+
+    outcome = process_chat_message(
+        tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
+    )
+
+    assert _NODOCS_PRE_CONFIRM in outcome.text
+    chat = _nodocs_chat(db_session, session_id)
+    assert chat.escalation_pre_confirm_pending is True
+    assert (
+        chat.escalation_pre_confirm_context["trigger"]
+        == EscalationTrigger.llm_self_offer.value
+    )
+    assert _nodocs_turn_props(events)["handoff_stood_down"] is False
+
+
+# ---------------------------------------------------------------------------
+# The weak-retrieval band offers a handoff only on a second consecutive miss
+# -- absorbed from the deleted test_low_confidence_second_attempt.py.
+#
+# ``low_similarity`` means retrieval found something and scored it below the
+# handoff floor. The first-weak-turn-keeps-its-answer and second-consecutive-
+# weak-turn-escalates failure modes are already asserted above by the
+# cross-flavour tests (test_zero_chunk_then_weak_turn_escalates and
+# test_weak_then_zero_chunk_turn_escalates share the same two-strike tracker
+# with the no_documents flavour); only the reset behaviour below is distinct.
+# ---------------------------------------------------------------------------
+
+
+def _lowconf_weak_retrieval() -> RetrievalContext:
+    """Chunks came back, but below the 0.45 handoff floor."""
+    return RetrievalContext(
+        chunk_texts=["tunnels to origin without a public IP are not supported"],
+        document_ids=[uuid.uuid4()],
+        scores=[0.31],
+        mode="hybrid",
+        best_rank_score=0.31,
+        best_confidence_score=0.31,
+        confidence_source="vector_similarity",
+        reliability=build_reliability_assessment(top_score=0.31, result_count=3),
+    )
+
+
+def _lowconf_setup(tenant: TestClient, db_session: Session, email: str) -> tuple[uuid.UUID, str]:
+    token = register_and_verify_user(tenant, db_session, email=email)
+    created = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Second Attempt Tenant"},
+    ).json()
+    set_client_openai_key(tenant, token)
+    return uuid.UUID(created["id"]), created["api_key"]
+
+
+_LOWCONF_WEAK_ANSWER = "The docs only mention the limitations list."
+
+
+def _lowconf_patch_weak_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every turn retrieves weakly and the pipeline recommends escalation."""
+    monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: _NoOpFakeTrace())
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda text: LanguageDetectionResult("en", 0.99, True),
+    )
+    monkeypatch.setattr("backend.chat.service._try_ingest_gap_signal", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "backend.chat.service._trigger_log_analysis_threshold",
+        lambda *_a, **_k: None,
+    )
+
+    async def _weak_pipeline(*args, **kwargs) -> ChatPipelineResult:
+        return ChatPipelineResult(
+            raw_answer=_LOWCONF_WEAK_ANSWER,
+            final_answer=_LOWCONF_WEAK_ANSWER,
+            tokens_used=3,
+            strategy="rag_only",
+            reject_reason=None,
+            is_reject=False,
+            is_faq_direct=False,
+            retrieval=_lowconf_weak_retrieval(),
+            escalation_recommended=True,
+            escalation_trigger=EscalationTrigger.low_similarity,
+        )
+
+    monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _weak_pipeline)
+
+    async def _fake_render_pre_confirm(**kwargs):
+        return type(
+            "EscalationOut", (), {"message_to_user": _NODOCS_PRE_CONFIRM, "tokens_used": 1}
+        )()
+
+    monkeypatch.setattr(
+        "backend.chat.service.render_pre_confirm_text", _fake_render_pre_confirm
+    )
+
+
+def test_a_good_turn_between_two_weak_ones_resets_the_tracker(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two weak turns separated by an answered one are not 'consecutive'."""
+    tenant_id, api_key = _lowconf_setup(tenant, db_session, "weak-reset@example.com")
+    session_id = uuid.uuid4()
+    _lowconf_patch_weak_turn(monkeypatch)
+
+    process_chat_message(
+        tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
+    )
+
+    async def _confident_pipeline(*args, **kwargs) -> ChatPipelineResult:
+        return ChatPipelineResult(
+            raw_answer="Yes, here is how.",
+            final_answer="Yes, here is how.",
+            tokens_used=3,
+            strategy="rag_only",
+            reject_reason=None,
+            is_reject=False,
+            is_faq_direct=False,
+            retrieval=_lowconf_weak_retrieval(),
+            escalation_recommended=False,
+            escalation_trigger=None,
+        )
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_run_chat_pipeline", _confident_pipeline
+    )
+    process_chat_message(
+        tenant_id, "and how do I deploy?", session_id, db_session, api_key=api_key
+    )
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    db_session.refresh(chat)
+    assert chat.last_reply_was_low_confidence is False
+
+    _lowconf_patch_weak_turn(monkeypatch)
+    outcome = process_chat_message(
+        tenant_id, "what about custom domains?", session_id, db_session, api_key=api_key
+    )
+
+    assert outcome.text == _LOWCONF_WEAK_ANSWER
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is False
+
+
+# ---------------------------------------------------------------------------
+# Chat pipeline orchestration (process_chat_message) -- absorbed from the
+# deleted test_chat_pipeline.py
+# ---------------------------------------------------------------------------
+
+
+def test_process_chat_message_ends_followup_span_on_exception(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat, Tenant, EscalationTicket, EscalationTrigger, EscalationStatus
+
+    class FakeSpan:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.followup_span = FakeSpan()
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            if kwargs["name"] == "escalation-followup":
+                return self.followup_span
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            return None
+
+    token = register_and_verify_user(tenant, db_session, email="trace-followup@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    chat = Chat(
+        tenant_id=client_row.id,
+        session_id=uuid.uuid4(),
+        user_context={},
+        escalation_followup_pending=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        tenant_id=client_row.id,
+        ticket_number="ESC-0001",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    fake_trace = FakeTrace()
+    monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: fake_trace)
+    async def _boom_escalation(**kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        _boom_escalation,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        process_chat_message(
+            client_row.id,
+            "no thanks",
+            chat.session_id,
+            db_session,
+            api_key=cl_resp.json()["api_key"],
+        )
+
+    assert fake_trace.followup_span.end_calls == [
+        {
+            "output": {"error": True},
+            "level": "ERROR",
+            "status_message": "boom",
+        }
+    ]
+
+
+def test_process_chat_message_adds_variant_summary_to_trace(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Tenant
+    from backend.search.service import ContradictionPair, build_reliability_assessment
+
+    class FakeSpan:
+        def end(self, **kwargs: object) -> None:
+            return None
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.update_calls: list[dict[str, object]] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            self.update_calls.append(kwargs)
+
+        def promote(self, **kwargs: object) -> None:
+            return None
+
+    token = register_and_verify_user(tenant, db_session, email="trace-chat@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace Chat Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    fake_trace = FakeTrace()
+    monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: fake_trace)
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: RetrievalContext(
+            chunk_texts=["reset password in settings"],
+            document_ids=[uuid.uuid4()],
+            scores=[0.93],
+            mode="hybrid",
+            best_rank_score=0.93,
+            best_confidence_score=0.91,
+            confidence_source="vector_similarity",
+            reliability=build_reliability_assessment(
+                top_score=0.93,
+                result_count=5,
+                contradiction_pairs=(
+                    ContradictionPair(
+                        chunk_a_id="a",
+                        chunk_b_id="b",
+                        basis="effective_date",
+                        value_a="2024-03-01",
+                        value_b="2025-03-01",
+                    ),
+                    ContradictionPair(
+                        chunk_a_id="a",
+                        chunk_b_id="b",
+                        basis="version",
+                        value_a="v2",
+                        value_b="v3",
+                    ),
+                ),
+            ),
+            variant_mode="multi",
+            query_variant_count=3,
+            extra_embedded_queries=2,
+            extra_embedding_api_requests=0,
+            extra_vector_search_calls=2,
+            bm25_expansion_mode="symmetric_variants",
+            bm25_query_variant_count=2,
+            bm25_variant_eval_count=2,
+            extra_bm25_variant_evals=1,
+            bm25_merged_hit_count_before_cap=4,
+            bm25_merged_hit_count_after_cap=3,
+            retrieval_duration_ms=18.4,
+        )),
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *args, **kwargs: ("Use the reset link in settings.", 17)),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *args, **kwargs: (False, None),
+    )
+
+    outcome = process_chat_message(
+        client_row.id,
+        "How do I reset my password?",
+        uuid.uuid4(),
+        db_session,
+        api_key=cl_resp.json()["api_key"],
+    )
+
+    assert outcome.text == "Use the reset link in settings."
+    assert outcome.tokens_used == 17
+    assert outcome.chat_ended is False
+    assert fake_trace.update_calls[-1]["metadata"]["variant_mode"] == "multi"
+    assert fake_trace.update_calls[-1]["metadata"]["query_variant_count"] == 3
+    assert fake_trace.update_calls[-1]["metadata"]["extra_embedded_queries"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["extra_embedding_api_requests"] == 0
+    assert fake_trace.update_calls[-1]["metadata"]["extra_vector_search_calls"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_expansion_mode"] == "symmetric_variants"
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_query_variant_count"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_variant_eval_count"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["extra_bm25_variant_evals"] == 1
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_merged_hit_count_before_cap"] == 4
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_merged_hit_count_after_cap"] == 3
+    assert fake_trace.update_calls[-1]["metadata"]["retrieval_duration_ms"] == 18.4
+    assert fake_trace.update_calls[-1]["metadata"]["reliability"] == {
+        "base_score": "high",
+        "score": "low",
+        "cap": "low",
+        "cap_reason": "contradiction",
+        "signals": [{"kind": "contradiction"}],
+        "evidence": {
+            "contradiction": {
+                "pairs": [
+                    {
+                        "chunk_a_id": "a",
+                        "chunk_b_id": "b",
+                        "basis": "effective_date",
+                        "value_a": "2024-03-01",
+                        "value_b": "2025-03-01",
+                    },
+                    {
+                        "chunk_a_id": "a",
+                        "chunk_b_id": "b",
+                        "basis": "version",
+                        "value_a": "v2",
+                        "value_b": "v3",
+                    },
+                ]
+            }
+        },
+    }
+    assert fake_trace.update_calls[-1]["metadata"]["contradiction_detected"] is True
+    assert fake_trace.update_calls[-1]["metadata"]["contradiction_count"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["contradiction_pair_count"] == 1
+    assert fake_trace.update_calls[-1]["metadata"]["contradiction_basis_types"] == [
+        "effective_date",
+        "version",
+    ]
+    assert fake_trace.update_calls[-1]["tags"] == ["variants:multi"]
+
+
+def test_trace_metadata_language_confidence_and_response_language_across_turns(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for ClickUp 86exmtu8h — confidence=0 on follow-up traces.
+
+    Two guarantees, checked across a 3-turn chat:
+
+    * ``response_language`` is present in the trace metadata of **every** turn,
+      not just the first.
+    * Language-detection confidence is recorded under the unambiguous
+      ``language_confidence`` key (the bare ``confidence`` key collided with the
+      RAG handler's retrieval ``best_confidence_score``). On follow-up turns the
+      chat is language-locked and detection is skipped, so the key is **omitted**
+      rather than written as a false-negative ``0.0``.
+    """
+    from backend.models import Tenant
+
+    class FakeSpan:
+        def end(self, **kwargs: object) -> None:
+            return None
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.update_calls: list[dict[str, object]] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            self.update_calls.append(kwargs)
+
+        def promote(self, **kwargs: object) -> None:
+            return None
+
+        @property
+        def merged_metadata(self) -> dict:
+            # Effective server-merged view: every update(metadata=...) this turn
+            # layered onto one dict, later keys winning — mirrors how Langfuse
+            # merges trace metadata across the pre-dispatch and handler writes.
+            merged: dict = {}
+            for call in self.update_calls:
+                md = call.get("metadata")
+                if isinstance(md, dict):
+                    merged.update(md)
+            return merged
+
+    token = register_and_verify_user(
+        tenant, db_session, email="trace-lang-conf@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace Lang Conf Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    traces: list[FakeTrace] = []
+
+    def _begin_trace(**kwargs: object) -> FakeTrace:
+        trace = FakeTrace()
+        traces.append(trace)
+        return trace
+
+    monkeypatch.setattr("backend.chat.service.begin_trace", _begin_trace)
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(
+            lambda *args, **kwargs: RetrievalContext(
+                chunk_texts=["Чтобы сбросить пароль, откройте настройки аккаунта."],
+                document_ids=[uuid.uuid4()],
+                scores=[0.9],
+                mode="hybrid",
+                best_rank_score=0.9,
+                best_confidence_score=0.88,
+                confidence_source="vector_similarity",
+                reliability=build_reliability_assessment(top_score=0.9, result_count=5),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(
+            lambda *args, **kwargs: ("Откройте настройки и сбросьте пароль.", 12)
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *args, **kwargs: (False, None),
+    )
+
+    # A single session drives all three turns so the chat's language lock (set on
+    # the first reliable Russian turn) carries into the follow-ups.
+    session_id = uuid.uuid4()
+    questions = [
+        "Как мне сбросить пароль от моего аккаунта?",
+        "А если я не помню электронную почту?",
+        "Сколько времени занимает восстановление доступа?",
+    ]
+    for question in questions:
+        process_chat_message(
+            client_row.id,
+            question,
+            session_id,
+            db_session,
+            api_key=cl_resp.json()["api_key"],
+        )
+
+    assert len(traces) == 3
+    metadatas = [trace.merged_metadata for trace in traces]
+
+    for md in metadatas:
+        # AC2: response_language present on every turn.
+        assert md.get("response_language") == "ru"
+        # The bare "confidence" key must never reappear at trace level.
+        assert "confidence" not in md
+        # Retrieval confidence keeps its own distinct key.
+        assert md.get("best_confidence_score") == 0.88
+        # AC1: language_confidence, when present, is a real measurement — never
+        # the false-negative sentinel 0.0.
+        if "language_confidence" in md:
+            assert md["language_confidence"] > 0.0
+
+    # Turn 1 runs detection → language_confidence recorded.
+    assert metadatas[0].get("language_confidence", 0.0) > 0.0
+    assert metadatas[0].get("language_is_reliable") is True
+
+    # Follow-up turns are language-locked → detection skipped → the confidence
+    # keys are omitted rather than written as 0.0.
+    assert "language_confidence" not in metadatas[1]
+    assert "language_is_reliable" not in metadatas[1]
+    assert "language_confidence" not in metadatas[2]
+    assert "language_is_reliable" not in metadatas[2]
+
+
+def test_trace_metadata_stamps_knowledge_base_updated_at(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ClickUp 86eytw2zn — every chat-turn trace carries the time the tenant's
+    knowledge base last changed (max ``Document.updated_at``), so two traces of
+    the same question a week apart show at a glance whether the base moved in
+    between. Tenants with no documents get an explicit ``None``."""
+    import datetime as dt
+
+    from backend.models import Document, DocumentStatus, DocumentType
+
+    class FakeSpan:
+        def end(self, **kwargs: object) -> None:
+            return None
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.update_calls: list[dict[str, object]] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            self.update_calls.append(kwargs)
+
+        def promote(self, **kwargs: object) -> None:
+            return None
+
+        def stamp(self) -> object:
+            for call in self.update_calls:
+                md = call.get("metadata")
+                if isinstance(md, dict) and "knowledge_base_updated_at" in md:
+                    return md["knowledge_base_updated_at"]
+            raise AssertionError("knowledge_base_updated_at missing from trace metadata")
+
+    token = register_and_verify_user(tenant, db_session, email="trace-kb-stamp@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace KB Stamp Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    traces: list[FakeTrace] = []
+
+    def _begin_trace(**kwargs: object) -> FakeTrace:
+        trace = FakeTrace()
+        traces.append(trace)
+        return trace
+
+    monkeypatch.setattr("backend.chat.service.begin_trace", _begin_trace)
+
+    async def _fake_async_pipeline(*args, **kwargs):
+        return _cp_make_pipeline_result(final_answer="Use the reset link in settings.")
+
+    monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _fake_async_pipeline)
+
+    process_chat_message(tenant_id, "How do I reset my password?", uuid.uuid4(), db_session, api_key=api_key)
+    assert traces[-1].stamp() is None
+
+    older = dt.datetime(2026, 9, 1, 8, 0, 0)
+    newest = dt.datetime(2026, 9, 14, 3, 30, 0)
+    for filename, updated_at in (("old.md", older), ("new.md", newest)):
+        db_session.add(
+            Document(
+                tenant_id=tenant_id,
+                filename=filename,
+                file_type=DocumentType.markdown,
+                status=DocumentStatus.ready,
+                parsed_text="content",
+                created_at=updated_at,
+                updated_at=updated_at,
+            )
+        )
+    db_session.commit()
+
+    process_chat_message(tenant_id, "How do I reset my password?", uuid.uuid4(), db_session, api_key=api_key)
+    assert traces[-1].stamp() == "2026-09-14T03:30:00Z"
+
+
+def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = register_and_verify_user(tenant, db_session, email="clarify-domain@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Clarify Domain Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    session_id = uuid.uuid4()
+
+    async def _fake_async_pipeline(*args, **kwargs):
+        return _cp_make_pipeline_result(
+            final_answer="Which domain provider are you trying to configure?",
+            reliability_score="medium",
+        )
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_run_chat_pipeline",
+        _fake_async_pipeline,
+    )
+
+    outcome = process_chat_message(
+        tenant_id,
+        "How to connect domain?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+
+    assert outcome.text == "Which domain provider are you trying to configure?"
+    assert outcome.tokens_used == 3
+
+def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Tenant
+
+    token = register_and_verify_user(tenant, db_session, email="locale-fallback@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Locale Fallback Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_generate_greeting_in_language_result(**kwargs: object) -> LocalizationResult:
+        captured_kwargs.update(kwargs)
+        return LocalizationResult(text="Bonjour", tokens_used=4)
+
+    monkeypatch.setattr(
+        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
+        fake_generate_greeting_in_language_result,
+    )
+
+    outcome = process_chat_message(
+        client_row.id,
+        "",
+        uuid.uuid4(),
+        db_session,
+        api_key=cl_resp.json()["api_key"],
+        user_context={"locale": "fr-FR"},
+        browser_locale="de-DE",
+    )
+
+    assert outcome.text == "Bonjour"
+    assert outcome.tokens_used == 4
+    assert captured_kwargs["target_language"] == "fr-FR"
+
+
+@pytest.mark.asyncio
+async def test_complete_escalation_openai_turn_localizes_fallback_to_question_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    async def _fake_localize(**kwargs: object) -> LocalizationResult:
+        return LocalizationResult(
+            text="Nous n'avons pas pu charger une reponse complete pour le moment.",
+            tokens_used=17,
+        )
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
+        _fake_localize,
+    )
+
+    result = await complete_escalation_openai_turn(
+        phase=__import__("backend.models", fromlist=["EscalationPhase"]).EscalationPhase.handoff_email_known,
+        chat_messages=[],
+        fact_json={"ticket_number": "ESC-1234"},
+        latest_user_text="J'ai besoin d'aide",
+        api_key="sk-test",
+    )
+
+    assert result.message_to_user.startswith(
+        "Nous n'avons pas pu charger une reponse complete pour le moment."
+    )
+    assert result.tokens_used == 17
+
+
+def _cp_make_retrieval_context(*, reliability_score: str = "medium") -> RetrievalContext:
+    top_score = {"high": 0.9, "medium": 0.6, "low": 0.3}[reliability_score]
+    result_count = {"high": 3, "medium": 3, "low": 1}[reliability_score]
+    return RetrievalContext(
+        chunk_texts=["retrieved docs"],
+        document_ids=[uuid.uuid4()],
+        scores=[top_score],
+        mode="vector",
+        best_rank_score=top_score,
+        best_confidence_score=top_score,
+        confidence_source="vector_similarity",
+        reliability=build_reliability_assessment(top_score=top_score, result_count=result_count),
+        vector_similarities=[top_score],
+    )
+
+
+def _cp_make_pipeline_result(
+    *,
+    final_answer: str,
+    reliability_score: str = "medium",
+    is_reject: bool = False,
+    reject_reason: str | None = None,
+) -> ChatPipelineResult:
+    retrieval = None if is_reject and reject_reason == "not_relevant" else _cp_make_retrieval_context(
+        reliability_score=reliability_score
+    )
+    return ChatPipelineResult(
+        raw_answer=final_answer,
+        final_answer=final_answer,
+        tokens_used=3,
+        strategy="guard_reject" if is_reject else "rag_only",
+        reject_reason=reject_reason,  # type: ignore[arg-type]
+        is_reject=is_reject,
+        is_faq_direct=False,
+        retrieval=retrieval,
+        escalation_recommended=False,
+        escalation_trigger=None,
+    )

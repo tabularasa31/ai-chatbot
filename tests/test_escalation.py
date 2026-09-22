@@ -39,20 +39,23 @@ from tests.conftest import register_and_verify_user
 
 @pytest.mark.smoke
 @pytest.mark.parametrize(
-    "similarity, doc_count, expected_escalate, expected_trigger",
+    "similarity, doc_count, rank_score, expected_escalate, expected_trigger",
     [
-        pytest.param(0.3, 3, True, EscalationTrigger.low_similarity, id="low_similarity"),
-        pytest.param(None, 0, True, EscalationTrigger.no_documents, id="no_documents"),
-        pytest.param(0.9, 2, False, None, id="good_match_no_escalation"),
+        pytest.param(0.3, 3, None, True, EscalationTrigger.low_similarity, id="low_similarity"),
+        pytest.param(None, 0, None, True, EscalationTrigger.no_documents, id="no_documents"),
+        pytest.param(0.9, 2, None, False, None, id="good_match_no_escalation"),
+        pytest.param(0.35, 3, 0.52, False, None, id="strong_lexical_rank_suppresses"),
+        pytest.param(0.35, 3, 0.40, True, EscalationTrigger.low_similarity, id="weak_lexical_rank_still_escalates"),
     ],
 )
 def test_should_escalate(
     similarity: float | None,
     doc_count: int,
+    rank_score: float | None,
     expected_escalate: bool,
     expected_trigger: EscalationTrigger | None,
 ) -> None:
-    esc, trig = should_escalate(similarity, doc_count)
+    esc, trig = should_escalate(similarity, doc_count, best_rank_score=rank_score)
     assert esc is expected_escalate
     assert trig == expected_trigger
 

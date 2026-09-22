@@ -177,10 +177,6 @@ class Chat(Base):
     # Schema: {"trigger": str, "primary_question": str,
     #          "best_similarity_score": float|null, "retrieved_chunks": list|null}
     escalation_pre_confirm_context = Column(JSON, nullable=True)
-    # Legacy: a visitor-initiated close that no longer exists. Old rows still
-    # carry a value; nothing reads it. Dropping the column is a separate
-    # migration.
-    ended_at = Column(DateTime, nullable=True)
     # Analytics-only marker: set by the inactivity sweeper when the
     # chat_session_ended event has been emitted. Reporting a session as ended
     # does not make the chat un-resumable.

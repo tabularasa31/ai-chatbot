@@ -191,14 +191,14 @@ def test_before_flush_strips_tzinfo_on_naive_datetime_columns(db_session) -> Non
     db_session.commit()
 
     # Assign an aware UTC datetime — listener should strip tzinfo at flush.
-    chat.ended_at = dt.datetime.now(dt.UTC)
-    assert chat.ended_at.tzinfo is not None, "test setup precondition"
+    chat.session_ended_event_at = dt.datetime.now(dt.UTC)
+    assert chat.session_ended_event_at.tzinfo is not None, "test setup precondition"
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
 
-    assert chat.ended_at is not None
-    assert chat.ended_at.tzinfo is None, (
+    assert chat.session_ended_event_at is not None
+    assert chat.session_ended_event_at.tzinfo is None, (
         "before_flush listener must have stripped tzinfo from naive DateTime "
         "column; aware values crash asyncpg on the widget chat path"
     )
@@ -206,17 +206,17 @@ def test_before_flush_strips_tzinfo_on_naive_datetime_columns(db_session) -> Non
 
 def test_before_flush_leaves_none_datetimes_untouched(db_session) -> None:
     """The listener must not error on objects whose datetime column is
-    ``None`` (e.g. newly-inserted chats with optional ``ended_at``).
+    ``None`` (e.g. newly-inserted chats with optional ``session_ended_event_at``).
     """
     user = _create_user(db_session, email="none-datetime@example.com")
     tenant = _create_client(db_session, user)
 
     chat = Chat(tenant_id=tenant.id, session_id=uuid.uuid4())
-    assert chat.ended_at is None
+    assert chat.session_ended_event_at is None
     db_session.add(chat)
     db_session.commit()  # No exception expected.
     db_session.refresh(chat)
-    assert chat.ended_at is None
+    assert chat.session_ended_event_at is None
 
 
 def test_before_flush_leaves_naive_datetimes_unchanged(db_session) -> None:
@@ -232,12 +232,12 @@ def test_before_flush_leaves_naive_datetimes_unchanged(db_session) -> None:
     db_session.commit()
 
     naive_value = dt.datetime(2026, 5, 13, 12, 34, 56)
-    chat.ended_at = naive_value
+    chat.session_ended_event_at = naive_value
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
-    assert chat.ended_at == naive_value
-    assert chat.ended_at.tzinfo is None
+    assert chat.session_ended_event_at == naive_value
+    assert chat.session_ended_event_at.tzinfo is None
 
 
 def test_before_flush_converts_non_utc_aware_to_utc_then_strips_tzinfo(db_session) -> None:
@@ -260,14 +260,14 @@ def test_before_flush_converts_non_utc_aware_to_utc_then_strips_tzinfo(db_sessio
 
     # 10:00 in a -04:00 zone == 14:00 UTC.
     eastern = dt.timezone(dt.timedelta(hours=-4))
-    chat.ended_at = dt.datetime(2026, 5, 13, 10, 0, 0, tzinfo=eastern)
+    chat.session_ended_event_at = dt.datetime(2026, 5, 13, 10, 0, 0, tzinfo=eastern)
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
 
-    assert chat.ended_at == dt.datetime(2026, 5, 13, 14, 0, 0), (
+    assert chat.session_ended_event_at == dt.datetime(2026, 5, 13, 14, 0, 0), (
         "listener must convert to UTC before stripping tzinfo — bare "
         "replace(tzinfo=None) would have stored 10:00 and silently shifted "
         "the instant by 4 hours"
     )
-    assert chat.ended_at.tzinfo is None
+    assert chat.session_ended_event_at.tzinfo is None

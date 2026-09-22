@@ -1185,7 +1185,6 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
     assert set(private_properties.keys()) == {
         "text",
         "session_id",
-        "chat_ended",
         "ticket_number",
         "delivered_to_operator",
         "source_documents",
@@ -1210,7 +1209,6 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
     assert set(widget_properties.keys()) == {
         "text",
         "session_id",
-        "chat_ended",
         "ticket_number",
         "outcome",
         "failure_state",

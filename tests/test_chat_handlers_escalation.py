@@ -12,7 +12,6 @@ persisted dangling foreign key, which the test database's FK enforcement
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import patch
 
@@ -134,12 +133,6 @@ def test_handle_falls_through_when_awaiting_ticket_vanished_and_no_human_request
         pytest.param({}, True, True, id="explicit_request_with_no_state_dispatches"),
         pytest.param({}, False, False, id="no_state_and_no_human_request_declines"),
         pytest.param(
-            {"ended_at": lambda: datetime.now(UTC)},
-            False,
-            False,
-            id="legacy_ended_at_is_ignored",
-        ),
-        pytest.param(
             {"escalation_awaiting_ticket_id": lambda: uuid.uuid4()},
             False,
             True,
@@ -167,8 +160,7 @@ def test_can_handle_dispatch(
 ) -> None:
     """``can_handle`` dispatches on any deterministic escalation state flag
     (awaiting-ticket, followup-pending, awaiting-request) or an explicit
-    human request when no state is set; a legacy ``ended_at`` is not itself
-    a dispatch signal."""
+    human request when no state is set."""
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
     for attr, value in chat_attrs.items():

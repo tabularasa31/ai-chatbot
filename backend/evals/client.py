@@ -24,7 +24,6 @@ from typing import Any, Protocol
 class ChatResponse:
     text: str
     sources: list[dict[str, str]]
-    chat_ended: bool
     latency_ms: int
     #: Straight from the `done` event: the backend's own record of whether this
     #: reply offered the support handoff. Replaces the RU/EN phrase matching the
@@ -148,7 +147,6 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
     chunks: list[str] = []
     final_text: str | None = None
     sources: list[dict[str, str]] = []
-    chat_ended = False
     escalation_offered = False
     ticket_number: str | None = None
     error: dict | None = None
@@ -161,7 +159,6 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
                 chunks.append(text)
         elif kind == "done":
             final_text = ev.get("text") or "".join(chunks)
-            chat_ended = bool(ev.get("chat_ended"))
             escalation_offered = bool(ev.get("escalation_offered"))
             ticket_number = ev.get("ticket_number")
             sources = ev.get("sources") or []
@@ -172,7 +169,6 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
     return ChatResponse(
         text=text,
         sources=sources,
-        chat_ended=chat_ended,
         latency_ms=latency_ms,
         escalation_offered=escalation_offered,
         ticket_number=ticket_number,

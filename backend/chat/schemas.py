@@ -59,9 +59,6 @@ class ChatTurnResponse(BaseModel):
 
     text: str
     session_id: UUID
-    #: Always ``False``: conversations never close. Kept for older
-    #: integrations that still read it; drop in the next major.
-    chat_ended: bool = False
     ticket_number: str | None = None
     delivered_to_operator: bool = False
     # Trace fields — populated only by the private API; widget always omits these.
@@ -84,8 +81,6 @@ class WidgetChatTurnResponse(BaseModel):
 
     text: str
     session_id: UUID
-    #: Always ``False`` — see :class:`ChatTurnResponse`.
-    chat_ended: bool = False
     ticket_number: str | None = None
     outcome: Literal["llm_unavailable"] | None = None
     failure_state: LlmFailureState | None = None

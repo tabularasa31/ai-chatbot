@@ -90,7 +90,6 @@ def test_chat_success_persists_messages(
     assert "session_id" in data
     assert data["source_documents"] == [str(doc.id)]
     assert data["tokens_used"] == 50
-    assert data.get("chat_ended") is False
 
     session_id = uuid.UUID(data["session_id"])
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
@@ -339,7 +338,6 @@ def test_chat_empty_question_journey(
         "product setup, integrations, and finding the right information. Ask your question."
     )
     assert data["source_documents"] == []
-    assert data["chat_ended"] is False
     session_id = data["session_id"]
 
     second = tenant.post(
@@ -495,7 +493,6 @@ def test_chat_no_embeddings_then_pre_confirm_non_yes_no_reply_does_not_escalate(
     )
     assert data["ticket_number"] is None
     assert data["tokens_used"] == 0
-    assert data.get("chat_ended") is False
     session_id = data["session_id"]
 
     from backend.models import Chat
@@ -530,7 +527,6 @@ def test_chat_no_embeddings_then_pre_confirm_non_yes_no_reply_does_not_escalate(
     )
     assert third.status_code == 200
     assert third.json()["ticket_number"] is None
-    assert third.json().get("chat_ended") is False
     ticket_count = (
         db_session.query(EscalationTicket)
         .filter(EscalationTicket.tenant_id == tenant_id)

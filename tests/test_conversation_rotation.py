@@ -159,8 +159,6 @@ def test_returning_visitor_within_default_window_does_not_rotate(
         pytest.param(45, False, {"escalation_pre_confirm_pending": True}, True, id="stale_pre_confirm_pending_does_not_block"),
         pytest.param(45, False, {"escalation_awaiting_request": True}, True, id="stale_awaiting_request_does_not_block"),
         pytest.param(45, False, {"escalation_followup_pending": True}, True, id="stale_followup_pending_does_not_block"),
-        # Legacy closed rows rotate on the idle rule like any other chat.
-        pytest.param(45, False, {"ended_at": _utcnow()}, True, id="legacy_ended_at_idle_chat_rotates"),
         # The sweeper's marker commit used to refresh updated_at (onupdate),
         # making the idle chat look fresh right after a sweep. The marker
         # itself is the system's declaration that the conversation ended.

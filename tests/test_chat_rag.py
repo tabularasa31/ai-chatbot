@@ -2753,7 +2753,6 @@ def test_process_chat_message_adds_variant_summary_to_trace(
 
     assert outcome.text == "Use the reset link in settings."
     assert outcome.tokens_used == 17
-    assert outcome.chat_ended is False
     assert fake_trace.update_calls[-1]["metadata"]["variant_mode"] == "multi"
     assert fake_trace.update_calls[-1]["metadata"]["query_variant_count"] == 3
     assert fake_trace.update_calls[-1]["metadata"]["extra_embedded_queries"] == 2

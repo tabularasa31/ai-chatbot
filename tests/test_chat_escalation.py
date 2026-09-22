@@ -722,7 +722,7 @@ def test_stale_followup_falls_through_to_rag_after_session_ended(
     turn rotates to a fresh chat, so the new question gets a RAG answer and
     never reaches the yes/no classifier; the handler's own stale-gate branch
     is a second line of defence that rotation makes unreachable here."""
-    from datetime import UTC, datetime
+    from datetime import UTC
 
     api_key, tenant_id = _register_tenant_with_key(
         tenant, db_session, email="stale-followup@example.com", name="Stale Followup"
@@ -763,7 +763,7 @@ def test_stale_followup_with_explicit_human_request_still_escalates(
 ) -> None:
     """A stale follow-up must not swallow an explicit "connect me to a human":
     it still escalates immediately rather than falling through to RagHandler."""
-    from datetime import UTC, datetime
+    from datetime import UTC
 
     from backend.models import EscalationTicket, EscalationTrigger
 
@@ -1632,7 +1632,7 @@ def test_ticket_notify_journey_l2_recipient_then_threaded_update_then_failure_me
 
     # Step outside the follow-up notify debounce window so the next turn's
     # threaded update is not skipped as "too soon after the last send".
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, timedelta
 
     from backend.escalation.service import _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS
 

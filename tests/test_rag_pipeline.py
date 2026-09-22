@@ -445,7 +445,6 @@ def test_faq_direct_skips_retrieval_and_generation(
         db_session,
         api_key=api_key,
     )
-    assert outcome.chat_ended is False
     assert outcome.document_ids == []
     assert outcome.tokens_used == 0
     assert outcome.text == faq_answer

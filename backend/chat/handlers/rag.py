@@ -441,7 +441,6 @@ class RagHandler(PipelineHandler):
                 ctx.trace.update(
                     output={"answer": result.final_answer, "source": source},
                     metadata={
-                        "chat_ended": False,
                         "escalated": False,
                         "strategy": result.strategy,
                         "reject_reason": result.reject_reason,
@@ -478,7 +477,6 @@ class RagHandler(PipelineHandler):
                 text=result.final_answer,
                 document_ids=[],
                 tokens_used=result.tokens_used,
-                chat_ended=False,
                 chat_id=str(chat.id) if chat is not None else None,
             )
 
@@ -923,7 +921,6 @@ class RagHandler(PipelineHandler):
             ctx.trace.update(
                 output={"answer": answer},
                 metadata={
-                    "chat_ended": False,
                     "escalated": bool(escalate),
                     "escalation_trigger": esc_trigger.value if esc_trigger else None,
                     "response_language": ctx.language_context.response_language,
@@ -1032,7 +1029,6 @@ class RagHandler(PipelineHandler):
             text=answer,
             document_ids=document_ids,
             tokens_used=tokens_used,
-            chat_ended=False,
             ticket_number=created_ticket_number,
             chat_id=str(chat.id) if chat is not None else None,
             escalation_offered=bool(chat.escalation_pre_confirm_pending),

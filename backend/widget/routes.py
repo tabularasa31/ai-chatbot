@@ -614,7 +614,6 @@ def _widget_chat_stream(
                     text=text,
                     document_ids=[],
                     tokens_used=0,
-                    chat_ended=False,
                     failure_state=failure_state,
                 )
                 logger.info(

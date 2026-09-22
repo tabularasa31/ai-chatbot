@@ -469,7 +469,6 @@ def test_explicit_human_request_still_escalates_immediately(
             text="HANDOFF",
             document_ids=[],
             tokens_used=0,
-            chat_ended=False,
             chat_id=str(ctx.chat.id),
         )
 

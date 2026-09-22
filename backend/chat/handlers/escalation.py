@@ -352,7 +352,7 @@ class EscalationStateMachine(PipelineHandler):
                 _clear_escalation_clarify_flag(chat)
                 ctx.db.add(chat)
                 if followup_span is not None:
-                    followup_span.end(output={"decision": decision, "chat_ended": False})
+                    followup_span.end(output={"decision": decision})
                 return _svc._escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
@@ -372,7 +372,7 @@ class EscalationStateMachine(PipelineHandler):
             _set_escalation_clarify_flag(chat)
             ctx.db.add(chat)
             if followup_span is not None:
-                followup_span.end(output={"decision": decision, "chat_ended": False})
+                followup_span.end(output={"decision": decision})
             outcome = _svc._escalation_turn_response(
                 db=ctx.db,
                 chat=chat,
@@ -725,7 +725,6 @@ class EscalationStateMachine(PipelineHandler):
             ctx.trace.update(
                 output={"answer": localized.text, "source": trace_source},
                 metadata={
-                    "chat_ended": False,
                     "escalated": False,
                     "awaiting_request": True,
                     "response_language": ctx.language_context.response_language,
@@ -735,7 +734,6 @@ class EscalationStateMachine(PipelineHandler):
             text=localized.text,
             document_ids=[],
             tokens_used=localized.tokens_used,
-            chat_ended=False,
         )
 
     def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome | None:

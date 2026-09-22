@@ -262,7 +262,6 @@ def test_widget_chat_empty_message_bootstraps_new_session(
             text="Hello from bootstrap",
             document_ids=[],
             tokens_used=0,
-            chat_ended=False,
         )
 
     monkeypatch.setattr(
@@ -302,7 +301,6 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
             text="ok",
             document_ids=[],
             tokens_used=0,
-            chat_ended=False,
         )
 
     monkeypatch.setattr(
@@ -495,7 +493,6 @@ def test_widget_chat_stream_sse(
             text="Hello, world!",
             document_ids=[],
             tokens_used=3,
-            chat_ended=False,
         )
 
     monkeypatch.setattr(
@@ -640,7 +637,6 @@ def test_widget_chat_returns_plain_answer_payload(
             text="Which provider are you trying to configure?",
             document_ids=[],
             tokens_used=0,
-            chat_ended=False,
         )
 
     monkeypatch.setattr(
@@ -801,7 +797,6 @@ def test_widget_chat_empty_message_allowed_when_rotation_pending(
             text="Fresh greeting",
             document_ids=[],
             tokens_used=0,
-            chat_ended=False,
         )
 
     monkeypatch.setattr(

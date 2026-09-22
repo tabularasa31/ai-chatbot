@@ -199,7 +199,6 @@ class GreetingHandler(PipelineHandler):
                     "source": "greeting" if is_bootstrap else "greeting_social",
                 },
                 metadata={
-                    "chat_ended": False,
                     "escalated": False,
                     "greeting": True,
                     "greeting_kind": "bootstrap" if is_bootstrap else "social",
@@ -210,5 +209,4 @@ class GreetingHandler(PipelineHandler):
             text=greeting.text,
             document_ids=[],
             tokens_used=greeting.tokens_used,
-            chat_ended=False,
         )

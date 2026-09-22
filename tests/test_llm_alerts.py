@@ -302,7 +302,7 @@ def test_widget_llm_failure_alert_lifecycle(
 
     async def _greeting(*args, **kwargs):
         return ChatTurnOutcome(
-            text="Hello!", document_ids=[], tokens_used=0, chat_ended=False
+            text="Hello!", document_ids=[], tokens_used=0
         )
 
     monkeypatch.setattr("backend.widget.routes.async_process_chat_message", _greeting)
@@ -317,7 +317,7 @@ def test_widget_llm_failure_alert_lifecycle(
 
     async def _success(*args, **kwargs):
         return ChatTurnOutcome(
-            text="answer with tokens", document_ids=[], tokens_used=10, chat_ended=False
+            text="answer with tokens", document_ids=[], tokens_used=10
         )
 
     monkeypatch.setattr("backend.widget.routes.async_process_chat_message", _success)

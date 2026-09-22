@@ -254,7 +254,6 @@ class OperatorHandler(PipelineHandler):
             ctx.trace.update(
                 output={"answer": "", "source": "operator_live"},
                 metadata={
-                    "chat_ended": False,
                     "escalated": False,
                     "operator_state": OperatorState.live.value,
                     "delivered_to_operator": True,
@@ -264,7 +263,6 @@ class OperatorHandler(PipelineHandler):
             text="",
             document_ids=[],
             tokens_used=0,
-            chat_ended=False,
             delivered_to_operator=True,
             chat_id=str(chat.id),
         )

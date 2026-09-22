@@ -129,7 +129,7 @@ def test_per_client_ip_rate_limit(
     )
     _seed_rag_chunk(db_session, uuid.UUID(body["id"]))
     async def _fake_async_process(*args, **kwargs):
-        return ChatTurnOutcome(text="ok", document_ids=[], tokens_used=0, chat_ended=False)
+        return ChatTurnOutcome(text="ok", document_ids=[], tokens_used=0)
 
     monkeypatch.setattr(
         "backend.widget.routes.async_process_chat_message",

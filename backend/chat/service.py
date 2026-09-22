@@ -215,7 +215,6 @@ def _escalation_turn_response(
     trace.update(
         output={"answer": out.message_to_user, "source": trace_source},
         metadata={
-            "chat_ended": False,
             "escalated": escalated,
             "response_language": language_context.response_language,
             "escalation_language": language_context.escalation_language,
@@ -225,7 +224,6 @@ def _escalation_turn_response(
         text=out.message_to_user,
         document_ids=[],
         tokens_used=out.tokens_used,
-        chat_ended=False,
         ticket_number=ticket_number,
         escalation_offered=bool(chat.escalation_pre_confirm_pending),
     )

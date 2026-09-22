@@ -25,7 +25,6 @@ class ChatTurnOutcome:
     text: str
     document_ids: list[uuid.UUID]
     tokens_used: int
-    chat_ended: bool
     ticket_number: str | None = None
     # When set, the turn ended in a degraded state because the LLM provider was
     # unavailable. Acts as the discriminator for outcome = "llm_unavailable".

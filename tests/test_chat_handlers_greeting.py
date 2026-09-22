@@ -212,8 +212,6 @@ def test_handle_produces_outcome_and_persists_only_assistant_message(
     assert outcome.text == "Hello, I am the Acme assistant."
     assert outcome.tokens_used == 7
     assert outcome.document_ids == []
-    assert outcome.chat_ended is False
-
     # Only the assistant greeting is persisted — no empty user-message row.
     persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
     roles = [m.role for m in persisted]

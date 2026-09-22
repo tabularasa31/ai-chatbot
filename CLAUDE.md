@@ -51,6 +51,14 @@ Run a single file: `pytest tests/test_chat.py -v`
 - Tests use SQLite by default; pgvector tests run against the Docker container.
 - Do **not** use `--asyncio-mode=auto` globally; configuration lives in `pytest.ini`.
 
+### Test strategy
+
+- **E2E/integration first.** Default to a test that drives a real request through the FastAPI app (the style of `test_chat_api.py`, `test_chat_escalation.py`, `test_search.py`) over one that mocks internals to isolate a unit. A new feature should land with a scenario in the relevant `make` suite (`smoke`, `escalation`, `rag-edge`, …) that proves it works end-to-end and can be rerun to catch regressions — that scenario is the artifact.
+- **Isolated/unit tests are for logic E2E can't cover efficiently**: branch-heavy pure logic (RRF fusion in `search/service.py`, reranking strategy selection, the injection-guard levels, per-type chunkers). Before writing one, write down the failure modes it's meant to catch (as the test names or a short comment) — the file should read as a spec of what can go wrong, not incidental coverage of whatever changed.
+- **A unit test earns its place only when either:** (a) it covers a failure mode an E2E test can't reach cheaply (an edge-case branch, malformed input, a race), or (b) reaching that branch through the E2E path would need heavy mocking/setup. Otherwise extend an existing E2E scenario instead of adding a new test file — don't add a test just because code changed.
+- **Group by domain, not by handler.** Don't fragment tests 1:1 with implementation files (e.g. a standalone file per chat handler). Add scenarios to the domain's existing test file; split it out only once it's genuinely unwieldy.
+- Every test, E2E or isolated, must be deterministic and rerunnable via one of the `make` targets above — no reliance on live network/OpenAI calls (use the fixtures/mocks already in `conftest.py`).
+
 ---
 
 ## Linting

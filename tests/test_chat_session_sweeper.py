@@ -72,12 +72,43 @@ def _make_chat(
     return chat
 
 
-def test_sweeps_inactive_chat_and_emits_event(
+def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     db_session: Session, monkeypatch
 ) -> None:
+    """One sweep pass, seeded with every row shape the sweeper must tell apart:
+    - a fresh (non-idle) chat is left untouched
+    - an idle chat with messages is swept: emitted once, marker set,
+      ended_at stays NULL, duration_ms matches its real activity window
+    - an idle *empty* mount chat (no messages) is marked but never emitted.
+      /widget/session/init creates a Chat row on every widget mount before the
+      user writes anything; emitting chat_session_ended for those inflated the
+      funnel with widget-impressions (observed 154 "sessions" per 1 real turn).
+      The has_messages check must also correlate per row, not just "any
+      message exists anywhere" (that bug would emit for the empty chat too)
+    - a chat already carrying the marker is not re-swept/re-emitted
+    - a legacy row closed via ``ended_at`` is swept like any other idle chat
+      (the sweeper ignores ``ended_at``; in practice this only reaches a
+      legacy row the ``legacy_closed_chats_marker_v1`` backfill never saw)
+    - the marker write does not disturb updated_at — it is an analytics
+      write, not activity, and rotation must still see the swept chat's real
+      last-activity timestamp, not the marker commit's
+    """
     tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, age_minutes=90)
-    last_activity = chat.updated_at
+    fresh = _make_chat(db_session, tenant, age_minutes=5)
+    active = _make_chat(db_session, tenant, age_minutes=90)
+    active_last_activity = active.updated_at
+    empty = _make_chat(db_session, tenant, age_minutes=90, with_message=False)
+    already_reported = _make_chat(db_session, tenant, age_minutes=90)
+    already_reported.session_ended_event_at = already_reported.updated_at
+    db_session.commit()
+    legacy = _make_chat(db_session, tenant, age_minutes=90)
+    # Query-level update: a plain ORM commit would fire updated_at's onupdate
+    # and make the idle chat look fresh.
+    db_session.query(Chat).filter(Chat.id == legacy.id).update(
+        {"ended_at": legacy.updated_at, "updated_at": legacy.updated_at},
+        synchronize_session=False,
+    )
+    db_session.commit()
 
     captured: list[dict] = []
     monkeypatch.setattr(
@@ -88,39 +119,30 @@ def test_sweeps_inactive_chat_and_emits_event(
 
     count = sweep_inactive_chats(db_session)
 
-    assert count == 1
-    db_session.refresh(chat)
-    # Marker is set, but ended_at stays NULL so the chat remains resumable.
-    assert chat.session_ended_event_at is not None
-    assert chat.ended_at is None
+    assert count == 2
+    swept_sessions = {c["session_id"] for c in captured}
+    assert swept_sessions == {str(active.session_id), str(legacy.session_id)}
 
-    assert len(captured) == 1
-    payload = captured[0]
-    assert payload["tenant_public_id"] == tenant.public_id
-    assert payload["session_id"] == str(chat.session_id)
-    assert payload["outcome"] == "timeout"
-    assert payload["duration_ms"] == int(
-        (last_activity - chat.created_at).total_seconds() * 1000
+    db_session.expire_all()
+    db_session.refresh(fresh)
+    assert fresh.session_ended_event_at is None
+
+    db_session.refresh(active)
+    assert active.session_ended_event_at is not None
+    assert active.ended_at is None
+    assert active.updated_at == active_last_activity
+    active_payload = next(c for c in captured if c["session_id"] == str(active.session_id))
+    assert active_payload["tenant_public_id"] == tenant.public_id
+    assert active_payload["outcome"] == "timeout"
+    assert active_payload["duration_ms"] == int(
+        (active_last_activity - active.created_at).total_seconds() * 1000
     )
 
+    db_session.refresh(empty)
+    assert empty.session_ended_event_at is not None
 
-def test_fresh_chat_is_not_swept(db_session: Session, monkeypatch) -> None:
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, age_minutes=5)
-
-    captured: list[dict] = []
-    monkeypatch.setattr(
-        chat_session_sweeper,
-        "_emit_chat_session_ended_event",
-        lambda **kwargs: captured.append(kwargs),
-    )
-
-    count = sweep_inactive_chats(db_session)
-
-    assert count == 0
-    assert captured == []
-    db_session.refresh(chat)
-    assert chat.session_ended_event_at is None
+    db_session.refresh(legacy)
+    assert legacy.session_ended_event_at is not None
 
 
 def test_sweep_is_capped_and_drains_oldest_first(
@@ -145,82 +167,6 @@ def test_sweep_is_capped_and_drains_oldest_first(
     assert count == 2
     swept_sessions = {c["session_id"] for c in captured}
     assert swept_sessions == {str(oldest.session_id), str(middle.session_id)}
-
-
-def test_already_reported_chat_is_not_re_emitted(
-    db_session: Session, monkeypatch
-) -> None:
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, age_minutes=90)
-    chat.session_ended_event_at = chat.updated_at
-    db_session.commit()
-
-    captured: list[dict] = []
-    monkeypatch.setattr(
-        chat_session_sweeper,
-        "_emit_chat_session_ended_event",
-        lambda **kwargs: captured.append(kwargs),
-    )
-
-    count = sweep_inactive_chats(db_session)
-
-    assert count == 0
-    assert captured == []
-
-
-def test_empty_chat_is_marked_but_not_emitted(
-    db_session: Session, monkeypatch
-) -> None:
-    # /widget/session/init creates a Chat row on every widget mount before the
-    # user writes anything. Emitting chat_session_ended for those would inflate
-    # the funnel with widget-impressions (observed 154 "sessions" per 1 turn).
-    # The marker is still set so the row exits ix_chats_sweeper_pending and
-    # isn't re-evaluated on every pass.
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, age_minutes=90, with_message=False)
-
-    captured: list[dict] = []
-    monkeypatch.setattr(
-        chat_session_sweeper,
-        "_emit_chat_session_ended_event",
-        lambda **kwargs: captured.append(kwargs),
-    )
-
-    count = sweep_inactive_chats(db_session)
-
-    assert count == 0
-    assert captured == []
-    db_session.refresh(chat)
-    assert chat.session_ended_event_at is not None
-    assert chat.ended_at is None
-
-
-def test_mixed_pass_emits_only_for_chats_with_messages(
-    db_session: Session, monkeypatch
-) -> None:
-    # The has_messages EXISTS column must correlate per row: a pass holding
-    # both an empty and a non-empty chat must emit exactly once (for the
-    # non-empty one) and mark both. An uncorrelated EXISTS would emit for
-    # both as long as any message exists anywhere.
-    tenant = _make_tenant(db_session)
-    empty = _make_chat(db_session, tenant, age_minutes=90, with_message=False)
-    nonempty = _make_chat(db_session, tenant, age_minutes=90, with_message=True)
-
-    captured: list[dict] = []
-    monkeypatch.setattr(
-        chat_session_sweeper,
-        "_emit_chat_session_ended_event",
-        lambda **kwargs: captured.append(kwargs),
-    )
-
-    count = sweep_inactive_chats(db_session)
-
-    assert count == 1
-    assert [c["session_id"] for c in captured] == [str(nonempty.session_id)]
-    db_session.refresh(empty)
-    db_session.refresh(nonempty)
-    assert empty.session_ended_event_at is not None
-    assert nonempty.session_ended_event_at is not None
 
 
 def test_empty_chat_reaped_on_short_window_message_chat_kept(
@@ -257,60 +203,6 @@ def test_empty_chat_reaped_on_short_window_message_chat_kept(
     db_session.refresh(conversation)
     assert empty.session_ended_event_at is not None
     assert conversation.session_ended_event_at is None
-
-
-def test_legacy_ended_at_chat_is_swept_like_any_other(
-    db_session: Session, monkeypatch
-) -> None:
-    # The sweeper ignores ``ended_at``. Rows closed before the closed-chat
-    # state was removed already carry the marker (backfilled by
-    # ``legacy_closed_chats_marker_v1``), so in practice this only reaches
-    # a legacy row the backfill never saw.
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, age_minutes=90)
-    # Query-level update: a plain ORM commit would fire updated_at's onupdate
-    # and make the idle chat look fresh.
-    db_session.query(Chat).filter(Chat.id == chat.id).update(
-        {"ended_at": chat.updated_at, "updated_at": chat.updated_at},
-        synchronize_session=False,
-    )
-    db_session.commit()
-
-    captured: list[dict] = []
-    monkeypatch.setattr(
-        chat_session_sweeper,
-        "_emit_chat_session_ended_event",
-        lambda **kwargs: captured.append(kwargs),
-    )
-
-    count = sweep_inactive_chats(db_session)
-
-    assert count == 1
-    assert len(captured) == 1
-    db_session.refresh(chat)
-    assert chat.session_ended_event_at is not None
-
-
-def test_sweep_preserves_updated_at(db_session: Session, monkeypatch) -> None:
-    # The marker is an analytics write, not activity: updated_at must keep
-    # the real last-activity timestamp, otherwise conversation rotation sees
-    # the swept chat as fresh and resumes stale state.
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, age_minutes=90)
-    last_activity = chat.updated_at
-
-    monkeypatch.setattr(
-        chat_session_sweeper,
-        "_emit_chat_session_ended_event",
-        lambda **kwargs: None,
-    )
-
-    sweep_inactive_chats(db_session)
-
-    db_session.expire_all()
-    db_session.refresh(chat)
-    assert chat.session_ended_event_at is not None
-    assert chat.updated_at == last_activity
 
 
 # ---------------------------------------------------------------------------

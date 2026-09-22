@@ -543,6 +543,20 @@ async def async_engine_fx():
 
 
 @pytest.fixture(autouse=True)
+def _no_injection_reference_seeds(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mocked embeddings API returns the same vector for every text, so the
+    semantic injection level would flag every question. Leave it without
+    reference seeds everywhere except the detector's own tests."""
+    if request.node.fspath.basename == "test_injection_detector.py":
+        return
+    from backend.guards import injection_detector
+
+    monkeypatch.setattr(injection_detector, "_reference_embeddings", [])
+
+
+@pytest.fixture(autouse=True)
 def _reset_escalation_rate_window(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Reset the module-level escalation sliding-window deque before every test.
 

@@ -378,7 +378,8 @@ async def async_detect_injection_semantic(
         )
         ref_embeddings = await _get_reference_embeddings_async(api_key)
         max_score = max(
-            cosine_similarity(embedding, ref) for ref in ref_embeddings
+            (cosine_similarity(embedding, ref) for ref in ref_embeddings),
+            default=0.0,
         )
         _record_semantic_success(api_key)
         if _score_detects(max_score):

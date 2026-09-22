@@ -426,22 +426,6 @@ def _classify_faq_match(
     )
 
 
-def match_faq(
-    *,
-    tenant_id: uuid.UUID,
-    question: str,
-    question_embedding: list[float],
-    db: Session,
-) -> FAQMatchResult:
-    rows = _fetch_top_faq_rows(
-        tenant_id=tenant_id,
-        question_embedding=question_embedding,
-        db=db,
-        limit=3,
-    )
-    return _classify_faq_match(rows=rows, question=question)
-
-
 async def async_match_faq(
     *,
     tenant_id: uuid.UUID,

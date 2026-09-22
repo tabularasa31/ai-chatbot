@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import uuid
 
+import pytest
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -90,48 +91,43 @@ def test_mailto_support_email_accepted() -> None:
     assert candidate.score >= 135
 
 
-def test_mailto_blocklisted_email_rejected() -> None:
-    blocked = "privacy" + "@acme.com"
-    html = f'<a href="mailto:{blocked}">Privacy</a>'
-
-    candidate = _extract_support_email(_soup(html), blocked, "https://acme.com/contact")
-
-    assert candidate is None
-
-
-def test_mailto_no_reply_rejected() -> None:
-    html = '<a href="mailto:no-reply@acme.com">Do not reply</a>'
-
-    candidate = _extract_support_email(
-        _soup(html), "Do not reply", "https://acme.com/contact"
-    )
-
-    assert candidate is None
-
-
-def test_email_too_long_rejected() -> None:
-    local = "a" * 50
-    html = f'<a href="mailto:{local}@acme.com">Email us</a>'
-
-    candidate = _extract_support_email(_soup(html), html, "https://acme.com/contact")
-
-    assert candidate is None
-
-
-def test_email_malformed_double_dot_rejected() -> None:
-    html = '<a href="mailto:a..b@x.com">Email us</a>'
-
-    candidate = _extract_support_email(_soup(html), html, "https://acme.com/contact")
-
-    assert candidate is None
-
-
-def test_regex_fallback_skips_blocklisted() -> None:
-    blocked = "legal" + "@acme.com"
-
-    candidate = _extract_support_email(
-        _soup(f"<p>{blocked}</p>"), blocked, "https://acme.com/legal"
-    )
+@pytest.mark.parametrize(
+    ("html", "label", "url"),
+    [
+        pytest.param(
+            '<a href="mailto:{blocked}">Privacy</a>'.format(blocked="privacy" + "@acme.com"),
+            "privacy" + "@acme.com",
+            "https://acme.com/contact",
+            id="mailto_blocklisted_email_rejected",
+        ),
+        pytest.param(
+            '<a href="mailto:no-reply@acme.com">Do not reply</a>',
+            "Do not reply",
+            "https://acme.com/contact",
+            id="mailto_no_reply_rejected",
+        ),
+        pytest.param(
+            f'<a href="mailto:{"a" * 50}@acme.com">Email us</a>',
+            f'<a href="mailto:{"a" * 50}@acme.com">Email us</a>',
+            "https://acme.com/contact",
+            id="email_too_long_rejected",
+        ),
+        pytest.param(
+            '<a href="mailto:a..b@x.com">Email us</a>',
+            '<a href="mailto:a..b@x.com">Email us</a>',
+            "https://acme.com/contact",
+            id="email_malformed_double_dot_rejected",
+        ),
+        pytest.param(
+            "<p>{blocked}</p>".format(blocked="legal" + "@acme.com"),
+            "legal" + "@acme.com",
+            "https://acme.com/legal",
+            id="regex_fallback_skips_blocklisted",
+        ),
+    ],
+)
+def test_extract_support_email_rejects(html: str, label: str, url: str) -> None:
+    candidate = _extract_support_email(_soup(html), label, url)
 
     assert candidate is None
 
@@ -162,14 +158,36 @@ def test_mailto_multiple_picks_best_score() -> None:
     assert candidate.value == "support@acme.com"
 
 
-def test_trial_full_sentence() -> None:
-    candidate = _extract_trial_info(
-        "Try our 14-day free trial. No credit card required.",
-        "https://acme.com/pricing",
-    )
+@pytest.mark.parametrize(
+    ("text", "expected_value"),
+    [
+        pytest.param(
+            "Try our 14-day free trial. No credit card required.",
+            "Try our 14-day free trial.",
+            id="full_sentence",
+        ),
+        pytest.param("Get 999-day trial now", None, id="rejects_999_days"),
+        pytest.param(
+            "30-day free trial available",
+            "30-day free trial available",
+            id="accepts_30_day",
+        ),
+        pytest.param(
+            "Welcome aboard. Start your free trial today. Later we mention another free trial.",
+            "Start your free trial today.",
+            id="picks_first_matching_sentence",
+        ),
+        pytest.param("Plans are billed annually.", None, id="returns_none_when_no_match"),
+    ],
+)
+def test_extract_trial_info(text: str, expected_value: str | None) -> None:
+    candidate = _extract_trial_info(text, "https://acme.com/pricing")
 
-    assert candidate is not None
-    assert candidate.value == "Try our 14-day free trial."
+    if expected_value is None:
+        assert candidate is None
+    else:
+        assert candidate is not None
+        assert candidate.value == expected_value
 
 
 def test_trial_no_sentence_punct_truncates_at_240() -> None:
@@ -185,38 +203,6 @@ def test_trial_no_sentence_punct_truncates_at_240() -> None:
     assert candidate.value.endswith("…")
     assert len(candidate.value) <= 240
     assert not candidate.value.endswith(" …")
-
-
-def test_trial_rejects_999_days() -> None:
-    candidate = _extract_trial_info("Get 999-day trial now", "https://acme.com/pricing")
-
-    assert candidate is None
-
-
-def test_trial_accepts_30_day() -> None:
-    candidate = _extract_trial_info(
-        "30-day free trial available", "https://acme.com/pricing"
-    )
-
-    assert candidate is not None
-    assert candidate.value == "30-day free trial available"
-
-
-def test_trial_picks_first_matching_sentence() -> None:
-    text = "Welcome aboard. Start your free trial today. Later we mention another free trial."
-
-    candidate = _extract_trial_info(text, "https://acme.com/pricing")
-
-    assert candidate is not None
-    assert candidate.value == "Start your free trial today."
-
-
-def test_trial_returns_none_when_no_match() -> None:
-    candidate = _extract_trial_info(
-        "Plans are billed annually.", "https://acme.com/pricing"
-    )
-
-    assert candidate is None
 
 
 def test_documentation_url_returns_none_without_anchors() -> None:

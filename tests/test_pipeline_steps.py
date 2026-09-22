@@ -440,15 +440,39 @@ def test_low_retrieval_guard_reranker_rescue_passes() -> None:
     assert run.state.reranker_rescued is True
 
 
-def test_low_retrieval_guard_social_recheck_returns_ack(
+@pytest.mark.parametrize(
+    ("question", "guard_verdict", "expected_reject_reason", "expected_final_answer"),
+    [
+        pytest.param(
+            "спасибо",
+            VerdictReason.SOCIAL,
+            "social",
+            "thanks — happy to help",
+            id="social_recheck_returns_ack",
+            # A short mid-dialogue social turn that bypassed the relevance guard
+            # and retrieved only sub-threshold hits gets the polite social
+            # acknowledgement, not the low_retrieval refusal.
+        ),
+        pytest.param(
+            "wildcard?",
+            VerdictReason.RELEVANT,
+            "low_retrieval",
+            "low retrieval",
+            id="bypass_non_social_still_low_retrieval",
+            # A short *question* that bypassed the guard but is not social falls
+            # through to the normal low_retrieval reject after the re-check.
+        ),
+    ],
+)
+def test_low_retrieval_guard_short_query_bypass_recheck(
     monkeypatch: pytest.MonkeyPatch,
+    question: str,
+    guard_verdict: VerdictReason,
+    expected_reject_reason: str,
+    expected_final_answer: str,
 ) -> None:
-    """A short mid-dialogue social turn ("thanks") that bypassed the relevance
-    guard and retrieved only sub-threshold hits gets the polite social
-    acknowledgement, not the low_retrieval refusal."""
-
     async def _fake_reject(**kwargs):
-        return _FakeLocalization(text="thanks — happy to help")
+        return _FakeLocalization(text=expected_final_answer)
 
     monkeypatch.setattr(
         "backend.chat.steps.refusal.build_reject_response_result", _fake_reject
@@ -456,51 +480,21 @@ def test_low_retrieval_guard_social_recheck_returns_ack(
 
     async def _guard(**kwargs):
         assert kwargs.get("force_llm_check") is True
-        return Verdict.of(VerdictReason.SOCIAL)
+        return Verdict.of(guard_verdict)
 
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile", _guard
     )
 
-    run = _make_run(question="спасибо")
+    run = _make_run(question=question)
     run.state.guard_bypassed_short_query = True
     run.state.retrieval = _retrieval_ctx(
         best_rank_score=0.1, vector_similarities=[0.01, 0.02]
     )
     result = asyncio.run(retrieval.low_retrieval_guard(run))
     assert result is not None
-    assert result.reject_reason == "social"
-    assert result.final_answer == "thanks — happy to help"
-
-
-def test_low_retrieval_guard_bypass_non_social_still_low_retrieval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A short *question* that bypassed the guard but is not social falls
-    through to the normal low_retrieval reject after the re-check."""
-
-    async def _fake_reject(**kwargs):
-        return _FakeLocalization(text="low retrieval")
-
-    monkeypatch.setattr(
-        "backend.chat.steps.refusal.build_reject_response_result", _fake_reject
-    )
-
-    async def _guard(**kwargs):
-        return Verdict.of(VerdictReason.RELEVANT)
-
-    monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile", _guard
-    )
-
-    run = _make_run(question="wildcard?")
-    run.state.guard_bypassed_short_query = True
-    run.state.retrieval = _retrieval_ctx(
-        best_rank_score=0.1, vector_similarities=[0.01, 0.02]
-    )
-    result = asyncio.run(retrieval.low_retrieval_guard(run))
-    assert result is not None
-    assert result.reject_reason == "low_retrieval"
+    assert result.reject_reason == expected_reject_reason
+    assert result.final_answer == expected_final_answer
 
 
 def test_low_retrieval_guard_no_recheck_when_not_bypassed(
@@ -568,80 +562,98 @@ def _capture_generation_kwargs(
     return calls
 
 
-def test_run_generation_sets_strong_context_when_retrieval_clears_the_bar(
+@pytest.mark.parametrize(
+    (
+        "best_rank_score",
+        "best_confidence_score",
+        "escalate",
+        "expected_strong_context",
+        "expected_low_context",
+        "expected_require_clarification",
+    ),
+    [
+        pytest.param(
+            0.9,
+            0.8,
+            False,
+            True,
+            False,
+            None,
+            id="clears_the_bar_sets_strong_context",
+            # The escalation verdict computed before generation must reach the
+            # prompt, so the model answers from the retrieved context instead of
+            # reporting a documentation gap on a turn the backend classified as
+            # needing no handoff.
+        ),
+        pytest.param(
+            0.9,
+            0.8,
+            True,
+            False,
+            None,
+            None,
+            id="escalating_clears_strong_context",
+        ),
+        pytest.param(
+            0.385,
+            0.60,
+            False,
+            False,
+            True,
+            None,
+            id="never_sets_strong_and_low_context_together",
+            # low_context reads reliability.score (rank score only) while
+            # should_escalate takes max(rank, vector similarity), so a
+            # paraphrased question can clear the escalation floor on vector
+            # similarity while its rank score stays low. The two prompt lines
+            # contradict each other, so the conservative one must win.
+        ),
+        pytest.param(
+            0.5,
+            0.3,
+            False,
+            False,
+            False,
+            "low_retrieval_confidence",
+            id="clears_strong_context_when_blocking_clarify_required",
+            # classify_kb_confidence (keyed off best_confidence_score) and
+            # reliability.score (keyed off top rank score) use different
+            # thresholds on different scores, so a turn can clear reliability's
+            # "not low" bar — leaving low_context False — while kb_confidence
+            # still reads low and requires_blocking_clarify fires. Left
+            # unreconciled, the prompt told the model both "the context clears
+            # the bar, answer from it" and "ask one question, do not enumerate
+            # cases" in the same turn, and the model split the difference by
+            # answering from an off-topic top chunk anyway.
+        ),
+    ],
+)
+def test_run_generation_strong_and_low_context_flags(
     monkeypatch: pytest.MonkeyPatch,
+    best_rank_score: float,
+    best_confidence_score: float,
+    escalate: bool,
+    expected_strong_context: bool | None,
+    expected_low_context: bool | None,
+    expected_require_clarification: str | None,
 ) -> None:
-    """The escalation verdict computed before generation must reach the prompt,
-    so the model answers from the retrieved context instead of reporting a
-    documentation gap on a turn the backend classified as needing no handoff."""
     calls = _capture_generation_kwargs(
         monkeypatch,
         retrieval_ctx=_retrieval_ctx(
-            reliability=build_reliability_assessment(top_score=0.9, result_count=3)
+            best_rank_score=best_rank_score,
+            best_confidence_score=best_confidence_score,
+            reliability=build_reliability_assessment(
+                top_score=best_rank_score, result_count=3
+            ),
         ),
-        escalate=False,
+        escalate=escalate,
     )
-    assert calls["strong_context"] is True
-    assert calls["low_context"] is False
-
-
-def test_run_generation_clears_strong_context_when_escalating(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = _capture_generation_kwargs(
-        monkeypatch,
-        retrieval_ctx=_retrieval_ctx(
-            reliability=build_reliability_assessment(top_score=0.9, result_count=3)
-        ),
-        escalate=True,
-    )
-    assert calls["strong_context"] is False
-
-
-def test_run_generation_never_sets_strong_and_low_context_together(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """low_context reads reliability.score (rank score only) while
-    should_escalate takes max(rank, vector similarity), so a paraphrased
-    question can clear the escalation floor on vector similarity while its rank
-    score stays low. The two prompt lines contradict each other, so the
-    conservative one must win."""
-    calls = _capture_generation_kwargs(
-        monkeypatch,
-        retrieval_ctx=_retrieval_ctx(
-            best_rank_score=0.385,
-            best_confidence_score=0.60,
-            reliability=build_reliability_assessment(top_score=0.385, result_count=3),
-        ),
-        escalate=False,
-    )
-    assert calls["low_context"] is True
-    assert calls["strong_context"] is False
-
-
-def test_run_generation_clears_strong_context_when_blocking_clarify_required(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """classify_kb_confidence (keyed off best_confidence_score) and
-    reliability.score (keyed off top rank score) use different thresholds on
-    different scores, so a turn can clear reliability's "not low" bar — leaving
-    low_context False — while kb_confidence still reads low and
-    requires_blocking_clarify fires. Left unreconciled, the prompt told the
-    model both "the context clears the bar, answer from it" and "ask one
-    question, do not enumerate cases" in the same turn, and the model split the
-    difference by answering from an off-topic top chunk anyway."""
-    calls = _capture_generation_kwargs(
-        monkeypatch,
-        retrieval_ctx=_retrieval_ctx(
-            best_rank_score=0.5,
-            best_confidence_score=0.3,
-            reliability=build_reliability_assessment(top_score=0.5, result_count=3),
-        ),
-        escalate=False,
-    )
-    assert calls["low_context"] is False
-    assert calls["require_clarification"] == "low_retrieval_confidence"
-    assert calls["strong_context"] is False
+    if expected_strong_context is not None:
+        assert calls["strong_context"] is expected_strong_context
+    if expected_low_context is not None:
+        assert calls["low_context"] is expected_low_context
+    if expected_require_clarification is not None:
+        assert calls["require_clarification"] == expected_require_clarification
 
 
 def test_run_generation_resolves_seam_via_rag_module(

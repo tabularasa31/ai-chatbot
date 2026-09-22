@@ -106,33 +106,29 @@ async def test_status_row_committed_before_enqueue(queue_db, monkeypatch):
     assert seen["row_status"] == BackgroundJobStatus.queued.value
 
 
-@pytest.mark.asyncio
-async def test_orphan_row_deleted_on_enqueue_failure(queue_db, monkeypatch):
-    """When pool.enqueue_job raises, the pre-inserted row must be cleaned up."""
+async def _boom(*_args: Any, **_kwargs: Any):
+    raise RuntimeError("redis exploded")
 
-    async def _boom(*_args: Any, **_kwargs: Any):
-        raise RuntimeError("redis exploded")
 
-    _install_fake_pool(monkeypatch, enqueue_side_effect=_boom)
-
-    job_id = await queue_module.enqueue("smoke_ping", kind="smoke_ping")
-    assert job_id is None
-
-    rows = (await queue_db.execute(select(BackgroundJob))).scalars().all()
-    assert rows == []
+async def _none(*_args: Any, **_kwargs: Any):
+    return None
 
 
 @pytest.mark.asyncio
-async def test_orphan_row_deleted_when_arq_reports_duplicate(
-    queue_db, monkeypatch
+@pytest.mark.parametrize(
+    "enqueue_side_effect",
+    [
+        pytest.param(_boom, id="enqueue_raises"),
+        pytest.param(_none, id="arq_reports_duplicate"),
+    ],
+)
+async def test_orphan_row_deleted_when_enqueue_does_not_succeed(
+    queue_db, monkeypatch, enqueue_side_effect
 ):
-    """ARQ returns ``None`` from enqueue_job when the job_id is already
-    queued by another producer. We must not leave a stale row behind."""
-
-    async def _none(*_args: Any, **_kwargs: Any):
-        return None
-
-    _install_fake_pool(monkeypatch, enqueue_side_effect=_none)
+    """When ``pool.enqueue_job`` raises, or returns ``None`` (ARQ's signal that
+    the job_id is already queued by another producer), the pre-inserted row
+    must not be left behind."""
+    _install_fake_pool(monkeypatch, enqueue_side_effect=enqueue_side_effect)
 
     job_id = await queue_module.enqueue("smoke_ping", kind="smoke_ping")
     assert job_id is None

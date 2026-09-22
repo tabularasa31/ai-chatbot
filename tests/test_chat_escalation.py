@@ -530,122 +530,6 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
 
 
 @pytest.mark.escalation
-def test_chat_followup_new_question_gets_rag_answer_same_turn(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1:
-    a new question during ``escalation_followup_pending`` must get a real
-    RAG answer this same turn, not the canned handoff reply."""
-    from backend.models import (
-        Chat,
-        Document,
-        DocumentStatus,
-        DocumentType,
-        Embedding,
-        EscalationStatus,
-        EscalationTicket,
-        EscalationTrigger,
-    )
-
-    token = register_and_verify_user(tenant, db_session, email="follow-newq@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Follow NewQ Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
-
-    chat = Chat(
-        tenant_id=tenant_id,
-        session_id=uuid.uuid4(),
-        user_context={},
-        escalation_followup_pending=True,
-    )
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    ticket = EscalationTicket(
-        tenant_id=tenant_id,
-        ticket_number="ESC-0001",
-        primary_question="Need support",
-        trigger=EscalationTrigger.user_request,
-        status=EscalationStatus.open,
-        chat_id=chat.id,
-        session_id=chat.session_id,
-    )
-    db_session.add(ticket)
-    db_session.commit()
-
-    doc = Document(
-        tenant_id=tenant_id,
-        filename="wildcards.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-        parsed_text="content",
-    )
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-    emb = Embedding(
-        document_id=doc.id,
-        chunk_text="Wildcard domains are supported on all plans",
-        vector=None,
-        metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
-    )
-    db_session.add(emb)
-    db_session.commit()
-
-    mock_openai_client.embeddings.create.return_value.data = [
-        Mock(embedding=[0.1] * 1536)
-    ]
-    mock_openai_client.chat.completions.create.side_effect = (
-        _chat_completion_side_effect("Yes, wildcard domains are supported.")
-    )
-
-    async def _gate_new_question(**kwargs):
-        return ("new_question", 7)
-
-    monkeypatch.setattr(
-        "backend.chat.service.classify_followup_reply", _gate_new_question
-    )
-
-    async def _fail_full_turn(**kwargs):
-        raise AssertionError(
-            "new-question follow-up must be answered by RAG, not the "
-            "full-turn escalation LLM"
-        )
-
-    monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn", _fail_full_turn
-    )
-
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={
-            "session_id": str(chat.session_id),
-            "question": "do you support wildcard domain names?",
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["text"] == "Yes, wildcard domains are supported."
-    assert data.get("chat_ended") is False
-    # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
-    assert data["tokens_used"] == 7
-
-    db_session.refresh(chat)
-    assert chat.escalation_followup_pending is False
-    assert chat.ended_at is None
-
-
-@pytest.mark.escalation
 def test_chat_legacy_ended_at_chat_is_answered_normally(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -854,88 +738,6 @@ def test_implied_human_request_after_prior_substantive_content_falls_through_to_
 
 
 @pytest.mark.escalation
-def test_explicit_request_without_content_opens_awaiting_request_elicitation(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bare "connect me to a human" with nothing to forward yet asks for the
-    actual question instead of minting an empty ticket."""
-    from backend.chat.handlers.escalation import _AWAITING_REQUEST_CANONICAL_TEXT
-    from backend.models import EscalationTicket
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="explicit-no-content@example.com", name="Explicit No Content"
-    )
-    chat = _make_chat(db_session, tenant_id)
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(
-                human_request=True,
-                message_has_request_content=False,
-                human_request_explicit=True,
-            )
-        ),
-    )
-
-    [resp] = drive(tenant, api_key, chat.session_id, "connect me to a human")
-
-    assert resp["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
-    assert resp["chat_ended"] is False
-    db_session.refresh(chat)
-    assert chat.escalation_awaiting_request is True
-    assert (
-        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
-        == 0
-    )
-
-
-@pytest.mark.escalation
-def test_pre_confirm_repeated_unclear_never_auto_escalates(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression for 86exn3x7c: a second consecutive "unclear" reply to the
-    pre_confirm offer must re-ask, never get silently promoted to a "yes" and
-    mint a ticket."""
-    from backend.models import EscalationTicket
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant,
-        db_session,
-        email="pre-confirm-unclear-twice@example.com",
-        name="Pre Confirm Unclear Twice",
-    )
-    chat = _make_chat(
-        db_session,
-        tenant_id,
-        escalation_pre_confirm_pending=True,
-        escalation_pre_confirm_context={
-            "trigger": "low_similarity",
-            "primary_question": "my widget won't render",
-            "best_similarity_score": 0.31,
-            "retrieved_chunks": None,
-        },
-        user_context={"escalation_followup_clarify": True},
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.classify_pre_confirm_reply", _async_esc_stub(("unclear", 0))
-    )
-
-    [resp] = drive(tenant, api_key, chat.session_id, "wait, what do you mean by forwarding?")
-
-    assert resp["chat_ended"] is False
-    db_session.refresh(chat)
-    assert chat.escalation_pre_confirm_pending is True
-    assert (
-        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
-        == 0
-    )
-
-
-@pytest.mark.escalation
 def test_pre_confirm_null_reply_with_explicit_human_request_still_escalates(
     tenant: TestClient,
     db_session: Session,
@@ -1086,18 +888,26 @@ def test_stale_followup_with_explicit_human_request_still_escalates(
 
 @pytest.mark.smoke
 @pytest.mark.escalation
-def test_pre_confirm_yes_creates_ticket(
+def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
+    mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An explicit "yes" on the pre_confirm offer must actually create the
-    ticket and hand off — the one branch of the pre_confirm gate this file did
-    not exercise through the app at all before this test."""
+    """Multi-turn pre_confirm -> followup journey from a low_similarity offer:
+
+    - regression for 86exn3x7c: a second consecutive "unclear" reply to the
+      pre_confirm offer re-asks, never gets silently promoted to "yes"
+    - an explicit "yes" actually creates the ticket, hands off, and flips the
+      chat into followup_pending
+    - regression for prod session 0a730bc1-0db6-4e0b-84b6-bd0eccfbbda1: the
+      very next new question is answered by RAG in the same turn, not the
+      canned followup handoff reply
+    """
     from backend.models import EscalationTicket, EscalationTrigger
 
     api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="pre-confirm-yes@example.com", name="Pre Confirm Yes"
+        tenant, db_session, email="pre-confirm-journey@example.com", name="Pre Confirm Journey"
     )
     chat = _make_chat(
         db_session,
@@ -1109,15 +919,36 @@ def test_pre_confirm_yes_creates_ticket(
             "best_similarity_score": 0.31,
             "retrieved_chunks": None,
         },
+        # A known contact email means the ticket goes straight to
+        # followup_pending on creation instead of parking in awaiting_ticket.
+        user_context={"email": "user@example.com"},
     )
-    monkeypatch.setattr(
-        "backend.chat.service.classify_pre_confirm_reply", _async_esc_stub(("yes", 5))
+    pre_confirm_replies = iter([("unclear", 0), ("unclear", 0), ("yes", 5)])
+
+    async def _pre_confirm_stub(**kwargs):
+        return next(pre_confirm_replies)
+
+    monkeypatch.setattr("backend.chat.service.classify_pre_confirm_reply", _pre_confirm_stub)
+
+    r1, r2 = drive(
+        tenant,
+        api_key,
+        chat.session_id,
+        "wait, what do you mean by forwarding?",
+        "still not sure what you mean",
+    )
+    assert r1["chat_ended"] is False
+    assert r2["chat_ended"] is False
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is True
+    assert (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
+        == 0
     )
 
-    [resp] = drive(tenant, api_key, chat.session_id, "yes please")
-
-    assert resp["chat_ended"] is False
-    assert resp.get("ticket_number")
+    [r3] = drive(tenant, api_key, chat.session_id, "yes please")
+    assert r3["chat_ended"] is False
+    assert r3.get("ticket_number")
     ticket = (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     )
@@ -1125,31 +956,75 @@ def test_pre_confirm_yes_creates_ticket(
     assert ticket.primary_question == "my widget won't render"
     db_session.refresh(chat)
     assert chat.escalation_pre_confirm_pending is False
+    assert chat.escalation_followup_pending is True
+
+    _seed_rag_answer(
+        mock_openai_client, db_session, tenant_id, answer="Yes, wildcard domains are supported."
+    )
+
+    async def _gate_new_question(**kwargs):
+        return ("new_question", 7)
+
+    monkeypatch.setattr("backend.chat.service.classify_followup_reply", _gate_new_question)
+
+    async def _fail_full_turn(**kwargs):
+        raise AssertionError(
+            "new-question follow-up must be answered by RAG, not the full-turn escalation LLM"
+        )
+
+    monkeypatch.setattr("backend.chat.service.complete_escalation_openai_turn", _fail_full_turn)
+
+    [r4] = drive(tenant, api_key, chat.session_id, "do you support wildcard domain names?")
+    assert r4["text"] == "Yes, wildcard domains are supported."
+    assert r4.get("chat_ended") is False
+    # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
+    assert r4["tokens_used"] == 7
+
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is False
+    assert chat.ended_at is None
 
 
 @pytest.mark.smoke
 @pytest.mark.escalation
-def test_repeat_explicit_request_threads_onto_open_ticket_without_new_row(
+@pytest.mark.parametrize(
+    "status, seed_operator_reply, expect_requested_again",
+    [
+        pytest.param(None, False, False, id="open_unanswered_keeps_wait"),
+        pytest.param("in_progress", False, False, id="in_progress_unanswered_keeps_wait"),
+        pytest.param("in_progress", True, True, id="in_progress_after_operator_reply_requeues"),
+    ],
+)
+def test_repeat_explicit_request_threads_onto_open_ticket(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
+    status: str | None,
+    seed_operator_reply: bool,
+    expect_requested_again: bool,
 ) -> None:
-    """Regression for the incident where one conversation produced six ESC
-    numbers in 79 seconds: repeating an explicit human request must thread
-    onto the chat's existing open ticket instead of minting a fresh one."""
-    from backend.models import EscalationTicket
+    """Repeating an explicit human request must thread onto the chat's
+    existing open ticket instead of minting a fresh one (regression: one
+    conversation produced six ESC numbers in 79 seconds), and must only reset
+    the visitor's wait (``requested_again_at``) once an operator has actually
+    answered — never while the ticket is still unanswered, open or
+    in_progress."""
+    from backend.models import EscalationStatus, EscalationTicket, Message, MessageRole
 
     api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="repeat-explicit@example.com", name="Repeat Explicit"
+        tenant,
+        db_session,
+        email=f"repeat-explicit-{status}-{seed_operator_reply}@example.com",
+        name="Repeat Explicit",
     )
     chat = _make_chat(db_session, tenant_id)
-    existing = _make_open_ticket(
-        db_session,
-        tenant_id,
-        chat,
-        primary_question="дай мне телефон или почту службы поддержки",
-        user_email="user@example.com",
-    )
+    ticket_kwargs: dict[str, object] = {"user_email": "user@example.com"}
+    if status is not None:
+        ticket_kwargs["status"] = EscalationStatus(status)
+    existing = _make_open_ticket(db_session, tenant_id, chat, **ticket_kwargs)
+    if seed_operator_reply:
+        db_session.add(Message(chat_id=chat.id, role=MessageRole.operator, content="Which form?"))
+        db_session.commit()
     monkeypatch.setattr(
         "backend.chat.service.detect_human_request",
         _human_request_sequence(
@@ -1161,95 +1036,19 @@ def test_repeat_explicit_request_threads_onto_open_ticket_without_new_row(
         ),
     )
 
-    [resp] = drive(
-        tenant, api_key, chat.session_id, "дай мне телефон или почту службы поддержки"
-    )
+    [resp] = drive(tenant, api_key, chat.session_id, "I need a person again")
 
     assert resp["ticket_number"] == existing.ticket_number
     tickets = (
         db_session.query(EscalationTicket).filter(EscalationTicket.chat_id == chat.id).all()
     )
     assert len(tickets) == 1
-
-
-@pytest.mark.escalation
-def test_repeat_request_after_operator_answer_sets_requested_again_at(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Answered, handed back to the bot, asked again: a repeat request after an
-    operator reply must re-queue with a fresh ``requested_again_at``."""
-    from backend.models import EscalationStatus, Message, MessageRole
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="repeat-after-answer@example.com", name="Repeat After Answer"
-    )
-    chat = _make_chat(db_session, tenant_id)
-    ticket = _make_open_ticket(
-        db_session,
-        tenant_id,
-        chat,
-        status=EscalationStatus.in_progress,
-        user_email="user@example.com",
-    )
-    db_session.add(Message(chat_id=chat.id, role=MessageRole.operator, content="Which form?"))
-    db_session.commit()
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(
-                human_request=True,
-                message_has_request_content=True,
-                human_request_explicit=True,
-            )
-        ),
-    )
-
-    drive(tenant, api_key, chat.session_id, "I need a person again")
-
-    db_session.refresh(ticket)
-    assert ticket.status is EscalationStatus.in_progress
-    assert ticket.requested_again_at is not None
-    assert ticket.requested_again_at >= ticket.created_at
-
-
-@pytest.mark.escalation
-def test_repeat_request_while_unanswered_keeps_original_wait(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A repeat request while the ticket is still unanswered must not reset the
-    visitor's wait — ``requested_again_at`` stays null."""
-    from backend.models import EscalationStatus
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="repeat-unanswered@example.com", name="Repeat Unanswered"
-    )
-    chat = _make_chat(db_session, tenant_id)
-    ticket = _make_open_ticket(
-        db_session,
-        tenant_id,
-        chat,
-        status=EscalationStatus.in_progress,
-        user_email="user@example.com",
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(
-                human_request=True,
-                message_has_request_content=True,
-                human_request_explicit=True,
-            )
-        ),
-    )
-
-    drive(tenant, api_key, chat.session_id, "I need a person again")
-
-    db_session.refresh(ticket)
-    assert ticket.requested_again_at is None
+    db_session.refresh(existing)
+    if expect_requested_again:
+        assert existing.requested_again_at is not None
+        assert existing.requested_again_at >= existing.created_at
+    else:
+        assert existing.requested_again_at is None
 
 
 @pytest.mark.escalation
@@ -1298,75 +1097,59 @@ def test_human_request_after_greeting_only_elicits_not_escalates(
 
 
 @pytest.mark.escalation
-def test_awaiting_request_then_substantive_message_escalates(
+def test_awaiting_request_journey_elicit_then_reping_then_substantive_escalates(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Once the user supplies the concrete question, the parked awaiting-request
-    state escalates with that content and clears the flag."""
-    from backend.models import EscalationTicket
+    """Multi-turn awaiting-request journey:
 
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="awaiting-then-content@example.com", name="Awaiting Then Content"
-    )
-    chat = _make_chat(db_session, tenant_id, escalation_awaiting_request=True)
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(human_request=False, message_has_request_content=True)
-        ),
-    )
-
-    [resp] = drive(tenant, api_key, chat.session_id, "my invoice shows the wrong amount")
-
-    assert resp["chat_ended"] is False
-    ticket = (
-        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
-    )
-    assert ticket.primary_question == "my invoice shows the wrong amount"
-    db_session.refresh(chat)
-    assert chat.escalation_awaiting_request is False
-
-
-@pytest.mark.escalation
-def test_awaiting_request_repeated_bare_ping_re_elicits(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Still no concrete question, still asking for a human: re-ask and stay
-    parked, never mint a ticket."""
+    - a bare "connect me to a human" with nothing to forward opens
+      awaiting-request elicitation instead of minting an empty ticket
+    - a repeated bare ping while parked re-elicits and stays parked, never
+      mints a ticket
+    - once the user supplies the concrete question, the parked state
+      escalates with that content and clears the flag
+    """
     from backend.chat.handlers.escalation import _AWAITING_REQUEST_CANONICAL_TEXT
     from backend.models import EscalationTicket
 
     api_key, tenant_id = _register_tenant_with_key(
-        tenant,
-        db_session,
-        email="awaiting-repeated-ping@example.com",
-        name="Awaiting Repeated Ping",
+        tenant, db_session, email="awaiting-journey@example.com", name="Awaiting Journey"
     )
-    chat = _make_chat(db_session, tenant_id, escalation_awaiting_request=True)
+    chat = _make_chat(db_session, tenant_id)
     monkeypatch.setattr(
         "backend.chat.service.detect_human_request",
         _human_request_sequence(
             HumanRequestResult(
-                human_request=True,
-                message_has_request_content=False,
-                human_request_explicit=True,
-            )
+                human_request=True, message_has_request_content=False, human_request_explicit=True
+            ),
+            HumanRequestResult(
+                human_request=True, message_has_request_content=False, human_request_explicit=True
+            ),
+            HumanRequestResult(human_request=False, message_has_request_content=True),
         ),
     )
 
-    [resp] = drive(tenant, api_key, chat.session_id, "is anyone there??")
-
-    assert resp["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
+    r1, r2 = drive(tenant, api_key, chat.session_id, "connect me to a human", "is anyone there??")
+    assert r1["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
+    assert r1["chat_ended"] is False
+    assert r2["text"] == _AWAITING_REQUEST_CANONICAL_TEXT
     db_session.refresh(chat)
     assert chat.escalation_awaiting_request is True
     assert (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
         == 0
     )
+
+    [r3] = drive(tenant, api_key, chat.session_id, "my invoice shows the wrong amount")
+    assert r3["chat_ended"] is False
+    ticket = (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
+    )
+    assert ticket.primary_question == "my invoice shows the wrong amount"
+    db_session.refresh(chat)
+    assert chat.escalation_awaiting_request is False
 
 
 @pytest.mark.escalation
@@ -1528,19 +1311,17 @@ def test_chat_succeeds_when_user_session_tracking_fails(
 
 
 @pytest.mark.escalation
-def test_manual_escalate_requires_api_key(tenant: TestClient) -> None:
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"X-API-Key": "bad-key"}],
+    ids=["missing_api_key", "invalid_api_key"],
+)
+def test_manual_escalate_requires_valid_api_key(
+    tenant: TestClient, headers: dict[str, str]
+) -> None:
     response = tenant.post(
         f"/chat/{uuid.uuid4()}/escalate",
-        json={"trigger": "user_request"},
-    )
-    assert response.status_code == 401
-
-
-@pytest.mark.escalation
-def test_manual_escalate_invalid_api_key(tenant: TestClient) -> None:
-    response = tenant.post(
-        f"/chat/{uuid.uuid4()}/escalate",
-        headers={"X-API-Key": "bad-key"},
+        headers=headers,
         json={"trigger": "user_request"},
     )
     assert response.status_code == 401
@@ -1676,60 +1457,6 @@ def test_manual_escalate_success_for_both_triggers(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.smoke
-@pytest.mark.escalation
-def test_new_ticket_notify_routes_to_l2_email_then_falls_back_to_owner(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A new-ticket notification goes to the tenant's L2 support address when
-    one is configured, and falls back to the account owner's email otherwise."""
-    token = register_and_verify_user(tenant, db_session, email="owner-fallback@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Notify Routing Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
-    chat = _make_chat(db_session, tenant_id, user_context={"email": "enduser@example.com"})
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(
-                human_request=True, message_has_request_content=True, human_request_explicit=True
-            )
-        ),
-    )
-    with patch("backend.escalation.service.send_email") as send_email_mock:
-        drive(tenant, api_key, chat.session_id, "billing is broken, connect me to a human")
-    send_email_mock.assert_called_once()
-    assert send_email_mock.call_args.args[0] == "owner-fallback@example.com"
-
-    support_resp = tenant.put(
-        "/tenants/me/support-settings",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"l2_email": "l2@example.com"},
-    )
-    assert support_resp.status_code == 200
-
-    chat2 = _make_chat(db_session, tenant_id, user_context={"email": "enduser2@example.com"})
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(
-                human_request=True, message_has_request_content=True, human_request_explicit=True
-            )
-        ),
-    )
-    with patch("backend.escalation.service.send_email") as send_email_mock2:
-        drive(tenant, api_key, chat2.session_id, "billing is broken again, connect me to a human")
-    send_email_mock2.assert_called_once()
-    assert send_email_mock2.call_args.args[0] == "l2@example.com"
-
-
 @pytest.mark.escalation
 @pytest.mark.parametrize(
     "send_email_kwargs, expected_reason",
@@ -1784,22 +1511,28 @@ def test_new_ticket_notify_failure_reports_metric_and_leaves_ticket_retryable(
 
 @pytest.mark.smoke
 @pytest.mark.escalation
-def test_new_ticket_notify_email_is_pii_safe_in_body_and_carries_context_in_headers(
+def test_new_ticket_notify_no_l2_routes_to_owner_pii_safe_and_subject_hides_priority(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The support email is a human-facing surface: the user's own literal
-    contact details and the conversation transcript render verbatim in the
-    body (redaction only guards the model boundary), while tenant-internal
-    classification data (plan tier, user id, audience tag, KYC extras,
-    priority, trigger) moves to X-Chat9-* headers instead of leaking into a
-    body a support agent might quote back to the end user. Also asserts the
-    initial ``send_email`` return value is captured as the threading anchor."""
+    """Without an L2 support address configured, a new-ticket notification
+    goes to the account owner's email. The support email is a human-facing
+    surface: the user's own literal contact details and the conversation
+    transcript render verbatim in the body (redaction only guards the model
+    boundary), while tenant-internal classification data (plan tier, user id,
+    audience tag, KYC extras, priority, trigger) moves to X-Chat9-* headers
+    instead of leaking into a body a support agent might quote back to the
+    end user. The Re:-able subject line never leaks the internal priority
+    tier or the "Chat9" brand, and the body omits the user-note section when
+    there was none — this chat-driven trigger never populates one. Also
+    asserts the initial ``send_email`` return value is captured as the
+    threading anchor."""
     from backend.models import EscalationTicket
 
+    owner_email = "pii-safe-owner@example.com"
     api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="pii-safe@example.com", name="PII Safe Tenant"
+        tenant, db_session, email=owner_email, name="PII Safe Tenant"
     )
     chat = _make_chat(
         db_session,
@@ -1833,9 +1566,10 @@ def test_new_ticket_notify_email_is_pii_safe_in_body_and_carries_context_in_head
 
     send_email_mock.assert_called_once()
     args, kwargs = send_email_mock.call_args
-    body = args[2]
+    recipient, subject, body = args[0], args[1], args[2]
     headers = kwargs.get("extra_headers") or {}
 
+    assert recipient == owner_email
     assert kwargs.get("reply_to") == "enduser@acme.io"
     assert "pro" not in body
     assert "u_18422" not in body
@@ -1852,6 +1586,10 @@ def test_new_ticket_notify_email_is_pii_safe_in_body_and_carries_context_in_head
     assert headers.get("X-Chat9-User-Id") == "u_18422"
     assert headers.get("X-Chat9-Audience") == "paying_b2b"
     assert headers.get("X-Chat9-Trigger") == "user_request"
+
+    for forbidden in ("CRITICAL", "Critical", "HIGH", "High", "Chat9"):
+        assert forbidden not in subject
+    assert "USER'S NOTE" not in body
 
     ticket = db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     assert ticket.notification_message_id == "<pii-safe@brevo>"
@@ -1920,63 +1658,76 @@ def test_apply_collected_email_fires_deferred_notification(
     assert "late@example.com" in args[2]
 
 
+@pytest.mark.smoke
 @pytest.mark.escalation
-def test_new_ticket_notify_subject_hides_priority_and_body_omits_absent_note(
+def test_ticket_notify_journey_l2_recipient_then_threaded_update_then_failure_metric(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Re:-able subject line never leaks the internal priority tier or the
-    "Chat9" brand, and the body omits the user-note section when there was
-    none — this chat-driven trigger never populates one."""
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="subj-note@example.com", name="Subject Note Tenant"
+    """Multi-turn notification journey with an L2 support address configured:
+
+    - the new-ticket notification routes to the tenant's L2 address instead
+      of the account owner once one is configured
+    - a follow-up turn classified ``unclear`` (real context, not a bare
+      yes/no) is forwarded to support as a threaded reply under the initial
+      notification, carrying only the turns not already sent
+    - a refused follow-up send reports the same internal metric as an
+      initial-notify failure, tagged with the follow-up stage, and must not
+      advance ``last_notified_message_id`` so the delta is retried later
+    """
+    from backend.models import EscalationTicket
+
+    token = register_and_verify_user(tenant, db_session, email="l2-journey-owner@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "L2 Journey Tenant"},
     )
-    chat = _make_chat(db_session, tenant_id, user_context={"email": "urgent@example.com"})
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    support_resp = tenant.put(
+        "/tenants/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"l2_email": "l2@example.com"},
+    )
+    assert support_resp.status_code == 200
+
+    chat = _make_chat(db_session, tenant_id, user_context={"email": "enduser@example.com"})
     monkeypatch.setattr(
         "backend.chat.service.detect_human_request",
         _human_request_sequence(
             HumanRequestResult(
                 human_request=True, message_has_request_content=True, human_request_explicit=True
-            )
+            ),
+            # Later turns land in the followup branch, which does not act on
+            # this result — kept benign so the (session-scoped) stub doesn't
+            # run out of canned answers.
+            HumanRequestResult(human_request=False, message_has_request_content=False),
+            HumanRequestResult(human_request=False, message_has_request_content=False),
         ),
     )
     with patch("backend.escalation.service.send_email") as send_email_mock:
-        drive(tenant, api_key, chat.session_id, "urgent, everything is down, connect me to a human")
+        send_email_mock.return_value = "<initial-abc@brevo>"
+        drive(tenant, api_key, chat.session_id, "billing is broken, connect me to a human")
+    send_email_mock.assert_called_once()
+    assert send_email_mock.call_args.args[0] == "l2@example.com"
 
-    subject = send_email_mock.call_args.args[1]
-    body = send_email_mock.call_args.args[2]
-    for forbidden in ("CRITICAL", "Critical", "HIGH", "High", "Chat9"):
-        assert forbidden not in subject
-    assert "USER'S NOTE" not in body
-
-
-@pytest.mark.escalation
-def test_ticket_update_notify_threads_reply_and_sends_only_new_turns(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A follow-up turn classified ``unclear`` (real context, not a bare
-    yes/no) is forwarded to support as a threaded reply under the initial
-    notification, carrying only the turns not already sent."""
-    from backend.models import Message, MessageRole
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="ticket-update@example.com", name="Ticket Update Tenant"
+    ticket = (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
     )
-    chat = _make_chat(db_session, tenant_id, escalation_followup_pending=True)
-    ticket = _make_open_ticket(
-        db_session,
-        tenant_id,
-        chat,
-        notification_message_id="<initial-abc@brevo>",
-        user_email="enduser@example.com",
+    assert ticket.notification_message_id == "<initial-abc@brevo>"
+
+    # Step outside the follow-up notify debounce window so the next turn's
+    # threaded update is not skipped as "too soon after the last send".
+    from datetime import UTC, datetime, timedelta
+
+    from backend.escalation.service import _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS
+
+    ticket.last_notified_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+        seconds=_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS + 5
     )
-    old = Message(chat_id=chat.id, role=MessageRole.user, content="OLD already-notified turn")
-    db_session.add(old)
-    db_session.commit()
-    ticket.last_notified_message_id = old.id
     db_session.add(ticket)
     db_session.commit()
 
@@ -1990,19 +1741,54 @@ def test_ticket_update_notify_threads_reply_and_sends_only_new_turns(
             )
         ),
     )
-
-    with patch("backend.escalation.service.send_email") as send_email_mock:
-        send_email_mock.return_value = "<update-1@brevo>"
+    with patch("backend.escalation.service.send_email") as send_email_mock2:
+        send_email_mock2.return_value = "<update-1@brevo>"
         drive(tenant, api_key, chat.session_id, "BRAND NEW context about a billing error")
 
-    send_email_mock.assert_called_once()
-    subject = send_email_mock.call_args.args[1]
-    body = send_email_mock.call_args.args[2]
-    headers = send_email_mock.call_args.kwargs["extra_headers"]
+    send_email_mock2.assert_called_once()
+    subject = send_email_mock2.call_args.args[1]
+    body = send_email_mock2.call_args.args[2]
+    headers = send_email_mock2.call_args.kwargs["extra_headers"]
     assert subject.startswith(f"Re: [{ticket.ticket_number}]")
     assert headers["In-Reply-To"] == "<initial-abc@brevo>"
     assert "BRAND NEW context about a billing error" in body
-    assert "OLD already-notified turn" not in body
+    assert "billing is broken, connect me to a human" not in body
+
+    db_session.refresh(ticket)
+    pre_marker = ticket.last_notified_message_id
+    ticket.last_notified_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+        seconds=_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS + 5
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    # The previous "unclear" turn set the followup clarify flag; a second
+    # consecutive "unclear" reply would be promoted to "yes" (a deliberate,
+    # separately-tested FSM rule) and never reach the notify path at all.
+    # Clear it so this turn is read as a fresh "unclear" that does notify.
+    db_session.refresh(chat)
+    chat.user_context = {**(chat.user_context or {}), "escalation_followup_clarify": None}
+    db_session.add(chat)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        _async_esc_stub(
+            Mock(message_to_user="Noted.", followup_decision="unclear", tokens_used=2)
+        ),
+    )
+    with (
+        patch("backend.escalation.service.send_email", return_value=None),
+        patch("backend.escalation.service.capture_event") as capture_mock,
+    ):
+        drive(tenant, api_key, chat.session_id, "context that fails to send")
+
+    capture_mock.assert_called_once()
+    assert capture_mock.call_args.args[0] == "escalation.email_send_failed"
+    assert capture_mock.call_args.kwargs["properties"]["reason"] == "brevo_refused"
+    assert capture_mock.call_args.kwargs["properties"]["stage"] == "followup"
+    db_session.refresh(ticket)
+    assert ticket.last_notified_message_id == pre_marker
 
 
 @pytest.mark.escalation
@@ -2058,54 +1844,11 @@ def test_ticket_update_notify_skipped_for_administrative_reply_or_resolved_ticke
     assert ticket2.status == EscalationStatus.resolved
 
 
-@pytest.mark.escalation
-def test_ticket_update_notify_failure_reports_metric_and_preserves_marker(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A refused follow-up send reports the same internal metric as the
-    initial-notify failure, tagged with the follow-up stage, and must not
-    advance ``last_notified_message_id`` so the delta is retried later."""
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="ticket-update-fail@example.com", name="Ticket Update Fail Tenant"
-    )
-    chat = _make_chat(db_session, tenant_id, escalation_followup_pending=True)
-    ticket = _make_open_ticket(
-        db_session,
-        tenant_id,
-        chat,
-        notification_message_id="<anchor-fail@brevo>",
-        user_email="enduser@example.com",
-    )
-    pre_marker = ticket.last_notified_message_id
-
-    monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
-        _async_esc_stub(
-            Mock(message_to_user="Noted.", followup_decision="unclear", tokens_used=2)
-        ),
-    )
-    with (
-        patch("backend.escalation.service.send_email", return_value=None),
-        patch("backend.escalation.service.capture_event") as capture_mock,
-    ):
-        drive(tenant, api_key, chat.session_id, "context that fails to send")
-
-    capture_mock.assert_called_once()
-    assert capture_mock.call_args.args[0] == "escalation.email_send_failed"
-    assert capture_mock.call_args.kwargs["properties"]["reason"] == "brevo_refused"
-    assert capture_mock.call_args.kwargs["properties"]["stage"] == "followup"
-    db_session.refresh(ticket)
-    assert ticket.last_notified_message_id == pre_marker
-
-
 # ---------------------------------------------------------------------------
 # perform_manual_escalation: ticket state, reuse and priority, migrated from
 # tests/test_escalation.py (audit rows 41-46). Ticket-reuse-on-repeat and
 # requested_again_at are covered by test_repeat_explicit_request_threads_
-# onto_open_ticket_without_new_row and test_repeat_request_after_operator_
-# answer_sets_requested_again_at above (stage 1) — not duplicated here.
+# onto_open_ticket above (stage 1) — not duplicated here.
 # ---------------------------------------------------------------------------
 
 

@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from backend.escalation.service import HumanRequestResult
 from backend.models import ContactSession
 from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -25,56 +26,130 @@ def _async_esc_stub(result):
     return _stub
 
 
+def _human_request_sequence(*results: HumanRequestResult):
+    """Async stub for ``detect_human_request``: returns one result per call, in
+    order — one entry per driven turn."""
+    calls = iter(results)
+
+    async def _stub(*_args: object, **_kwargs: object) -> HumanRequestResult:
+        return next(calls)
+
+    return _stub
+
+
+def _register_tenant_with_key(
+    tenant: TestClient, db_session: Session, *, email: str, name: str
+) -> tuple[str, uuid.UUID]:
+    """Register a user, create their tenant, and set a client OpenAI key.
+
+    Collapses the "register → create tenant → set_client_openai_key"
+    boilerplate repeated across this file. Returns ``(api_key, tenant_id)``.
+    """
+    token = register_and_verify_user(tenant, db_session, email=email)
+    resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": name},
+    )
+    set_client_openai_key(tenant, token)
+    return resp.json()["api_key"], uuid.UUID(resp.json()["id"])
+
+
+def _make_chat(db_session: Session, tenant_id: uuid.UUID, **kwargs: object):
+    from backend.models import Chat
+
+    kwargs.setdefault("session_id", uuid.uuid4())
+    kwargs.setdefault("user_context", {})
+    chat = Chat(tenant_id=tenant_id, **kwargs)
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    return chat
+
+
+def _make_open_ticket(db_session: Session, tenant_id: uuid.UUID, chat, **kwargs: object):
+    from backend.models import EscalationStatus, EscalationTicket, EscalationTrigger
+
+    kwargs.setdefault("ticket_number", f"ESC-{uuid.uuid4().hex[:8]}")
+    kwargs.setdefault("primary_question", "Need support")
+    kwargs.setdefault("trigger", EscalationTrigger.user_request)
+    kwargs.setdefault("status", EscalationStatus.open)
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        **kwargs,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+    return ticket
+
+
+def drive(
+    tenant: TestClient, api_key: str, session_id: uuid.UUID, *questions: str
+) -> list[dict]:
+    """POST each question through ``/chat`` in turn; return the parsed JSON
+    responses in order. Asserts every turn succeeds (200) as it goes."""
+    responses = []
+    for question in questions:
+        resp = tenant.post(
+            "/chat",
+            headers={"X-API-Key": api_key},
+            json={"session_id": str(session_id), "question": question},
+        )
+        assert resp.status_code == 200, resp.text
+        responses.append(resp.json())
+    return responses
+
+
+def _seed_rag_answer(
+    mock_openai_client: Mock, db_session: Session, tenant_id: uuid.UUID, *, answer: str
+) -> None:
+    """Seed one document/embedding and stub the raw OpenAI client so RagHandler
+    answers with ``answer`` for a turn that falls through to it."""
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="seed.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text=answer,
+            vector=None,
+            metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+        )
+    )
+    db_session.commit()
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(answer)
+
+
 @pytest.mark.escalation
 def test_chat_awaiting_email_valid_email_transitions_to_followup(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
-
-    token = register_and_verify_user(tenant, db_session, email="await-valid@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Await Valid Tenant"},
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="await-valid@example.com", name="Await Valid Tenant"
     )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
-
-    chat = Chat(
-        tenant_id=tenant_id,
-        session_id=uuid.uuid4(),
-        user_context={"user_id": "u-await"},
-    )
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    ticket = EscalationTicket(
-        tenant_id=tenant_id,
-        ticket_number="ESC-0001",
-        primary_question="Need human support",
-        trigger=EscalationTrigger.user_request,
-        status=EscalationStatus.open,
-        chat_id=chat.id,
-        session_id=chat.session_id,
-    )
-    db_session.add(ticket)
-    db_session.commit()
-    db_session.refresh(ticket)
+    chat = _make_chat(db_session, tenant_id, user_context={"user_id": "u-await"})
+    ticket = _make_open_ticket(db_session, tenant_id, chat, primary_question="Need human support")
 
     chat.escalation_awaiting_ticket_id = ticket.id
     db_session.add(chat)
     db_session.commit()
 
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "reach me at user@example.com"},
-    )
-    assert response.status_code == 200
+    drive(tenant, api_key, chat.session_id, "reach me at user@example.com")
 
     db_session.refresh(chat)
     db_session.refresh(ticket)
@@ -89,46 +164,18 @@ def test_chat_awaiting_email_invalid_keeps_waiting_ticket(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
-
-    token = register_and_verify_user(tenant, db_session, email="await-invalid@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Await Invalid Tenant"},
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="await-invalid@example.com", name="Await Invalid Tenant"
     )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
-
-    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-
-    ticket = EscalationTicket(
-        tenant_id=tenant_id,
-        ticket_number="ESC-0001",
-        primary_question="Need support",
-        trigger=EscalationTrigger.user_request,
-        status=EscalationStatus.open,
-        chat_id=chat.id,
-        session_id=chat.session_id,
-    )
-    db_session.add(ticket)
-    db_session.commit()
-    db_session.refresh(ticket)
+    chat = _make_chat(db_session, tenant_id)
+    ticket = _make_open_ticket(db_session, tenant_id, chat)
 
     chat.escalation_awaiting_ticket_id = ticket.id
     db_session.add(chat)
     db_session.commit()
 
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "my email is not provided"},
-    )
-    assert response.status_code == 200
+    drive(tenant, api_key, chat.session_id, "my email is not provided")
+
     db_session.refresh(chat)
     db_session.refresh(ticket)
     assert chat.escalation_awaiting_ticket_id == ticket.id
@@ -858,14 +905,9 @@ def test_manual_escalate_missing_session_returns_404(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="manual-404@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Manual 404"},
+    api_key, _tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="manual-404@example.com", name="Manual 404"
     )
-    set_client_openai_key(tenant, token)
-    api_key = cl_resp.json()["api_key"]
 
     response = tenant.post(
         f"/chat/{uuid.uuid4()}/escalate",

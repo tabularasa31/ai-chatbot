@@ -987,27 +987,44 @@ def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
 
 @pytest.mark.smoke
 @pytest.mark.escalation
-def test_repeat_explicit_request_threads_onto_open_ticket_without_new_row(
+@pytest.mark.parametrize(
+    "status, seed_operator_reply, expect_requested_again",
+    [
+        pytest.param(None, False, False, id="open_unanswered_keeps_wait"),
+        pytest.param("in_progress", False, False, id="in_progress_unanswered_keeps_wait"),
+        pytest.param("in_progress", True, True, id="in_progress_after_operator_reply_requeues"),
+    ],
+)
+def test_repeat_explicit_request_threads_onto_open_ticket(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
+    status: str | None,
+    seed_operator_reply: bool,
+    expect_requested_again: bool,
 ) -> None:
-    """Regression for the incident where one conversation produced six ESC
-    numbers in 79 seconds: repeating an explicit human request must thread
-    onto the chat's existing open ticket instead of minting a fresh one."""
-    from backend.models import EscalationTicket
+    """Repeating an explicit human request must thread onto the chat's
+    existing open ticket instead of minting a fresh one (regression: one
+    conversation produced six ESC numbers in 79 seconds), and must only reset
+    the visitor's wait (``requested_again_at``) once an operator has actually
+    answered — never while the ticket is still unanswered, open or
+    in_progress."""
+    from backend.models import EscalationStatus, EscalationTicket, Message, MessageRole
 
     api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="repeat-explicit@example.com", name="Repeat Explicit"
+        tenant,
+        db_session,
+        email=f"repeat-explicit-{status}-{seed_operator_reply}@example.com",
+        name="Repeat Explicit",
     )
     chat = _make_chat(db_session, tenant_id)
-    existing = _make_open_ticket(
-        db_session,
-        tenant_id,
-        chat,
-        primary_question="дай мне телефон или почту службы поддержки",
-        user_email="user@example.com",
-    )
+    ticket_kwargs: dict[str, object] = {"user_email": "user@example.com"}
+    if status is not None:
+        ticket_kwargs["status"] = EscalationStatus(status)
+    existing = _make_open_ticket(db_session, tenant_id, chat, **ticket_kwargs)
+    if seed_operator_reply:
+        db_session.add(Message(chat_id=chat.id, role=MessageRole.operator, content="Which form?"))
+        db_session.commit()
     monkeypatch.setattr(
         "backend.chat.service.detect_human_request",
         _human_request_sequence(
@@ -1019,95 +1036,19 @@ def test_repeat_explicit_request_threads_onto_open_ticket_without_new_row(
         ),
     )
 
-    [resp] = drive(
-        tenant, api_key, chat.session_id, "дай мне телефон или почту службы поддержки"
-    )
+    [resp] = drive(tenant, api_key, chat.session_id, "I need a person again")
 
     assert resp["ticket_number"] == existing.ticket_number
     tickets = (
         db_session.query(EscalationTicket).filter(EscalationTicket.chat_id == chat.id).all()
     )
     assert len(tickets) == 1
-
-
-@pytest.mark.escalation
-def test_repeat_request_after_operator_answer_sets_requested_again_at(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Answered, handed back to the bot, asked again: a repeat request after an
-    operator reply must re-queue with a fresh ``requested_again_at``."""
-    from backend.models import EscalationStatus, Message, MessageRole
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="repeat-after-answer@example.com", name="Repeat After Answer"
-    )
-    chat = _make_chat(db_session, tenant_id)
-    ticket = _make_open_ticket(
-        db_session,
-        tenant_id,
-        chat,
-        status=EscalationStatus.in_progress,
-        user_email="user@example.com",
-    )
-    db_session.add(Message(chat_id=chat.id, role=MessageRole.operator, content="Which form?"))
-    db_session.commit()
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(
-                human_request=True,
-                message_has_request_content=True,
-                human_request_explicit=True,
-            )
-        ),
-    )
-
-    drive(tenant, api_key, chat.session_id, "I need a person again")
-
-    db_session.refresh(ticket)
-    assert ticket.status is EscalationStatus.in_progress
-    assert ticket.requested_again_at is not None
-    assert ticket.requested_again_at >= ticket.created_at
-
-
-@pytest.mark.escalation
-def test_repeat_request_while_unanswered_keeps_original_wait(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A repeat request while the ticket is still unanswered must not reset the
-    visitor's wait — ``requested_again_at`` stays null."""
-    from backend.models import EscalationStatus
-
-    api_key, tenant_id = _register_tenant_with_key(
-        tenant, db_session, email="repeat-unanswered@example.com", name="Repeat Unanswered"
-    )
-    chat = _make_chat(db_session, tenant_id)
-    ticket = _make_open_ticket(
-        db_session,
-        tenant_id,
-        chat,
-        status=EscalationStatus.in_progress,
-        user_email="user@example.com",
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.detect_human_request",
-        _human_request_sequence(
-            HumanRequestResult(
-                human_request=True,
-                message_has_request_content=True,
-                human_request_explicit=True,
-            )
-        ),
-    )
-
-    drive(tenant, api_key, chat.session_id, "I need a person again")
-
-    db_session.refresh(ticket)
-    assert ticket.requested_again_at is None
+    db_session.refresh(existing)
+    if expect_requested_again:
+        assert existing.requested_again_at is not None
+        assert existing.requested_again_at >= existing.created_at
+    else:
+        assert existing.requested_again_at is None
 
 
 @pytest.mark.escalation

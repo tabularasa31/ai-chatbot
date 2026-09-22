@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.models import User, ContactSession
@@ -190,3 +191,21 @@ def test_start_user_session_savepoint_rollback_preserves_outer_transaction(
     active_rows = _active_sessions(db_session, tenant_id=tenant.id, contact_id="u1")
     assert len(active_rows) == 1
     assert active_rows[0].id == winner_id
+
+
+def test_contact_sessions_allow_only_one_active_row_per_contact(db_session: Session) -> None:
+    """The raw DB-level constraint this whole file's race-recovery logic
+    exists to work around: two active (``session_ended_at IS NULL``) rows for
+    the same tenant+contact cannot both be committed."""
+    from sqlalchemy.exc import IntegrityError
+
+    user = _create_user(db_session, email="unique-user-session@example.com")
+    tenant = _create_client(db_session, user, name="Unique User Session Tenant")
+
+    db_session.add(ContactSession(tenant_id=tenant.id, contact_id="u-unique"))
+    db_session.commit()
+
+    db_session.add(ContactSession(tenant_id=tenant.id, contact_id="u-unique"))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()

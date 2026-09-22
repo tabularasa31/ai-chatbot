@@ -1535,29 +1535,6 @@ def test_chat_succeeds_when_user_session_tracking_fails(
     assert len(messages) == 2
 
 
-def test_contact_sessions_allow_only_one_active_row_per_contact(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    from sqlalchemy.exc import IntegrityError
-
-    token = register_and_verify_user(tenant, db_session, email="unique-user-session@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Unique User Session Tenant"},
-    )
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    db_session.add(ContactSession(tenant_id=tenant_id, contact_id="u-unique"))
-    db_session.commit()
-
-    db_session.add(ContactSession(tenant_id=tenant_id, contact_id="u-unique"))
-    with pytest.raises(IntegrityError):
-        db_session.commit()
-    db_session.rollback()
-
-
 @pytest.mark.escalation
 def test_manual_escalate_requires_api_key(tenant: TestClient) -> None:
     response = tenant.post(
@@ -1628,18 +1605,19 @@ def test_manual_escalate_openai_error_returns_503(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """``complete_escalation_openai_turn`` — the only OpenAI call on this path
+    — catches every exception internally and always returns a fail-safe
+    result (never raises), so an ``APIError`` genuinely cannot reach this
+    route from the real OpenAI-client boundary today. The route's ``except
+    APIError`` branch is exercised here by patching ``perform_manual_
+    escalation`` directly, one level in from the HTTP boundary, since there
+    is no reachable network-boundary stub that would trigger it."""
     from backend.models import Chat
     from openai import APIError
 
-    token = register_and_verify_user(tenant, db_session, email="manual-503@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Manual 503"},
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="manual-503@example.com", name="Manual 503"
     )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
     chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
     db_session.add(chat)
     db_session.commit()
@@ -1661,30 +1639,18 @@ def test_manual_escalate_openai_error_returns_503(
 def test_manual_escalate_success_for_both_triggers(
     tenant: TestClient,
     db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
+    escalation_openai_override,
 ) -> None:
-    from backend.models import Chat
+    from backend.models import Chat, EscalationTicket
 
-    token = register_and_verify_user(tenant, db_session, email="manual-success@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Manual Success"},
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="manual-success@example.com", name="Manual Success"
     )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
     chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
     db_session.add(chat)
     db_session.commit()
 
-    async def _fake_manual_escalation(*args, **kwargs):
-        return ("Escalated.", "ESC-0009")
-
-    monkeypatch.setattr(
-        "backend.chat.routes.perform_manual_escalation",
-        _fake_manual_escalation,
-    )
+    escalation_openai_override(message_to_user="Escalated.")
 
     r1 = tenant.post(
         f"/chat/{chat.session_id}/escalate",
@@ -1692,7 +1658,9 @@ def test_manual_escalate_success_for_both_triggers(
         json={"trigger": "user_request"},
     )
     assert r1.status_code == 200
-    assert r1.json()["ticket_number"] == "ESC-0009"
+    assert r1.json()["message"] == "Escalated."
+    ticket_number = r1.json()["ticket_number"]
+    assert ticket_number
 
     r2 = tenant.post(
         f"/chat/{chat.session_id}/escalate",
@@ -1700,4 +1668,9 @@ def test_manual_escalate_success_for_both_triggers(
         json={"trigger": "answer_rejected"},
     )
     assert r2.status_code == 200
-    assert r2.json()["ticket_number"] == "ESC-0009"
+    # Second press threads onto the same open ticket rather than minting a new one.
+    assert r2.json()["ticket_number"] == ticket_number
+    tickets = (
+        db_session.query(EscalationTicket).filter(EscalationTicket.chat_id == chat.id).all()
+    )
+    assert len(tickets) == 1

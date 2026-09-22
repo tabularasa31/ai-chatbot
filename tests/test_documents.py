@@ -42,6 +42,17 @@ def _make_minimal_pdf() -> bytes:
     return buf.getvalue()
 
 
+def _make_minimal_docx() -> bytes:
+    """Create a minimal valid .docx file in memory for testing."""
+    import docx as docx_lib
+
+    doc = docx_lib.Document()
+    doc.add_paragraph("Hello from docx test document.")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def _fake_embedding_vector() -> list[float]:
     return [0.1] * 1536
 
@@ -61,162 +72,77 @@ def _get_unverified_user_token(db_session: Session, email: str) -> str:
     return token
 
 
-def test_upload_pdf_success(tenant: TestClient, db_session: Session) -> None:
-    """Upload a small PDF, get DocumentResponse back, status=ready."""
-    token = register_and_verify_user(tenant, db_session, email="pdf@example.com")
-    tenant.post(
+def _create_tenant_and_token(
+    http: TestClient, db: Session, *, email: str, name: str = "Tenant"
+) -> tuple[str, uuid.UUID]:
+    token = register_and_verify_user(http, db, email=email)
+    resp = http.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "PDF Tenant"},
+        json={"name": name},
     )
-    pdf_bytes = _make_minimal_pdf()
-    response = tenant.post(
+    assert resp.status_code == 201, resp.text
+    return token, uuid.UUID(resp.json()["id"])
+
+
+def _upload(http: TestClient, token: str, filename: str, content: bytes, content_type: str):
+    return http.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("test.pdf", pdf_bytes, "application/pdf")},
+        files={"file": (filename, content, content_type)},
     )
-    assert response.status_code == 201
-    data = response.json()
-    assert "id" in data
-    assert data["filename"] == "test.pdf"
-    assert data["file_type"] == "pdf"
-    assert data["status"] == "ready"
-    assert "created_at" in data
-    assert "updated_at" in data
 
 
-def test_upload_markdown_success(tenant: TestClient, db_session: Session) -> None:
-    """Upload .md file, status=ready."""
-    token = register_and_verify_user(tenant, db_session, email="md@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "MD Tenant"},
-    )
-    md_content = b"# Test\n\nThis is a test document."
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("test.md", md_content, "text/markdown")},
-    )
-    assert response.status_code == 201
-    data = response.json()
-    assert data["filename"] == "test.md"
-    assert data["file_type"] == "markdown"
-    assert data["status"] == "ready"
+def _patch_crawl_session(monkeypatch: pytest.MonkeyPatch, db_session: Session, url_service_mod) -> None:
+    monkeypatch.setattr(url_service_mod, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
 
 
-def test_upload_markdown_persists_detected_language(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """Document.language must be populated at parse time for cross-lingual retrieval."""
-    token = register_and_verify_user(tenant, db_session, email="lang-en@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Lang Tenant"},
-    )
-    md_content = (
-        b"# Onboarding Guide\n\n"
-        b"This document explains how customers can reset their password and enable "
-        b"two-factor authentication. The verification code is sent via email."
-    )
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("guide.md", md_content, "text/markdown")},
-    )
-    assert response.status_code == 201
-    doc = db_session.query(Document).filter(Document.filename == "guide.md").first()
-    assert doc is not None
-    assert doc.language == "en"
+def _fake_extracted_page(url: str, title: str, text: str, *, chunk_text: str | None = None):
+    chunk_text = chunk_text if chunk_text is not None else text
+    return type(
+        "Page",
+        (),
+        {
+            "url": url,
+            "title": title,
+            "text": text,
+            "chunks": [
+                {
+                    "chunk_text": chunk_text,
+                    "chunk_index": 0,
+                    "section_title": None,
+                    "token_count": 1,
+                    "content_hash": url,
+                    "raw_text": chunk_text,
+                }
+            ],
+        },
+    )()
 
 
-def test_upload_russian_markdown_persists_language(
-    tenant: TestClient, db_session: Session
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="lang-ru@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Lang RU Tenant"},
-    )
-    md_content = (
-        "# Инструкция\n\n"
-        "Этот документ описывает, как клиенты могут сбросить пароль и включить "
-        "двухфакторную аутентификацию. Код подтверждения приходит по электронной почте."
-    ).encode("utf-8")
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("guide-ru.md", md_content, "text/markdown")},
-    )
-    assert response.status_code == 201
-    doc = db_session.query(Document).filter(Document.filename == "guide-ru.md").first()
-    assert doc is not None
-    assert doc.language == "ru"
-
-
-def test_upload_persists_detected_script(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """Document.script must be populated at parse time for KB script detection.
-
-    Uses a writing system the old two-bucket detector could not represent, so
-    the assertion cannot pass by accident.
-    """
-    token = register_and_verify_user(tenant, db_session, email="script@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Script Tenant"},
-    )
-    md_content = (
-        "# Οδηγός\n\n"
-        "Αυτό το έγγραφο εξηγεί πώς οι πελάτες μπορούν να επαναφέρουν τον κωδικό "
-        "πρόσβασης και να ενεργοποιήσουν την ταυτοποίηση δύο παραγόντων."
-    ).encode("utf-8")
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("odigos.md", md_content, "text/markdown")},
-    )
-    assert response.status_code == 201
-    doc = db_session.query(Document).filter(Document.filename == "odigos.md").first()
-    assert doc is not None
-    assert doc.script == "greek"
-
-
-def test_upload_swagger_success(tenant: TestClient, db_session: Session) -> None:
-    """Upload valid OpenAPI JSON, status=ready."""
-    token = register_and_verify_user(tenant, db_session, email="swagger@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Swagger Tenant"},
-    )
-    swagger_content = b'{"openapi":"3.0.0","info":{"title":"Test API","version":"1.0"},"paths":{"/test":{"get":{"description":"Test endpoint"}}}}'
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("api.json", swagger_content, "application/json")},
-    )
-    assert response.status_code == 201
-    data = response.json()
-    assert data["filename"] == "api.json"
-    assert data["file_type"] == "swagger"
-    assert data["status"] == "ready"
-
-
-def test_upload_swagger_yaml_success(tenant: TestClient, db_session: Session) -> None:
-    """Upload valid OpenAPI YAML, status=ready."""
-    token = register_and_verify_user(tenant, db_session, email="swagger-yaml@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Swagger YAML Tenant"},
-    )
-    swagger_content = b"""
+@pytest.mark.parametrize(
+    "filename, content, content_type, expected_file_type",
+    [
+        pytest.param("test.pdf", None, "application/pdf", "pdf", id="pdf"),
+        pytest.param(
+            "test.md",
+            b"# Test\n\nThis is a test document.",
+            "text/markdown",
+            "markdown",
+            id="markdown",
+        ),
+        pytest.param(
+            "api.json",
+            b'{"openapi":"3.0.0","info":{"title":"Test API","version":"1.0"},'
+            b'"paths":{"/test":{"get":{"description":"Test endpoint"}}}}',
+            "application/json",
+            "swagger",
+            id="swagger_json",
+        ),
+        pytest.param(
+            "api.yaml",
+            b"""
 openapi: 3.0.0
 info:
   title: YAML Test API
@@ -228,129 +154,170 @@ paths:
       responses:
         "201":
           description: Created
-"""
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("api.yaml", swagger_content, "application/yaml")},
+""",
+            "application/yaml",
+            "swagger",
+            id="swagger_yaml",
+        ),
+        pytest.param(
+            "report.docx",
+            None,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "docx",
+            id="docx",
+        ),
+        pytest.param(
+            "notes.txt",
+            b"This is a plain text document.\n\nIt has multiple paragraphs.",
+            "text/plain",
+            "plaintext",
+            id="txt",
+        ),
+    ],
+)
+def test_upload_various_file_types_succeeds(
+    tenant: TestClient,
+    db_session: Session,
+    filename: str,
+    content: bytes | None,
+    content_type: str,
+    expected_file_type: str,
+) -> None:
+    """Every supported file type must parse and report status=ready."""
+    if content is None:
+        content = _make_minimal_pdf() if filename.endswith(".pdf") else _make_minimal_docx()
+    token, _ = _create_tenant_and_token(
+        tenant, db_session, email=f"upload-{expected_file_type}@example.com"
     )
+    response = _upload(tenant, token, filename, content, content_type)
     assert response.status_code == 201
     data = response.json()
-    assert data["filename"] == "api.yaml"
-    assert data["file_type"] == "swagger"
+    assert data["filename"] == filename
+    assert data["file_type"] == expected_file_type
     assert data["status"] == "ready"
 
 
-def _make_minimal_docx() -> bytes:
-    """Create a minimal valid .docx file in memory for testing."""
-    import docx as docx_lib
+@pytest.mark.parametrize(
+    "filename, content, expected_language, expected_script",
+    [
+        pytest.param(
+            "guide.md",
+            (
+                b"# Onboarding Guide\n\n"
+                b"This document explains how customers can reset their password and enable "
+                b"two-factor authentication. The verification code is sent via email."
+            ),
+            "en",
+            None,
+            id="english",
+        ),
+        pytest.param(
+            "guide-ru.md",
+            (
+                "# Инструкция\n\n"
+                "Этот документ описывает, как клиенты могут сбросить пароль и включить "
+                "двухфакторную аутентификацию. Код подтверждения приходит по электронной почте."
+            ).encode("utf-8"),
+            "ru",
+            None,
+            id="russian",
+        ),
+        pytest.param(
+            "odigos.md",
+            (
+                "# Οδηγός\n\n"
+                "Αυτό το έγγραφο εξηγεί πώς οι πελάτες μπορούν να επαναφέρουν τον κωδικό "
+                "πρόσβασης και να ενεργοποιήσουν την ταυτοποίηση δύο παραγόντων."
+            ).encode("utf-8"),
+            None,
+            "greek",
+            id="greek_script",
+        ),
+    ],
+)
+def test_upload_persists_detected_language_and_script(
+    tenant: TestClient,
+    db_session: Session,
+    filename: str,
+    content: bytes,
+    expected_language: str | None,
+    expected_script: str | None,
+) -> None:
+    """Document.language/.script must be populated at parse time for cross-lingual
+    retrieval and KB script detection.
 
-    doc = docx_lib.Document()
-    doc.add_paragraph("Hello from docx test document.")
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
-
-def test_upload_docx_success(tenant: TestClient, db_session: Session) -> None:
-    """Upload .docx file, status=ready."""
-    token = register_and_verify_user(tenant, db_session, email="docx@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "DOCX Tenant"},
-    )
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("report.docx", _make_minimal_docx(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
-    )
+    The Greek case uses a writing system the old two-bucket detector could not
+    represent, so that assertion cannot pass by accident.
+    """
+    token, _ = _create_tenant_and_token(tenant, db_session, email=f"lang-{filename}@example.com")
+    response = _upload(tenant, token, filename, content, "text/markdown")
     assert response.status_code == 201
-    data = response.json()
-    assert data["filename"] == "report.docx"
-    assert data["file_type"] == "docx"
-    assert data["status"] == "ready"
+    doc = db_session.query(Document).filter(Document.filename == filename).first()
+    assert doc is not None
+    if expected_language is not None:
+        assert doc.language == expected_language
+    if expected_script is not None:
+        assert doc.script == expected_script
 
 
-def test_upload_txt_success(tenant: TestClient, db_session: Session) -> None:
-    """Upload .txt file, status=ready."""
-    token = register_and_verify_user(tenant, db_session, email="txt@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "TXT Tenant"},
+@pytest.mark.parametrize(
+    "with_tenant, with_auth, filename, content, content_type, expected_status, detail_substring",
+    [
+        pytest.param(
+            True, True, "virus.exe", b"MZ", "application/octet-stream", 400, "unsupported",
+            id="unsupported_type",
+        ),
+        pytest.param(
+            True, True, "huge.pdf", b"x" * (51 * 1024 * 1024), "application/pdf", 400, "too large",
+            id="too_large",
+        ),
+        pytest.param(
+            False, True, "test.md", b"# Test", "text/markdown", 404, "tenant",
+            id="no_client",
+        ),
+        pytest.param(
+            True, False, "test.md", b"# Test", "text/markdown", 401, None,
+            id="unauthenticated",
+        ),
+    ],
+)
+def test_upload_rejections(
+    tenant: TestClient,
+    db_session: Session,
+    with_tenant: bool,
+    with_auth: bool,
+    filename: str,
+    content: bytes,
+    content_type: str,
+    expected_status: int,
+    detail_substring: str | None,
+) -> None:
+    """Covers: unsupported extension, oversized file, missing tenant, missing auth."""
+    token = register_and_verify_user(
+        tenant, db_session, email=f"reject-{expected_status}-{filename}@example.com"
     )
-    txt_content = b"This is a plain text document.\n\nIt has multiple paragraphs."
+    if with_tenant:
+        tenant.post(
+            "/tenants",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": "Reject Tenant"},
+        )
+    headers = {"Authorization": f"Bearer {token}"} if with_auth else {}
     response = tenant.post(
         "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("notes.txt", txt_content, "text/plain")},
+        headers=headers,
+        files={"file": (filename, content, content_type)},
     )
-    assert response.status_code == 201
-    data = response.json()
-    assert data["filename"] == "notes.txt"
-    assert data["file_type"] == "plaintext"
-    assert data["status"] == "ready"
-
-
-def test_upload_unsupported_type(tenant: TestClient, db_session: Session) -> None:
-    """Upload .exe → 400."""
-    token = register_and_verify_user(tenant, db_session, email="exe@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Exe Tenant"},
-    )
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("virus.exe", b"MZ", "application/octet-stream")},
-    )
-    assert response.status_code == 400
-    assert "unsupported" in response.json()["detail"].lower()
-
-
-def test_upload_too_large(tenant: TestClient, db_session: Session) -> None:
-    """Upload >50MB file → 400."""
-    token = register_and_verify_user(tenant, db_session, email="large@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Large Tenant"},
-    )
-    # 51 MB
-    large_content = b"x" * (51 * 1024 * 1024)
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("huge.pdf", large_content, "application/pdf")},
-    )
-    assert response.status_code == 400
-    assert "too large" in response.json()["detail"].lower()
-
-
-def test_upload_no_client(tenant: TestClient, db_session: Session) -> None:
-    """Upload without creating tenant first → 404."""
-    token = register_and_verify_user(tenant, db_session, email="noclient@example.com")
-    md_content = b"# Test"
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("test.md", md_content, "text/markdown")},
-    )
-    assert response.status_code == 404
-    assert "tenant" in response.json()["detail"].lower()
+    assert response.status_code == expected_status
+    if detail_substring is not None:
+        assert detail_substring in response.json()["detail"].lower()
 
 
 def test_upload_document_limit_is_shared_capacity(tenant: TestClient, db_session: Session) -> None:
     """The tenant-wide document capacity should fill up and reject the next upload."""
-    token = register_and_verify_user(tenant, db_session, email="limit100@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Limit Tenant"},
+    token, tenant_id = _create_tenant_and_token(
+        tenant, db_session, email="limit100@example.com", name="Limit Tenant"
     )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     for index in range(KNOWLEDGE_DOCUMENT_CAPACITY):
         db_session.add(
@@ -364,42 +331,10 @@ def test_upload_document_limit_is_shared_capacity(tenant: TestClient, db_session
         )
     db_session.commit()
 
-    response = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("overflow.md", b"# Overflow", "text/markdown")},
-    )
+    response = _upload(tenant, token, "overflow.md", b"# Overflow", "text/markdown")
 
     assert response.status_code == 400
     assert response.json()["detail"] == f"Document limit reached (max {KNOWLEDGE_DOCUMENT_CAPACITY})"
-
-
-def test_upload_unauthenticated(tenant: TestClient) -> None:
-    """No JWT → 401."""
-    md_content = b"# Test"
-    response = tenant.post(
-        "/documents",
-        files={"file": ("test.md", md_content, "text/markdown")},
-    )
-    assert response.status_code == 401
-
-
-def test_list_documents_empty(tenant: TestClient, db_session: Session) -> None:
-    """Get documents when none uploaded → empty list."""
-    token = register_and_verify_user(tenant, db_session, email="empty@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Tenant"},
-    )
-    response = tenant.get(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert "documents" in data
-    assert data["documents"] == []
 
 
 def test_list_knowledge_sources_requires_client(tenant: TestClient, db_session: Session) -> None:
@@ -415,101 +350,74 @@ def test_list_knowledge_sources_requires_client(tenant: TestClient, db_session: 
     assert response.json()["detail"] == "Tenant not found"
 
 
-def test_list_documents(tenant: TestClient, db_session: Session) -> None:
-    """Upload 2 docs, get list → 2 items."""
-    token = register_and_verify_user(tenant, db_session, email="list@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "List Tenant"},
+def test_document_list_and_detail_journey(tenant: TestClient, db_session: Session) -> None:
+    """Covers: empty list, list after upload, detail retrieval, cross-user isolation."""
+    token_a, _ = _create_tenant_and_token(
+        tenant, db_session, email="doc-journey-a@example.com", name="Journey Tenant A"
     )
-    md1 = b"# Doc 1"
-    md2 = b"# Doc 2"
-    tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("doc1.md", md1, "text/markdown")},
+
+    empty = tenant.get("/documents", headers={"Authorization": f"Bearer {token_a}"})
+    assert empty.status_code == 200
+    assert empty.json()["documents"] == []
+
+    upload1 = _upload(
+        tenant,
+        token_a,
+        "doc1.md",
+        b"# Test\n\nThis is a test document with some content.",
+        "text/markdown",
     )
-    tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("doc2.md", md2, "text/markdown")},
-    )
-    response = tenant.get(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["documents"]) == 2
-    filenames = {d["filename"] for d in data["documents"]}
-    assert filenames == {"doc1.md", "doc2.md"}
+    _upload(tenant, token_a, "doc2.md", b"# Doc 2", "text/markdown")
+
+    listing = tenant.get("/documents", headers={"Authorization": f"Bearer {token_a}"})
+    assert listing.status_code == 200
+    listing_data = listing.json()
+    assert len(listing_data["documents"]) == 2
+    assert {d["filename"] for d in listing_data["documents"]} == {"doc1.md", "doc2.md"}
+
+    doc_id = upload1.json()["id"]
+    detail = tenant.get(f"/documents/{doc_id}", headers={"Authorization": f"Bearer {token_a}"})
+    assert detail.status_code == 200
+    detail_data = detail.json()
+    assert detail_data["id"] == str(doc_id)
+    assert detail_data["filename"] == "doc1.md"
+    assert "Test" in (detail_data["parsed_text"] or "")
+    assert "test document" in (detail_data["parsed_text"] or "")
+
+    token_b = register_and_verify_user(tenant, db_session, email="doc-journey-b@example.com")
+    cross_user = tenant.get(f"/documents/{doc_id}", headers={"Authorization": f"Bearer {token_b}"})
+    assert cross_user.status_code == 404
 
 
-def test_get_document_detail(tenant: TestClient, db_session: Session) -> None:
-    """Get single document, verify parsed_text preview."""
-    token = register_and_verify_user(tenant, db_session, email="detail@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Detail Tenant"},
+def test_delete_document_journey(tenant: TestClient, db_session: Session) -> None:
+    """Covers: wrong user cannot delete; owner delete succeeds and document is gone."""
+    token_a, _ = _create_tenant_and_token(
+        tenant, db_session, email="del-journey-a@example.com", name="Journey Tenant A"
     )
-    md_content = b"# Test\n\nThis is a test document with some content."
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("detail.md", md_content, "text/markdown")},
-    )
-    doc_id = upload_resp.json()["id"]
-    response = tenant.get(
-        f"/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["id"] == str(doc_id)
-    assert data["filename"] == "detail.md"
-    assert "parsed_text" in data
-    assert "Test" in (data["parsed_text"] or "")
-    assert "test document" in (data["parsed_text"] or "")
+    upload = _upload(tenant, token_a, "protected.md", b"# Protected", "text/markdown")
+    doc_id = upload.json()["id"]
+
+    token_b = register_and_verify_user(tenant, db_session, email="del-journey-b@example.com")
+    forbidden = tenant.delete(f"/documents/{doc_id}", headers={"Authorization": f"Bearer {token_b}"})
+    assert forbidden.status_code == 404
+
+    still_there = tenant.get(f"/documents/{doc_id}", headers={"Authorization": f"Bearer {token_a}"})
+    assert still_there.status_code == 200
+
+    deleted = tenant.delete(f"/documents/{doc_id}", headers={"Authorization": f"Bearer {token_a}"})
+    assert deleted.status_code == 204
+
+    gone = tenant.get(f"/documents/{doc_id}", headers={"Authorization": f"Bearer {token_a}"})
+    assert gone.status_code == 404
 
 
-def test_get_document_wrong_user(tenant: TestClient, db_session: Session) -> None:
-    """User B tries to get user A's document → 404."""
-    token_a = register_and_verify_user(tenant, db_session, email="userA@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "User A Tenant"},
-    )
-    md_content = b"# Secret"
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token_a}"},
-        files={"file": ("secret.md", md_content, "text/markdown")},
-    )
-    doc_id = upload_resp.json()["id"]
-
-    token_b = register_and_verify_user(tenant, db_session, email="userB@example.com")
-
-    response = tenant.get(
-        f"/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token_b}"},
-    )
-    assert response.status_code == 404
-
-
-def test_get_url_source_detail_returns_latest_five_runs(
+def test_get_url_source_detail_includes_runs_and_quick_answers(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """Source detail should return the five newest runs ordered in SQL."""
-    token = register_and_verify_user(tenant, db_session, email="source-runs@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Source Runs Tenant"},
+    """Source detail must return the five newest runs (SQL-ordered) and stored quick answers."""
+    token, tenant_id = _create_tenant_and_token(
+        tenant, db_session, email="source-detail@example.com", name="Source Detail Tenant"
     )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
         tenant_id=tenant_id,
@@ -518,8 +426,8 @@ def test_get_url_source_detail_returns_latest_five_runs(
         normalized_domain="docs.example.com",
         status=SourceStatus.ready,
         crawl_schedule=SourceSchedule.weekly,
-        pages_indexed=0,
-        chunks_created=0,
+        pages_indexed=1,
+        chunks_created=2,
         tokens_used=0,
         metadata_json={},
     )
@@ -539,6 +447,17 @@ def test_get_url_source_detail_returns_latest_five_runs(
         db_session.add(run)
         if index >= 2:
             expected_statuses.insert(0, run.status)
+
+    db_session.add(
+        QuickAnswer(
+            tenant_id=tenant_id,
+            source_id=source.id,
+            key="documentation_url",
+            value="https://docs.example.com/",
+            source_url="https://docs.example.com/",
+            metadata_json={"method": "source_url"},
+        )
+    )
     db_session.commit()
 
     response = tenant.get(
@@ -547,9 +466,18 @@ def test_get_url_source_detail_returns_latest_five_runs(
     )
 
     assert response.status_code == 200
-    recent_runs = response.json()["recent_runs"]
+    payload = response.json()
+    recent_runs = payload["recent_runs"]
     assert len(recent_runs) == 5
     assert [run["status"] for run in recent_runs] == expected_statuses
+    assert payload["quick_answers"] == [
+        {
+            "key": "documentation_url",
+            "value": "https://docs.example.com/",
+            "source_url": "https://docs.example.com/",
+            "detected_at": payload["quick_answers"][0]["detected_at"],
+        }
+    ]
 
 
 @patch("backend.auth.routes.send_email")
@@ -587,68 +515,11 @@ def test_delete_url_source_requires_verified_user(
     assert response.json()["detail"] == "Email not verified."
 
 
-def test_get_url_source_detail_includes_quick_answers(
-    tenant: TestClient, db_session: Session
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="source-qa@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Source QA Tenant"},
-    )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
-
-    source = UrlSource(
-        tenant_id=tenant_id,
-        name="Docs",
-        url="https://docs.example.com/",
-        normalized_domain="docs.example.com",
-        status=SourceStatus.ready,
-        crawl_schedule=SourceSchedule.weekly,
-        pages_indexed=1,
-        chunks_created=2,
-        tokens_used=0,
-        metadata_json={},
-    )
-    db_session.add(source)
-    db_session.flush()
-    db_session.add(
-        QuickAnswer(
-            tenant_id=tenant_id,
-            source_id=source.id,
-            key="documentation_url",
-            value="https://docs.example.com/",
-            source_url="https://docs.example.com/",
-            metadata_json={"method": "source_url"},
-        )
-    )
-    db_session.commit()
-
-    response = tenant.get(
-        f"/documents/sources/{source.id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["quick_answers"] == [
-        {
-            "key": "documentation_url",
-            "value": "https://docs.example.com/",
-            "source_url": "https://docs.example.com/",
-            "detected_at": payload["quick_answers"][0]["detected_at"],
-        }
-    ]
-
-
 def test_create_url_source_rejects_duplicate_normalized_domain(
     tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="source-dup@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Source Dup Tenant"},
+    token, _ = _create_tenant_and_token(
+        tenant, db_session, email="source-dup@example.com", name="Source Dup Tenant"
     )
 
     monkeypatch.setattr(
@@ -681,13 +552,9 @@ def test_create_url_source_rejects_duplicate_normalized_domain(
 def test_refresh_url_source_returns_429_inside_cooldown(
     tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="source-refresh@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Source Refresh Tenant"},
+    token, tenant_id = _create_tenant_and_token(
+        tenant, db_session, email="source-refresh@example.com", name="Source Refresh Tenant"
     )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
         tenant_id=tenant_id,
@@ -729,16 +596,11 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
     """URL pages should consume the same shared capacity pool as uploaded files."""
     from backend.documents import url_service
 
-    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
-    monkeypatch.setattr(db_session, "close", lambda: None)
+    _patch_crawl_session(monkeypatch, db_session, url_service)
 
-    token = register_and_verify_user(tenant, db_session, email="shared-capacity@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Shared Capacity Tenant"},
+    token, tenant_id = _create_tenant_and_token(
+        tenant, db_session, email="shared-capacity@example.com", name="Shared Capacity Tenant"
     )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     prefill_count = KNOWLEDGE_DOCUMENT_CAPACITY - 40
     for index in range(prefill_count):
@@ -773,12 +635,7 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
     monkeypatch.setattr(
         embedder_mod,
         "_extract_page",
-        lambda url, html: type("Page", (), {
-            "url": url,
-            "title": url.rsplit("/", 1)[-1],
-            "text": html,
-            "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
-        })(),
+        lambda url, html: _fake_extracted_page(url, url.rsplit("/", 1)[-1], html),
     )
     monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
@@ -802,16 +659,11 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     """Refresh should update existing source pages and only add new pages while capacity remains."""
     from backend.documents import url_service
 
-    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
-    monkeypatch.setattr(db_session, "close", lambda: None)
+    _patch_crawl_session(monkeypatch, db_session, url_service)
 
-    token = register_and_verify_user(tenant, db_session, email="refresh-capacity@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Refresh Capacity Tenant"},
+    token, tenant_id = _create_tenant_and_token(
+        tenant, db_session, email="refresh-capacity@example.com", name="Refresh Capacity Tenant"
     )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
         tenant_id=tenant_id,
@@ -858,12 +710,7 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     monkeypatch.setattr(
         embedder_mod,
         "_extract_page",
-        lambda url, html: type("Page", (), {
-            "url": url,
-            "title": url.rsplit("/", 1)[-1],
-            "text": f"updated {url}",
-            "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
-        })(),
+        lambda url, html: _fake_extracted_page(url, url.rsplit("/", 1)[-1], f"updated {url}"),
     )
     monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
@@ -881,68 +728,19 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     assert db_session.query(Document).filter(Document.tenant_id == tenant_id).count() == KNOWLEDGE_DOCUMENT_CAPACITY
 
 
-def test_delete_document_success(tenant: TestClient, db_session: Session) -> None:
-    """Delete document → 204, verify gone."""
-    token = register_and_verify_user(tenant, db_session, email="del@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Del Tenant"},
-    )
-    md_content = b"# To Delete"
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("todel.md", md_content, "text/markdown")},
-    )
-    doc_id = upload_resp.json()["id"]
+def test_delete_source_page_journey(
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Covers: successful delete persists an exclusion; deleting via the wrong
+    source 404s and leaves the page intact; a later crawl does not recreate a
+    manually excluded page."""
+    from backend.documents import url_service
 
-    response = tenant.delete(
-        f"/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
+    _patch_crawl_session(monkeypatch, db_session, url_service)
+
+    token, tenant_id = _create_tenant_and_token(
+        tenant, db_session, email="delete-source-page@example.com", name="Delete Source Page Tenant"
     )
-    assert response.status_code == 204
-
-    get_resp = tenant.get(
-        f"/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert get_resp.status_code == 404
-
-
-def test_delete_document_wrong_user(tenant: TestClient, db_session: Session) -> None:
-    """User B tries to delete user A's document → 404."""
-    token_a = register_and_verify_user(tenant, db_session, email="delA@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "User A Tenant"},
-    )
-    md_content = b"# Protected"
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token_a}"},
-        files={"file": ("protected.md", md_content, "text/markdown")},
-    )
-    doc_id = upload_resp.json()["id"]
-
-    token_b = register_and_verify_user(tenant, db_session, email="delB@example.com")
-
-    response = tenant.delete(
-        f"/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token_b}"},
-    )
-    assert response.status_code == 404
-
-
-def test_delete_source_page_success_persists_exclusion(tenant: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(tenant, db_session, email="delete-source-page@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Delete Source Page Tenant"},
-    )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
         tenant_id=tenant_id,
@@ -957,7 +755,19 @@ def test_delete_source_page_success_persists_exclusion(tenant: TestClient, db_se
         tokens_used=0,
         metadata_json={},
     )
-    db_session.add(source)
+    other_source = UrlSource(
+        tenant_id=tenant_id,
+        name="Docs Other",
+        url="https://docs.example.com/other",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add_all([source, other_source])
     db_session.flush()
 
     doc = Document(
@@ -972,20 +782,21 @@ def test_delete_source_page_success_persists_exclusion(tenant: TestClient, db_se
     db_session.add(doc)
     db_session.flush()
     db_session.add(
-        Embedding(
-            document_id=doc.id,
-            chunk_text="hello",
-            vector=_fake_embedding_vector(),
-            metadata_json={},
-        )
+        Embedding(document_id=doc.id, chunk_text="hello", vector=_fake_embedding_vector(), metadata_json={})
     )
     db_session.commit()
+
+    wrong_source_response = tenant.delete(
+        f"/documents/sources/{other_source.id}/pages/{doc.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert wrong_source_response.status_code == 404
+    assert db_session.query(Document).filter(Document.id == doc.id).first() is not None
 
     response = tenant.delete(
         f"/documents/sources/{source.id}/pages/{doc.id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-
     assert response.status_code == 204
     assert db_session.query(Document).filter(Document.id == doc.id).first() is None
     assert db_session.query(Embedding).filter(Embedding.document_id == doc.id).count() == 0
@@ -996,159 +807,24 @@ def test_delete_source_page_success_persists_exclusion(tenant: TestClient, db_se
     assert refreshed_source.chunks_created == 0
     assert refreshed_source.metadata_json["manually_excluded_page_urls"] == ["https://docs.example.com/start"]
 
-
-def test_delete_source_page_rejects_document_from_another_source(tenant: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(tenant, db_session, email="delete-source-page-wrong-source@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Delete Source Page Wrong Source Tenant"},
+    monkeypatch.setattr(
+        url_service, "_discover_urls", lambda root_url, exclusions, page_cap: ["https://docs.example.com/start"]
     )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
-
-    first_source = UrlSource(
-        tenant_id=tenant_id,
-        name="Docs A",
-        url="https://docs.example.com/a",
-        normalized_domain="docs.example.com",
-        status=SourceStatus.ready,
-        crawl_schedule=SourceSchedule.manual,
-        pages_indexed=1,
-        chunks_created=0,
-        tokens_used=0,
-        metadata_json={},
-    )
-    second_source = UrlSource(
-        tenant_id=tenant_id,
-        name="Docs B",
-        url="https://docs.example.com/b",
-        normalized_domain="docs.example.com",
-        status=SourceStatus.ready,
-        crawl_schedule=SourceSchedule.manual,
-        pages_indexed=0,
-        chunks_created=0,
-        tokens_used=0,
-        metadata_json={},
-    )
-    db_session.add_all([first_source, second_source])
-    db_session.flush()
-
-    doc = Document(
-        tenant_id=tenant_id,
-        source_id=first_source.id,
-        filename="Page A",
-        file_type=DocumentType.url,
-        status=DocumentStatus.ready,
-        parsed_text="A",
-        source_url="https://docs.example.com/a",
-    )
-    db_session.add(doc)
-    db_session.commit()
-
-    response = tenant.delete(
-        f"/documents/sources/{second_source.id}/pages/{doc.id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert response.status_code == 404
-    assert db_session.query(Document).filter(Document.id == doc.id).first() is not None
-
-
-def test_manually_deleted_source_page_is_not_recreated_on_refresh(
-    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from backend.documents import url_service
-
-    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
-    monkeypatch.setattr(db_session, "close", lambda: None)
-
-    token = register_and_verify_user(tenant, db_session, email="delete-source-page-refresh@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Delete Source Page Refresh Tenant"},
-    )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
-
-    source = UrlSource(
-        tenant_id=tenant_id,
-        name="Docs",
-        url="https://docs.example.com/start",
-        normalized_domain="docs.example.com",
-        status=SourceStatus.ready,
-        crawl_schedule=SourceSchedule.manual,
-        pages_found=1,
-        pages_indexed=1,
-        chunks_created=1,
-        tokens_used=0,
-        metadata_json={},
-    )
-    db_session.add(source)
-    db_session.flush()
-
-    doc = Document(
-        tenant_id=tenant_id,
-        source_id=source.id,
-        filename="Getting Started",
-        file_type=DocumentType.url,
-        status=DocumentStatus.ready,
-        parsed_text="hello",
-        source_url="https://docs.example.com/start",
-    )
-    db_session.add(doc)
-    db_session.flush()
-    db_session.add(
-        Embedding(
-            document_id=doc.id,
-            chunk_text="hello",
-            vector=_fake_embedding_vector(),
-            metadata_json={},
-        )
-    )
-    db_session.commit()
-
-    delete_response = tenant.delete(
-        f"/documents/sources/{source.id}/pages/{doc.id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert delete_response.status_code == 204
-
-    monkeypatch.setattr(url_service, "_discover_urls", lambda root_url, exclusions, page_cap: ["https://docs.example.com/start"])
     monkeypatch.setattr(http_client_mod, "_fetch_page_html", lambda url: "<html><body>start</body></html>")
     monkeypatch.setattr(
-        embedder_mod,
-        "_extract_page",
-        lambda url, html: type(
-            "Page",
-            (),
-            {
-                "url": url,
-                "title": "Start",
-                "text": "start",
-                "chunks": [
-                    {
-                        "chunk_text": "start",
-                        "chunk_index": 0,
-                        "section_title": None,
-                        "token_count": 1,
-                        "content_hash": url,
-                        "raw_text": html,
-                    }
-                ],
-            },
-        )(),
+        embedder_mod, "_extract_page", lambda url, html: _fake_extracted_page(url, "Start", "start")
     )
     monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
     url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()
 
-    refreshed_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()
+    recrawled_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()
     source_docs = db_session.query(Document).filter(Document.source_id == source.id).all()
 
-    assert refreshed_source is not None
-    assert refreshed_source.pages_indexed == 0
-    assert refreshed_source.pages_found == 0
+    assert recrawled_source is not None
+    assert recrawled_source.pages_indexed == 0
+    assert recrawled_source.pages_found == 0
     assert source_docs == []
 
 
@@ -1157,16 +833,11 @@ def test_crawl_url_source_detects_openapi_yaml_and_indexes_as_swagger(
 ) -> None:
     from backend.documents import url_service
 
-    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
-    monkeypatch.setattr(db_session, "close", lambda: None)
+    _patch_crawl_session(monkeypatch, db_session, url_service)
 
-    token = register_and_verify_user(tenant, db_session, email="openapi-url@example.com")
-    create_client_response = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "OpenAPI URL Tenant"},
+    token, tenant_id = _create_tenant_and_token(
+        tenant, db_session, email="openapi-url@example.com", name="OpenAPI URL Tenant"
     )
-    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
         tenant_id=tenant_id,

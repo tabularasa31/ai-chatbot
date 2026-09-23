@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.core.config import settings
+
 import uuid
 from unittest.mock import Mock
 
@@ -8,8 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.service import (
-    RetrievalContext,
     process_chat_message,
+)
+from backend.chat.types import (
+    RetrievalContext,
 )
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.models import Tenant, Document, DocumentStatus, DocumentType, Embedding
@@ -170,9 +174,8 @@ def test_faq_context_in_prompt(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.chat import service as chat_service
 
-    monkeypatch.setattr(chat_service.settings, "observability_capture_full_prompts", True)
+    monkeypatch.setattr(settings, "observability_capture_full_prompts", True)
 
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
@@ -442,7 +445,6 @@ def test_faq_direct_skips_retrieval_and_generation(
         db_session,
         api_key=api_key,
     )
-    assert outcome.chat_ended is False
     assert outcome.document_ids == []
     assert outcome.tokens_used == 0
     assert outcome.text == faq_answer
@@ -530,7 +532,9 @@ def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
 ) -> None:
     import asyncio
 
-    from backend.chat.handlers.rag import async_generate_answer
+    from backend.chat.handlers.rag import (
+        async_generate_answer,
+    )
 
     mock_openai_client.chat.completions.create.return_value.choices = [
         Mock(message=Mock(content="Answer from FAQ hint"))
@@ -570,7 +574,9 @@ def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
 
 class TestStripThoughtTags:
     def setup_method(self) -> None:
-        from backend.chat.handlers.rag import _strip_thought_tags
+        from backend.chat.streaming import (
+            _strip_thought_tags,
+        )
 
         self._strip = _strip_thought_tags
 

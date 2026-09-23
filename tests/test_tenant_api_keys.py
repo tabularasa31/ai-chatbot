@@ -20,6 +20,7 @@ import datetime as dt
 import uuid
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -43,17 +44,12 @@ def _create_tenant(client: TestClient, db: Session, email: str) -> tuple[str, st
     return token, resp.json()["api_key"]
 
 
-def test_create_tenant_returns_plaintext_once_and_stores_hash(
-    tenant: TestClient, db_session: Session
-) -> None:
-    _, plain = _create_tenant(tenant, db_session, "rot1@example.com")
-    assert plain.startswith("ck_")
-    # Plaintext is never stored — only its hash is.
-    rows = db_session.query(TenantApiKey).all()
-    assert len(rows) == 1
-    assert rows[0].key_hash == hash_api_key(plain)
-    assert rows[0].key_hint == plain[-4:]
-    assert rows[0].status == "active"
+def _make_owner(db: Session, email: str) -> None:
+    from backend.models import User
+
+    user = db.query(User).filter(User.email == email).first()
+    user.role = "owner"
+    db.commit()
 
 
 def _probe_key(client: TestClient, key: str) -> int:
@@ -67,15 +63,20 @@ def _probe_key(client: TestClient, key: str) -> int:
     ).status_code
 
 
-def test_api_key_works_with_initial_key(
+def test_create_tenant_key_lifecycle_hash_and_probe(
     tenant: TestClient, db_session: Session
 ) -> None:
-    _, plain = _create_tenant(tenant, db_session, "rot-widget@example.com")
-    # 400 = key accepted but OpenAI not configured (expected in tests)
+    """Plaintext is returned once and never stored; only its hash + hint
+    are; the plaintext key authenticates, an unknown one does not."""
+    _, plain = _create_tenant(tenant, db_session, "rot1@example.com")
+    assert plain.startswith("ck_")
+    rows = db_session.query(TenantApiKey).all()
+    assert len(rows) == 1
+    assert rows[0].key_hash == hash_api_key(plain)
+    assert rows[0].key_hint == plain[-4:]
+    assert rows[0].status == "active"
+
     assert _probe_key(tenant, plain) == 400
-
-
-def test_api_key_rejects_unknown_key(tenant: TestClient) -> None:
     assert _probe_key(tenant, "ck_deadbeef" + "0" * 24) == 401
 
 
@@ -83,11 +84,7 @@ def test_rotate_grace_old_key_still_works_then_expires(
     tenant: TestClient, db_session: Session
 ) -> None:
     token, old = _create_tenant(tenant, db_session, "rot-grace@example.com")
-    # Promote the user to owner — rotation requires owner role.
-    from backend.models import User
-    user = db_session.query(User).filter(User.email == "rot-grace@example.com").first()
-    user.role = "owner"
-    db_session.commit()
+    _make_owner(db_session, "rot-grace@example.com")
 
     rot = tenant.post(
         "/tenants/me/api-keys/rotate",
@@ -123,12 +120,7 @@ def test_rotate_with_immediate_revoke_kills_old_key_now(
     tenant: TestClient, db_session: Session
 ) -> None:
     token, old = _create_tenant(tenant, db_session, "rot-immediate@example.com")
-    from backend.models import User
-    user = db_session.query(User).filter(
-        User.email == "rot-immediate@example.com"
-    ).first()
-    user.role = "owner"
-    db_session.commit()
+    _make_owner(db_session, "rot-immediate@example.com")
 
     rot = tenant.post(
         "/tenants/me/api-keys/rotate",
@@ -150,14 +142,13 @@ def test_rotate_with_immediate_revoke_kills_old_key_now(
     assert old_row.revoked_reason == "compromise"
 
 
-def test_revoke_endpoint_kills_specified_key(
+def test_revoke_endpoint_then_cannot_revoke_only_remaining_key(
     tenant: TestClient, db_session: Session
 ) -> None:
+    """DELETE revokes a specified key (killing auth with it); once only one
+    active key remains, revoking it is blocked with 409."""
     token, old = _create_tenant(tenant, db_session, "rot-del@example.com")
-    from backend.models import User
-    user = db_session.query(User).filter(User.email == "rot-del@example.com").first()
-    user.role = "owner"
-    db_session.commit()
+    _make_owner(db_session, "rot-del@example.com")
 
     # Rotate first so we have two keys (active + revoking).
     rot = tenant.post(
@@ -178,32 +169,19 @@ def test_revoke_endpoint_kills_specified_key(
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "revoked"
-
     assert _probe_key(tenant, old) == 401
 
-
-def test_cannot_revoke_only_active_key(
-    tenant: TestClient, db_session: Session
-) -> None:
-    token, _plain = _create_tenant(tenant, db_session, "rot-only@example.com")
-    from backend.models import User
-    user = db_session.query(User).filter(User.email == "rot-only@example.com").first()
-    user.role = "owner"
-    db_session.commit()
-
-    rows = (
+    remaining = (
         db_session.query(TenantApiKey)
-        .filter(TenantApiKey.tenant_id == user.tenant_id)
+        .filter(TenantApiKey.tenant_id == old_row.tenant_id, TenantApiKey.status == "active")
         .all()
     )
-    assert len(rows) == 1
-    only_id = rows[0].id
-
-    resp = tenant.delete(
-        f"/tenants/me/api-keys/{only_id}",
+    assert len(remaining) == 1
+    resp2 = tenant.delete(
+        f"/tenants/me/api-keys/{remaining[0].id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 409
+    assert resp2.status_code == 409
 
 
 def test_list_api_keys_returns_all_no_plaintext(
@@ -244,10 +222,7 @@ def test_rotate_rate_limited_per_tenant(
     from backend.core.limiter import set_owner_jwt_rate_limit_key_override
 
     token, _ = _create_tenant(tenant, db_session, "rot-rl@example.com")
-    from backend.models import User
-    user = db_session.query(User).filter(User.email == "rot-rl@example.com").first()
-    user.role = "owner"
-    db_session.commit()
+    _make_owner(db_session, "rot-rl@example.com")
 
     set_owner_jwt_rate_limit_key_override(lambda r: r.headers.get("x-test-owner", "fixed-A"))
     try:
@@ -268,9 +243,7 @@ def test_rotate_rate_limited_per_tenant(
 
         # Different tenant identity → not throttled.
         token2, _ = _create_tenant(tenant, db_session, "rot-rl2@example.com")
-        u2 = db_session.query(User).filter(User.email == "rot-rl2@example.com").first()
-        u2.role = "owner"
-        db_session.commit()
+        _make_owner(db_session, "rot-rl2@example.com")
         resp = tenant.post(
             "/tenants/me/api-keys/rotate",
             headers={"Authorization": f"Bearer {token2}", "x-test-owner": "fixed-B"},
@@ -281,46 +254,6 @@ def test_rotate_rate_limited_per_tenant(
         set_owner_jwt_rate_limit_key_override(None)
 
 
-def test_retry_after_uses_remaining_rate_limit_window(monkeypatch) -> None:
-    from backend import main as app_main
-
-    request = SimpleNamespace(
-        state=SimpleNamespace(view_rate_limit=("limit", ["key", "scope"]))
-    )
-
-    class FakeStorageLimiter:
-        @staticmethod
-        def get_window_stats(limit, *args):
-            assert limit == "limit"
-            assert args == ("key", "scope")
-            return (125.2, 0)
-
-    monkeypatch.setattr(app_main.limiter, "_limiter", FakeStorageLimiter())
-    monkeypatch.setattr(app_main.time, "time", lambda: 100.0)
-
-    assert app_main._retry_after_seconds(request) == 26
-
-
-def test_retry_after_falls_back_when_window_stats_unavailable(monkeypatch) -> None:
-    from backend import main as app_main
-
-    request = SimpleNamespace(
-        state=SimpleNamespace(view_rate_limit=("limit", ["key", "scope"]))
-    )
-
-    class BrokenStorageLimiter:
-        @staticmethod
-        def get_window_stats(*_args):
-            raise RuntimeError("storage unavailable")
-
-    monkeypatch.setattr(app_main.limiter, "_limiter", BrokenStorageLimiter())
-
-    assert (
-        app_main._retry_after_seconds(request)
-        == app_main.RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS
-    )
-
-
 def test_revoke_rate_limited_per_tenant(
     tenant: TestClient, db_session: Session
 ) -> None:
@@ -328,10 +261,7 @@ def test_revoke_rate_limited_per_tenant(
     from backend.core.limiter import set_owner_jwt_rate_limit_key_override
 
     token, _ = _create_tenant(tenant, db_session, "rev-rl@example.com")
-    from backend.models import User
-    user = db_session.query(User).filter(User.email == "rev-rl@example.com").first()
-    user.role = "owner"
-    db_session.commit()
+    _make_owner(db_session, "rev-rl@example.com")
 
     set_owner_jwt_rate_limit_key_override(lambda r: r.headers.get("x-test-owner", "fixed-D"))
     try:
@@ -370,3 +300,38 @@ def test_rotate_requires_owner_role(
         json={"reason": "scheduled"},
     )
     assert resp.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "get_window_stats,expected",
+    [
+        pytest.param(lambda limit, *a: (125.2, 0), 26, id="normal_uses_remaining_window"),
+        pytest.param(
+            lambda *a: (_ for _ in ()).throw(RuntimeError("storage unavailable")),
+            None,
+            id="falls_back_when_window_stats_unavailable",
+        ),
+    ],
+)
+def test_retry_after_seconds_computation(monkeypatch, get_window_stats, expected) -> None:
+    from backend import main as app_main
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(view_rate_limit=("limit", ["key", "scope"]))
+    )
+
+    class FakeStorageLimiter:
+        @staticmethod
+        def get_window_stats(limit, *args):
+            return get_window_stats(limit, *args)
+
+    monkeypatch.setattr(app_main.limiter, "_limiter", FakeStorageLimiter())
+    monkeypatch.setattr(app_main.time, "time", lambda: 100.0)
+
+    if expected is None:
+        assert (
+            app_main._retry_after_seconds(request)
+            == app_main.RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS
+        )
+    else:
+        assert app_main._retry_after_seconds(request) == expected

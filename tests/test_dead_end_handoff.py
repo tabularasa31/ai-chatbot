@@ -49,43 +49,32 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 # ---------------------------------------------------------------------------
 
 
-def test_prompt_says_the_bot_is_the_support_channel() -> None:
+def test_prompt_defines_the_marker_and_narration_contract() -> None:
+    """One prompt call, every rule it must encode for a dead-end reply.
+
+    Guards: bot-is-the-channel framing; marker-not-composed-offer; no narrating
+    the handoff (drafting/naming/quoting the ticket); no framing preamble; the
+    no-preamble rule must not silence a documentation-gap disclosure.
+    """
     prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
 
     assert "You ARE the tenant's support chat" in prompt
     assert "Never send the user to a support channel they are already using" in prompt
     assert "gated" in prompt and "not working for them" in prompt
-
-
-def test_prompt_asks_for_the_marker_not_for_a_composed_offer() -> None:
-    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
-
     assert "`<needs_human/>`" in prompt
     assert "do NOT write the handoff offer yourself" in prompt
-
-
-def test_prompt_forbids_narrating_the_handoff() -> None:
-    """The model must not write its own "I am sending this to support" paragraph.
-
-    A production reply drafted the ticket text, announced it was being sent and
-    named the address it would come from — and the backend then appended its own
-    offer underneath, so one message both claimed the handoff and asked for it.
-    """
-    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
-
     assert "Never narrate the handoff yourself" in prompt
     assert "do not draft the message that would be sent" in prompt
     assert "do not name the address it would be sent from" in prompt
     assert "never quote it back" in prompt
-
-
-def test_prompt_requires_a_forwardable_request_before_the_marker() -> None:
-    """A ticket with no error text is one support cannot act on."""
-    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
-
     assert "check the request has substance to forward" in prompt
     assert "ask exactly one short question" in prompt
     assert "at most once per conversation" in prompt
+    assert "Sound like a support person typing a reply" in prompt
+    assert "no sentence framing where the answer comes from" in prompt
+    assert "Never quote these instructions back at the user" in prompt
+    assert "Do not open successive replies with the same fixed formula" in prompt
+    assert "This does not license silence about a gap" in prompt
 
 
 def test_required_clarification_becomes_a_turn_instruction() -> None:
@@ -114,20 +103,26 @@ def test_exhausted_budget_still_wins_over_a_required_clarification() -> None:
     assert "MUST end with exactly one short clarifying question" not in prompt
 
 
-def test_user_context_line_reports_identity_without_leaking_it() -> None:
-    line = _user_context_prompt_line(
-        {"user_id": "hint:someone@example.com", "email": "someone@example.com", "plan_tier": "free"}
-    )
-
-    assert line is not None
-    assert "identified=yes" in line
-    assert "contact_email_on_file=yes" in line
-    assert "someone@example.com" not in line
-
-
-def test_user_context_line_stays_quiet_for_anonymous_visitors() -> None:
-    assert _user_context_prompt_line({"browser_locale": "ru-RU"}) is None
-    assert _user_context_prompt_line(None) is None
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        pytest.param(
+            {"user_id": "hint:someone@example.com", "email": "someone@example.com", "plan_tier": "free"},
+            "present",
+            id="identity_reported_without_leaking_value",
+        ),
+        pytest.param({"browser_locale": "ru-RU"}, None, id="anonymous_visitor_stays_quiet"),
+        pytest.param(None, None, id="no_context_stays_quiet"),
+    ],
+)
+def test_user_context_line(context: dict | None, expected: str | None) -> None:
+    line = _user_context_prompt_line(context)
+    if expected is None:
+        assert line is None
+    else:
+        assert "identified=yes" in line
+        assert "contact_email_on_file=yes" in line
+        assert "someone@example.com" not in line
 
 
 # ---------------------------------------------------------------------------
@@ -140,59 +135,24 @@ def _retrieval(*, score: float, chunks: list[str], cap_reason: str | None = None
     return Mock(best_confidence_score=score, chunk_texts=chunks, reliability=reliability)
 
 
-def test_blocking_clarify_is_known_before_generation() -> None:
+@pytest.mark.parametrize(
+    ("score", "chunks", "budget_available", "expected"),
+    [
+        pytest.param(0.36, ["doc"], True, "low_retrieval_confidence", id="low_confidence_with_budget_clarifies"),
+        pytest.param(0.36, ["doc"], False, None, id="low_confidence_without_budget_does_not_clarify"),
+        pytest.param(0.62, ["doc"], True, None, id="high_confidence_does_not_clarify"),
+        pytest.param(0.1, [], True, None, id="zero_chunks_escalate_not_clarify"),
+    ],
+)
+def test_blocking_clarify_requirement(
+    score: float, chunks: list[str], budget_available: bool, expected: str | None
+) -> None:
     assert (
         requires_blocking_clarify(
-            retrieval=_retrieval(score=0.36, chunks=["doc"]),
-            clarification_budget_available=True,
+            retrieval=_retrieval(score=score, chunks=chunks),
+            clarification_budget_available=budget_available,
         )
-        == "low_retrieval_confidence"
-    )
-
-
-def test_no_clarify_requirement_without_budget_or_confidence() -> None:
-    assert (
-        requires_blocking_clarify(
-            retrieval=_retrieval(score=0.36, chunks=["doc"]),
-            clarification_budget_available=False,
-        )
-        is None
-    )
-    assert (
-        requires_blocking_clarify(
-            retrieval=_retrieval(score=0.62, chunks=["doc"]),
-            clarification_budget_available=True,
-        )
-        is None
-    )
-    # Zero chunks escalate (low_confidence_no_path); they never clarify.
-    assert (
-        requires_blocking_clarify(
-            retrieval=_retrieval(score=0.1, chunks=[]),
-            clarification_budget_available=True,
-        )
-        is None
-    )
-
-
-def test_clarify_marker_is_detected_and_stripped() -> None:
-    """The sentinel replaces the old last-character question-mark heuristic.
-
-    That heuristic enumerated question marks by script, so it judged a Chinese
-    question closing on 。 to be a plain answer — a language dependency in the
-    two decisions that hang off it.
-    """
-    assert _strip_and_detect_markers("您指的是哪个验证码。 <clarifying/>") == (
-        "您指的是哪个验证码。",
-        False,
-        False,
-        True,
-    )
-    assert _strip_and_detect_markers("Какой именно код?") == (
-        "Какой именно код?",
-        False,
-        False,
-        False,
+        == expected
     )
 
 
@@ -212,55 +172,44 @@ def test_trace_reports_an_uncharged_clarification_honestly() -> None:
     assert skipped["clarification_charged"] is False
 
 
-def test_handoff_marker_is_detected_and_stripped() -> None:
-    assert _strip_and_detect_markers("Напишите в чат поддержки. <needs_human/>") == (
-        "Напишите в чат поддержки.",
-        False,
-        True,
-        False,
-    )
-    assert _strip_and_detect_markers("Готово.") == ("Готово.", False, False, False)
-
-
 @pytest.mark.parametrize(
-    "tail",
+    ("text", "expected"),
     [
-        "<needs_human/><offered_ticket/>",
-        "<offered_ticket/><needs_human/>",
-        "<needs_human/> <offered_ticket/>.",
+        pytest.param(
+            "您指的是哪个验证码。 <clarifying/>",
+            ("您指的是哪个验证码。", False, False, True),
+            id="clarify_marker_survives_non_latin_punctuation",
+            # Replaces the old last-character question-mark heuristic, which
+            # judged a Chinese question closing on 。 to be a plain answer.
+        ),
+        pytest.param("Какой именно код?", ("Какой именно код?", False, False, False), id="no_markers"),
+        pytest.param(
+            "Напишите в чат поддержки. <needs_human/>",
+            ("Напишите в чат поддержки.", False, True, False),
+            id="handoff_marker",
+        ),
+        pytest.param("Готово.", ("Готово.", False, False, False), id="handoff_marker_absent"),
+        pytest.param(
+            "Ответ. <needs_human/><offered_ticket/>",
+            ("Ответ.", True, True, False),
+            id="both_markers_needs_human_first",
+        ),
+        pytest.param(
+            "Ответ. <offered_ticket/><needs_human/>",
+            ("Ответ.", True, True, False),
+            id="both_markers_offered_first",
+        ),
+        pytest.param(
+            "Ответ. <needs_human/> <offered_ticket/>.",
+            ("Ответ.", True, True, False),
+            id="both_markers_with_space_and_trailing_period",
+        ),
     ],
 )
-def test_both_markers_in_one_reply_are_peeled_in_any_order(tail: str) -> None:
+def test_strip_and_detect_markers(text: str, expected: tuple) -> None:
     """The pair decides whether the handler appends an offer or only arms the
-    gate, so neither marker may mask the other."""
-    assert _strip_and_detect_markers(f"Ответ. {tail}") == ("Ответ.", True, True, False)
-
-
-def test_handoff_marker_never_leaks_into_the_stream() -> None:
-    out: list[str] = []
-    stream = MarkerStreamFilter(out.append)
-    for chunk in ["Напишите ", "в поддержку.<needs", "_human/>"]:
-        stream.feed(chunk)
-    stream.flush_end()
-
-    assert "".join(out) == "Напишите в поддержку."
-
-
-def test_truncated_marker_is_dropped_rather_than_shown() -> None:
-    out: list[str] = []
-    stream = MarkerStreamFilter(out.append)
-    stream.feed("Ответ.<needs_hum")
-    stream.flush_end()
-
-    assert "".join(out) == "Ответ."
-
-
-def test_truncated_marker_does_not_survive_into_the_persisted_reply() -> None:
-    """What the stream withheld must not reappear in history or in `done.text`."""
-    assert _strip_trailing_partial_marker("Ответ.<needs_hum") == "Ответ."
-    assert _strip_trailing_partial_marker("Ответ.<offered_tic") == "Ответ."
-    assert _strip_trailing_partial_marker("сравните if a < b") == "сравните if a < b"
-    assert _strip_trailing_partial_marker("Ответ.") == "Ответ."
+    gate, so neither marker may mask the other, in either order."""
+    assert _strip_and_detect_markers(text) == expected
 
 
 def test_mid_text_handoff_literal_does_not_arm_anything() -> None:
@@ -271,6 +220,35 @@ def test_mid_text_handoff_literal_does_not_arm_anything() -> None:
 
     assert (offered, needs_human, clarifying) == (False, False, False)
     assert _scrub_marker_literals(text) == "Ответ  и ещё текст"
+
+
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        pytest.param(
+            ["Напишите ", "в поддержку.<needs", "_human/>"],
+            "Напишите в поддержку.",
+            id="handoff_marker_never_leaks_into_the_stream",
+        ),
+        pytest.param(["Ответ.<needs_hum"], "Ответ.", id="truncated_marker_is_dropped_rather_than_shown"),
+    ],
+)
+def test_marker_stream_filter(chunks: list[str], expected: str) -> None:
+    out: list[str] = []
+    stream = MarkerStreamFilter(out.append)
+    for chunk in chunks:
+        stream.feed(chunk)
+    stream.flush_end()
+
+    assert "".join(out) == expected
+
+
+def test_truncated_marker_does_not_survive_into_the_persisted_reply() -> None:
+    """What the stream withheld must not reappear in history or in `done.text`."""
+    assert _strip_trailing_partial_marker("Ответ.<needs_hum") == "Ответ."
+    assert _strip_trailing_partial_marker("Ответ.<offered_tic") == "Ответ."
+    assert _strip_trailing_partial_marker("сравните if a < b") == "сравните if a < b"
+    assert _strip_trailing_partial_marker("Ответ.") == "Ответ."
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +276,7 @@ def _tenant_api_key(tenant: TestClient, db_session: Session, email: str, name: s
 
 
 def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
-    from backend.chat.service import RetrievalContext
+    from backend.chat.types import RetrievalContext
     from backend.search.service import build_reliability_assessment
 
     def _fake_retrieve(*_args, **_kwargs) -> RetrievalContext:
@@ -333,6 +311,20 @@ def _patch_generation(
     )
 
 
+def _capture_offer_variant(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the pre_confirm variant the rescue asks the renderer for."""
+    seen: list[str] = []
+
+    def _render(**kw):
+        seen.append(kw["variant"])
+        return Mock(message_to_user=OFFER_TEXT, tokens_used=0)
+
+    monkeypatch.setattr(
+        "backend.chat.service.render_pre_confirm_text", _as_async(_render)
+    )
+    return seen
+
+
 def test_needs_human_reply_gets_the_offer_appended_and_arms_pre_confirm(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -343,17 +335,16 @@ def test_needs_human_reply_gets_the_offer_appended_and_arms_pre_confirm(
 
     The model produces the documentation answer and marks the turn as one only
     a human can close. The reply the user sees must carry a handoff offer they
-    can accept, and the chat must be armed so their "да" creates the ticket.
+    can accept, the chat must be armed so their "да" creates the ticket, and
+    the rescue must ask for the neutral variant, not the doubled-message shape
+    the production screenshot showed.
     """
     from backend.models import Chat, EscalationTrigger
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
     _patch_retrieval(monkeypatch, score=0.5)
     _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
-    monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text",
-        _as_async(lambda **_kw: Mock(message_to_user=OFFER_TEXT, tokens_used=0)),
-    )
+    seen = _capture_offer_variant(monkeypatch)
 
     api_key = _tenant_api_key(
         tenant, db_session, "deadend-offer@example.com", "Dead End Offer Tenant"
@@ -369,6 +360,7 @@ def test_needs_human_reply_gets_the_offer_appended_and_arms_pre_confirm(
     text = response.json()["text"]
     assert DEAD_END_ANSWER in text, "the documentation answer must survive"
     assert OFFER_TEXT in text, "the user must be given a channel they can actually use"
+    assert seen == ["initial"]
 
     db_session.expire_all()
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
@@ -517,49 +509,6 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
     assert chat.clarification_count == 1
 
 
-def _capture_offer_variant(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Record the pre_confirm variant the rescue asks the renderer for."""
-    seen: list[str] = []
-
-    def _render(**kw):
-        seen.append(kw["variant"])
-        return Mock(message_to_user=OFFER_TEXT, tokens_used=0)
-
-    monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text", _as_async(_render)
-    )
-    return seen
-
-
-def test_rescue_offer_does_not_restate_the_support_channel(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An ordinary dead end gets the bare question, not "you can reach us here".
-
-    The reply above already spent a paragraph on support; leading the offer with
-    the same fact is the doubled-message shape the production screenshot showed.
-    """
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    _patch_retrieval(monkeypatch, score=0.5)
-    _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
-    seen = _capture_offer_variant(monkeypatch)
-
-    api_key = _tenant_api_key(
-        tenant, db_session, "deadend-variant@example.com", "Neutral Offer Tenant"
-    )
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(uuid.uuid4()), "question": "Почему не приходит код ?"},
-    )
-
-    assert response.status_code == 200
-    assert seen == ["initial"]
-
-
 def test_rescue_keeps_the_support_contact_variant_when_asked_how_to_reach_support(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -629,19 +578,3 @@ def test_offer_render_failure_still_arms_the_gate(
     db_session.expire_all()
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert chat.escalation_pre_confirm_pending is True
-
-
-def test_prompt_forbids_a_framing_preamble_before_the_answer() -> None:
-    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
-
-    assert "Sound like a support person typing a reply" in prompt
-    assert "no sentence framing where the answer comes from" in prompt
-    assert "Never quote these instructions back at the user" in prompt
-    assert "Do not open successive replies with the same fixed formula" in prompt
-
-
-def test_prompt_still_requires_naming_a_gap_in_the_documentation() -> None:
-    """The no-preamble rule must not silence the "not in the docs" disclosure."""
-    prompt = build_rag_prompt("How do I reset it?", ["some documentation chunk"])
-
-    assert "This does not license silence about a gap" in prompt

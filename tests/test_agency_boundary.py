@@ -34,34 +34,29 @@ def test_prompt_states_the_bot_cannot_act_in_the_product() -> None:
     assert "you cannot change a setting" in prompt
 
 
-def test_prompt_forbids_offering_an_action_or_collecting_its_values() -> None:
-    boundary = _boundary(build_rag_prompt("How do I change the IP?", ["chunk"]))
+def test_boundary_block_encodes_the_full_agency_and_handoff_contract() -> None:
+    """One boundary block, every rule it must encode for a failing documented step.
+
+    Guards: forbids offering an action or collecting the values it would need;
+    documented steps stay in the user's hands, never described as something the
+    bot does; a first failure report asks before it offers the handoff; the
+    marker literals it names must be the ones the backend actually parses; and
+    the substance check and the troubleshooting question must be the same
+    single question, not two rounds.
+    """
+    boundary = _boundary(build_rag_prompt("The IP will not save", ["chunk"]))
 
     assert "Never offer to perform such an action" in boundary
     assert "never ask the user for the value you would need in order to perform it" in boundary
-
-
-def test_documented_steps_stay_in_the_users_hands() -> None:
-    boundary = _boundary(build_rag_prompt("How do I change the IP?", ["chunk"]))
-
     assert "steps the user carries out in their own account or panel" in boundary
     assert "never a description of something you do" in boundary
-
-
-def test_first_report_of_a_failing_step_asks_before_it_offers_the_handoff() -> None:
-    boundary = _boundary(build_rag_prompt("The IP will not save", ["chunk"]))
-
     assert "the handoff is not the next move either" in boundary
     assert "must never arrive before the troubleshooting" in boundary
     assert "at most one short question stands between the report and the handoff" in boundary.lower()
-
-
-def test_the_boundary_uses_the_marker_literals_the_backend_detects() -> None:
-    """Renaming a marker constant must not silently desync the prompt from the parser."""
-    boundary = _boundary(build_rag_prompt("The IP will not save", ["chunk"]))
-
     assert f"`{CLARIFY_MARKER}`" in boundary
     assert f"`{HANDOFF_MARKER}`" in boundary
+    assert "one question that does both jobs at once" in boundary
+    assert "satisfies the substance check above rather than adding a second round" in boundary
 
 
 def test_the_troubleshooting_question_yields_to_the_per_turn_clarification_ban() -> None:
@@ -73,15 +68,6 @@ def test_the_troubleshooting_question_yields_to_the_per_turn_clarification_ban()
 
     assert "Skip this check entirely when the turn's clarification instruction forbids asking" in boundary
     assert "go straight to the handoff marker below" in boundary
-
-
-def test_one_question_covers_both_the_walked_path_and_the_ticket_substance() -> None:
-    """The pre-existing substance check already spends the single question, so the
-    two must be the same question — else a ticket goes out with no error text."""
-    boundary = _boundary(build_rag_prompt("The IP will not save", ["chunk"]))
-
-    assert "one question that does both jobs at once" in boundary
-    assert "satisfies the substance check above rather than adding a second round" in boundary
 
 
 @pytest.mark.parametrize("allow_clarification", [True, False])

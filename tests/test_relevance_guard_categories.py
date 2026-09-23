@@ -23,7 +23,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.language import LocalizationResult
-from backend.chat.service import RetrievalContext, process_chat_message
+from backend.chat.types import (
+    RetrievalContext,
+)
+from backend.chat.service import (
+    process_chat_message,
+)
 from backend.faq.faq_matcher import FAQMatchResult
 from backend.guards.types import Verdict, VerdictReason
 from backend.models import Chat, Message, MessageRole, Tenant

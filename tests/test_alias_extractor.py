@@ -10,9 +10,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -186,7 +184,6 @@ def test_alias_confidence_increments(db_session, client_with_profile):
     from backend.jobs.alias_extractor import (
         AliasEntry,
         ALIAS_BASE_CONFIDENCE,
-        ALIAS_CONFIDENCE_INCREMENT,
         ALIAS_CONFIDENCE_MAX,
         _merge_aliases_into_profile,
     )

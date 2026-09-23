@@ -86,13 +86,6 @@ async def test_multi_hop_baseline(
     capsys: pytest.CaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Pin the flag off so the baseline numbers stay comparable across
-    # rollouts. The runtime default flipped to True in Step 6 (entity
-    # channel enabled globally) — without this pin the "baseline" test
-    # would silently start measuring the entity-on path instead.
-    monkeypatch.setattr(
-        "backend.core.config.settings.entity_overlap_enabled", False
-    )
     tenant_id = cast(uuid.UUID, indexed_corpus["tenant_id"])
     uuid_to_chunk_id: dict[uuid.UUID, str] = indexed_corpus["uuid_to_chunk_id"]
 
@@ -145,8 +138,8 @@ async def test_multi_hop_with_entity_overlap_channel(
     """Step 5 deliverable: rerun the same eval with the entity channel ON.
 
     Compares against the same numbers test_multi_hop_baseline produces.
-    The channel is gated by ``settings.entity_overlap_enabled``; the
-    baseline test runs with it OFF (default), this one flips it ON.
+    The entity channel is unconditional now (no config gate); the baseline
+    test measures it with real NER, this one stubs NER from ground truth.
 
     Both NER calls (query-side via extract_entities_from_query, chunk-side
     via extract_entities_from_passage) are stubbed from the dataset's
@@ -162,8 +155,6 @@ async def test_multi_hop_with_entity_overlap_channel(
     - multi_hop / brand_specific: already at recall@5 = 1.0 in baseline,
       so the bar is "hold steady".
     """
-    monkeypatch.setattr("backend.core.config.settings.entity_overlap_enabled", True)
-
     def stub_query_ner(query: str, _api_key, *, tenant_id=None, bot_id=None):  # noqa: ARG001
         return list(query_entities_lookup.get(query, []))
 

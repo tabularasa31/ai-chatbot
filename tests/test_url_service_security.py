@@ -18,7 +18,6 @@ from backend.documents import sitemap as sitemap_mod
 from backend.documents import url_service
 from backend.documents.parsers import build_openapi_ingestion_payload
 from backend.documents.schemas import (
-    SOURCE_TYPE_URL,
     UrlSourceCreateRequest,
     UrlSourceRunResponse,
     UrlSourceUpdateRequest,
@@ -34,6 +33,13 @@ from backend.models import (
     User,
     UrlSource,
 )
+
+
+def _make_tenant(db: Session, email: str, name: str = "Tenant"):
+    user = User(email=email, password_hash=hash_password("SecurePass1!"), is_verified=True)
+    db.add(user)
+    db.flush()
+    return create_tenant(user.id, name, db)
 
 
 def test_scan_html_for_quick_answers_detects_expected_fields() -> None:
@@ -87,23 +93,28 @@ def test_scan_html_for_quick_answers_prefers_support_mailto_when_multiple_exist(
     assert answers["support_email"].value == "help@example.com"
 
 
-def test_validate_public_hostname_rejects_private_ip() -> None:
+@pytest.mark.parametrize(
+    "hostname, fake_getaddrinfo",
+    [
+        pytest.param("127.0.0.1", None, id="private_ip_literal"),
+        pytest.param(
+            "internal.example.com",
+            lambda host, port, type=0: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))
+            ],
+            id="private_dns_resolution",
+        ),
+    ],
+)
+def test_validate_public_hostname_rejects_private_targets(
+    hostname: str, fake_getaddrinfo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SSRF guard: reject a literal private IP and a hostname that resolves to one."""
+    if fake_getaddrinfo is not None:
+        monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
+
     with pytest.raises(HTTPException) as exc_info:
-        http_client_mod._validate_public_hostname("127.0.0.1")
-
-    assert exc_info.value.status_code == 400
-    assert "not allowed" in str(exc_info.value.detail).lower()
-
-
-def test_validate_public_hostname_rejects_private_dns(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_getaddrinfo(host: str, port: int | None, type: int = 0):  # type: ignore[override]
-        assert host == "internal.example.com"
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
-
-    monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
-
-    with pytest.raises(HTTPException) as exc_info:
-        http_client_mod._validate_public_hostname("internal.example.com")
+        http_client_mod._validate_public_hostname(hostname)
 
     assert exc_info.value.status_code == 400
     assert "not allowed" in str(exc_info.value.detail).lower()
@@ -173,45 +184,49 @@ def test_fetch_reachable_page_returns_404_for_missing_page(
     assert "404" in str(exc_info.value.detail)
 
 
-def test_url_source_create_request_validates_http_url_and_schedule() -> None:
+def test_url_source_create_request_parses_valid_url_and_schedule() -> None:
     payload = UrlSourceCreateRequest(url="https://docs.example.com", schedule="manual")
 
     assert str(payload.url) == "https://docs.example.com/"
     assert payload.schedule == "manual"
 
+
+@pytest.mark.parametrize(
+    "model_cls, kwargs",
+    [
+        pytest.param(UrlSourceCreateRequest, {"url": "ftp://docs.example.com"}, id="non_http_scheme"),
+        pytest.param(
+            UrlSourceCreateRequest,
+            {"url": "https://docs.example.com", "schedule": "monthly"},
+            id="unsupported_schedule_create",
+        ),
+        pytest.param(UrlSourceUpdateRequest, {"schedule": "monthly"}, id="unsupported_schedule_update"),
+        pytest.param(
+            UrlSourceCreateRequest,
+            {"url": "https://docs.example.com", "exclusions": [f"/docs/{i}" for i in range(51)]},
+            id="too_many_exclusions_create",
+        ),
+        pytest.param(
+            UrlSourceUpdateRequest,
+            {"exclusions": [f"/docs/{i}" for i in range(51)]},
+            id="too_many_exclusions_update",
+        ),
+        pytest.param(
+            UrlSourceCreateRequest,
+            {"url": "https://docs.example.com", "exclusions": ["/" + ("a" * 255)]},
+            id="too_long_exclusion_create",
+        ),
+        pytest.param(
+            UrlSourceUpdateRequest,
+            {"exclusions": ["/" + ("a" * 255)]},
+            id="too_long_exclusion_update",
+        ),
+    ],
+)
+def test_url_source_request_rejects_invalid_input(model_cls, kwargs: dict) -> None:
+    """Covers: non-HTTP scheme, unsupported schedule, too many/too long exclusions."""
     with pytest.raises(Exception):
-        UrlSourceCreateRequest(url="ftp://docs.example.com", schedule="weekly")
-
-    with pytest.raises(Exception):
-        UrlSourceCreateRequest(url="https://docs.example.com", schedule="monthly")
-
-
-def test_url_source_update_request_accepts_only_supported_schedules() -> None:
-    payload = UrlSourceUpdateRequest(schedule="daily")
-    assert payload.schedule == "daily"
-
-    with pytest.raises(Exception):
-        UrlSourceUpdateRequest(schedule="monthly")
-
-
-def test_url_source_request_rejects_too_many_exclusions() -> None:
-    exclusions = [f"/docs/{index}" for index in range(51)]
-
-    with pytest.raises(Exception):
-        UrlSourceCreateRequest(url="https://docs.example.com", exclusions=exclusions)
-
-    with pytest.raises(Exception):
-        UrlSourceUpdateRequest(exclusions=exclusions)
-
-
-def test_url_source_request_rejects_too_long_exclusion() -> None:
-    too_long = "/" + ("a" * 255)
-
-    with pytest.raises(Exception):
-        UrlSourceCreateRequest(url="https://docs.example.com", exclusions=[too_long])
-
-    with pytest.raises(Exception):
-        UrlSourceUpdateRequest(exclusions=[too_long])
+        model_cls(**kwargs)
 
 
 def test_url_source_run_response_uses_typed_failed_urls() -> None:
@@ -400,43 +415,34 @@ def test_fetch_page_html_accepts_markdown_response(monkeypatch: pytest.MonkeyPat
     assert http_client_mod._fetch_page_html("https://docs.example.com/guide") == markdown
 
 
-def test_summarize_crawl_failure_prefers_fetch_and_format_message() -> None:
-    assert (
-        url_service._summarize_crawl_failure(
-            [
-                {"url": "https://docs.example.com/a", "reason": "Could not fetch HTML"},
-                {"url": "https://docs.example.com/b", "reason": "Could not fetch HTML"},
-                {"url": "https://docs.example.com/c", "reason": "No readable content extracted"},
-            ]
-        )
-        == "Indexing failed — most pages could not be fetched or returned an unsupported format."
-    )
-
-
-def test_summarize_crawl_failure_prefers_readable_content_message() -> None:
-    assert (
-        url_service._summarize_crawl_failure(
-            [
-                {"url": "https://docs.example.com/a", "reason": "No readable content extracted"},
-                {"url": "https://docs.example.com/b", "reason": "No readable content extracted"},
-                {"url": "https://docs.example.com/c", "reason": "Could not fetch HTML"},
-            ]
-        )
-        == "Indexing failed — most pages did not contain readable content."
-    )
+@pytest.mark.parametrize(
+    "reasons, expected_message",
+    [
+        pytest.param(
+            ["Could not fetch HTML", "Could not fetch HTML", "No readable content extracted"],
+            "Indexing failed — most pages could not be fetched or returned an unsupported format.",
+            id="fetch_and_format_dominant",
+        ),
+        pytest.param(
+            ["No readable content extracted", "No readable content extracted", "Could not fetch HTML"],
+            "Indexing failed — most pages did not contain readable content.",
+            id="readable_content_dominant",
+        ),
+    ],
+)
+def test_summarize_crawl_failure_prioritizes_dominant_reason(
+    reasons: list[str], expected_message: str
+) -> None:
+    failures = [
+        {"url": f"https://docs.example.com/{i}", "reason": reason} for i, reason in enumerate(reasons)
+    ]
+    assert url_service._summarize_crawl_failure(failures) == expected_message
 
 
 def test_upsert_page_document_skips_reembedding_when_hash_matches(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    user = User(
-        email="hash-check@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=True,
-    )
-    db_session.add(user)
-    db_session.flush()
-    tenant, _ = create_tenant(user.id, "Tenant", db_session)
+    tenant, _ = _make_tenant(db_session, "hash-check@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -503,14 +509,7 @@ def test_upsert_page_document_persists_detected_script(
     Uses a writing system the old two-bucket detector could not represent, so
     the assertion cannot pass by accident.
     """
-    user = User(
-        email="page-script@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=True,
-    )
-    db_session.add(user)
-    db_session.flush()
-    tenant, _ = create_tenant(user.id, "Tenant", db_session)
+    tenant, _ = _make_tenant(db_session, "page-script@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -559,14 +558,7 @@ def test_upsert_structured_document_persists_detected_script(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Document.script must be written on the structured-source path too."""
-    user = User(
-        email="structured-script@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=True,
-    )
-    db_session.add(user)
-    db_session.flush()
-    tenant, _ = create_tenant(user.id, "Tenant", db_session)
+    tenant, _ = _make_tenant(db_session, "structured-script@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -628,14 +620,7 @@ def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
 
     monkeypatch.setattr(embedder_mod, "_run_tenant_knowledge_extraction_best_effort", capture_extraction)
 
-    user = User(
-        email="hash-extract-env@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=True,
-    )
-    db_session.add(user)
-    db_session.flush()
-    tenant, _ = create_tenant(user.id, "Tenant", db_session)
+    tenant, _ = _make_tenant(db_session, "hash-extract-env@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -700,14 +685,7 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
     engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = Session(bind=engine)
-    user = User(
-        email="fail-check@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=True,
-    )
-    session.add(user)
-    session.flush()
-    tenant, _ = create_tenant(user.id, "Tenant", session)
+    tenant, _ = _make_tenant(session, "fail-check@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -757,15 +735,7 @@ def test_crawl_url_source_persists_quick_answers(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    user = User(
-        email="quickanswers@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=True,
-    )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    tenant, _ = create_tenant(user.id, "Quick Answers Tenant", db_session)
+    tenant, _ = _make_tenant(db_session, "quickanswers@example.com", "Quick Answers Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -840,21 +810,10 @@ def test_crawl_url_source_persists_quick_answers(
     assert "free trial" in by_key["trial_info"].lower()
 
 
-def test_url_source_response_constant_exposed() -> None:
-    assert SOURCE_TYPE_URL == "url"
-
-
 def test_upsert_structured_document_skips_reembedding_when_hash_matches(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    user = User(
-        email="structured-hash@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=True,
-    )
-    db_session.add(user)
-    db_session.flush()
-    tenant, _ = create_tenant(user.id, "Tenant", db_session)
+    tenant, _ = _make_tenant(db_session, "structured-hash@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -960,14 +919,7 @@ def test_crawl_url_source_marks_error_for_invalid_structured_openapi_payload(
     engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = Session(bind=engine)
-    user = User(
-        email="invalid-structured@example.com",
-        password_hash=hash_password("SecurePass1!"),
-        is_verified=True,
-    )
-    session.add(user)
-    session.flush()
-    tenant, _ = create_tenant(user.id, "Tenant", session)
+    tenant, _ = _make_tenant(session, "invalid-structured@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,

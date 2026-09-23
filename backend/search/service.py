@@ -100,7 +100,6 @@ LOW_RELIABILITY_SCORE_THRESHOLD = 0.45
 WEAK_RECALL_RESULT_COUNT_THRESHOLD = 2
 CONTRADICTION_DATE_KEYS: tuple[str, ...] = ("effective_date",)
 CONTRADICTION_VERSION_KEYS: tuple[str, ...] = ("version", "revision")
-CONTRADICTION_ADJUDICATION_SETTINGS_KEY = "contradiction_adjudication"
 CONTRADICTION_ADJUDICATION_FACT_LIMIT_SKIP_REASON = "fact_limit"
 
 
@@ -418,7 +417,6 @@ def _build_contradiction_adjudication_projection_fields(
 ) -> dict[str, object]:
     """Derive observability-only adjudication metrics (prefer shadow run over canonical evidence)."""
     defaults = {
-        "contradiction_adjudication_enabled": False,
         "contradiction_adjudication_applied_to_any_fact": False,
         "contradiction_adjudication_status": "disabled",
         "contradiction_adjudication_candidate_count": 0,
@@ -432,7 +430,6 @@ def _build_contradiction_adjudication_projection_fields(
 
     if observability is not None:
         return {
-            "contradiction_adjudication_enabled": observability.enabled,
             "contradiction_adjudication_applied_to_any_fact": observability.applied_to_any_fact,
             "contradiction_adjudication_status": observability.status,
             "contradiction_adjudication_candidate_count": observability.candidate_count,
@@ -453,9 +450,6 @@ def _build_contradiction_adjudication_projection_fields(
         return defaults
 
     return {
-        "contradiction_adjudication_enabled": bool(
-            adjudication_payload.get("enabled", False)
-        ),
         "contradiction_adjudication_applied_to_any_fact": bool(
             adjudication_payload.get("applied_to_any_fact", False)
         ),
@@ -668,29 +662,6 @@ def detect_metadata_contradictions(
     return tuple(contradiction_pairs)
 
 
-def _tenant_contradiction_adjudication_enabled(tenant: Tenant | None) -> bool:
-    """Resolve per-tenant contradiction adjudication override from JSON settings.
-
-    Default is ``True`` when the setting is absent or malformed: a tenant only
-    opts out by explicitly setting
-    ``settings.retrieval.contradiction_adjudication.enabled = false``.
-    The whole tenant-level gate is scheduled for removal — see the settings
-    audit task — but until then this default keeps adjudication on for every
-    tenant without manual JSON edits.
-    """
-    if tenant is None or not isinstance(tenant.settings, dict):
-        return True
-    retrieval_settings = tenant.settings.get("retrieval")
-    if not isinstance(retrieval_settings, dict):
-        return True
-    contradiction_settings = retrieval_settings.get(
-        CONTRADICTION_ADJUDICATION_SETTINGS_KEY
-    )
-    if not isinstance(contradiction_settings, dict):
-        return True
-    return contradiction_settings.get("enabled") is not False
-
-
 def _candidate_preview_text(embedding: Embedding) -> str:
     """Return one stable preview source for contradiction adjudication."""
     return embedding.chunk_text or ""
@@ -717,7 +688,6 @@ def _build_contradiction_adjudication_evidence(
     *,
     contradiction_pairs: tuple[ContradictionPair, ...],
     final_results: list[tuple[Embedding, float]],
-    tenant: Tenant | None,
     api_key: str | None,
 ) -> tuple[ContradictionAdjudicationEvidence | None, ContradictionAdjudicationRun]:
     """
@@ -737,22 +707,6 @@ def _build_contradiction_adjudication_evidence(
             enabled=False,
             status="skipped_no_candidates",
             candidate_count=0,
-            model=model,
-        )
-
-    if not settings.contradiction_adjudication_enabled:
-        return None, build_contradiction_adjudication_run(
-            enabled=False,
-            status="skipped_global_config",
-            candidate_count=candidate_count,
-            model=model,
-        )
-
-    if not _tenant_contradiction_adjudication_enabled(tenant):
-        return None, build_contradiction_adjudication_run(
-            enabled=False,
-            status="skipped_client_setting",
-            candidate_count=candidate_count,
             model=model,
         )
 
@@ -859,10 +813,8 @@ def _adjudication_suppresses_contradiction_cap(
     item returned `verdict == "rejected"`. Any other state — `confirmed`,
     `inconclusive`, `error`, `skip_reason`, mixed verdicts, partial coverage where
     some facts were not sent, or a `failed_open`/non-completed run — leaves the
-    deterministic cap untouched. The global flag must be on.
+    deterministic cap untouched.
     """
-    if not settings.contradiction_adjudication_filter_cap_enabled:
-        return False
     if contradiction_adjudication is None:
         return False
     run = contradiction_adjudication.run
@@ -1506,8 +1458,8 @@ def reciprocal_rank_fusion(
     surfaced it. ``entity_results`` is keyword-only because three
     same-typed positional ranked lists are easy to mix up at call sites;
     keeping it named makes the third-channel intent obvious. ``None``
-    (the default) means "skip the entity channel entirely" — when
-    ``settings.entity_overlap_enabled`` is off the caller passes None
+    (the default) means "skip the entity channel entirely" — when the
+    tenant has no entity index or no API key the caller passes None
     and we degrade to the two-channel formula with zero added cost.
     """
     scores: dict[uuid.UUID, float] = {}
@@ -2730,9 +2682,7 @@ async def _async_run_candidate_stage(
     # NER runs concurrently in the default executor (thread pool).
     ner_task: asyncio.Task[list[str]] | None = None
     loop = asyncio.get_running_loop()
-    if settings.entity_overlap_enabled and api_key and await _async_tenant_has_embeddings(
-        tenant_id, db
-    ):
+    if api_key and await _async_tenant_has_embeddings(tenant_id, db):
         ner_task = loop.run_in_executor(
             None,
             lambda: extract_entities_from_query(query, api_key, tenant_id=str(tenant_id)),
@@ -2986,12 +2936,6 @@ async def _async_run_quality_stage(
     source_overlap_detected, source_overlap_pairs = detect_source_overlaps(final_results)
     contradiction_pairs = detect_metadata_contradictions(final_results, source_overlap_pairs)
 
-    client_row: Tenant | None = None
-    if settings.contradiction_adjudication_enabled:
-        stmt = select(Tenant).filter(Tenant.id == tenant_id)
-        result = await db.execute(stmt)
-        client_row = result.scalars().first()
-
     # adjudicate_contradictions is sync (LLM call) — run in executor to avoid
     # blocking the event loop. The helper itself is CPU-light; the OpenAI call
     # inside uses the sync client, which is fine in a thread context.
@@ -3001,7 +2945,6 @@ async def _async_run_quality_stage(
         lambda: _build_contradiction_adjudication_evidence(
             contradiction_pairs=contradiction_pairs,
             final_results=final_results,
-            tenant=client_row,
             api_key=api_key,
         ),
     )

@@ -14,10 +14,9 @@ Covers acceptance criteria from spec:
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,7 +25,6 @@ from backend.models import (
     Tenant,
     LogAnalysisState,
     Message,
-    MessageEmbedding,
     MessageRole,
     TenantFaq,
     User,

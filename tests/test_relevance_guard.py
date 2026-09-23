@@ -8,7 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import RetrievalContext, process_chat_message
+from backend.chat.types import (
+    RetrievalContext,
+)
+from backend.chat.service import (
+    process_chat_message,
+)
 from backend.guards.reject_response import (
     RejectReason,
     _build_canonical_reject_response,
@@ -80,8 +85,6 @@ def test_injection_rejects_before_rag(
         db_session,
         api_key=api_key,
     )
-
-    assert outcome.chat_ended is False
     assert outcome.document_ids == []
     assert outcome.tokens_used == 0
     expected = _build_canonical_reject_response(
@@ -152,7 +155,6 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
         db_session,
         api_key=api_key,
     )
-    assert outcome.chat_ended is False
     assert outcome.text == "OK"
     assert outcome.document_ids  # some document ids exist
 
@@ -211,7 +213,6 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
         db_session,
         api_key=api_key,
     )
-    assert outcome.chat_ended is False
     assert outcome.document_ids == []
     assert outcome.tokens_used == 0
     assert outcome.text.startswith("Sorry")

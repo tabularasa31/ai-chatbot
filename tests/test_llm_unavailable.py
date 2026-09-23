@@ -50,69 +50,80 @@ def _response(status: int) -> httpx.Response:
 # -- classifier ---------------------------------------------------------------
 
 
-def test_classify_timeout_is_retryable_provider_timeout() -> None:
-    fs = classify_llm_failure(APITimeoutError(_request()))
-    assert fs.type is LlmFailureType.provider_timeout
-    assert fs.retryable is True
-
-
-def test_classify_connection_error_is_retryable_provider_unavailable() -> None:
-    fs = classify_llm_failure(APIConnectionError(request=_request()))
-    assert fs.type is LlmFailureType.provider_unavailable
-    assert fs.retryable is True
-
-
-def test_classify_internal_server_error_is_retryable_provider_unavailable() -> None:
-    fs = classify_llm_failure(
-        InternalServerError("boom", response=_response(500), body=None)
-    )
-    assert fs.type is LlmFailureType.provider_unavailable
-    assert fs.retryable is True
-
-
-def test_classify_rate_limit_is_retryable() -> None:
-    exc = RateLimitError("slow down", response=_response(429), body=None)
+@pytest.mark.parametrize(
+    ("exc", "expected_type", "expected_retryable"),
+    [
+        pytest.param(
+            APITimeoutError(_request()),
+            LlmFailureType.provider_timeout,
+            True,
+            id="timeout",
+        ),
+        pytest.param(
+            APIConnectionError(request=_request()),
+            LlmFailureType.provider_unavailable,
+            True,
+            id="connection_error",
+        ),
+        pytest.param(
+            InternalServerError("boom", response=_response(500), body=None),
+            LlmFailureType.provider_unavailable,
+            True,
+            id="internal_server_error",
+        ),
+        pytest.param(
+            RateLimitError("slow down", response=_response(429), body=None),
+            LlmFailureType.rate_limited,
+            True,
+            id="rate_limit",
+        ),
+        pytest.param(
+            # AC4: quota exhausted disables retry.
+            RateLimitError(
+                "you exceeded your current quota",
+                response=_response(429),
+                body={"error": {"code": "insufficient_quota"}},
+            ),
+            LlmFailureType.quota_exhausted,
+            False,
+            id="quota_exhausted",
+        ),
+        pytest.param(
+            AuthenticationError("bad key", response=_response(401), body=None),
+            LlmFailureType.invalid_api_key,
+            False,
+            id="invalid_api_key",
+        ),
+        pytest.param(
+            PermissionDeniedError("forbidden", response=_response(403), body=None),
+            LlmFailureType.invalid_api_key,
+            False,
+            id="permission_denied_is_invalid_api_key",
+        ),
+    ],
+)
+def test_classify_llm_failure(exc, expected_type, expected_retryable: bool) -> None:
     fs = classify_llm_failure(exc)
-    assert fs.type is LlmFailureType.rate_limited
-    assert fs.retryable is True
-
-
-def test_classify_quota_exhausted_is_not_retryable() -> None:
-    """AC4: quota exhausted disables retry."""
-    exc = RateLimitError(
-        "you exceeded your current quota",
-        response=_response(429),
-        body={"error": {"code": "insufficient_quota"}},
-    )
-    fs = classify_llm_failure(exc)
-    assert fs.type is LlmFailureType.quota_exhausted
-    assert fs.retryable is False
-
-
-def test_classify_invalid_api_key_is_not_retryable() -> None:
-    exc = AuthenticationError("bad key", response=_response(401), body=None)
-    fs = classify_llm_failure(exc)
-    assert fs.type is LlmFailureType.invalid_api_key
-    assert fs.retryable is False
-
-
-def test_classify_permission_denied_is_invalid_api_key() -> None:
-    exc = PermissionDeniedError("forbidden", response=_response(403), body=None)
-    fs = classify_llm_failure(exc)
-    assert fs.type is LlmFailureType.invalid_api_key
-    assert fs.retryable is False
+    assert fs.type is expected_type
+    assert fs.retryable is expected_retryable
 
 
 # -- copy table ---------------------------------------------------------------
 
 
-def test_fallback_text_english_retryable() -> None:
-    assert "try again" in fallback_text(language="en", retryable=True).lower()
-
-
-def test_fallback_text_russian_not_retryable() -> None:
-    text = fallback_text(language="ru", retryable=False)
-    assert "поддержку" in text.lower()
+@pytest.mark.parametrize(
+    ("language", "retryable", "check"),
+    [
+        pytest.param(
+            "en", True, lambda t: "try again" in t.lower(), id="english_retryable"
+        ),
+        pytest.param(
+            "ru", False, lambda t: "поддержку" in t.lower(), id="russian_not_retryable"
+        ),
+    ],
+)
+def test_fallback_text(language: str, retryable: bool, check) -> None:
+    assert check(fallback_text(language=language, retryable=retryable))
 
 
 def test_fallback_text_unknown_language_falls_back_to_english() -> None:

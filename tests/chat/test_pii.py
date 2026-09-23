@@ -19,23 +19,31 @@ def test_redact_email():
     assert redact_text("contact support@company.co.uk") == "contact [EMAIL]"
 
 
-def test_redact_phone_ru():
-    assert "[PHONE]" in redact_text("звони на +7 (999) 123-45-67")
-    assert "[PHONE]" in redact_text("мой номер 8-999-123-45-67")
-    assert "[PHONE]" in redact_text("+79991234567")
-
-
-def test_redact_phone_international():
-    assert "[PHONE]" in redact_text("call me at +1-800-555-0100")
-
-
-def test_redact_api_keys():
-    assert "[API_KEY]" in redact_text(
-        "my key is sk-abc123XYZ789verylongkeyhere1234"
-    )
-    assert "[API_KEY]" in redact_text(
-        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc123"
-    )
+@pytest.mark.parametrize(
+    "text,marker",
+    [
+        ("звони на +7 (999) 123-45-67", "[PHONE]"),
+        ("мой номер 8-999-123-45-67", "[PHONE]"),
+        ("+79991234567", "[PHONE]"),
+        ("call me at +1-800-555-0100", "[PHONE]"),
+        ("my key is sk-abc123XYZ789verylongkeyhere1234", "[API_KEY]"),
+        ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc123", "[API_KEY]"),
+        ("https://example.com/reset?token=abc123456", "[URL_TOKEN]"),
+        ("connecting from 192.168.1.10", "[IP]"),
+    ],
+    ids=[
+        "phone-ru-spaced",
+        "phone-ru-dashed",
+        "phone-ru-e164",
+        "phone-international",
+        "api-key-sk-prefix",
+        "api-key-bearer-jwt",
+        "url-token",
+        "ip",
+    ],
+)
+def test_redact_text_detects_entity(text, marker):
+    assert marker in redact_text(text)
 
 
 def test_redact_credit_cards_with_luhn():
@@ -69,26 +77,6 @@ def test_card_next_to_another_number_is_still_masked(text):
     assert "4111" not in result
 
 
-def test_redact_url_token():
-    assert "[URL_TOKEN]" in redact_text(
-        "https://example.com/reset?token=abc123456"
-    )
-
-
-def test_plain_url_is_left_alone():
-    text = "see https://example.com/docs for details"
-    assert redact_text(text) == text
-
-
-def test_ip_redaction_skips_invalid_octets():
-    text = "release 1.2.3.4 and invalid ip 999.999.999.999"
-    assert redact_text(text) == text
-
-
-def test_redact_ip():
-    assert redact_text("connecting from 192.168.1.10") == "connecting from [IP]"
-
-
 def test_redaction_result_contains_entity_counts():
     result = redact("mail me at test@email.com and backup@email.com")
     assert result.was_redacted is True
@@ -115,8 +103,11 @@ def test_an_entity_inside_another_match_does_not_split_the_mask():
     assert "79161234567" not in result
 
 
-def test_ordinary_support_text_is_untouched():
-    for text in [
+@pytest.mark.parametrize(
+    "text",
+    [
+        "see https://example.com/docs for details",
+        "release 1.2.3.4 and invalid ip 999.999.999.999",
         "My order number is 100234567, when will it ship?",
         "I get error code ERR5012 when saving",
         "Ticket ESC-2024-0198 was closed",
@@ -124,16 +115,28 @@ def test_ordinary_support_text_is_untouched():
         "Build 20240115 crashed on startup",
         "SKU 987654321 out of stock",
         "how do I reset my password?",
-    ]:
-        assert redact_text(text) == text
-
-
-def test_labelled_secrets_are_out_of_scope():
-    """Out of scope by design — catching these would need a language-specific label."""
-    for text in [
         "my password is Hunter22",
         "mein Passwort ist Hunter22",
         "паспорт 4510 123456",
         "инн 7707083893",
-    ]:
-        assert redact_text(text) == text
+    ],
+    ids=[
+        "plain-url",
+        "invalid-ip-octets",
+        "order-number",
+        "error-code",
+        "ticket-id",
+        "rate-limit-number",
+        "build-number",
+        "sku",
+        "benign-question",
+        "labelled-secret-en",
+        "labelled-secret-de",
+        "labelled-secret-ru-passport",
+        "labelled-secret-ru-inn",
+    ],
+)
+def test_redact_text_is_a_noop_for_non_pii(text):
+    """Out-of-scope inputs (plain URLs, business identifiers, labelled secrets
+    that would need a language-specific label to catch) pass through unchanged."""
+    assert redact_text(text) == text

@@ -94,6 +94,13 @@ def _say(db: Session, chat: Chat, role: MessageRole, content: str, **kwargs) -> 
 
 _ticket_seq = iter(range(1000, 100000))
 
+_WRITE_ROUTES = (
+    ("take", None),
+    ("messages", {"text": "hi"}),
+    ("release", None),
+    ("resolve", {}),
+)
+
 
 def _ticket(
     db: Session,
@@ -351,12 +358,7 @@ def test_a_member_without_a_seat_reads_but_cannot_act(
     assert tenant.get("/operator/inbox/summary", headers=ws.auth).status_code == 200
     assert tenant.get(f"/operator/sessions/{chat.session_id}", headers=ws.auth).status_code == 200
 
-    for path, payload in (
-        ("take", None),
-        ("messages", {"text": "hi"}),
-        ("release", None),
-        ("resolve", {}),
-    ):
+    for path, payload in _WRITE_ROUTES:
         resp = tenant.post(f"/operator/chats/{chat.id}/{path}", headers=ws.auth, json=payload)
         assert resp.status_code == 403, (path, resp.text)
 
@@ -745,12 +747,7 @@ def test_a_foreign_session_or_chat_is_unreachable(
 
     assert tenant.get("/operator/inbox?scope=all", headers=mine.auth).json()["items"] == []
     assert tenant.get(f"/operator/sessions/{chat.session_id}", headers=mine.auth).status_code == 404
-    for path, payload in (
-        ("take", None),
-        ("messages", {"text": "hi"}),
-        ("release", None),
-        ("resolve", {}),
-    ):
+    for path, payload in _WRITE_ROUTES:
         resp = tenant.post(f"/operator/chats/{chat.id}/{path}", headers=mine.auth, json=payload)
         assert resp.status_code == 404, (path, resp.text)
 

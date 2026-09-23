@@ -149,12 +149,6 @@ async def _get_reference_embeddings_async(api_key: str) -> list[list[float]]:
     return _reference_embeddings
 
 
-def _reset_reference_embeddings() -> None:
-    """For testing only — clear cached reference embeddings."""
-    global _reference_embeddings
-    _reference_embeddings = None
-
-
 # ---------------------------------------------------------------------------
 # Circuit breaker for the semantic (embedding-backed) level
 # ---------------------------------------------------------------------------
@@ -238,12 +232,6 @@ def _record_semantic_success(api_key: str) -> None:
         _cb_states.pop(_cb_key(api_key), None)
 
 
-def _reset_circuit_breaker() -> None:
-    """For testing only — clear all breaker state."""
-    with _cb_lock:
-        _cb_states.clear()
-
-
 def _passthrough_result(normalized: str) -> InjectionDetectionResult:
     """Level-2 non-detection result (open circuit or timeout/error)."""
     return InjectionDetectionResult(
@@ -300,7 +288,10 @@ async def _semantic_cache_get(
 ) -> InjectionDetectionResult | None:
     from backend.core import redis as redis_mod
 
-    raw = await redis_mod.cache_get(key)
+    try:
+        raw = await redis_mod.cache_get(key)
+    except Exception:
+        return None
     if raw is None:
         return None
     try:
@@ -332,9 +323,12 @@ async def _semantic_cache_set(key: str, result: InjectionDetectionResult) -> Non
     from backend.core import redis as redis_mod
 
     payload = json.dumps({"d": result.detected, "s": result.score})
-    await redis_mod.cache_set_with_ttl(
-        key, payload, settings.guard_semantic_cache_ttl_seconds
-    )
+    try:
+        await redis_mod.cache_set_with_ttl(
+            key, payload, settings.guard_semantic_cache_ttl_seconds
+        )
+    except Exception:
+        pass
 
 
 async def async_detect_injection_semantic(
@@ -384,7 +378,8 @@ async def async_detect_injection_semantic(
         )
         ref_embeddings = await _get_reference_embeddings_async(api_key)
         max_score = max(
-            cosine_similarity(embedding, ref) for ref in ref_embeddings
+            (cosine_similarity(embedding, ref) for ref in ref_embeddings),
+            default=0.0,
         )
         _record_semantic_success(api_key)
         if _score_detects(max_score):
@@ -469,9 +464,9 @@ async def async_detect_injection(
     """Two-level injection detection. Returns a :class:`Verdict`.
 
     Level 1 (structural) runs first, is CPU-bound and executes synchronously
-    (~0 ms); if it triggers, level 2 is skipped. Level 2 (semantic) is gated
-    by INJECTION_SEMANTIC_ENABLED and uses ``async_detect_injection_semantic``
-    so the event loop is not blocked during the embedding HTTP call.
+    (~0 ms); if it triggers, level 2 is skipped. Level 2 (semantic) uses
+    ``async_detect_injection_semantic`` so the event loop is not blocked
+    during the embedding HTTP call.
 
     When ``chat_id`` is given (a real chat turn), the verdict is recorded to
     ``guard_events`` with the level-2 cache-hit flag. Internal callers without
@@ -497,30 +492,29 @@ async def async_detect_injection(
         return _finalize_injection(result, tenant_id, chat_id, _start)
 
     # Level 2: async semantic (~50-100 ms)
-    if settings.injection_semantic_enabled:
-        _l2_start = perf_counter()
-        result = await async_detect_injection_semantic(
-            text, result.normalized_input, api_key=api_key, tenant_id=tenant_id,
+    _l2_start = perf_counter()
+    result = await async_detect_injection_semantic(
+        text, result.normalized_input, api_key=api_key, tenant_id=tenant_id,
+    )
+    _l2_ms = round((perf_counter() - _l2_start) * 1000, 2)
+    if trace is not None:
+        _l2_span = trace.span(
+            name="injection_l2",
+            input={"question_preview": text[:80]},
         )
-        _l2_ms = round((perf_counter() - _l2_start) * 1000, 2)
-        if trace is not None:
-            _l2_span = trace.span(
-                name="injection_l2",
-                input={"question_preview": text[:80]},
-            )
-            _l2_span.end(
-                output={"detected": result.detected, "score": result.score},
-                metadata={
-                    "duration_ms": _l2_ms,
-                    "method": "semantic",
-                    "cache_hit": result.cache_hit,
-                    "threshold": result.threshold,
-                    "seeds_hash": result.seeds_hash,
-                },
-            )
-            record_stage_ms(trace, "injection_guard_ms", _l2_ms)
-        if result.detected:
-            _log_detection(tenant_id, result)
+        _l2_span.end(
+            output={"detected": result.detected, "score": result.score},
+            metadata={
+                "duration_ms": _l2_ms,
+                "method": "semantic",
+                "cache_hit": result.cache_hit,
+                "threshold": result.threshold,
+                "seeds_hash": result.seeds_hash,
+            },
+        )
+        record_stage_ms(trace, "injection_guard_ms", _l2_ms)
+    if result.detected:
+        _log_detection(tenant_id, result)
 
     return _finalize_injection(result, tenant_id, chat_id, _start)
 

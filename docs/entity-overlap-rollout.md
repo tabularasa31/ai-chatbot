@@ -20,10 +20,7 @@ End-state per the epic: lifts retrieval recall on multi-hop / brand-specific / e
 
 Single env var, both for Railway and local:
 
-```bash
-ENTITY_OVERLAP_ENABLED=false   # disable everywhere — no deploy needed
-ENTITY_OVERLAP_ENABLED=true    # default; explicit set for clarity
-```
+The channel is always on; there is no configuration toggle.
 
 When `false`, `_run_candidate_stage` skips the entity NER and entity-overlap search entirely; RRF degrades to today's two-channel formula at zero added cost. No code change, no migration.
 
@@ -53,7 +50,7 @@ Each tile below: **what it shows**, **what "healthy" looks like**, **what to do 
 **Healthy:** roughly equal to the chat-turn volume in the same period (every successful chat retrieval should fire one event when the flag is on). A non-trivial number means the channel is actually executing.
 
 **Drift signals:**
-- **Number = 0** → either no traffic, the kill switch was flipped (`ENTITY_OVERLAP_ENABLED=false`), or the deploy hasn't picked up the flag yet. Cross-check with chat-turn volume on the main observability dashboard.
+- **Number = 0** → no traffic. Cross-check with chat-turn volume on the main observability dashboard.
 - **Number ≪ chat turns** → most chats are skipping the channel. Most likely cause: `api_key` was None at retrieval time (no per-tenant OpenAI key). Check `client.openai_api_key` decryption errors in logs.
 
 ---
@@ -189,19 +186,14 @@ The `>= baseline` floors per category are pinned in the test — any future chan
 
 ## Rolling back if something goes wrong
 
-1. Set `ENTITY_OVERLAP_ENABLED=false` in Railway env vars. Effect: instant, no deploy needed.
-2. Restart the backend service so the new env value is picked up by the running workers.
-3. Verify in PostHog that `entity_overlap.channel_used` event volume drops to zero.
-4. Open an issue with: PostHog dashboard link, Langfuse trace IDs of failing queries, the change that introduced the regression.
-
-The chat hot path has graceful fallback at every layer — even with the flag on and NER hard-failing, retrieval still serves results from dense + BM25. So a "rollback" is rarely time-critical, but the kill switch exists for when it is.
+There is no kill switch: the channel is always on, and the chat hot path has graceful fallback at every layer — even with NER hard-failing, retrieval still serves results from dense + BM25. A regression is rolled back by reverting the change.
 
 ## Future: per-tenant rollout
 
-When the first pilot client lands and we want to flip the channel **only for them** before a wider rollout, follow the `_tenant_contradiction_adjudication_enabled` precedent in `backend/search/service.py` (~line 667):
+When the first pilot client lands and we want to flip the channel **only for them** before a wider rollout, add a tenant-level gate (the former `_tenant_contradiction_adjudication_enabled` in `backend/search/service.py` was the precedent before it was removed):
 
 1. Add `_tenant_entity_overlap_enabled(tenant: Tenant | None) -> bool` reading `tenant.settings["retrieval"]["entity_overlap"]["enabled"]`.
-2. Gate the `if settings.entity_overlap_enabled` block in `_run_candidate_stage` with an additional `and _tenant_entity_overlap_enabled(tenant)` check. This requires loading the `Tenant` row in `_run_candidate_stage` (currently only `tenant_id` is threaded through).
+2. Gate the NER task in `_run_candidate_stage` with an `if _tenant_entity_overlap_enabled(tenant)` check. This requires loading the `Tenant` row in `_run_candidate_stage` (currently only `tenant_id` is threaded through).
 3. Decide opt-in vs opt-out semantics:
    - **Opt-in** (mirrors `contradiction_adjudication`): default tenant flag = False. Channel only runs for explicitly-enrolled tenants. Use this if there's any concern about NER cost or quality on production tenants we haven't profiled.
    - **Opt-out**: default tenant flag = True. Channel runs everywhere unless a specific tenant turned it off. Use this if the multi-hop eval delta is large enough that running by default is the safer choice.

@@ -23,9 +23,16 @@ from backend.chat.answer_cache import (
     CachedAnswer,
     normalize_question,
 )
-from backend.chat.handlers.rag import RagHandler
+from backend.chat.handlers.rag import (
+    RagHandler,
+)
 from backend.chat.language import ResolvedLanguageContext
-from backend.chat.service import RetrievalContext, process_chat_message
+from backend.chat.types import (
+    RetrievalContext,
+)
+from backend.chat.service import (
+    process_chat_message,
+)
 from backend.chat.steps import answer_cache as cache_steps
 from backend.chat.types import ChatPipelineResult, PipelineRun
 from backend.core import redis as redis_mod
@@ -533,19 +540,37 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
     async def _no_rewrite(*_args, **_kwargs):
         return None
 
+    def _unit_vector_for(text: str) -> list[float]:
+        rng = random.Random(normalize_question(text))
+        raw = [rng.gauss(0.0, 1.0) for _ in range(1536)]
+        norm = sum(v * v for v in raw) ** 0.5
+        return [v / norm for v in raw]
+
     async def _embed(texts: list[str], **_kwargs) -> list[list[float]]:
         # Text-dependent vectors: the shared mock returns one constant vector
         # for every input, which would make every question a semantic hit.
         counters["embed"] += 1
-        vectors = []
-        for text in texts:
-            rng = random.Random(normalize_question(text))
-            raw = [rng.gauss(0.0, 1.0) for _ in range(1536)]
-            norm = sum(v * v for v in raw) ** 0.5
-            vectors.append([v / norm for v in raw])
-        return vectors
+        return [_unit_vector_for(text) for text in texts]
+
+    async def _guard_embed_query(text: str, **_kwargs) -> list[float]:
+        # Level 2 injection guard is unconditional now — give it text-dependent
+        # vectors too, or every question would score as an identical (and
+        # therefore "detected") match against the reference seed embeddings.
+        return _unit_vector_for(text)
+
+    async def _guard_embed_queries(texts: list[str], **_kwargs) -> list[list[float]]:
+        return [_unit_vector_for(text) for text in texts]
 
     monkeypatch.setattr("backend.chat.service.async_embed_queries", _embed)
+    monkeypatch.setattr(
+        "backend.guards.injection_detector.async_embed_query", _guard_embed_query
+    )
+    monkeypatch.setattr(
+        "backend.guards.injection_detector.async_embed_queries", _guard_embed_queries
+    )
+    # Force the lazily-cached seed embeddings to recompute with the patched
+    # embedder above instead of reusing whatever another test cached first.
+    monkeypatch.setattr("backend.guards.injection_detector._reference_embeddings", None)
     monkeypatch.setattr("backend.chat.handlers.rag.async_generate_answer", _generate)
     monkeypatch.setattr("backend.chat.service.async_retrieve_context", _retrieve)
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
@@ -642,43 +667,20 @@ def test_repeated_question_is_served_from_cache_without_openai(
     assert "answer-cache" in trace.spans
 
 
-def test_knowledge_base_or_bot_change_invalidates_cached_answer(
+def test_knowledge_base_or_agent_layer_change_invalidates_cached_answer(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     fake_redis: dict[str, str],
 ) -> None:
+    """The fingerprint must hash every input that can change the answer:
+    - a new document indexed for the tenant
+    - the preset text changing in code (the effective agent layer)
+    - the bot's custom_instructions changing
+    Each must invalidate the cache and force a fresh generation.
+    """
     cl_row, api_key = _create_client(tenant, db_session, email="answer-cache-kb@example.com")
-    _insert_single_chunk(db_session, tenant_id=cl_row.id)
-    counters = _patch_pipeline_fakes(monkeypatch, answer="Answer")
-    bot = db_session.query(Bot).filter(Bot.tenant_id == cl_row.id).first()
-
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 1
-
-    _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="New doc")
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 2
-
-    bot.custom_instructions = "Answer only in bullet points."
-    db_session.commit()
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 3
-
-
-def test_preset_or_custom_instructions_change_invalidates_cached_answer(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-    fake_redis: dict[str, str],
-) -> None:
-    """The fingerprint must hash the *effective* agent layer: a preset text
-    change in code, or a tenant's custom_instructions change, both need to
-    invalidate cached answers."""
-    cl_row, api_key = _create_client(tenant, db_session, email="answer-cache-preset@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
     counters = _patch_pipeline_fakes(monkeypatch, answer="Answer")
     bot = db_session.query(Bot).filter(Bot.tenant_id == cl_row.id).first()
@@ -689,16 +691,20 @@ def test_preset_or_custom_instructions_change_invalidates_cached_answer(
     _ask(cl_row, api_key, db_session, bot_id=bot.id)
     assert counters["generate"] == 1
 
+    _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="New doc")
+    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    assert counters["generate"] == 2
+
     import backend.chat.presets as presets_module
 
     monkeypatch.setitem(presets_module.PRESETS, "support_agent", "Replaced preset text.")
     _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 2
+    assert counters["generate"] == 3
 
-    bot.custom_instructions = "Always mention the trial period."
+    bot.custom_instructions = "Answer only in bullet points."
     db_session.commit()
     _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    assert counters["generate"] == 3
+    assert counters["generate"] == 4
 
 
 def test_language_switch_does_not_serve_cached_answer(
@@ -753,7 +759,9 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
     _ask(cl_row, api_key, db_session, user_context=identified)
     _ask(cl_row, api_key, db_session, "Reset the password for john.doe@example.com please")
     assert cache_lookups() == 0
-    assert fake_redis == {}
+    # No answer-cache key was written (the injection guard's own semantic
+    # verdict cache is unrelated and may still populate `fake_redis`).
+    assert not any(key.startswith("cache:answer:") for key in fake_redis)
     assert db_session.query(AnswerCacheEntry).count() == 0
 
     # Anonymous first turn is cached; the identified visitor still gets a fresh answer.

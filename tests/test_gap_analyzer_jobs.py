@@ -29,8 +29,6 @@ from backend.models import (
     DocumentType,
     Embedding,
     GapAnalyzerJob,
-    GapCluster,
-    GapClusterStatus,
     Tenant,
     User,
 )

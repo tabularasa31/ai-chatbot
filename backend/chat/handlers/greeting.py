@@ -152,8 +152,10 @@ class GreetingHandler(PipelineHandler):
     ) -> ChatTurnOutcome:
         # Lazy import: service.py imports the router at module load, so importing
         # the persistence helpers at module top would create a cycle.
-        from backend.chat.service import (
+        from backend.chat.persistence import (
             _persist_assistant_message_with_response_language,
+        )
+        from backend.chat.service import (
             _persist_turn_with_response_language,
         )
 
@@ -197,7 +199,6 @@ class GreetingHandler(PipelineHandler):
                     "source": "greeting" if is_bootstrap else "greeting_social",
                 },
                 metadata={
-                    "chat_ended": False,
                     "escalated": False,
                     "greeting": True,
                     "greeting_kind": "bootstrap" if is_bootstrap else "social",
@@ -208,5 +209,4 @@ class GreetingHandler(PipelineHandler):
             text=greeting.text,
             document_ids=[],
             tokens_used=greeting.tokens_used,
-            chat_ended=False,
         )

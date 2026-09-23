@@ -15,14 +15,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.chat.decision import (
     MAX_CLARIFICATIONS_PER_SESSION,
-    Decision,  # noqa: F401  (re-export for type hints in callers)
 )
+
+# Looked up late as ``service.<name>`` by chat handlers and steps to break the
+# service <-> handlers import cycle; not dead imports.
 from backend.chat.events import (
-    _emit_chat_completed_event,  # noqa: F401  (re-export)
-    _emit_chat_escalated_event,  # noqa: F401  (re-export — handlers access via _svc.*)
-    _emit_chat_session_ended_event,  # noqa: F401  (re-export)
-    _emit_chat_turn_event,  # noqa: F401  (re-export)
-    _session_duration_ms,  # noqa: F401  (re-export)
+    _emit_chat_escalated_event,
+    _emit_chat_turn_event,
 )
 from backend.chat.handlers import (
     ChatTurnOutcome,
@@ -30,121 +29,125 @@ from backend.chat.handlers import (
     HandlerRouter,
     default_router,
 )
-from backend.chat.handlers.rag import (
-    ChatPipelineResult,
-    RetrievalContext,
-    _async_lookup_quick_answers,  # noqa: F401  (re-export for monkeypatch)
-    _classify_kb_confidence,
-    _emit_quick_answer_lookup_event,
-    _lookup_quick_answers,
-    _metrics_distinct_id,
-    _quick_answer_keys_for_question,
-    _quick_answer_quality_score,
-    _quick_answers_context,
-    _strip_thought_tags,
-    _user_context_prompt_line,
-    async_retrieve_context,
-    async_run_chat_pipeline,
-    build_rag_messages,
-    build_rag_prompt,
-)
-from backend.chat.history_service import (
-    PREVIEW_MAX_LEN,  # noqa: F401  (re-export)
-    SessionSummary,  # noqa: F401  (re-export for test imports)
-    get_chat_history,  # noqa: F401  (re-export for test imports)
-    get_session_logs,  # noqa: F401  (re-export for test imports)
-    list_chat_sessions,  # noqa: F401  (re-export for test imports)
-)
 from backend.chat.language import (
     ResolvedLanguageContext,
 )
 from backend.chat.language_context import (
-    _assistant_turn_index,  # noqa: F401  (re-export — handlers access via _svc.*)
     _is_bootstrap_question,
-    _load_recent_user_turn_texts,  # noqa: F401  (re-export)
-    _maybe_lock_language,  # noqa: F401  (re-export)
     _resolve_chat_language_context,
-    _resolve_fallback_locale,  # noqa: F401  (re-export for test imports via backend.chat.service)
-    _set_last_response_language,  # noqa: F401  (re-export — escalation handler accesses via _svc.*)
-    _user_message_count,  # noqa: F401  (re-export)
 )
 from backend.chat.persistence import (
-    _create_message,  # noqa: F401  (re-export)
-    _finalize_persisted_messages,  # noqa: F401  (re-export)
-    _persist_assistant_message,  # noqa: F401  (re-export — greeting handler lazy-imports via service)
-    _persist_assistant_message_with_response_language,  # noqa: F401  (re-export)
-    _persist_operator_message,  # noqa: F401  (re-export — operator channel)
-    _persist_turn,  # noqa: F401  (re-export — escalation handler accesses via _svc.*)
     _persist_turn_with_response_language,
-    _persist_user_only_turn,  # noqa: F401  (re-export — operator handler lazy-imports via service)
-    _source_docs_for_db,  # noqa: F401  (re-export)
 )
 from backend.chat.pii import redact
+from backend.chat.pipeline import (
+    async_run_chat_pipeline,
+)
 from backend.chat.presets import effective_agent_instructions
+from backend.chat.prompts import (
+    _user_context_prompt_line,
+)
 from backend.chat.rotation import latest_chat_query, should_rotate
 from backend.chat.steps import answer_cache as answer_cache_steps
-from backend.chat.types import QuestionIntentResult
+from backend.chat.steps.pre_retrieval import (
+    _async_lookup_quick_answers,
+)
+from backend.chat.steps.retrieval import (
+    async_retrieve_context,
+)
+from backend.chat.types import (
+    QuestionIntentResult,
+)
 from backend.contact_sessions.service import touch_user_session
 from backend.core import db as core_db
-from backend.core.config import (
-    settings,  # noqa: F401  (re-export for monkeypatch via backend.chat.service.settings)
-)
 from backend.core.db import async_commit_or_rollback, run_sync
+from backend.core.openai_client import (
+    get_async_openai_client,
+)
 
 # Symbols below are re-exported so that tests can monkeypatch them through
 # ``backend.chat.service.<name>`` and the lazy ``_svc.*`` lookups in handlers
 # still see the patched versions.
-from backend.core.openai_client import get_async_openai_client  # noqa: F401
-from backend.core.openai_retry import async_call_openai_with_retry  # noqa: F401
 from backend.documents.service import async_knowledge_base_updated_at
 from backend.escalation.openai_escalation import (
     EscalationLlmResult,
-    classify_followup_reply,  # noqa: F401
-    classify_pre_confirm_reply,  # noqa: F401
-    complete_escalation_openai_turn,  # noqa: F401
-    render_pre_confirm_text,  # noqa: F401
+    classify_followup_reply,
+    classify_pre_confirm_reply,
+    complete_escalation_openai_turn,
+    render_pre_confirm_text,
 )
 from backend.escalation.service import (
-    build_chat_messages_for_openai,  # noqa: F401
+    build_chat_messages_for_openai,
     classify_question_intent,
-    create_escalation_ticket,  # noqa: F401
+    create_escalation_ticket,
     detect_human_request,
-    fact_from_ticket,  # noqa: F401
-    should_escalate,  # noqa: F401
+    fact_from_ticket,
+    should_escalate,
+    visitor_identity_context,
 )
-from backend.faq.faq_matcher import async_match_faq, match_faq  # noqa: F401
+from backend.faq.faq_matcher import (
+    async_match_faq,
+)
 from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.injection_detector import async_detect_injection  # noqa: F401
+from backend.guards.injection_detector import (
+    async_detect_injection,
+)
 from backend.guards.relevance_checker import (
-    async_check_relevance_with_profile,  # noqa: F401
+    async_check_relevance_with_profile,
 )
 from backend.models import (
     Bot,
     Chat,
     Message,
-    MessageRole,  # noqa: F401  (re-export)
     Tenant,
     TenantProfile,
     TurnOutcome,
 )
 from backend.observability import TraceHandle, begin_trace, record_stage_ms
-from backend.observability.metrics import capture_event  # noqa: F401  (re-export for monkeypatch)
+from backend.observability.metrics import (
+    capture_event,
+)
 from backend.search.service import (
-    async_detect_tenant_kb_scripts,  # noqa: F401
-    async_embed_queries,  # noqa: F401
-    async_semantic_query_rewrite,  # noqa: F401
-    async_semantic_query_rewrite_for_kb,  # noqa: F401
-    expand_query,  # noqa: F401
+    async_detect_tenant_kb_scripts,
+    async_embed_queries,
+    async_semantic_query_rewrite,
+    async_semantic_query_rewrite_for_kb,
+    expand_query,
 )
 from backend.tenants.cache import (
     get_cached_tenant,
     get_cached_tenant_profile,
     set_cached_tenant,
     set_cached_tenant_profile,
+)
+
+__all__ = (
+    "_async_lookup_quick_answers",
+    "_emit_chat_escalated_event",
+    "_emit_chat_turn_event",
+    "async_check_relevance_with_profile",
+    "async_detect_injection",
+    "async_detect_tenant_kb_scripts",
+    "async_embed_queries",
+    "async_match_faq",
+    "async_retrieve_context",
+    "async_semantic_query_rewrite",
+    "async_semantic_query_rewrite_for_kb",
+    "build_chat_messages_for_openai",
+    "capture_event",
+    "classify_followup_reply",
+    "classify_pre_confirm_reply",
+    "complete_escalation_openai_turn",
+    "create_escalation_ticket",
+    "expand_query",
+    "fact_from_ticket",
+    "get_async_openai_client",
+    "render_pre_confirm_text",
+    "should_escalate",
 )
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
@@ -154,22 +157,6 @@ logger = logging.getLogger(__name__)
 # Re-exports above are kept at module top so that tests can monkeypatch them
 # through ``backend.chat.service.<name>`` and handlers looking them up via
 # the lazy ``_svc = from backend.chat import service`` pattern still see the patches.
-__all__ = (
-    "ChatPipelineResult",
-    "RetrievalContext",
-    "_classify_kb_confidence",
-    "_emit_quick_answer_lookup_event",
-    "_lookup_quick_answers",
-    "_metrics_distinct_id",
-    "_quick_answer_keys_for_question",
-    "_quick_answer_quality_score",
-    "_quick_answers_context",
-    "_strip_thought_tags",
-    "_user_context_prompt_line",
-    "async_retrieve_context",
-    "build_rag_messages",
-    "build_rag_prompt",
-)
 
 _HANDLER_ROUTER: HandlerRouter = default_router()
 
@@ -228,7 +215,6 @@ def _escalation_turn_response(
     trace.update(
         output={"answer": out.message_to_user, "source": trace_source},
         metadata={
-            "chat_ended": False,
             "escalated": escalated,
             "response_language": language_context.response_language,
             "escalation_language": language_context.escalation_language,
@@ -238,7 +224,6 @@ def _escalation_turn_response(
         text=out.message_to_user,
         document_ids=[],
         tokens_used=out.tokens_used,
-        chat_ended=False,
         ticket_number=ticket_number,
         escalation_offered=bool(chat.escalation_pre_confirm_pending),
     )
@@ -476,7 +461,7 @@ async def _ensure_chat_async(
     elif rotated_from is not None and rotated_from.user_context:
         # The visitor identity survives rotation even though the conversation
         # state does not.
-        effective_user_ctx = dict(rotated_from.user_context)
+        effective_user_ctx = visitor_identity_context(rotated_from.user_context)
     elif user_context:
         effective_user_ctx = dict(user_context)
     if rotated_from is not None:
@@ -666,7 +651,9 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
     each handler is responsible for its own sync/async bridging (currently
     via an internal ``run_sync`` wrapper around its persistence body).
     """
-    from backend.chat.handlers.rag import RagHandler
+    from backend.chat.handlers.rag import (
+        RagHandler,
+    )
 
     ctx.async_db = db
     for handler in _HANDLER_ROUTER.handlers:

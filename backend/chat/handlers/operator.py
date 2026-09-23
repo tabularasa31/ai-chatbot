@@ -199,7 +199,9 @@ class OperatorHandler(PipelineHandler):
     def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome | None:
         # Lazy import: service.py imports the router at module load, so
         # importing the persistence helpers at module top would cycle.
-        from backend.chat.service import _persist_user_only_turn
+        from backend.chat.persistence import (
+            _persist_user_only_turn,
+        )
         from backend.escalation.service import notify_support_of_visitor_turn
         from backend.operator.sessions import emit_operator_session_ended
 
@@ -252,7 +254,6 @@ class OperatorHandler(PipelineHandler):
             ctx.trace.update(
                 output={"answer": "", "source": "operator_live"},
                 metadata={
-                    "chat_ended": False,
                     "escalated": False,
                     "operator_state": OperatorState.live.value,
                     "delivered_to_operator": True,
@@ -262,7 +263,6 @@ class OperatorHandler(PipelineHandler):
             text="",
             document_ids=[],
             tokens_used=0,
-            chat_ended=False,
             delivered_to_operator=True,
             chat_id=str(chat.id),
         )

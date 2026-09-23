@@ -76,6 +76,9 @@ def _ticket(db: Session, chat: Chat, *, created_at) -> EscalationTicket:
 
 
 def test_analytics_summary_exact_values(tenant: TestClient, db_session: Session) -> None:
+    """Default period is 30d; messages/conversations/filtered/answered_rate/
+    deflection_rate all match hand-computed values, tickets and messages
+    outside the window or belonging to another tenant never count."""
     client = tenant
     ws = _workspace(client, db_session, email="owner@example.com", name="Acme")
     other = _workspace(client, db_session, email="other-owner@example.com", name="Other Co")
@@ -133,6 +136,48 @@ def test_analytics_summary_exact_values(tenant: TestClient, db_session: Session)
     assert body["deflection_rate"] == pytest.approx(1 - 1 / 3)
 
 
+@pytest.mark.parametrize("period,days", [("7d", 7), ("90d", 90)])
+def test_analytics_summary_window_exact_and_boundary(
+    tenant: TestClient, db_session: Session, period: str, days: int
+) -> None:
+    """Rows just inside the window count; rows just outside are excluded."""
+    client = tenant
+    ws = _workspace(client, db_session, email=f"win-{period}@example.com", name=f"Win {period}")
+
+    now = _utcnow()
+    just_inside = now - timedelta(days=days) + timedelta(minutes=5)
+    just_outside = now - timedelta(days=days) - timedelta(minutes=5)
+
+    chat_in = _chat(db_session, ws.tenant_id)
+    _say(db_session, chat_in, MessageRole.user, created_at=just_inside)
+    _say(
+        db_session,
+        chat_in,
+        MessageRole.assistant,
+        turn_outcome=TurnOutcome.answered.value,
+        created_at=just_inside,
+    )
+
+    chat_out = _chat(db_session, ws.tenant_id)
+    _say(db_session, chat_out, MessageRole.user, created_at=just_outside)
+    _say(
+        db_session,
+        chat_out,
+        MessageRole.assistant,
+        turn_outcome=TurnOutcome.answered.value,
+        created_at=just_outside,
+    )
+
+    resp = client.get("/analytics/summary", headers=ws.auth, params={"period": period})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["period"] == period
+    assert body["messages"] == 1
+    assert body["conversations"] == 1
+    assert body["answered_rate"] == pytest.approx(1.0)
+
+
 def test_analytics_summary_social_excluded_from_answered_rate(
     tenant: TestClient, db_session: Session
 ) -> None:
@@ -154,6 +199,40 @@ def test_analytics_summary_social_excluded_from_answered_rate(
 
     # social rows must not inflate the denominator nor be counted answered.
     assert body["answered_rate"] == pytest.approx(1.0)
+
+
+def test_analytics_summary_operator_messages_excluded(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Operator-authored turns must not count toward messages/answered_rate/filtered."""
+    client = tenant
+    ws = _workspace(client, db_session, email="operator-owner@example.com", name="Op Co")
+
+    now = _utcnow()
+    recent = now - timedelta(hours=1)
+
+    chat = _chat(db_session, ws.tenant_id)
+    _say(db_session, chat, MessageRole.user, created_at=recent)
+    _say(
+        db_session,
+        chat,
+        MessageRole.assistant,
+        turn_outcome=TurnOutcome.answered.value,
+        created_at=recent,
+    )
+    # An operator reply in the same window: must be invisible to every metric.
+    _say(db_session, chat, MessageRole.operator, created_at=recent)
+    _say(db_session, chat, MessageRole.user, created_at=recent)
+
+    resp = client.get("/analytics/summary", headers=ws.auth)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["messages"] == 2, "operator turn must not count as a user message"
+    assert body["answered_rate"] == pytest.approx(1.0), (
+        "operator turn must not appear in the answered_rate numerator or denominator"
+    )
+    assert body["filtered"] == 0
 
 
 def test_analytics_summary_deflection_rate_stays_within_bounds(
@@ -190,6 +269,40 @@ def test_analytics_summary_deflection_rate_stays_within_bounds(
     assert body["deflection_rate"] == pytest.approx(1.0)
 
 
+def test_analytics_summary_ticket_without_in_window_messages(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Deflection edge case: a ticket whose session has no in-window message
+    is excluded from both the conversation count and the escalated count."""
+    client = tenant
+    ws = _workspace(client, db_session, email="deflect-edge@example.com", name="Deflect Co")
+
+    now = _utcnow()
+    recent = now - timedelta(hours=1)
+    old = now - timedelta(days=40)
+
+    chat = _chat(db_session, ws.tenant_id)
+    _say(db_session, chat, MessageRole.user, created_at=old)
+    _say(
+        db_session,
+        chat,
+        MessageRole.assistant,
+        turn_outcome=TurnOutcome.answered.value,
+        created_at=old,
+    )
+    _ticket(db_session, chat, created_at=recent)
+
+    resp = client.get("/analytics/summary", headers=ws.auth)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # The session contributes 0 to both `conversations` and the escalated
+    # count, so the service short-circuits deflection_rate to None rather
+    # than dividing.
+    assert body["conversations"] == 0
+    assert body["deflection_rate"] is None
+
+
 def test_analytics_summary_empty_tenant(tenant: TestClient, db_session: Session) -> None:
     client = tenant
     ws = _workspace(client, db_session, email="empty-owner@example.com", name="Empty Co")
@@ -205,24 +318,25 @@ def test_analytics_summary_empty_tenant(tenant: TestClient, db_session: Session)
     assert body["answered_rate"] is None
 
 
-def test_analytics_summary_default_period_is_30d(tenant: TestClient, db_session: Session) -> None:
+@pytest.mark.parametrize(
+    ("params", "use_auth", "expected_status"),
+    [
+        pytest.param({"period": "14d"}, True, 400, id="invalid_period"),
+        pytest.param({}, False, 401, id="unauthenticated"),
+    ],
+)
+def test_analytics_summary_rejects_bad_requests(
+    tenant: TestClient,
+    db_session: Session,
+    params: dict[str, str],
+    use_auth: bool,
+    expected_status: int,
+) -> None:
     client = tenant
-    ws = _workspace(client, db_session, email="default-owner@example.com", name="Default Co")
+    headers = {}
+    if use_auth:
+        ws = _workspace(client, db_session, email="bad-request-owner@example.com", name="Bad Co")
+        headers = ws.auth
 
-    resp = client.get("/analytics/summary", headers=ws.auth)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["period"] == "30d"
-
-
-def test_analytics_summary_invalid_period_rejected(tenant: TestClient, db_session: Session) -> None:
-    client = tenant
-    ws = _workspace(client, db_session, email="invalid-owner@example.com", name="Invalid Co")
-
-    resp = client.get("/analytics/summary", headers=ws.auth, params={"period": "14d"})
-    assert resp.status_code == 400
-
-
-def test_analytics_summary_unauthenticated_rejected(tenant: TestClient) -> None:
-    client = tenant
-    resp = client.get("/analytics/summary")
-    assert resp.status_code == 401
+    resp = client.get("/analytics/summary", headers=headers, params=params)
+    assert resp.status_code == expected_status

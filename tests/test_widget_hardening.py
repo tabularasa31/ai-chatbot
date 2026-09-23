@@ -7,7 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import ChatTurnOutcome
+from backend.chat.service import (
+    ChatTurnOutcome,
+)
 from backend.models import Chat, Tenant
 from backend.widget.service import apply_identity_context_patch, sanitize_locale
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -54,42 +56,57 @@ def _post_widget_chat(
 # ---------------------------------------------------------------------------
 
 
-def test_widget_chat_rejects_oversized_message(
+@pytest.mark.parametrize(
+    "message,needs_existing_session,expected_status,expected_detail",
+    [
+        pytest.param(
+            "x" * 5000,
+            False,
+            413,
+            {"code": "message_too_long", "max_chars": settings.widget_message_max_chars},
+            id="oversized_message",
+        ),
+        pytest.param(
+            "",
+            True,
+            422,
+            {"code": "message_required"},
+            id="empty_message_mid_conversation",
+        ),
+    ],
+)
+def test_widget_chat_rejects_invalid_message(
     tenant: TestClient,
     db_session: Session,
+    message: str,
+    needs_existing_session: bool,
+    expected_status: int,
+    expected_detail: dict,
 ) -> None:
     body = _create_widget_client(
         tenant, db_session,
-        email="widget-hardening-too-long@example.com",
-        name="Widget Hardening Too Long",
+        email=f"widget-hardening-{expected_status}@example.com",
+        name="Widget Hardening Message",
     )
-    response = _post_widget_chat(tenant, body["bot_public_id"], message="x" * 5000)
-    assert response.status_code == 413
-    assert response.json()["detail"] == {"code": "message_too_long", "max_chars": settings.widget_message_max_chars}
+    session_query = ""
+    if needs_existing_session:
+        existing_chat = Chat(
+            tenant_id=uuid.UUID(body["id"]),
+            session_id=uuid.uuid4(),
+            user_context={},
+        )
+        db_session.add(existing_chat)
+        db_session.commit()
+        session_query = f"&session_id={existing_chat.session_id}"
 
-
-def test_widget_chat_rejects_empty_message(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    body = _create_widget_client(
-        tenant, db_session,
-        email="widget-hardening-empty@example.com",
-        name="Widget Hardening Empty",
-    )
-    existing_chat = Chat(
-        tenant_id=uuid.UUID(body["id"]),
-        session_id=uuid.uuid4(),
-        user_context={},
-    )
-    db_session.add(existing_chat)
-    db_session.commit()
     response = tenant.post(
-        f"/widget/chat?bot_id={body['bot_public_id']}&session_id={existing_chat.session_id}",
-        json={"message": ""},
+        f"/widget/chat?bot_id={body['bot_public_id']}{session_query}",
+        json={"message": message},
     )
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "message_required"
+    assert response.status_code == expected_status
+    detail = response.json()["detail"]
+    for key, value in expected_detail.items():
+        assert detail[key] == value
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +129,7 @@ def test_per_client_ip_rate_limit(
     )
     _seed_rag_chunk(db_session, uuid.UUID(body["id"]))
     async def _fake_async_process(*args, **kwargs):
-        return ChatTurnOutcome(text="ok", document_ids=[], tokens_used=0, chat_ended=False)
+        return ChatTurnOutcome(text="ok", document_ids=[], tokens_used=0)
 
     monkeypatch.setattr(
         "backend.widget.routes.async_process_chat_message",
@@ -166,15 +183,15 @@ def test_session_init_rate_limit_lower(
 # ---------------------------------------------------------------------------
 
 
-def test_apply_patch_strips_unknown_keys_and_caps_email() -> None:
+def test_apply_identity_context_patch_strips_caps_and_sanitizes_locale() -> None:
+    """apply_identity_context_patch: unknown keys are stripped, an oversized
+    email is capped, and browser_locale only survives when pre-sanitized."""
     result = apply_identity_context_patch({"user_id": "u1", "malicious": "x"}, {})
     assert result == {"user_id": "u1"}
 
     result = apply_identity_context_patch({"user_id": "u1"}, {"email": f"{'a' * 490}@example.com"})
     assert len(result["email"]) == 320
 
-
-def test_apply_patch_sanitizes_browser_locale() -> None:
     accepted = apply_identity_context_patch({"user_id": "u1"}, {}, browser_locale=sanitize_locale("en-US"))
     rejected = apply_identity_context_patch(
         {"user_id": "u1"}, {}, browser_locale=sanitize_locale("not_a_locale; DROP TABLE")

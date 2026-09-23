@@ -296,20 +296,6 @@ class EscalationStateMachine(PipelineHandler):
     def _handle_followup_yes_no(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         _svc = _svc_lookup()
         chat = ctx.chat
-        # Session-window guard: ``escalation_followup_pending`` is a persistent
-        # DB flag, so a user resuming hours later — after the inactivity sweeper
-        # reported the session ended (``session_ended_event_at`` set) — would
-        # otherwise have a genuine new question classified as a yes/no answer to
-        # the long-gone "anything else?" prompt and eaten by the escalation FSM.
-        # Treat the follow-up as stale: clear the gate and fall through to RAG so
-        # the new question gets a fresh answer. Mirrors the same staleness check
-        # the zero-hits rephrase fast path applies in rag.py.
-        if chat.session_ended_event_at is not None:
-            chat.escalation_followup_pending = False
-            _clear_escalation_clarify_flag(chat)
-            ctx.db.add(chat)
-            ctx.db.commit()
-            return None
         followup_span = (
             ctx.trace.span(name="escalation-followup", input={"pending": True})
             if ctx.trace is not None
@@ -366,7 +352,7 @@ class EscalationStateMachine(PipelineHandler):
                 _clear_escalation_clarify_flag(chat)
                 ctx.db.add(chat)
                 if followup_span is not None:
-                    followup_span.end(output={"decision": decision, "chat_ended": False})
+                    followup_span.end(output={"decision": decision})
                 return _svc._escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
@@ -386,7 +372,7 @@ class EscalationStateMachine(PipelineHandler):
             _set_escalation_clarify_flag(chat)
             ctx.db.add(chat)
             if followup_span is not None:
-                followup_span.end(output={"decision": decision, "chat_ended": False})
+                followup_span.end(output={"decision": decision})
             outcome = _svc._escalation_turn_response(
                 db=ctx.db,
                 chat=chat,
@@ -739,7 +725,6 @@ class EscalationStateMachine(PipelineHandler):
             ctx.trace.update(
                 output={"answer": localized.text, "source": trace_source},
                 metadata={
-                    "chat_ended": False,
                     "escalated": False,
                     "awaiting_request": True,
                     "response_language": ctx.language_context.response_language,
@@ -749,7 +734,6 @@ class EscalationStateMachine(PipelineHandler):
             text=localized.text,
             document_ids=[],
             tokens_used=localized.tokens_used,
-            chat_ended=False,
         )
 
     def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome | None:

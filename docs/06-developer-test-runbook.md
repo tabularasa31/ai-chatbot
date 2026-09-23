@@ -10,16 +10,12 @@ For **production regression evals** (latency / answer-quality comparisons after 
 make smoke
 ```
 
+Suite membership is declared by pytest markers (`smoke`, `auth_reset`, `escalation`, `rag_edge`, registered in `pytest.ini`), not by test-name filters. To add a test to a suite, decorate it with `@pytest.mark.<marker>`.
+
 Direct pytest equivalent:
 
 ```bash
-pytest -q \
-  tests/test_chat.py \
-  tests/test_escalation.py \
-  tests/test_auth.py \
-  tests/test_auth_email_verification.py \
-  tests/test_verification_enforcement.py \
-  -k "escalat or verify or forgot_password or reset_password"
+pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m smoke
 ```
 
 ## Auth Reset Flow
@@ -31,7 +27,7 @@ make auth-reset
 Direct pytest equivalent:
 
 ```bash
-pytest -q tests/test_auth.py -k "forgot_password or reset_password"
+pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m auth_reset
 ```
 
 ## Escalation State Machine + Manual Escalation
@@ -43,10 +39,7 @@ make escalation
 Direct pytest equivalent:
 
 ```bash
-pytest -q \
-  tests/test_chat.py \
-  tests/test_escalation.py \
-  -k "awaiting_email or followup or legacy_ended_at or manual_escalate or perform_manual_escalation"
+pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m escalation
 ```
 
 ## Clarification policy (decision engine)
@@ -93,10 +86,7 @@ make rag-edge
 Direct pytest equivalent:
 
 ```bash
-pytest -q \
-  tests/test_search.py \
-  tests/test_chat.py \
-  -k "openai_unavailable or malformed or wrong_dimension or low_vector"
+pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m rag_edge
 ```
 
 ## Reranker strategies

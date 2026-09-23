@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import uuid
 
-from backend.chat.handlers.rag import (
+from backend.chat.types import (
     RetrievalContext,
+)
+from backend.chat.handlers.rag import (
     _classify_kb_confidence,
     _floor_kb_confidence,
 )

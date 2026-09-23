@@ -159,19 +159,6 @@ class Settings(BaseSettings):
         gt=0,
         description="Hard wall-clock timeout for the per-request NER call in the chat hot path.",
     )
-    entity_overlap_enabled: bool = Field(
-        True,
-        alias="ENTITY_OVERLAP_ENABLED",
-        description=(
-            "When true, hybrid retrieval adds an entity-overlap channel "
-            "(third RRF list) using the per-chunk entity index populated at "
-            "ingest. NER on the query has its own timeout + empty-list "
-            "fallback inside extract_entities_from_query, so a slow or "
-            "broken NER cannot stall the chat hot path even with the flag on. "
-            "Default true — kept as a kill switch (set ENTITY_OVERLAP_ENABLED=false "
-            "to disable globally without a deploy)."
-        ),
-    )
     escalation_model: str = Field(
         "gpt-4.1-mini",
         alias="ESCALATION_MODEL",
@@ -232,10 +219,6 @@ class Settings(BaseSettings):
             "no abbreviations are present."
         ),
     )
-    contradiction_adjudication_enabled: bool = Field(
-        False,
-        alias="CONTRADICTION_ADJUDICATION_ENABLED",
-    )
     contradiction_adjudication_model: str = Field(
         "gpt-4.1-mini",
         alias="CONTRADICTION_ADJUDICATION_MODEL",
@@ -251,10 +234,6 @@ class Settings(BaseSettings):
     contradiction_adjudication_max_tokens: int = Field(
         500,
         alias="CONTRADICTION_ADJUDICATION_MAX_TOKENS",
-    )
-    contradiction_adjudication_filter_cap_enabled: bool = Field(
-        False,
-        alias="CONTRADICTION_ADJUDICATION_FILTER_CAP_ENABLED",
     )
     clarification_turn_limit: int = Field(1, alias="CLARIFICATION_TURN_LIMIT", ge=1)
     conversation_idle_timeout_seconds: int = Field(
@@ -348,7 +327,6 @@ class Settings(BaseSettings):
 
     # Email verification
     EMAIL_FROM: str | None = Field(None, alias="EMAIL_FROM")
-    SMTP_HOST: str | None = Field(None, alias="SMTP_HOST")  # kept for backwards compat, not used by Brevo HTTP
     SMTP_PORT: int | None = Field(None, alias="SMTP_PORT")
     SMTP_USER: str | None = Field(None, alias="SMTP_USER")
     SMTP_PASSWORD: str | None = Field(None, alias="SMTP_PASSWORD")
@@ -512,10 +490,6 @@ class Settings(BaseSettings):
         10.0,
         alias="EMBEDDING_HTTP_TIMEOUT_SECONDS",
         description="Read timeout (seconds) for OpenAI embedding HTTP calls in the RAG hot path.",
-    )
-    injection_semantic_enabled: bool = Field(
-        True,
-        alias="INJECTION_SEMANTIC_ENABLED",
     )
     guard_semantic_cache_ttl_seconds: int = Field(
         600,
@@ -748,6 +722,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
         enable_decoding=False,
+        extra="ignore",
     )
 
 

@@ -45,44 +45,69 @@ def _completion(payload: dict | str) -> MagicMock:
     return response
 
 
-# ── extract_entities_from_query ──────────────────────────────────────────────
+# ── behaviour shared by both extraction entrypoints ──────────────────────────
+#
+# extract_entities_from_query and extract_entities_from_passage both go
+# through the same JSON-parsing/normalization core; these failure modes are
+# asserted once per entrypoint via parametrize rather than duplicated.
 
 
-def test_query_happy_path_returns_entities():
-    response = _completion(
-        {"named_entities": ["Pro plan", "Acme CRM", "FooChat"]}
-    )
+@pytest.mark.parametrize(
+    "extract_fn, entities",
+    [
+        pytest.param(extract_entities_from_query, ["Pro plan", "Acme CRM", "FooChat"], id="query"),
+        pytest.param(
+            extract_entities_from_passage,
+            ["Pro plan", "Acme CRM", "$59 per month", "March 1, 2024"],
+            id="passage",
+        ),
+    ],
+)
+def test_happy_path_returns_entities(extract_fn, entities):
+    response = _completion({"named_entities": entities})
     with patch.object(
         entity_extractor, "get_openai_client", return_value=MagicMock()
     ), patch.object(
         entity_extractor, "call_openai_with_retry", return_value=response
     ):
-        result = extract_entities_from_query(
-            "How much is the Pro plan in Acme CRM with FooChat?",
-            "encrypted-key",
-        )
-    assert result == ["Pro plan", "Acme CRM", "FooChat"]
+        result = extract_fn("How much is the Pro plan?", "encrypted-key")
+    assert result == entities
 
 
-def test_query_empty_short_circuits_without_llm_call():
+@pytest.mark.parametrize(
+    "extract_fn",
+    [extract_entities_from_query, extract_entities_from_passage],
+    ids=["query", "passage"],
+)
+def test_empty_input_short_circuits_without_llm_call(extract_fn):
     """Empty / whitespace input must not spend a token."""
     with patch.object(entity_extractor, "get_openai_client") as get_client, patch.object(
         entity_extractor, "call_openai_with_retry"
     ) as retry:
-        assert extract_entities_from_query("", "key") == []
-        assert extract_entities_from_query("   ", "key") == []
+        assert extract_fn("", "key") == []
+        assert extract_fn("   \n", "key") == []
     get_client.assert_not_called()
     retry.assert_not_called()
 
 
-def test_query_missing_api_key_returns_empty():
+@pytest.mark.parametrize(
+    "extract_fn",
+    [extract_entities_from_query, extract_entities_from_passage],
+    ids=["query", "passage"],
+)
+def test_missing_api_key_returns_empty(extract_fn):
     with patch.object(entity_extractor, "get_openai_client") as get_client:
-        assert extract_entities_from_query("anything", None) == []
-        assert extract_entities_from_query("anything", "") == []
+        assert extract_fn("anything", None) == []
+        assert extract_fn("anything", "") == []
     get_client.assert_not_called()
 
 
-def test_query_openai_call_failure_returns_empty():
+@pytest.mark.parametrize(
+    "extract_fn",
+    [extract_entities_from_query, extract_entities_from_passage],
+    ids=["query", "passage"],
+)
+def test_openai_call_failure_returns_empty(extract_fn):
     with patch.object(
         entity_extractor, "get_openai_client", return_value=MagicMock()
     ), patch.object(
@@ -90,7 +115,25 @@ def test_query_openai_call_failure_returns_empty():
         "call_openai_with_retry",
         side_effect=RuntimeError("boom"),
     ):
-        assert extract_entities_from_query("hello?", "key") == []
+        assert extract_fn("hello?", "key") == []
+
+
+@pytest.mark.parametrize(
+    "extract_fn",
+    [extract_entities_from_query, extract_entities_from_passage],
+    ids=["query", "passage"],
+)
+def test_invalid_json_returns_empty(extract_fn):
+    response = _completion("not valid json {")
+    with patch.object(
+        entity_extractor, "get_openai_client", return_value=MagicMock()
+    ), patch.object(
+        entity_extractor, "call_openai_with_retry", return_value=response
+    ):
+        assert extract_fn("hello?", "key") == []
+
+
+# ── extract_entities_from_query specifics ────────────────────────────────────
 
 
 def test_query_client_init_failure_returns_empty():
@@ -98,16 +141,6 @@ def test_query_client_init_failure_returns_empty():
         entity_extractor,
         "get_openai_client",
         side_effect=RuntimeError("decrypt failed"),
-    ):
-        assert extract_entities_from_query("hello?", "key") == []
-
-
-def test_query_invalid_json_returns_empty():
-    response = _completion("not valid json {")
-    with patch.object(
-        entity_extractor, "get_openai_client", return_value=MagicMock()
-    ), patch.object(
-        entity_extractor, "call_openai_with_retry", return_value=response
     ):
         assert extract_entities_from_query("hello?", "key") == []
 
@@ -279,52 +312,6 @@ def test_query_timeout_returns_empty(monkeypatch):
 # ── extract_entities_from_passage ────────────────────────────────────────────
 
 
-def test_passage_happy_path_returns_entities():
-    response = _completion(
-        {
-            "named_entities": [
-                "Pro plan",
-                "Acme CRM",
-                "$59 per month",
-                "March 1, 2024",
-            ]
-        }
-    )
-    with patch.object(
-        entity_extractor, "get_openai_client", return_value=MagicMock()
-    ), patch.object(
-        entity_extractor, "call_openai_with_retry", return_value=response
-    ):
-        result = extract_entities_from_passage(
-            "The Pro plan in Acme CRM costs $59 per month. Launched March 1, 2024.",
-            "encrypted-key",
-        )
-    assert result == ["Pro plan", "Acme CRM", "$59 per month", "March 1, 2024"]
-
-
-def test_passage_empty_short_circuits_without_llm_call():
-    with patch.object(entity_extractor, "get_openai_client") as get_client:
-        assert extract_entities_from_passage("", "key") == []
-        assert extract_entities_from_passage("   \n", "key") == []
-    get_client.assert_not_called()
-
-
-def test_passage_missing_api_key_returns_empty():
-    assert extract_entities_from_passage("some text", None) == []
-    assert extract_entities_from_passage("some text", "") == []
-
-
-def test_passage_openai_failure_returns_empty():
-    with patch.object(
-        entity_extractor, "get_openai_client", return_value=MagicMock()
-    ), patch.object(
-        entity_extractor,
-        "call_openai_with_retry",
-        side_effect=RuntimeError("rate limit exhausted"),
-    ):
-        assert extract_entities_from_passage("anything goes here", "key") == []
-
-
 def test_passage_no_timeout_unlike_query(monkeypatch):
     """Passage path is indexing-time and must NOT enforce ner_query_timeout_seconds."""
     monkeypatch.setattr(entity_extractor.settings, "ner_query_timeout_seconds", 0.01)
@@ -339,16 +326,6 @@ def test_passage_no_timeout_unlike_query(monkeypatch):
         # Sleep > the (tiny) query timeout. Passage path ignores it and waits.
         result = extract_entities_from_passage("ipsum", "key")
     assert result == ["Acme"]
-
-
-def test_passage_json_garbage_returns_empty():
-    response = _completion("definitely not json")
-    with patch.object(
-        entity_extractor, "get_openai_client", return_value=MagicMock()
-    ), patch.object(
-        entity_extractor, "call_openai_with_retry", return_value=response
-    ):
-        assert extract_entities_from_passage("ipsum", "key") == []
 
 
 def test_passage_response_missing_choices_returns_empty():

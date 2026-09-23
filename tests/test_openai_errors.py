@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from openai import (
     APIConnectionError,
@@ -24,74 +25,60 @@ def _response(status_code: int, *, headers: dict[str, str] | None = None) -> htt
     return httpx.Response(status_code, request=_request(), headers=headers)
 
 
-def test_classify_rate_limit_error() -> None:
+@pytest.mark.parametrize(
+    "exc,expected_kind",
+    [
+        (
+            RateLimitError("rate limited", response=_response(429, headers={"retry-after": "2.5"}), body=None),
+            OpenAIFailureKind.RATE_LIMIT,
+        ),
+        (APITimeoutError(request=_request()), OpenAIFailureKind.TIMEOUT),
+        (APIConnectionError(request=_request()), OpenAIFailureKind.TRANSIENT),
+        (InternalServerError("boom", response=_response(500), body=None), OpenAIFailureKind.TRANSIENT),
+        (AuthenticationError("auth", response=_response(401), body=None), OpenAIFailureKind.PERMANENT),
+        (PermissionDeniedError("nope", response=_response(403), body=None), OpenAIFailureKind.PERMANENT),
+        (BadRequestError("bad", response=_response(400), body=None), OpenAIFailureKind.PERMANENT),
+        (APIError("weird", request=_request(), body=None), OpenAIFailureKind.UNKNOWN),
+        (ValueError("bad value"), OpenAIFailureKind.PERMANENT),
+    ],
+    ids=[
+        "rate-limit",
+        "timeout",
+        "connection-transient",
+        "server-500-transient",
+        "authentication-permanent",
+        "permission-denied-permanent",
+        "bad-request-permanent",
+        "unknown-api-error",
+        "non-openai-exception",
+    ],
+)
+def test_classify_openai_error_kind(exc, expected_kind) -> None:
+    assert classify_openai_error(exc).kind == expected_kind
+
+
+def test_classify_rate_limit_error_details() -> None:
     exc = RateLimitError(
-        "rate limited",
-        response=_response(429, headers={"retry-after": "2.5"}),
-        body=None,
+        "rate limited", response=_response(429, headers={"retry-after": "2.5"}), body=None
     )
 
     classified = classify_openai_error(exc)
 
-    assert classified.kind == OpenAIFailureKind.RATE_LIMIT
     assert classified.retry_after_seconds == 2.5
     assert classified.status_code == 429
 
 
-def test_classify_timeout_as_timeout_kind() -> None:
-    timeout_exc = APITimeoutError(request=_request())
-
-    classified = classify_openai_error(timeout_exc)
-
-    assert classified.kind == OpenAIFailureKind.TIMEOUT
-    assert classified.retry_after_seconds is None
+def test_classify_unknown_and_non_openai_have_no_status_code() -> None:
+    assert classify_openai_error(APIError("weird", request=_request(), body=None)).status_code is None
+    assert classify_openai_error(ValueError("bad value")).status_code is None
 
 
-def test_classify_connection_and_server_as_transient() -> None:
-    connection_exc = APIConnectionError(request=_request())
-    internal_exc = InternalServerError("boom", response=_response(500), body=None)
-
-    assert classify_openai_error(connection_exc).kind == OpenAIFailureKind.TRANSIENT
-    assert classify_openai_error(internal_exc).kind == OpenAIFailureKind.TRANSIENT
-
-
-def test_classify_authentication_permanent() -> None:
-    auth_exc = AuthenticationError("auth", response=_response(401), body=None)
-    permission_exc = PermissionDeniedError("nope", response=_response(403), body=None)
-    bad_request_exc = BadRequestError("bad", response=_response(400), body=None)
-
-    assert classify_openai_error(auth_exc).kind == OpenAIFailureKind.PERMANENT
-    assert classify_openai_error(permission_exc).kind == OpenAIFailureKind.PERMANENT
-    assert classify_openai_error(bad_request_exc).kind == OpenAIFailureKind.PERMANENT
-
-
-def test_classify_unknown_api_error() -> None:
-    exc = APIError("weird", request=_request(), body=None)
-
-    classified = classify_openai_error(exc)
-
-    assert classified.kind == OpenAIFailureKind.UNKNOWN
-    assert classified.status_code is None
-
-
-def test_classify_non_openai_exception() -> None:
-    classified = classify_openai_error(ValueError("bad value"))
-
-    assert classified.kind == OpenAIFailureKind.PERMANENT
-    assert classified.status_code is None
-
-
-def test_parse_retry_after_missing_returns_none() -> None:
-    exc = RateLimitError("rate limited", response=_response(429), body=None)
-
-    assert classify_openai_error(exc).retry_after_seconds is None
-
-
-def test_parse_retry_after_malformed_returns_none() -> None:
-    exc = RateLimitError(
-        "rate limited",
-        response=_response(429, headers={"retry-after": "abc"}),
-        body=None,
-    )
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"retry-after": "abc"}],
+    ids=["missing-header", "malformed-header"],
+)
+def test_parse_retry_after_falls_back_to_none(headers) -> None:
+    exc = RateLimitError("rate limited", response=_response(429, headers=headers), body=None)
 
     assert classify_openai_error(exc).retry_after_seconds is None

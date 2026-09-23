@@ -22,7 +22,9 @@ from backend.chat.history_service import (
     list_chat_sessions,
 )
 from backend.chat.rotation import should_rotate
-from backend.chat.service import _ensure_chat_async
+from backend.chat.service import (
+    _ensure_chat_async,
+)
 from backend.models import (
     Chat,
     EscalationStatus,
@@ -143,56 +145,40 @@ def test_returning_visitor_within_default_window_does_not_rotate(
     assert should_rotate(chat) is False
 
 
-def test_fresh_chat_does_not_rotate(db_session: Session) -> None:
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, idle_minutes=5)
-    assert should_rotate(chat) is False
-
-
-def test_idle_chat_rotates(db_session: Session) -> None:
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, idle_minutes=45)
-    assert should_rotate(chat) is True
-
-
-def test_live_ticket_awaiting_email_blocks_rotation(db_session: Session) -> None:
-    # A created ticket still collecting the visitor's email must survive the
-    # idle window: the returning user completes it in the old conversation.
-    tenant = _make_tenant(db_session)
-    ticket = _make_ticket(db_session, tenant)
-    chat = _make_chat(
-        db_session,
-        tenant,
-        idle_minutes=45,
-        escalation_awaiting_ticket_id=ticket.id,
-    )
-    assert should_rotate(chat) is False
-
-
 @pytest.mark.parametrize(
-    "stale_flag",
+    "idle_minutes, with_live_ticket, chat_fields, expected",
     [
-        {"escalation_pre_confirm_pending": True},
-        {"escalation_awaiting_request": True},
-        {"escalation_followup_pending": True},
+        pytest.param(5, False, {}, False, id="fresh_chat_does_not_rotate"),
+        pytest.param(45, False, {}, True, id="idle_chat_rotates"),
+        # A created ticket still collecting the visitor's email must survive the
+        # idle window: the returning user completes it in the old conversation.
+        pytest.param(45, True, {}, False, id="live_ticket_awaiting_email_blocks_rotation"),
+        # No ticket exists behind these pending questions; a returning visitor
+        # must get a fresh conversation, not an answer parsed against
+        # yesterday's "want a human?" prompt.
+        pytest.param(45, False, {"escalation_pre_confirm_pending": True}, True, id="stale_pre_confirm_pending_does_not_block"),
+        pytest.param(45, False, {"escalation_awaiting_request": True}, True, id="stale_awaiting_request_does_not_block"),
+        pytest.param(45, False, {"escalation_followup_pending": True}, True, id="stale_followup_pending_does_not_block"),
+        # The sweeper's marker commit used to refresh updated_at (onupdate),
+        # making the idle chat look fresh right after a sweep. The marker
+        # itself is the system's declaration that the conversation ended.
+        pytest.param(1, False, {"session_ended_event_at": _utcnow()}, True, id="sweeper_marker_forces_rotation_despite_fresh_updated_at"),
+        pytest.param(45, True, {"session_ended_event_at": _utcnow()}, False, id="live_ticket_blocks_rotation_even_with_sweeper_marker"),
     ],
 )
-def test_stale_offers_without_ticket_do_not_block_rotation(
-    db_session: Session, stale_flag: dict
+def test_should_rotate_rule_table(
+    db_session: Session,
+    idle_minutes: int,
+    with_live_ticket: bool,
+    chat_fields: dict,
+    expected: bool,
 ) -> None:
-    # No ticket exists behind these pending questions; a returning visitor
-    # must get a fresh conversation, not an answer parsed against yesterday's
-    # "want a human?" prompt.
     tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, idle_minutes=45, **stale_flag)
-    assert should_rotate(chat) is True
-
-
-def test_legacy_ended_at_idle_chat_rotates(db_session: Session) -> None:
-    # Legacy closed rows rotate on the idle rule like any other chat.
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(db_session, tenant, idle_minutes=45, ended_at=_utcnow())
-    assert should_rotate(chat) is True
+    if with_live_ticket:
+        ticket = _make_ticket(db_session, tenant)
+        chat_fields = {**chat_fields, "escalation_awaiting_ticket_id": ticket.id}
+    chat = _make_chat(db_session, tenant, idle_minutes=idle_minutes, **chat_fields)
+    assert should_rotate(chat) is expected
 
 
 def test_threshold_comes_from_settings(db_session: Session, monkeypatch) -> None:
@@ -420,32 +406,3 @@ def test_list_chat_sessions_groups_rotated_conversations(
     assert summary.message_count == 2
 
 
-def test_sweeper_marker_forces_rotation_despite_fresh_updated_at(
-    db_session: Session,
-) -> None:
-    # The sweeper's marker commit used to refresh updated_at (onupdate),
-    # making the idle chat look fresh right after a sweep. The marker itself
-    # is the system's declaration that the conversation ended — rotate.
-    tenant = _make_tenant(db_session)
-    chat = _make_chat(
-        db_session,
-        tenant,
-        idle_minutes=1,
-        session_ended_event_at=_utcnow(),
-    )
-    assert should_rotate(chat) is True
-
-
-def test_live_ticket_blocks_rotation_even_with_sweeper_marker(
-    db_session: Session,
-) -> None:
-    tenant = _make_tenant(db_session)
-    ticket = _make_ticket(db_session, tenant)
-    chat = _make_chat(
-        db_session,
-        tenant,
-        idle_minutes=45,
-        session_ended_event_at=_utcnow(),
-        escalation_awaiting_ticket_id=ticket.id,
-    )
-    assert should_rotate(chat) is False

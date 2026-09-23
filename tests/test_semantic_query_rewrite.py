@@ -62,36 +62,39 @@ class TestSemanticQueryRewriteHappyPath:
     """async_semantic_query_rewrite() returns a clean English rewrite on success."""
 
     @pytest.mark.asyncio
-    async def test_returns_english_feature_rewrite(self):
-        """Basic happy path: LLM returns a clean single-line string."""
+    @pytest.mark.parametrize(
+        ("question", "llm_content", "expected"),
+        [
+            pytest.param(
+                "Почему бот отвечает только по-английски?",
+                "language detection multilingual bot settings",
+                "language detection multilingual bot settings",
+                id="basic_english_rewrite",
+            ),
+            pytest.param(
+                "Мой виджет завис и не реагирует на клики",
+                "  widget troubleshooting embed setup  ",
+                "widget troubleshooting embed setup",
+                id="strips_surrounding_whitespace",
+            ),
+            pytest.param(
+                "What is {name} and {0} doing in my bot?",
+                "feature settings config",
+                "feature settings config",
+                id="curly_braces_in_query_do_not_crash",
+            ),
+        ],
+    )
+    async def test_returns_clean_rewrite(self, question, llm_content, expected):
         client_patch, retry_patch = _patch_rewrite_layer()
         with client_patch as mock_client, retry_patch as mock_retry:
-            mock_retry.return_value = _make_openai_response(
-                "language detection multilingual bot settings"
-            )
+            mock_retry.return_value = _make_openai_response(llm_content)
             mock_client.return_value = MagicMock()
 
-            result = await async_semantic_query_rewrite(
-                "Почему бот отвечает только по-английски?",
-                api_key="sk-test",
-            )
+            # Would raise KeyError if .format() were used on the prompt template.
+            result = await async_semantic_query_rewrite(question, api_key="sk-test")
 
-        assert result == "language detection multilingual bot settings"
-
-    @pytest.mark.asyncio
-    async def test_strips_surrounding_whitespace(self):
-        """Trailing/leading whitespace in LLM response is stripped."""
-        client_patch, retry_patch = _patch_rewrite_layer()
-        with client_patch, retry_patch as mock_retry:
-            mock_retry.return_value = _make_openai_response(
-                "  widget troubleshooting embed setup  "
-            )
-            result = await async_semantic_query_rewrite(
-                "Мой виджет завис и не реагирует на клики",
-                api_key="sk-test",
-            )
-
-        assert result == "widget troubleshooting embed setup"
+        assert result == expected
 
     @pytest.mark.asyncio
     async def test_prompt_contains_user_question(self):
@@ -117,22 +120,6 @@ class TestSemanticQueryRewriteHappyPath:
 
         assert "How do I stop the bot from going off-topic?" in content
         assert "FEATURE or SETTING" in content  # prompt focuses on feature terminology
-
-    @pytest.mark.asyncio
-    async def test_curly_braces_in_query_do_not_crash(self):
-        """User input with {braces} must not raise KeyError from .format()."""
-        client_patch, retry_patch = _patch_rewrite_layer()
-        with client_patch as mock_client, retry_patch as mock_retry:
-            mock_client.return_value = MagicMock()
-            mock_retry.return_value = _make_openai_response("feature settings config")
-
-            # Would raise KeyError if .format() were used on the prompt template
-            result = await async_semantic_query_rewrite(
-                "What is {name} and {0} doing in my bot?",
-                api_key="sk-test",
-            )
-
-        assert result == "feature settings config"
 
     @pytest.mark.asyncio
     async def test_uses_gpt4o_mini(self):
@@ -261,51 +248,40 @@ class TestSemanticQueryRewriteFailures:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_empty_content(self):
-        """Empty string from LLM → None (sanity check guards)."""
+    @pytest.mark.parametrize(
+        ("llm_content", "reason"),
+        [
+            pytest.param("", "empty_content", id="empty_content"),
+            pytest.param(
+                "language detection\nmultilingual settings",
+                "multiline_response",
+                id="multiline_response",
+            ),
+            pytest.param("x" * 201, "oversized_response", id="oversized_response"),
+        ],
+    )
+    async def test_returns_none_on_rejected_content(self, llm_content, reason):
+        """Sanity-check guards on the LLM response shape: empty, multi-line, or
+        oversized content is rejected rather than trusted as a rewrite."""
         client_patch, retry_patch = _patch_rewrite_layer()
         with client_patch, retry_patch as mock_retry:
-            mock_retry.return_value = _make_openai_response("")
+            mock_retry.return_value = _make_openai_response(llm_content)
             result = await async_semantic_query_rewrite("some question", api_key="sk-test")
 
-        assert result is None
+        assert result is None, reason
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_multiline_response(self):
-        """Multi-line LLM response is rejected (sanity check)."""
-        client_patch, retry_patch = _patch_rewrite_layer()
-        with client_patch, retry_patch as mock_retry:
-            mock_retry.return_value = _make_openai_response(
-                "language detection\nmultilingual settings"
-            )
-            result = await async_semantic_query_rewrite("some question", api_key="sk-test")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_oversized_response(self):
-        """Response longer than 200 chars is rejected."""
-        client_patch, retry_patch = _patch_rewrite_layer()
-        with client_patch, retry_patch as mock_retry:
-            mock_retry.return_value = _make_openai_response("x" * 201)
-            result = await async_semantic_query_rewrite("some question", api_key="sk-test")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_empty_query(self):
-        """Empty query short-circuits before any API call."""
+    @pytest.mark.parametrize(
+        ("question", "api_key"),
+        [
+            pytest.param("", "sk-test", id="empty_query"),
+            pytest.param("some question", "", id="empty_api_key"),
+        ],
+    )
+    async def test_returns_none_and_skips_api_call_on_empty_argument(self, question, api_key):
+        """Empty query or empty API key short-circuits before any API call."""
         with patch("backend.search.service.get_async_openai_client") as mock_client:
-            result = await async_semantic_query_rewrite("", api_key="sk-test")
-
-        mock_client.assert_not_called()
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_empty_api_key(self):
-        """Empty API key short-circuits before any API call."""
-        with patch("backend.search.service.get_async_openai_client") as mock_client:
-            result = await async_semantic_query_rewrite("some question", api_key="")
+            result = await async_semantic_query_rewrite(question, api_key=api_key)
 
         mock_client.assert_not_called()
         assert result is None
@@ -420,52 +396,37 @@ class TestDetectTenantKbScript:
     """async_detect_tenant_kb_script() reads Document.script stored at parse time."""
 
     @pytest.mark.asyncio
-    async def test_returns_the_only_script_present(self):
+    @pytest.mark.parametrize(
+        ("script_rows", "expected"),
+        [
+            pytest.param(
+                [("cyrillic", 3)], "cyrillic", id="returns_the_only_script_present"
+            ),
+            pytest.param(
+                [("greek", 2)],
+                "greek",
+                id="returns_a_script_outside_the_two_legacy_buckets",
+                # Regression: every non-latin/cyrillic KB used to collapse to None.
+            ),
+            pytest.param(
+                [("latin", 3), ("cyrillic", 1)],
+                "latin",
+                id="dominant_wins_for_mixed_kb",
+            ),
+            pytest.param([], None, id="returns_none_for_empty_kb"),
+        ],
+    )
+    async def test_returns_the_dominant_or_only_script(self, script_rows, expected):
         import uuid
         from backend.search.service import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(script_rows=[("cyrillic", 3)])
+        # chunk_rows=[] so the empty-KB case does not fall through to chunk
+        # sampling and pick up a stray script.
+        mock_db = _make_async_db(script_rows=script_rows, chunk_rows=[])
 
-        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
-
-    @pytest.mark.asyncio
-    async def test_returns_a_script_outside_the_two_legacy_buckets(self):
-        """Regression: every non-latin/cyrillic KB used to collapse to None."""
-        import uuid
-        from backend.search.service import async_detect_tenant_kb_script
-
-        tenant_id = uuid.uuid4()
-        _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(script_rows=[("greek", 2)])
-
-        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "greek"
-
-    @pytest.mark.asyncio
-    async def test_dominant_wins_for_mixed_kb(self):
-        """Dominant bucket is returned even when KB has multiple scripts."""
-        import uuid
-        from backend.search.service import async_detect_tenant_kb_script
-
-        tenant_id = uuid.uuid4()
-        _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(script_rows=[("latin", 3), ("cyrillic", 1)])
-
-        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == "latin"
-
-    @pytest.mark.asyncio
-    async def test_returns_none_for_empty_kb(self):
-        import uuid
-        from backend.search.service import async_detect_tenant_kb_script
-
-        tenant_id = uuid.uuid4()
-        _clear_kb_script_caches(tenant_id)
-
-        # No documents with a script set, no chunks indexed either.
-        mock_db = _make_async_db(script_rows=[], chunk_rows=[])
-
-        assert await async_detect_tenant_kb_script(tenant_id, mock_db) is None
+        assert await async_detect_tenant_kb_script(tenant_id, mock_db) == expected
 
     @pytest.mark.asyncio
     async def test_falls_back_to_chunk_sampling_when_no_language_set(self):
@@ -555,73 +516,45 @@ class TestDetectTenantKbScripts:
     """async_detect_tenant_kb_scripts() returns the full set of buckets in the KB."""
 
     @pytest.mark.asyncio
-    async def test_mixed_kb_returns_both_buckets(self):
-        """A two-script KB returns both, so cross-lingual rewrite reaches both."""
+    @pytest.mark.parametrize(
+        ("script_rows", "expected"),
+        [
+            pytest.param(
+                [("latin", 2), ("cyrillic", 1)],
+                frozenset({"cyrillic", "latin"}),
+                id="mixed_kb_returns_both_buckets",
+                # A two-script KB returns both, so cross-lingual rewrite reaches both.
+            ),
+            pytest.param(
+                [("latin", 3), ("greek", 2), ("arabic", 1)],
+                frozenset({"latin", "greek", "arabic"}),
+                id="returns_every_script_present_beyond_two",
+                # Buckets outside the two legacy ones survive instead of being dropped.
+            ),
+            pytest.param(
+                [("latin", 400), ("arabic", 1)],
+                frozenset({"latin"}),
+                id="drops_a_script_carried_by_a_stray_document",
+                # Each returned script costs an LLM call per turn; strays must not.
+            ),
+            pytest.param(
+                [("latin", 400), ("cyrillic", 30)],
+                frozenset({"latin", "cyrillic"}),
+                id="keeps_a_genuine_minority_script_section",
+                # A real minority-language section still earns a cross-lingual rewrite.
+            ),
+            pytest.param([], frozenset(), id="empty_kb_returns_empty_set"),
+        ],
+    )
+    async def test_returns_the_kb_script_set(self, script_rows, expected):
         import uuid
         from backend.search.service import async_detect_tenant_kb_scripts
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(script_rows=[("latin", 2), ("cyrillic", 1)])
+        mock_db = _make_async_db(script_rows=script_rows, chunk_rows=[])
 
-        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
-            {"cyrillic", "latin"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_returns_every_script_present_beyond_two(self):
-        """Buckets outside the two legacy ones survive instead of being dropped."""
-        import uuid
-        from backend.search.service import async_detect_tenant_kb_scripts
-
-        tenant_id = uuid.uuid4()
-        _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(
-            script_rows=[("latin", 3), ("greek", 2), ("arabic", 1)]
-        )
-
-        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
-            {"latin", "greek", "arabic"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_drops_a_script_carried_by_a_stray_document(self):
-        """Each returned script costs an LLM call per turn; strays must not."""
-        import uuid
-        from backend.search.service import async_detect_tenant_kb_scripts
-
-        tenant_id = uuid.uuid4()
-        _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(script_rows=[("latin", 400), ("arabic", 1)])
-
-        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
-            {"latin"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_keeps_a_genuine_minority_script_section(self):
-        """A real minority-language section still earns a cross-lingual rewrite."""
-        import uuid
-        from backend.search.service import async_detect_tenant_kb_scripts
-
-        tenant_id = uuid.uuid4()
-        _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(script_rows=[("latin", 400), ("cyrillic", 30)])
-
-        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
-            {"latin", "cyrillic"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_empty_kb_returns_empty_set(self):
-        import uuid
-        from backend.search.service import async_detect_tenant_kb_scripts
-
-        tenant_id = uuid.uuid4()
-        _clear_kb_script_caches(tenant_id)
-        mock_db = _make_async_db(script_rows=[], chunk_rows=[])
-
-        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset()
+        assert await async_detect_tenant_kb_scripts(tenant_id, mock_db) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -706,43 +639,57 @@ class TestSemanticQueryRewriteForKb:
 # _bm25_queries_for_script — non-EN now includes original query
 # ---------------------------------------------------------------------------
 
+_OMIT_KB_SCRIPT = object()
+
+
 class TestBm25QueriesForScriptNonEn:
     """Non-EN queries: order depends on whether KB script matches query script."""
 
-    def test_same_script_kb_puts_original_first(self):
-        """Cyrillic query + Cyrillic KB → original first for same-language BM25."""
+    @pytest.mark.parametrize(
+        ("query", "en_rewrite", "query_script", "kb_script", "expect_rewrite_first"),
+        [
+            pytest.param(
+                "сайт не открывается после подключения",
+                "site connectivity troubleshooting",
+                "cyrillic",
+                "cyrillic",
+                False,
+                id="same_script_kb_puts_original_first",
+                # Cyrillic query + Cyrillic KB → original first for same-language BM25.
+            ),
+            pytest.param(
+                "сайт не открывается",
+                "CDN site connectivity troubleshooting",
+                "cyrillic",
+                "latin",
+                True,
+                id="cross_script_kb_puts_en_rewrite_first",
+                # Cyrillic query + Latin KB → EN rewrite first for asymmetric BM25.
+            ),
+            pytest.param(
+                "сайт не открывается",
+                "CDN site connectivity troubleshooting",
+                "cyrillic",
+                _OMIT_KB_SCRIPT,
+                True,
+                id="unknown_kb_script_puts_en_rewrite_first",
+                # No kb_script → EN rewrite first (safe default for unknown KB language).
+            ),
+        ],
+    )
+    def test_orders_variants_by_script_match(
+        self, query, en_rewrite, query_script, kb_script, expect_rewrite_first
+    ):
         from backend.search.service import _bm25_queries_for_script
 
-        query = "сайт не открывается после подключения"
-        en_rewrite = "site connectivity troubleshooting"
         variants = [query, en_rewrite]
-        result = _bm25_queries_for_script(query, variants, "cyrillic", kb_script="cyrillic")
+        args = (query, variants, query_script)
+        kwargs = {} if kb_script is _OMIT_KB_SCRIPT else {"kb_script": kb_script}
+        result = _bm25_queries_for_script(*args, **kwargs)
 
-        assert result[0] == query, "Original must be first when KB is same-script"
-        assert en_rewrite in result
-
-    def test_cross_script_kb_puts_en_rewrite_first(self):
-        """Cyrillic query + Latin KB → EN rewrite first so asymmetric BM25 uses it."""
-        from backend.search.service import _bm25_queries_for_script
-
-        query = "сайт не открывается"
-        en_rewrite = "CDN site connectivity troubleshooting"
-        variants = [query, en_rewrite]
-        result = _bm25_queries_for_script(query, variants, "cyrillic", kb_script="latin")
-
-        assert result[0] == en_rewrite, "EN rewrite must be first for cross-script KB"
-        assert query in result
-
-    def test_unknown_kb_script_puts_en_rewrite_first(self):
-        """No kb_script → EN rewrite first (safe default for unknown KB language)."""
-        from backend.search.service import _bm25_queries_for_script
-
-        query = "сайт не открывается"
-        en_rewrite = "CDN site connectivity troubleshooting"
-        variants = [query, en_rewrite]
-        result = _bm25_queries_for_script(query, variants, "cyrillic")
-
-        assert result[0] == en_rewrite
+        expected_first = en_rewrite if expect_rewrite_first else query
+        assert result[0] == expected_first
+        assert query in result and en_rewrite in result
 
     def test_en_query_unchanged(self):
         from backend.search.service import _bm25_queries_for_script

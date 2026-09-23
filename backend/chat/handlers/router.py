@@ -8,7 +8,9 @@ from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, Pipeline
 from backend.chat.handlers.escalation import EscalationStateMachine
 from backend.chat.handlers.greeting import GreetingHandler
 from backend.chat.handlers.operator import OperatorHandler
-from backend.chat.handlers.rag import RagHandler
+from backend.chat.handlers.rag import (
+    RagHandler,
+)
 
 
 class HandlerRouter:

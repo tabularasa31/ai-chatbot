@@ -20,12 +20,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.decision import MAX_CLARIFICATIONS_PER_SESSION
-from backend.chat.handlers.rag import LoopSignal
+from backend.chat.handlers.rag import (
+    LoopSignal,
+)
 from backend.chat.language import LanguageDetectionResult
 from backend.chat.service import (
+    process_chat_message,
+)
+from backend.chat.types import (
     ChatPipelineResult,
     RetrievalContext,
-    process_chat_message,
 )
 from backend.models import Chat, EscalationTrigger
 from backend.search.service import build_reliability_assessment
@@ -208,10 +212,18 @@ def test_zero_retrieval_clarifying_question_reaches_user(
     assert props["escalated"] is False
 
 
-def test_second_weak_turn_clarifying_question_reaches_user(
+@pytest.mark.parametrize(
+    "second_turn_clarifying",
+    [
+        pytest.param(True, id="second_weak_turn_clarifying_question_reaches_user"),
+        pytest.param(False, id="second_weak_turn_without_clarifying_still_escalates"),
+    ],
+)
+def test_second_weak_turn_disposition(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
+    second_turn_clarifying: bool,
 ) -> None:
     """The second consecutive weak turn hands off — unless the bot asked something."""
     tenant_id, api_key = _setup(tenant, db_session, "clarify-second@example.com")
@@ -233,66 +245,36 @@ def test_second_weak_turn_clarifying_question_reaches_user(
     events.clear()
     _patch_pipeline(
         monkeypatch,
-        answer=CLARIFYING_ANSWER,
+        answer=CLARIFYING_ANSWER if second_turn_clarifying else PLAIN_ANSWER,
         retrieval=_weak_retrieval(),
         escalation_recommended=True,
         escalation_trigger=EscalationTrigger.low_similarity,
-        llm_clarifying=True,
+        llm_clarifying=second_turn_clarifying,
     )
     outcome = process_chat_message(
         tenant_id, "so how do I run one?", session_id, db_session, api_key=api_key
     )
 
-    assert outcome.text == CLARIFYING_ANSWER
     chat = _chat(db_session, session_id)
-    assert chat.escalation_pre_confirm_pending is False
-    assert chat.clarification_count == 1
-    # Standing down does not restart the two-strike count: the turn was weak.
-    assert chat.last_reply_was_low_confidence is True
-
     props = _turn_props(events)
-    assert props["turn_outcome"] == "diagnose"
-    assert props["handoff_stood_down"] is True
-
-
-def test_second_weak_turn_without_clarifying_still_escalates(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A weak turn whose reply asks the user nothing still offers the handoff."""
-    tenant_id, api_key = _setup(tenant, db_session, "clarify-plain@example.com")
-    session_id = uuid.uuid4()
-    events = _patch_common(monkeypatch)
-    _patch_pipeline(
-        monkeypatch,
-        answer=PLAIN_ANSWER,
-        retrieval=_weak_retrieval(),
-        escalation_recommended=True,
-        escalation_trigger=EscalationTrigger.low_similarity,
-        llm_clarifying=False,
-    )
-
-    process_chat_message(
-        tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
-    )
-    events.clear()
-    outcome = process_chat_message(
-        tenant_id, "so how do I run one?", session_id, db_session, api_key=api_key
-    )
-
-    assert outcome.text == PRE_CONFIRM
-    chat = _chat(db_session, session_id)
-    assert chat.escalation_pre_confirm_pending is True
-    assert (
-        chat.escalation_pre_confirm_context["trigger"]
-        == EscalationTrigger.low_similarity.value
-    )
-
-    props = _turn_props(events)
-    assert props["turn_outcome"] == "escalate"
-    assert props["clarifying_reply"] is False
-    assert props["handoff_stood_down"] is False
+    if second_turn_clarifying:
+        assert outcome.text == CLARIFYING_ANSWER
+        assert chat.escalation_pre_confirm_pending is False
+        assert chat.clarification_count == 1
+        # Standing down does not restart the two-strike count: the turn was weak.
+        assert chat.last_reply_was_low_confidence is True
+        assert props["turn_outcome"] == "diagnose"
+        assert props["handoff_stood_down"] is True
+    else:
+        assert outcome.text == PRE_CONFIRM
+        assert chat.escalation_pre_confirm_pending is True
+        assert (
+            chat.escalation_pre_confirm_context["trigger"]
+            == EscalationTrigger.low_similarity.value
+        )
+        assert props["turn_outcome"] == "escalate"
+        assert props["clarifying_reply"] is False
+        assert props["handoff_stood_down"] is False
 
 
 def test_plain_answer_turn_reports_answer_outcome(
@@ -324,16 +306,36 @@ def test_plain_answer_turn_reports_answer_outcome(
     assert props["handoff_stood_down"] is False
 
 
-def test_replaced_clarifying_question_does_not_spend_budget(
+@pytest.mark.parametrize(
+    ("first_turn_recommended", "first_turn_trigger"),
+    [
+        pytest.param(
+            False, None, id="replaced_clarifying_question_does_not_spend_budget"
+            # No active escalation on turn 1: decide() reaches clarify_loop_limit
+            # purely from the exhausted budget on turn 2.
+        ),
+        pytest.param(
+            True,
+            EscalationTrigger.low_similarity,
+            id="budget_ceiling_overrules_the_stand_down",
+            # Turn 1 is itself a retrieval-driven escalation; the stand-down that
+            # would apply to turn 2's clarifying reply is overruled by the ceiling.
+        ),
+    ],
+)
+def test_budget_ceiling_still_escalates_and_charges_nothing_for_the_lost_reply(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
+    first_turn_recommended: bool,
+    first_turn_trigger: EscalationTrigger | None,
 ) -> None:
     """The budget ceiling still escalates — and charges nothing for the lost reply.
 
     With the clarification budget exhausted, ``decide()`` returns
     ``clarify_loop_limit`` and the handoff offer replaces the reply. The user
-    never sees the question, so it must not move the counter.
+    never sees the question, so it must not move the counter — whether or not
+    a retrieval-driven escalation (and its stand-down) was already in play.
     """
     tenant_id, api_key = _setup(tenant, db_session, "clarify-budget@example.com")
     session_id = uuid.uuid4()
@@ -342,8 +344,8 @@ def test_replaced_clarifying_question_does_not_spend_budget(
         monkeypatch,
         answer=PLAIN_ANSWER,
         retrieval=_weak_retrieval(),
-        escalation_recommended=False,
-        escalation_trigger=None,
+        escalation_recommended=first_turn_recommended,
+        escalation_trigger=first_turn_trigger,
         llm_clarifying=False,
     )
     process_chat_message(
@@ -359,8 +361,8 @@ def test_replaced_clarifying_question_does_not_spend_budget(
         monkeypatch,
         answer=CLARIFYING_ANSWER,
         retrieval=_weak_retrieval(),
-        escalation_recommended=False,
-        escalation_trigger=None,
+        escalation_recommended=first_turn_recommended,
+        escalation_trigger=first_turn_trigger,
         llm_clarifying=True,
     )
     outcome = process_chat_message(
@@ -373,64 +375,10 @@ def test_replaced_clarifying_question_does_not_spend_budget(
     assert chat.clarification_count == MAX_CLARIFICATIONS_PER_SESSION
 
     props = _turn_props(events)
-    assert props["turn_outcome"] == "escalate"
-    assert props["clarifying_reply"] is False
-
-
-def test_budget_ceiling_overrules_the_stand_down(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A stand-down the budget ceiling then overrules is not a stand-down.
-
-    The second weak turn escalates from retrieval, the clarifying question
-    stands that down, and ``clarify_loop_limit`` re-arms the handoff. The user
-    gets the offer, so the turn must not be counted as a removed ticket.
-    """
-    tenant_id, api_key = _setup(tenant, db_session, "clarify-budget-override@example.com")
-    session_id = uuid.uuid4()
-    events = _patch_common(monkeypatch)
-    _patch_pipeline(
-        monkeypatch,
-        answer=PLAIN_ANSWER,
-        retrieval=_weak_retrieval(),
-        escalation_recommended=True,
-        escalation_trigger=EscalationTrigger.low_similarity,
-        llm_clarifying=False,
-    )
-    process_chat_message(
-        tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
-    )
-    chat = _chat(db_session, session_id)
-    assert chat.last_reply_was_low_confidence is True
-    chat.clarification_count = MAX_CLARIFICATIONS_PER_SESSION
-    db_session.add(chat)
-    db_session.commit()
-
-    events.clear()
-    _patch_pipeline(
-        monkeypatch,
-        answer=CLARIFYING_ANSWER,
-        retrieval=_weak_retrieval(),
-        escalation_recommended=True,
-        escalation_trigger=EscalationTrigger.low_similarity,
-        llm_clarifying=True,
-    )
-    outcome = process_chat_message(
-        tenant_id, "so how do I run one?", session_id, db_session, api_key=api_key
-    )
-
-    assert outcome.text == PRE_CONFIRM
-    chat = _chat(db_session, session_id)
-    assert chat.escalation_pre_confirm_pending is True
-    assert chat.clarification_count == MAX_CLARIFICATIONS_PER_SESSION
-
-    props = _turn_props(events)
     assert props["escalated"] is True
-    assert props["handoff_stood_down"] is False
-    assert props["clarifying_reply"] is False
     assert props["turn_outcome"] == "escalate"
+    assert props["clarifying_reply"] is False
+    assert props["handoff_stood_down"] is False
 
 
 def test_loop_detection_overrules_the_stand_down(
@@ -521,7 +469,6 @@ def test_explicit_human_request_still_escalates_immediately(
             text="HANDOFF",
             document_ids=[],
             tokens_used=0,
-            chat_ended=False,
             chat_id=str(ctx.chat.id),
         )
 

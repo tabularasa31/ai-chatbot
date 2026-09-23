@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from backend.chunkers import (
     chunk_markdown,
     chunk_pdf,
@@ -37,7 +39,7 @@ The reference section body.
 """
 
 
-def test_markdown_chunks_start_with_heading_path() -> None:
+def _markdown_heading_path_case() -> None:
     chunks = chunk_markdown(MD_DOC, chunk_size=700, overlap_sentences=1)
     by_path = {c.get("heading_path"): c for c in chunks}
     assert "Getting Started" in by_path
@@ -48,14 +50,14 @@ def test_markdown_chunks_start_with_heading_path() -> None:
     assert "Python 3.11" in req["text"]
 
 
-def test_markdown_preamble_has_no_prefix() -> None:
+def _markdown_preamble_case() -> None:
     chunks = chunk_markdown(MD_DOC)
     preamble = chunks[0]
     assert "heading_path" not in preamble
     assert preamble["text"].startswith("Intro paragraph")
 
 
-def test_markdown_offsets_point_to_body_span() -> None:
+def _markdown_offsets_case() -> None:
     chunks = chunk_markdown(MD_DOC)
     for c in chunks:
         body = MD_DOC[c["char_offset"] : c["char_end"]]
@@ -64,7 +66,7 @@ def test_markdown_offsets_point_to_body_span() -> None:
         assert body.split()[-1] in c["text"]
 
 
-def test_markdown_large_section_recursively_split() -> None:
+def _markdown_large_section_recursive_split_case() -> None:
     body = " ".join(f"Sentence number {i} lives here." for i in range(60))
     doc = f"# Big Section\n\n{body}\n"
     chunks = chunk_markdown(doc, chunk_size=300, overlap_sentences=1)
@@ -74,7 +76,7 @@ def test_markdown_large_section_recursively_split() -> None:
         assert c["text"].startswith("Big Section\n\n")
 
 
-def test_markdown_heading_inside_code_fence_ignored() -> None:
+def _markdown_heading_in_code_fence_ignored_case() -> None:
     doc = (
         "# Real Heading\n\n"
         "Some text before code.\n\n"
@@ -87,21 +89,21 @@ def test_markdown_heading_inside_code_fence_ignored() -> None:
     assert "not a heading" in joined
 
 
-def test_markdown_without_headings_falls_back_to_plaintext() -> None:
+def _markdown_falls_back_to_plaintext_case() -> None:
     text = "Just prose. " * 30
     md_chunks = chunk_markdown(text, chunk_size=200, overlap_sentences=1)
     pt_chunks = chunk_plaintext(text, chunk_size=200, overlap_sentences=1)
     assert [c["text"] for c in md_chunks] == [c["text"] for c in pt_chunks]
 
 
-def test_markdown_headings_only_document_still_indexed() -> None:
+def _markdown_headings_only_document_case() -> None:
     doc = "# One\n\n## Two\n\n## Three\n"
     chunks = chunk_markdown(doc)
     assert chunks
     assert "One" in chunks[0]["text"]
 
 
-def test_markdown_table_becomes_standalone_chunk() -> None:
+def _markdown_table_standalone_chunk_case() -> None:
     doc = (
         "# Pricing\n\n"
         "Our plans are below.\n\n"
@@ -120,9 +122,27 @@ def test_markdown_table_becomes_standalone_chunk() -> None:
     assert all("| Pro |" not in c["text"] for c in prose)
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(_markdown_heading_path_case, id="heading_path_present"),
+        pytest.param(_markdown_preamble_case, id="preamble_has_no_heading_prefix"),
+        pytest.param(_markdown_offsets_case, id="offsets_point_to_body_span"),
+        pytest.param(_markdown_large_section_recursive_split_case, id="oversized_section_recursively_split"),
+        pytest.param(_markdown_heading_in_code_fence_ignored_case, id="heading_inside_code_fence_ignored"),
+        pytest.param(_markdown_falls_back_to_plaintext_case, id="no_headings_falls_back_to_plaintext"),
+        pytest.param(_markdown_headings_only_document_case, id="headings_only_document_still_indexed"),
+        pytest.param(_markdown_table_standalone_chunk_case, id="table_becomes_standalone_chunk"),
+    ],
+)
+def test_chunk_markdown_edge_cases(case) -> None:
+    case()
+
+
 # ---------------------------------------------------------------- pdf
 
-def test_pdf_chunker_extracts_tables_as_chunks() -> None:
+
+def _pdf_extracts_tables_as_chunks_case() -> None:
     text = (
         "First page prose. It talks about things.\n\n"
         "| Col A | Col B |\n"
@@ -138,7 +158,7 @@ def test_pdf_chunker_extracts_tables_as_chunks() -> None:
     assert text[tables[0]["char_offset"] : tables[0]["char_end"]] == tables[0]["text"]
 
 
-def test_pdf_oversized_table_split_repeats_header() -> None:
+def _pdf_oversized_table_split_repeats_header_case() -> None:
     header = "| Name | Value |\n| --- | --- |\n"
     rows = "\n".join(f"| row-{i:03d} | value-{i:03d} |" for i in range(60))
     chunks = chunk_pdf(header + rows, chunk_size=400, overlap_sentences=1)
@@ -150,10 +170,22 @@ def test_pdf_oversized_table_split_repeats_header() -> None:
     assert "row-000" in all_rows and "row-059" in all_rows
 
 
-def test_pdf_single_pipe_line_is_not_a_table() -> None:
+def _pdf_single_pipe_line_is_not_a_table_case() -> None:
     text = "Some prose here. | just a pipe | in a sentence.\nMore prose follows here."
     chunks = chunk_pdf(text)
     assert all(c.get("subtype") != "table" for c in chunks)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(_pdf_extracts_tables_as_chunks_case, id="extracts_tables_as_chunks"),
+        pytest.param(_pdf_oversized_table_split_repeats_header_case, id="oversized_table_split_repeats_header"),
+        pytest.param(_pdf_single_pipe_line_is_not_a_table_case, id="single_pipe_line_is_not_a_table"),
+    ],
+)
+def test_chunk_pdf_edge_cases(case) -> None:
+    case()
 
 
 # ---------------------------------------------------------------- html
@@ -180,17 +212,13 @@ HTML_DOC = """
 """
 
 
-def test_html_to_markdown_strips_boilerplate() -> None:
+def test_html_to_markdown_strips_boilerplate_and_preserves_headings() -> None:
     text = html_to_markdown_text(HTML_DOC)
     assert "Home" not in text  # nav
     assert "Copyright" not in text  # footer
     assert "Related links" not in text  # aside
     assert "Sign up" not in text  # button
     assert "var x" not in text  # script
-
-
-def test_html_to_markdown_preserves_heading_structure() -> None:
-    text = html_to_markdown_text(HTML_DOC)
     assert "# Product Docs" in text
     assert "## Install" in text
     assert "| Linux | yes |" in text
@@ -228,17 +256,25 @@ def _word(x0: float, x1: float) -> dict[str, float]:
     return {"x0": x0, "x1": x1}
 
 
-def test_detect_column_split_two_columns() -> None:
-    words = [_word(10, 90) for _ in range(30)] + [_word(110, 190) for _ in range(30)]
+@pytest.mark.parametrize(
+    "words, expect_split",
+    [
+        pytest.param(
+            [_word(10, 90) for _ in range(30)] + [_word(110, 190) for _ in range(30)],
+            True,
+            id="two_columns",
+        ),
+        pytest.param([_word(10, 190) for _ in range(40)], False, id="single_column"),
+    ],
+)
+def test_detect_column_split(words: list[dict[str, float]], expect_split: bool) -> None:
     split = _detect_column_split(words, 0, 200)
-    assert split is not None
-    left_edge, right_edge = split
-    assert left_edge <= 100 <= right_edge
-
-
-def test_detect_column_split_single_column() -> None:
-    words = [_word(10, 190) for _ in range(40)]
-    assert _detect_column_split(words, 0, 200) is None
+    if expect_split:
+        assert split is not None
+        left_edge, right_edge = split
+        assert left_edge <= 100 <= right_edge
+    else:
+        assert split is None
 
 
 def test_parse_pdf_falls_back_to_pypdf(monkeypatch) -> None:

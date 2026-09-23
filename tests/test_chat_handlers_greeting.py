@@ -80,122 +80,91 @@ def _make_persisted_chat(db: Session, tenant: Tenant) -> Chat:
     return chat
 
 
-def test_can_handle_returns_true_for_empty_new_session(db_session: Session) -> None:
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
-
-    assert GreetingHandler().can_handle(ctx) is True
-
-
-def test_can_handle_returns_false_when_session_not_new(db_session: Session) -> None:
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(
-        db=db_session, tenant=tenant, chat=chat, is_new_session=False
-    )
-
-    assert GreetingHandler().can_handle(ctx) is False
-
-
-def test_can_handle_returns_false_for_short_question_with_request_content(
-    db_session: Session,
+@pytest.mark.parametrize(
+    ("chat_flags", "ctx_kwargs", "expected"),
+    [
+        pytest.param({}, {}, True, id="empty_new_session"),
+        pytest.param({}, {"is_new_session": False}, False, id="session_not_new"),
+        pytest.param(
+            {},
+            {
+                "question_text": "price?",
+                "is_new_session": False,
+                "message_has_request_content": True,
+            },
+            False,
+            # A short *question* still carries request content → flows to RAG,
+            # not greeted. This is the bug the old word-count small-talk path
+            # had: it greeted one-word questions. GreetingHandler now keys off
+            # intent, not length.
+            id="short_question_with_request_content",
+        ),
+        pytest.param(
+            {},
+            {
+                "question_text": "Здравствуйте!",
+                "is_new_session": False,
+                "message_has_request_content": False,
+            },
+            True,
+            # A typed greeting with no request content is greeted, not sent to RAG.
+            id="bare_typed_greeting",
+        ),
+        pytest.param(
+            {"has_substantive_content": True},
+            {
+                "question_text": "да есть",
+                "is_new_session": False,
+                "message_has_request_content": False,
+            },
+            False,
+            # Regression: no re-greeting once the chat has substantive content.
+            # The welcome text is a conversation opener. After real Q&A the
+            # sticky has_substantive_content flag is set; a bare affirmation the
+            # classifier momentarily reads as no-request-content ("да есть",
+            # answering the bot's own clarifying question) must fall through to
+            # RAG, not trigger the opener again. Reproduces the Langfuse
+            # "greeting mid-dialogue" session.
+            id="bare_social_turn_mid_dialogue",
+        ),
+        pytest.param(
+            {},
+            {
+                "question_text": "оператор",
+                "is_new_session": False,
+                "message_has_request_content": False,
+                "explicit_human_request": True,
+            },
+            False,
+            # A hand-me-off request is never small talk, even with no request content.
+            id="explicit_human_request",
+        ),
+        pytest.param(
+            {"escalation_pre_confirm_pending": True},
+            {
+                "question_text": "да",
+                "is_new_session": False,
+                "message_has_request_content": False,
+            },
+            False,
+            # A no-request-content reply during pre-confirm must reach the
+            # escalation FSM.
+            id="during_escalation_pre_confirm",
+        ),
+    ],
+)
+def test_can_handle(
+    db_session: Session, chat_flags: dict, ctx_kwargs: dict, expected: bool
 ) -> None:
-    """A short *question* still carries request content → flows to RAG, not greeted.
-
-    This is the bug the old word-count small-talk path had: it greeted one-word
-    questions. GreetingHandler now keys off intent, not length.
-    """
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(
-        db=db_session,
-        tenant=tenant,
-        chat=chat,
-        question_text="price?",
-        is_new_session=False,
-        message_has_request_content=True,
-    )
+    for attr, value in chat_flags.items():
+        setattr(chat, attr, value)
+    if chat_flags:
+        db_session.flush()
+    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, **ctx_kwargs)
 
-    assert GreetingHandler().can_handle(ctx) is False
-
-
-def test_can_handle_returns_true_for_bare_typed_greeting(db_session: Session) -> None:
-    """A typed greeting with no request content is greeted, not sent to RAG."""
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(
-        db=db_session,
-        tenant=tenant,
-        chat=chat,
-        question_text="Здравствуйте!",
-        is_new_session=False,
-        message_has_request_content=False,
-    )
-
-    assert GreetingHandler().can_handle(ctx) is True
-
-
-def test_can_handle_returns_false_for_bare_social_turn_mid_dialogue(
-    db_session: Session,
-) -> None:
-    """Regression: no re-greeting once the chat has substantive content.
-
-    The welcome text is a conversation opener. After real Q&A the sticky
-    ``has_substantive_content`` flag is set; a bare affirmation the classifier
-    momentarily reads as no-request-content ("да есть", answering the bot's own
-    clarifying question) must fall through to RAG, not trigger the opener again.
-    Reproduces the Langfuse "greeting mid-dialogue" session.
-    """
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    chat.has_substantive_content = True
-    db_session.flush()
-    ctx = _make_handler_context(
-        db=db_session,
-        tenant=tenant,
-        chat=chat,
-        question_text="да есть",
-        is_new_session=False,
-        message_has_request_content=False,
-    )
-
-    assert GreetingHandler().can_handle(ctx) is False
-
-
-def test_can_handle_returns_false_when_explicit_human_request(db_session: Session) -> None:
-    """A hand-me-off request is never small talk, even with no request content."""
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(
-        db=db_session,
-        tenant=tenant,
-        chat=chat,
-        question_text="оператор",
-        is_new_session=False,
-        message_has_request_content=False,
-        explicit_human_request=True,
-    )
-
-    assert GreetingHandler().can_handle(ctx) is False
-
-
-def test_can_handle_returns_false_during_escalation_pre_confirm(db_session: Session) -> None:
-    """A no-request-content reply during pre-confirm must reach the escalation FSM."""
-    tenant = _make_persisted_tenant(db_session)
-    chat = _make_persisted_chat(db_session, tenant)
-    chat.escalation_pre_confirm_pending = True
-    db_session.flush()
-    ctx = _make_handler_context(
-        db=db_session,
-        tenant=tenant,
-        chat=chat,
-        question_text="да",
-        is_new_session=False,
-        message_has_request_content=False,
-    )
-
-    assert GreetingHandler().can_handle(ctx) is False
+    assert GreetingHandler().can_handle(ctx) is expected
 
 
 def test_handle_typed_greeting_persists_user_and_assistant(
@@ -243,8 +212,6 @@ def test_handle_produces_outcome_and_persists_only_assistant_message(
     assert outcome.text == "Hello, I am the Acme assistant."
     assert outcome.tokens_used == 7
     assert outcome.document_ids == []
-    assert outcome.chat_ended is False
-
     # Only the assistant greeting is persisted — no empty user-message row.
     persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
     roles = [m.role for m in persisted]
@@ -278,6 +245,11 @@ async def test_build_greeting_result_passes_product_name_and_language(
     assert "Acme" in captured_kwargs["fallback_text"]
 
 
+class _SentinelDb:
+    def query(self, *args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("DB lookup must not happen when profile is provided")
+
+
 def test_resolve_product_name_falls_back_to_default_when_tenant_missing(
     db_session: Session,
 ) -> None:
@@ -293,11 +265,6 @@ def test_resolve_product_name_uses_tenant_name_when_no_profile(
 
 def test_resolve_product_name_skips_db_when_profile_passed(db_session: Session) -> None:
     """Caller-provided profile short-circuits the DB lookup."""
-
-    class _SentinelDb:
-        def query(self, *args: Any, **kwargs: Any) -> Any:
-            raise AssertionError("DB lookup must not happen when profile is provided")
-
     tenant = _make_persisted_tenant(db_session, name="No Lookup")
     profile = TenantProfile(tenant_id=tenant.id, product_name="ShinyProduct")
 

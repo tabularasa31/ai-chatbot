@@ -15,13 +15,17 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.chat.handlers.base import ChatTurnOutcome
-from backend.chat.handlers.rag import _CitationStreamFilter
 from backend.chat.language import async_localize_text_to_language_result
 from backend.chat.llm_unavailable import classify_llm_failure
 from backend.chat.llm_unavailable_copy import fallback_text
 from backend.chat.rotation import should_rotate
 from backend.chat.schemas import WidgetChatTurnResponse
-from backend.chat.service import async_process_chat_message
+from backend.chat.service import (
+    async_process_chat_message,
+)
+from backend.chat.streaming import (
+    _CitationStreamFilter,
+)
 from backend.contact_sessions.service import (
     start_user_session,
     sync_user_session_identity,
@@ -524,7 +528,6 @@ def _emit_first_token_metric(
             bot_id=bot_public_id,
             properties={
                 "ttft_ms": ttft_ms,
-                "chat_first_token_ms": ttft_ms,  # backward-compat alias
                 "session_id": str(sid),
                 "chat_id": chat_id,
                 "is_greeting": is_greeting,
@@ -611,7 +614,6 @@ def _widget_chat_stream(
                     text=text,
                     document_ids=[],
                     tokens_used=0,
-                    chat_ended=False,
                     failure_state=failure_state,
                 )
                 logger.info(
@@ -731,7 +733,6 @@ def _widget_chat_stream(
         turn_response = WidgetChatTurnResponse(
             text=final_text,
             session_id=sid,
-            chat_ended=bool(outcome.chat_ended) if outcome is not None else False,
             ticket_number=outcome.ticket_number if outcome is not None else None,
             outcome="llm_unavailable" if is_llm_unavailable else None,
             failure_state=outcome.failure_state if is_llm_unavailable else None,
@@ -806,9 +807,6 @@ def _handoff_state(s, chat: Chat) -> str:
 class WidgetHistoryResponse(BaseModel):
     session_id: uuid.UUID
     messages: list[WidgetHistoryMessage]
-    #: Always ``False``: conversations never close. Kept for older widgets
-    #: that still read it; drop in the next major.
-    chat_ended: bool = False
     ticket_number: str | None = None
     #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
     handoff_state: str = "bot"
@@ -904,7 +902,6 @@ async def widget_history(
                 WidgetHistoryMessage(id=m.id, role=m.role.value, content=m.content)
                 for m in messages
             ],
-            chat_ended=False,
             ticket_number=ticket_number,
             boundary_indices=boundary_indices,
             conversation_rotated=conversation_rotated,
@@ -923,7 +920,6 @@ class WidgetMessagesResponse(BaseModel):
     messages: list[WidgetHistoryMessage]
     #: ``bot`` | ``waiting`` | ``live`` — see :func:`_handoff_state`.
     handoff_state: str = "bot"
-    chat_ended: bool = False
     #: Byline for operator-authored messages.
     operator_label: str = OPERATOR_LABEL
     #: The cursor named a message this conversation does not contain (the
@@ -1048,7 +1044,6 @@ async def widget_messages(
                 for m in page
             ],
             handoff_state=_handoff_state(s, chat),
-            chat_ended=False,
             cursor_stale=cursor_stale,
         )
 

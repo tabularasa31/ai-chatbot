@@ -4,7 +4,9 @@ The behaviours worth protecting, in the order they matter:
 
 * a workspace with no seat sees no change at all — same ``Reply-To``, same
   straight-to-the-visitor path;
-* a seat holder's reply lands in the chat thread *and* in the visitor's inbox;
+* a seat holder's reply lands in the chat thread *and* in the visitor's inbox,
+  and mutes the bot exactly as the operator API's ``take`` does — releasing
+  the chat hands it back;
 * a reply from anybody else is forwarded to the visitor and never refused;
 * the visitor's replies reach the operator while the chat is live;
 * the endpoint refuses a missing path secret and a token matching no ticket.
@@ -14,8 +16,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
-from unittest import mock
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,6 +43,10 @@ from backend.escalation.service import (
 )
 from backend.models import (
     Chat,
+    Document,
+    DocumentStatus,
+    DocumentType,
+    Embedding,
     EscalationStatus,
     EscalationTicket,
     EscalationTrigger,
@@ -53,6 +58,7 @@ from backend.models import (
 )
 from backend.models.base import _utcnow
 from backend.operator.unread_reply import mail_unread_operator_replies
+from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 _SECRET = "inbound-secret-for-tests"
@@ -64,7 +70,7 @@ def _wire_the_lane(monkeypatch: pytest.MonkeyPatch):
     """Configure the lane for every test in this module.
 
     Without the secret the lane is not wired at all — that state has its own
-    test rather than being the default here.
+    case rather than being the default here.
     """
     monkeypatch.setattr(settings, "inbound_email_secret", _SECRET)
     monkeypatch.setattr(settings, "inbound_email_domain", _DOMAIN)
@@ -92,6 +98,25 @@ def _workspace(
         )
         assert seat.status_code == 200, seat.text
     return token, uuid.UUID(resp.json()["id"])
+
+
+def _workspace_with_key(
+    client: TestClient, db: Session, *, email: str, name: str, seated: bool
+) -> tuple[str, uuid.UUID, str]:
+    """Same as ``_workspace``, plus the widget API key for a ``/chat`` call."""
+    token = register_and_verify_user(client, db, email=email)
+    resp = client.post(
+        "/tenants", headers={"Authorization": f"Bearer {token}"}, json={"name": name}
+    )
+    assert resp.status_code == 201, resp.text
+    set_client_openai_key(client, token)
+    if seated:
+        seat = client.put(
+            "/tenants/members/me/seat", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert seat.status_code == 200, seat.text
+    body = resp.json()
+    return token, uuid.UUID(body["id"]), body["api_key"]
 
 
 def _ticket(
@@ -144,6 +169,38 @@ def _colleague(
     return user
 
 
+def _seed_knowledge(db: Session, tenant_id: uuid.UUID) -> None:
+    """One indexed chunk, so a bot turn has something to answer from."""
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="handbook.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="Refunds are issued within 14 days.",
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    db.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="Refunds are issued within 14 days.",
+            vector=None,
+            metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+        )
+    )
+    db.commit()
+
+
+def _arm_openai(mock_openai_client: Mock, answer: str = "Within 14 days.") -> None:
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.1] * 1536)
+    ]
+    mock_openai_client.chat.completions.create.side_effect = (
+        _chat_completion_side_effect(answer, total_tokens=7)
+    )
+
+
 def _brevo_item(
     *,
     to: str,
@@ -178,56 +235,51 @@ def _post_inbound(client: TestClient, payload: dict, *, secret: str = _SECRET):
 # --------------------------------------------------------------------------
 
 
-def test_seatless_workspace_keeps_the_visitors_address(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    "seated,wired,expect_token",
+    [
+        pytest.param(False, True, False, id="seatless_workspace_keeps_visitor_address"),
+        pytest.param(True, True, True, id="seated_workspace_gets_token_address"),
+        pytest.param(True, False, False, id="unwired_lane_keeps_visitor_address"),
+    ],
+)
+def test_notification_reply_to_by_seat_status(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    seated: bool,
+    wired: bool,
+    expect_token: bool,
 ) -> None:
-    """A tenant with no seat sees no change at all — acceptance criterion 1."""
+    """Acceptance criterion 1: a tenant with no seat, or no wired lane, sees no
+    change at all — same address the visitor already gave.
+    """
+    if not wired:
+        monkeypatch.setattr(settings, "inbound_email_secret", None)
     _token, tenant_id = _workspace(
-        tenant, db_session, email="seatless@example.com", name="Seatless", seated=False
+        tenant, db_session, email=f"notify-{seated}-{wired}@example.com",
+        name="Notify Co", seated=seated,
     )
-    workspace = db_session.query(Tenant).filter(Tenant.id == tenant_id).one()
     ticket = _ticket(db_session, tenant_id)
 
-    with patch("backend.escalation.service.send_email", return_value="<id@brevo>") as send:
-        assert _notify_tenant_new_ticket(workspace, ticket, db_session) is True
+    if wired:
+        workspace = db_session.query(Tenant).filter(Tenant.id == tenant_id).one()
+        with patch("backend.escalation.service.send_email", return_value="<id@brevo>") as send:
+            assert _notify_tenant_new_ticket(workspace, ticket, db_session) is True
+        reply_to = send.call_args.kwargs["reply_to"]
+    else:
+        reply_to = escalation_reply_to(ticket, db_session)
 
-    assert send.call_args.kwargs["reply_to"] == "visitor@example.com"
     db_session.refresh(ticket)
-    assert ticket.reply_token is None
+    if expect_token:
+        assert ticket.reply_token
+        assert reply_to == reply_address(ticket.reply_token)
+    else:
+        assert ticket.reply_token is None
+        assert reply_to == "visitor@example.com"
 
 
-def test_seated_workspace_gets_our_token_address(
-    tenant: TestClient, db_session: Session
-) -> None:
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="seated@example.com", name="Seated", seated=True
-    )
-    workspace = db_session.query(Tenant).filter(Tenant.id == tenant_id).one()
-    ticket = _ticket(db_session, tenant_id)
-
-    with patch("backend.escalation.service.send_email", return_value="<id@brevo>") as send:
-        assert _notify_tenant_new_ticket(workspace, ticket, db_session) is True
-
-    db_session.refresh(ticket)
-    assert ticket.reply_token
-    assert send.call_args.kwargs["reply_to"] == reply_address(ticket.reply_token)
-
-
-def test_unwired_lane_keeps_the_visitors_address(
-    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No webhook secret means no mailbox to receive on, so no token address."""
-    monkeypatch.setattr(settings, "inbound_email_secret", None)
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="unwired@example.com", name="Unwired", seated=True
-    )
-    ticket = _ticket(db_session, tenant_id)
-
-    assert escalation_reply_to(ticket, db_session) == "visitor@example.com"
-    assert ticket.reply_token is None
-
-
-def test_the_token_survives_re_notification(
+def test_reply_to_token_is_stable_across_renotify(
     tenant: TestClient, db_session: Session
 ) -> None:
     """A repeat notify must not invalidate an address already in an inbox."""
@@ -246,7 +298,7 @@ def test_the_token_survives_re_notification(
 # --------------------------------------------------------------------------
 
 
-def test_token_is_read_out_of_the_recipient_address() -> None:
+def test_token_from_recipients_parses_the_plus_address() -> None:
     assert token_from_recipients([f"reply+abc123@{_DOMAIN}"]) == "abc123"
     assert token_from_recipients([f"Ann <reply+abc123@{_DOMAIN}>"]) == "abc123"
     # Another domain is somebody else's mail, not a malformed token.
@@ -255,12 +307,15 @@ def test_token_is_read_out_of_the_recipient_address() -> None:
     assert token_from_recipients([]) is None
 
 
-def test_a_token_survives_the_mailer_lower_casing_the_address(
+def test_a_token_survives_case_folding_from_mint_to_reply(
     tenant: TestClient, db_session: Session
 ) -> None:
     """Brevo lower-cases ``Reply-To`` on send, so what comes back is not
     byte-identical to what was minted. Pinned against the real ESC-0659 miss:
     a mixed-case token in the row, a lower-cased one in the reply, 404.
+
+    Freshly minted tokens carry no case at all, so this is a legacy-token
+    concern rather than something new tokens can reintroduce.
     """
     _token, tenant_id = _workspace(
         tenant, db_session, email="fold@example.com", name="Fold", seated=True
@@ -270,43 +325,46 @@ def test_a_token_survives_the_mailer_lower_casing_the_address(
     db_session.commit()
 
     assert ticket_for_token("mixed-case_legacy_token", db_session) is ticket
-    assert (
-        token_from_recipients([f"reply+MiXeD-Case@{_DOMAIN}"]) == "mixed-case"
-    )
+    assert token_from_recipients([f"reply+MiXeD-Case@{_DOMAIN}"]) == "mixed-case"
 
-
-def test_freshly_minted_tokens_carry_no_case_at_all(
-    tenant: TestClient, db_session: Session
-) -> None:
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="hex@example.com", name="Hex", seated=True
-    )
-    ticket = _ticket(db_session, tenant_id)
-    address = escalation_reply_to(ticket, db_session)
-    token = ticket.reply_token
+    fresh = _ticket(db_session, tenant_id, number="ESC-9002")
+    address = escalation_reply_to(fresh, db_session)
+    token = fresh.reply_token
     assert token and token == token.lower() and token in address
     assert len(f"reply+{token}") <= 64  # RFC 5321 local-part limit
 
 
-def test_brevo_extracted_body_is_preferred_over_the_raw_text() -> None:
-    """No quote-stripping heuristics: Brevo already did the separation."""
+@pytest.mark.parametrize(
+    "case_id,item_kwargs,expected_text,expected_token",
+    [
+        pytest.param(
+            "extracted_preferred",
+            {},
+            "Sure — within 14 days.",
+            None,
+            id="extracted_preferred",
+        ),
+        pytest.param(
+            "raw_fallback",
+            {"extracted": None, "raw_text": "Plain body"},
+            "Plain body",
+            None,
+            id="raw_text_fallback",
+        ),
+    ],
+)
+def test_parse_brevo_payload_body_selection(
+    case_id: str, item_kwargs: dict, expected_text: str, expected_token: str | None
+) -> None:
+    """No quote-stripping heuristics on the extracted path: Brevo already did
+    the separation. The raw text is only the fallback when it did not.
+    """
     [reply] = parse_brevo_payload(
-        _brevo_item(to=f"reply+tok@{_DOMAIN}", sender="ann@agency.example")
+        _brevo_item(to=f"reply+tok@{_DOMAIN}", sender="ann@agency.example", **item_kwargs)
     )
-    assert reply.text == "Sure — within 14 days."
-    assert "On Mon, we wrote:" not in reply.text
-
-
-def test_the_raw_text_is_the_fallback_when_brevo_did_not_split() -> None:
-    [reply] = parse_brevo_payload(
-        _brevo_item(
-            to=f"reply+tok@{_DOMAIN}",
-            sender="ann@agency.example",
-            extracted=None,
-            raw_text="Plain body",
-        )
-    )
-    assert reply.text == "Plain body"
+    assert reply.text == expected_text
+    if case_id == "extracted_preferred":
+        assert "On Mon, we wrote:" not in reply.text
 
 
 def test_the_delivered_to_list_is_read_as_well_as_the_to_header() -> None:
@@ -341,31 +399,39 @@ def test_a_nonsense_payload_yields_nothing_rather_than_raising() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_wrong_path_secret_is_refused(tenant: TestClient) -> None:
-    resp = _post_inbound(
-        tenant,
-        _brevo_item(to=f"reply+tok@{_DOMAIN}", sender="ann@agency.example"),
-        secret="not-the-secret",
-    )
-    assert resp.status_code == 404
+def test_inbound_refusals(tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Four distinct ways in, all refused with a 404:
 
+    * a path secret that does not match ours;
+    * a lane never configured with a secret at all;
+    * a token that matches no ticket;
+    * a token revoked long enough ago that its grace window has passed.
+    """
+    item = _brevo_item(to=f"reply+nosuchtoken@{_DOMAIN}", sender="ann@agency.example")
 
-def test_an_unconfigured_lane_refuses_everything(
-    tenant: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    assert _post_inbound(tenant, item, secret="not-the-secret").status_code == 404
+
     monkeypatch.setattr(settings, "inbound_email_secret", None)
-    resp = _post_inbound(
-        tenant, _brevo_item(to=f"reply+tok@{_DOMAIN}", sender="ann@agency.example")
-    )
-    assert resp.status_code == 404
+    assert _post_inbound(tenant, item).status_code == 404
+    monkeypatch.setattr(settings, "inbound_email_secret", _SECRET)
 
+    assert _post_inbound(tenant, item).status_code == 404
 
-def test_a_token_matching_no_ticket_is_refused(tenant: TestClient) -> None:
-    resp = _post_inbound(
-        tenant,
-        _brevo_item(to=f"reply+nosuchtoken@{_DOMAIN}", sender="ann@agency.example"),
+    _token, tenant_id = _workspace(
+        tenant, db_session, email="stale@example.com", name="Stale", seated=True
     )
-    assert resp.status_code == 404
+    ticket = _ticket(db_session, tenant_id)
+    address = escalation_reply_to(ticket, db_session)
+    db_session.commit()
+    stage_ticket_resolved(db_session, ticket, "done")
+    db_session.commit()
+    ticket = db_session.get(EscalationTicket, ticket.id)
+    ticket.reply_token_revoked_at = _utcnow() - REVOKED_TOKEN_GRACE - timedelta(hours=1)
+    db_session.commit()
+
+    assert _post_inbound(
+        tenant, _brevo_item(to=address, sender="ann@agency.example")
+    ).status_code == 404
 
 
 def test_a_reply_to_a_just_resolved_request_still_reaches_the_visitor(
@@ -391,12 +457,8 @@ def test_a_reply_to_a_just_resolved_request_still_reaches_the_visitor(
     stage_ticket_resolved(db_session, ticket, "done")
     db_session.commit()
 
-    with mock.patch(
-        "backend.escalation.service._send_email_off_loop", return_value="mid"
-    ) as send:
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="ann@agency.example")
-        )
+    with patch("backend.escalation.service.send_email", return_value="mid") as send:
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="ann@agency.example"))
 
     assert resp.status_code == 200
     # Forwarded, never ingested: the request is closed, so the reply must not
@@ -405,58 +467,41 @@ def test_a_reply_to_a_just_resolved_request_still_reaches_the_visitor(
     assert send.call_count == 1
 
 
-def test_a_token_revoked_long_ago_addresses_nothing(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """The grace window ends, and with it the token.
+# --------------------------------------------------------------------------
+# Inbound: attribution, and the operator take/answer/release journey
+# --------------------------------------------------------------------------
 
-    A notification that leaked must not stay a way to mail the visitor for
-    ever, so the address stops resolving once the window has passed — and the
-    refusal looks like every other refusal.
+
+def test_seat_holders_reply_take_answer_release_journey(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Acceptance criteria 2 and 3, plus the handoff they produce, in one pass:
+
+    * a seat holder's e-mail reply lands in the thread and reaches the
+      visitor by e-mail too — the direct path the Reply-To change took away;
+    * it leaves no forward mark, because it was ingested, not forwarded;
+    * ingestion mutes the bot exactly as ``/operator/.../take`` does;
+    * the visitor's already-mailed reply means the unread-reply job has
+      nothing left to send;
+    * ``/operator/.../release`` hands the chat back and the bot resumes;
+    * once released, the seat holder's own seat — not their role — is what
+      decided the outcome: releasing it turns the same reply into a forward.
     """
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="stale@example.com", name="Stale", seated=True
-    )
-    ticket = _ticket(db_session, tenant_id)
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    stage_ticket_resolved(db_session, ticket, "done")
-    db_session.commit()
-    ticket = db_session.get(EscalationTicket, ticket.id)
-    ticket.reply_token_revoked_at = _utcnow() - REVOKED_TOKEN_GRACE - timedelta(hours=1)
-    db_session.commit()
-
-    resp = _post_inbound(
-        tenant, _brevo_item(to=address, sender="ann@agency.example")
-    )
-    assert resp.status_code == 404
-
-
-# --------------------------------------------------------------------------
-# Inbound: attribution
-# --------------------------------------------------------------------------
-
-
-def test_a_seat_holders_reply_enters_the_thread_and_reaches_the_visitor(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """Acceptance criteria 2 and 3, in one pass."""
-    _token, tenant_id = _workspace(
+    token, tenant_id, api_key = _workspace_with_key(
         tenant, db_session, email="owner-ingest@example.com", name="Ingest", seated=True
     )
-    operator = _colleague(
-        db_session, tenant_id, email="ann@agency.example", seated=True
-    )
+    operator = _colleague(db_session, tenant_id, email="ann@agency.example", seated=True)
+    _seed_knowledge(db_session, tenant_id)
+    _arm_openai(mock_openai_client, answer="Refunds take 14 days.")
     chat = _chat(db_session, tenant_id)
     ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>") as send:
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="Ann@Agency.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="Ann@Agency.example"))
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
@@ -472,13 +517,13 @@ def test_a_seat_holders_reply_enters_the_thread_and_reaches_the_visitor(
 
     chat = db_session.query(Chat).filter(Chat.id == chat.id).one()
     assert chat.operator_state is OperatorState.live
-    ticket = db_session.query(EscalationTicket).filter(
-        EscalationTicket.id == ticket.id
-    ).one()
+    ticket = db_session.get(EscalationTicket, ticket.id)
     assert ticket.status is EscalationStatus.in_progress
+    # Ingested, not forwarded: no mark left behind.
+    assert ticket.forwarded_reply_at is None
+    assert ticket.forwarded_reply_from is None
 
-    # ...and the same answer went to the visitor by e-mail, so the direct path
-    # the Reply-To change took away is restored.
+    # ...and the same answer went to the visitor by e-mail.
     assert send.call_count == 1
     assert send.call_args.args[0] == "visitor@example.com"
     assert "within 14 days" in send.call_args.args[2]
@@ -487,11 +532,56 @@ def test_a_seat_holders_reply_enters_the_thread_and_reaches_the_visitor(
     # reply job that the ingest scheduled must find nothing left to send.
     assert chat.unread_reply_mailed_message_id == rows[0].id
     with patch("backend.operator.unread_reply.send_email") as again:
-        outcome = mail_unread_operator_replies(
-            db_session, chat_id=chat.id, message_id=rows[0].id
-        )
+        outcome = mail_unread_operator_replies(db_session, chat_id=chat.id, message_id=rows[0].id)
     assert outcome == "nothing_unread"
     again.assert_not_called()
+
+    # The bot is muted while the chat is live, same as after a `take`.
+    muted = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "any update?", "session_id": str(chat.session_id)},
+    )
+    assert muted.status_code == 200, muted.text
+    assert muted.json()["text"] == ""
+
+    # Released through the real operator API, the bot answers again.
+    released = tenant.post(
+        f"/operator/chats/{chat.id}/release",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert released.status_code == 200, released.text
+    resumed = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "any update?", "session_id": str(chat.session_id)},
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["text"] != ""
+
+    # Same person, seat released: the same reply now takes the free path.
+    operator.seat_granted_at = None
+    db_session.add(operator)
+    db_session.commit()
+    with patch("backend.escalation.service.send_email", return_value="<fwd2@brevo>"):
+        [reply] = parse_brevo_payload(
+            _brevo_item(to=reply_address(ticket.reply_token), sender="ann@agency.example")
+        )
+        unseated_result = handle_inbound_reply(reply, db_session)
+    assert unseated_result.outcome is InboundOutcome.forwarded
+
+    # The owner role grants nothing on its own: without a seat the owner is
+    # forwarded like anyone else.
+    owner = db_session.query(User).filter(User.email == "owner-ingest@example.com").one()
+    owner.seat_granted_at = None
+    db_session.add(owner)
+    db_session.commit()
+    with patch("backend.escalation.service.send_email", return_value="<fwd3@brevo>"):
+        [reply] = parse_brevo_payload(
+            _brevo_item(to=reply_address(ticket.reply_token), sender="owner-ingest@example.com")
+        )
+        owner_result = handle_inbound_reply(reply, db_session)
+    assert owner_result.outcome is InboundOutcome.forwarded
 
 
 def test_a_seat_holders_reply_the_forward_lost_is_mailed_by_the_job(
@@ -508,9 +598,7 @@ def test_a_seat_holders_reply_the_forward_lost_is_mailed_by_the_job(
     db_session.commit()
 
     with patch("backend.escalation.service.send_email", return_value=None):
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="lee@agency.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="lee@agency.example"))
     assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
 
     db_session.expire_all()
@@ -523,34 +611,50 @@ def test_a_seat_holders_reply_the_forward_lost_is_mailed_by_the_job(
     assert chat.unread_reply_mailed_message_id is None
 
     with patch("backend.operator.unread_reply.send_email", return_value="<id>") as send:
-        outcome = mail_unread_operator_replies(
-            db_session, chat_id=chat.id, message_id=reply.id
-        )
+        outcome = mail_unread_operator_replies(db_session, chat_id=chat.id, message_id=reply.id)
     assert outcome == "sent"
     assert send.call_args.args[0] == "visitor@example.com"
 
 
-def test_a_reply_from_a_seatless_sender_is_forwarded_not_refused(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    "scenario",
+    ["seatless_colleague", "stranger", "cross_tenant_seat_holder"],
+)
+def test_non_seat_reply_is_forwarded_not_refused(
+    tenant: TestClient, db_session: Session, scenario: str
 ) -> None:
-    """Acceptance criterion 5. The customer is answered either way."""
+    """Acceptance criterion 5: the customer is answered either way, whoever
+    replies — a colleague without a seat, a total stranger, or a seat holder
+    who just happens to hold it on somebody else's workspace.
+    """
     _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-fwd@example.com", name="Forward", seated=True
+        tenant, db_session, email=f"owner-{scenario}@example.com", name="Fwd", seated=True
     )
-    _colleague(db_session, tenant_id, email="bob@agency.example", seated=False)
     chat = _chat(db_session, tenant_id)
     ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+
+    if scenario == "seatless_colleague":
+        _colleague(db_session, tenant_id, email="bob@agency.example", seated=False)
+        sender = "bob@agency.example"
+    elif scenario == "stranger":
+        sender = "nobody@elsewhere.example"
+    else:
+        _token_b, tenant_b = _workspace(
+            tenant, db_session, email="b-owner@example.com", name="Beta Co", seated=True
+        )
+        _colleague(db_session, tenant_b, email="outsider@b.example", seated=True)
+        sender = "outsider@b.example"
+
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>") as send:
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="bob@agency.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender=sender))
 
     assert resp.status_code == 200
     assert resp.json()["outcomes"] == [InboundOutcome.forwarded.value]
-    assert send.call_args.args[0] == "visitor@example.com"
+    if scenario != "cross_tenant_seat_holder":
+        assert send.call_args.args[0] == "visitor@example.com"
 
     db_session.expire_all()
     assert (
@@ -580,9 +684,7 @@ def test_a_forwarded_reply_leaves_its_mark_on_the_ticket_and_in_the_inbox(
     db_session.commit()
 
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="alias@agency.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
     assert resp.json()["outcomes"] == [InboundOutcome.forwarded.value]
 
     db_session.expire_all()
@@ -614,7 +716,8 @@ def test_a_forwarded_reply_answers_the_request_so_asking_again_re_queues(
     """The visitor got their answer by mail; asking for a human again is a new
     request and starts a new wait, exactly as after an answer in the thread.
     Before the forward the repeat changes nothing — the visitor still waits
-    from the first request.
+    from the first request. After it, the mark hides again, since it counts
+    against the request it answered and not the next one.
     """
     token, tenant_id = _workspace(
         tenant, db_session, email="owner-requeue@example.com", name="Requeue", seated=True
@@ -640,13 +743,16 @@ def test_a_forwarded_reply_answers_the_request_so_asking_again_re_queues(
     assert queue["waiting_count"] == 1
 
 
-def test_a_forwarded_reply_reports_its_own_clock_not_first_response(
+def test_forwarded_reply_response_ms_metric_and_stale_clock_guard(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """The visitor waited exactly until this mail, so the wait is recorded —
-    on the forward's own event, never on ``first_response_ms``: the product
-    metric measures the product, and this answer happened outside it. The
-    clock starts at the latest ask, as the queue's own wait does.
+    """The visitor waited exactly until this mail, so the wait is recorded on
+    the forward's own event, never on ``first_response_ms``: the product
+    metric measures the product, and this answer happened outside it.
+
+    A second forward whose stamp did not land must not report the first
+    forward's wait: the rolled-back session reloads yesterday's stamp, and a
+    stale number is worse than none. The forward itself still succeeds.
     """
     _token, tenant_id = _workspace(
         tenant, db_session, email="owner-clock@example.com", name="Clock", seated=True
@@ -673,161 +779,62 @@ def test_a_forwarded_reply_reports_its_own_clock_not_first_response(
     )
     assert forwarded.kwargs["properties"]["response_ms"] == expected
     assert timedelta(minutes=3) <= timedelta(milliseconds=expected) < timedelta(minutes=4)
-
-
-def test_a_failed_stamp_reports_no_clock_rather_than_the_previous_forward(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """A second forward whose stamp did not land must not report the first
-    forward's wait: the rolled-back session reloads yesterday's stamp, and a
-    stale number is worse than none. The forward itself still succeeds.
-    """
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-stale@example.com", name="Stale", seated=True
-    )
-    chat = _chat(db_session, tenant_id)
-    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
-    db_session.expire_all()
     first_stamp = ticket.forwarded_reply_at
-    assert first_stamp is not None
 
     with (
         patch("backend.escalation.service.send_email", return_value="<fwd2@brevo>"),
         patch("backend.email.inbound._utcnow", side_effect=RuntimeError("clock down")),
-        patch("backend.email.inbound.capture_event") as captured,
+        patch("backend.email.inbound.capture_event") as captured2,
     ):
         resp = _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
     assert resp.json()["outcomes"] == [InboundOutcome.forwarded.value]
 
     db_session.expire_all()
     assert ticket.forwarded_reply_at == first_stamp
-    [forwarded] = [
-        c for c in captured.call_args_list if c.args[0] == "email_lane.reply_forwarded"
+    [forwarded2] = [
+        c for c in captured2.call_args_list if c.args[0] == "email_lane.reply_forwarded"
     ]
-    assert forwarded.kwargs["properties"]["response_ms"] is None
+    assert forwarded2.kwargs["properties"]["response_ms"] is None
 
 
-def test_the_mark_hides_once_the_visitor_asks_again(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    "scenario,expected_outcome",
+    [
+        pytest.param("visitor_replies_direct", InboundOutcome.ignored_loopback, id="visitor_direct"),
+        pytest.param("visitor_replies_to_forward", InboundOutcome.ignored_loopback, id="visitor_to_forward"),
+        pytest.param("seat_holder_shares_visitor_address", InboundOutcome.ingested, id="seat_holder_same_address"),
+    ],
+)
+def test_loopback_guard_keys_on_seat_not_address(
+    tenant: TestClient, db_session: Session, scenario: str, expected_outcome: InboundOutcome
 ) -> None:
-    """A mailed answer counts against the request it answered, not the next
-    one: after the visitor asks for a human again the inbox must show the
-    fresh wait, not yesterday's "answered by e-mail".
+    """The loop guard drops the visitor's own words coming back — forwarding
+    those would ping-pong forever, whether they arrive straight or bounced off
+    a forward. But holding a seat is what separates a member of this
+    workspace from a visitor: a tenant testing their own widget from their own
+    support address must still get through.
     """
-    token, tenant_id = _workspace(
-        tenant, db_session, email="owner-again@example.com", name="Again", seated=True
-    )
-    chat = _chat(db_session, tenant_id)
-    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
-
-    db_session.expire_all()
-    ticket.requested_again_at = ticket.forwarded_reply_at + timedelta(minutes=5)
-    db_session.commit()
-    assert note_repeat_human_request(ticket, db_session) is False
-
-    auth = {"Authorization": f"Bearer {token}"}
-    [row] = tenant.get("/operator/inbox", headers=auth).json()["items"]
-    assert row["handoff_state"] == "waiting"
-    assert row["waiting_since"] == ticket.requested_again_at.isoformat()
-    assert row["ticket"]["forwarded_reply_at"] is None
-    assert row["ticket"]["forwarded_reply_from"] is None
-
-
-def test_an_ingested_reply_leaves_no_forward_mark(
-    tenant: TestClient, db_session: Session
-) -> None:
     _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-nomark@example.com", name="NoMark", seated=True
+        tenant, db_session, email=f"owner-{scenario}@example.com", name="Loop", seated=True
     )
     chat = _chat(db_session, tenant_id)
-    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
+    visitor_email = "support@theircompany.example" if scenario == "seat_holder_shares_visitor_address" else "visitor@example.com"
+    if scenario == "seat_holder_shares_visitor_address":
+        _colleague(db_session, tenant_id, email=visitor_email, seated=True)
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, user_email=visitor_email)
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
-    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="owner-nomark@example.com")
-        )
-    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
-
-    db_session.expire_all()
-    assert ticket.forwarded_reply_at is None
-    assert ticket.forwarded_reply_from is None
-
-
-def test_a_reply_from_a_stranger_is_forwarded_not_refused(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """An address matching no account at all still answers the customer."""
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-stranger@example.com", name="Stranger", seated=True
-    )
-    chat = _chat(db_session, tenant_id)
-    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
+    if scenario == "visitor_replies_to_forward":
+        with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
+            _post_inbound(tenant, _brevo_item(to=address, sender="alias@agency.example"))
 
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>") as send:
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="nobody@elsewhere.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender=visitor_email))
 
-    assert resp.json()["outcomes"] == [InboundOutcome.forwarded.value]
-    assert send.call_args.args[0] == "visitor@example.com"
-
-
-def test_a_seat_holder_in_another_workspace_is_a_stranger_here(
-    tenant: TestClient, db_session: Session
-) -> None:
-    _token_a, tenant_a = _workspace(
-        tenant, db_session, email="a-owner@example.com", name="Alpha Co", seated=True
-    )
-    _token_b, tenant_b = _workspace(
-        tenant, db_session, email="b-owner@example.com", name="Beta Co", seated=True
-    )
-    _colleague(db_session, tenant_b, email="outsider@b.example", seated=True)
-    chat = _chat(db_session, tenant_a)
-    ticket = _ticket(db_session, tenant_a, chat_id=chat.id)
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="outsider@b.example")
-        )
-
-    assert resp.json()["outcomes"] == [InboundOutcome.forwarded.value]
-
-
-def test_the_visitors_own_message_is_not_mailed_back_to_them(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """The loop guard: forwarding this would ping-pong forever."""
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-loop@example.com", name="Loop", seated=True
-    )
-    chat = _chat(db_session, tenant_id)
-    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    with patch("backend.escalation.service.send_email") as send:
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="visitor@example.com")
-        )
-
-    assert resp.json()["outcomes"] == [InboundOutcome.ignored_loopback.value]
-    send.assert_not_called()
+    assert resp.json()["outcomes"][-1] == expected_outcome.value
+    if expected_outcome is InboundOutcome.ignored_loopback:
+        send.assert_not_called()
 
 
 def test_a_mismatched_in_reply_to_is_recorded_not_refused(
@@ -847,9 +854,7 @@ def test_a_mismatched_in_reply_to_is_recorded_not_refused(
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
-    payload = _brevo_item(
-        to=address, sender="ann@agency.example", in_reply_to="<somebody-elses@id>"
-    )
+    payload = _brevo_item(to=address, sender="ann@agency.example", in_reply_to="<somebody-elses@id>")
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
         resp = _post_inbound(tenant, payload)
 
@@ -870,9 +875,7 @@ def test_a_failed_forward_after_ingestion_keeps_the_message(
     db_session.commit()
 
     with patch("backend.escalation.service.send_email", return_value=None):
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="ann@agency.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="ann@agency.example"))
 
     assert resp.status_code == 200
     assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
@@ -898,9 +901,7 @@ def test_a_failed_forward_with_nothing_ingested_asks_for_a_retry(
     db_session.commit()
 
     with patch("backend.escalation.service.send_email", return_value=None):
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="nobody@elsewhere.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="nobody@elsewhere.example"))
 
     assert resp.status_code == 503
 
@@ -920,9 +921,7 @@ def test_a_closed_request_is_forwarded_rather_than_reopened(
     db_session.commit()
 
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>") as send:
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="ann@agency.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="ann@agency.example"))
 
     assert resp.json()["outcomes"] == [InboundOutcome.forwarded.value]
     assert send.call_args.args[0] == "visitor@example.com"
@@ -946,9 +945,7 @@ def test_an_empty_body_is_dropped_quietly(
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
-    payload = _brevo_item(
-        to=address, sender="ann@agency.example", extracted="", raw_text="   "
-    )
+    payload = _brevo_item(to=address, sender="ann@agency.example", extracted="", raw_text="   ")
     with patch("backend.escalation.service.send_email") as send:
         resp = _post_inbound(tenant, payload)
 
@@ -968,9 +965,7 @@ def test_the_signature_reaches_the_mailbox_but_not_the_chat_bubble(
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
-    payload = _brevo_item(
-        to=address, sender="ann@agency.example", signature="--\nAnn, Support"
-    )
+    payload = _brevo_item(to=address, sender="ann@agency.example", signature="--\nAnn, Support")
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>") as send:
         _post_inbound(tenant, payload)
 
@@ -982,52 +977,6 @@ def test_the_signature_reaches_the_mailbox_but_not_the_chat_bubble(
         .one()
     )
     assert "Ann, Support" not in row.content
-
-
-# --------------------------------------------------------------------------
-# Direct unit coverage of the seat gate on the way in
-# --------------------------------------------------------------------------
-
-
-def test_handle_inbound_reply_reads_the_seat_not_the_role(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """An owner who never took a seat cannot write into the transcript.
-
-    The role is what somebody may administer; the seat is what they may
-    operate. This is the distinction the lane is sold on, so it gets its own
-    test rather than being implied by the forwarding case above.
-    """
-    token, tenant_id = _workspace(
-        tenant, db_session, email="unseated-owner@example.com", name="Unseated", seated=True
-    )
-    owner = (
-        db_session.query(User)
-        .filter(User.email == "unseated-owner@example.com")
-        .one()
-    )
-    chat = _chat(db_session, tenant_id)
-    ticket = _ticket(db_session, tenant_id, chat_id=chat.id)
-    escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    [reply] = parse_brevo_payload(
-        _brevo_item(
-            to=reply_address(ticket.reply_token), sender="unseated-owner@example.com"
-        )
-    )
-    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        seated_result = handle_inbound_reply(reply, db_session)
-    assert seated_result.outcome is InboundOutcome.ingested
-
-    # Same person, seat released: the same reply now takes the free path.
-    owner.seat_granted_at = None
-    db_session.add(owner)
-    db_session.commit()
-    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        unseated_result = handle_inbound_reply(reply, db_session)
-    assert unseated_result.outcome is InboundOutcome.forwarded
-    assert token  # the workspace token is unused here; kept for readability
 
 
 def test_an_html_only_reply_is_not_lost(
@@ -1048,9 +997,7 @@ def test_an_html_only_reply_is_not_lost(
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
-    payload = _brevo_item(
-        to=address, sender="ann-html@agency.example", extracted=None, raw_text=""
-    )
+    payload = _brevo_item(to=address, sender="ann-html@agency.example", extracted=None, raw_text="")
     payload["items"][0]["RawHtmlBody"] = (
         "<html><body><p>Within 14 days.</p>"
         "<p>Ask billing if it is late &amp; unpaid.</p></body></html>"
@@ -1129,10 +1076,7 @@ def test_a_failed_send_asks_for_the_batch_again_without_losing_it(
     chat = _chat(db_session, tenant_id)
     good_ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9102")
     bad_ticket = _ticket(
-        db_session,
-        tenant_id,
-        number="ESC-9103",
-        user_email="other-visitor@example.com",
+        db_session, tenant_id, number="ESC-9103", user_email="other-visitor@example.com"
     )
     good_address = escalation_reply_to(good_ticket, db_session)
     bad_address = escalation_reply_to(bad_ticket, db_session)
@@ -1149,7 +1093,6 @@ def test_a_failed_send_asks_for_the_batch_again_without_losing_it(
 
     with patch("backend.escalation.service.send_email", side_effect=_send):
         resp = _post_inbound(tenant, {"items": [good, bad]})
-
     assert resp.status_code == 503, resp.text
 
     # The redelivery skips what landed and re-attempts only what did not.
@@ -1157,10 +1100,7 @@ def test_a_failed_send_asks_for_the_batch_again_without_losing_it(
         retry = _post_inbound(tenant, {"items": [good, bad]})
 
     assert retry.status_code == 200, retry.text
-    assert retry.json()["outcomes"] == [
-        "already_handled",
-        InboundOutcome.forwarded.value,
-    ]
+    assert retry.json()["outcomes"] == ["already_handled", InboundOutcome.forwarded.value]
 
     db_session.expire_all()
     rows = (
@@ -1171,83 +1111,54 @@ def test_a_failed_send_asks_for_the_batch_again_without_losing_it(
     assert len(rows) == 1
 
 
-def test_the_quoted_original_does_not_follow_the_reply_into_the_chat(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    "quote_position,expect_dropped",
+    [
+        pytest.param("above", None, id="quote_above_reply_is_trimmed"),
+        pytest.param("below", "refunds take 14 days", id="reply_below_quote_still_delivered"),
+    ],
+)
+def test_html_fallback_quote_trimming(
+    tenant: TestClient, db_session: Session, quote_position: str, expect_dropped: str | None
 ) -> None:
-    """The HTML fallback must not carry our own notification back to the visitor.
+    """The HTML fallback must not carry our own notification back to the
+    visitor. The plain-text path never has to think about this — Brevo
+    separates the reply from what it was replying to — but without trimming,
+    the fallback put the ticket number, the visitor's own question and their
+    contact details into the bubble they read, and mailed the same thing back
+    to them.
 
-    The plain-text path never had to think about this — Brevo separates the
-    reply from what it was replying to. The fallback has no such help, and
-    without trimming it put the ticket number, the visitor's own question and
-    their contact details into the bubble they read, and mailed the same thing
-    back to them.
+    Cutting at the first quote marker suits the overwhelming majority, who
+    type above it. For the person who types underneath, a reply with the
+    history attached beats ``ignored_empty``.
     """
     _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-quote@example.com", name="Quote", seated=True
+        tenant, db_session, email=f"owner-quote-{quote_position}@example.com", name="Quote", seated=True
     )
     _colleague(db_session, tenant_id, email="ann-quote@agency.example", seated=True)
     chat = _chat(db_session, tenant_id)
-    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9104")
+    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number=f"ESC-910{quote_position[0]}")
     address = escalation_reply_to(ticket, db_session)
     db_session.commit()
 
-    payload = _brevo_item(
-        to=address, sender="ann-quote@agency.example", extracted=None, raw_text=""
-    )
-    payload["items"][0]["RawHtmlBody"] = (
-        '<div dir="ltr">Refunds take 14 days.</div><br>'
-        '<div class="gmail_quote"><div class="gmail_attr">On Mon, Chat9 wrote:</div>'
-        "<blockquote><p>New escalation ESC-9104</p>"
-        "<p>Visitor asked: my card is 4111 1111 1111 1111</p></blockquote></div>"
-    )
+    payload = _brevo_item(to=address, sender="ann-quote@agency.example", extracted=None, raw_text="")
+    if quote_position == "above":
+        payload["items"][0]["RawHtmlBody"] = (
+            '<div dir="ltr">Refunds take 14 days.</div><br>'
+            '<div class="gmail_quote"><div class="gmail_attr">On Mon, Chat9 wrote:</div>'
+            f"<blockquote><p>New escalation {ticket.ticket_number}</p>"
+            "<p>Visitor asked: my card is 4111 1111 1111 1111</p></blockquote></div>"
+        )
+    else:
+        payload["items"][0]["RawHtmlBody"] = (
+            f"<blockquote><p>New escalation {ticket.ticket_number}</p></blockquote>"
+            "<div>Answering below: refunds take 14 days.</div>"
+        )
 
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>") as send:
         resp = _post_inbound(tenant, payload)
 
     assert resp.status_code == 200, resp.text
-    db_session.expire_all()
-    written = (
-        db_session.query(Message)
-        .filter(Message.chat_id == chat.id, Message.role == MessageRole.operator)
-        .one()
-    )
-    assert written.content == "Refunds take 14 days."
-    assert "4111" not in written.content
-    assert "ESC-9104" not in written.content
-    # The same trimming has to hold on the copy mailed to the visitor.
-    forwarded_body = send.call_args.args[2]
-    assert "4111" not in forwarded_body
-
-
-def test_a_reply_written_below_the_quote_is_still_delivered(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """Trimming must never turn an answer into an empty message.
-
-    Cutting at the first quote marker suits the overwhelming majority, who type
-    above it. For the person who types underneath, a reply with the history
-    attached beats ``ignored_empty``.
-    """
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-below@example.com", name="Below", seated=True
-    )
-    _colleague(db_session, tenant_id, email="ann-below@agency.example", seated=True)
-    chat = _chat(db_session, tenant_id)
-    ticket = _ticket(db_session, tenant_id, chat_id=chat.id, number="ESC-9105")
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    payload = _brevo_item(
-        to=address, sender="ann-below@agency.example", extracted=None, raw_text=""
-    )
-    payload["items"][0]["RawHtmlBody"] = (
-        "<blockquote><p>New escalation ESC-9105</p></blockquote>"
-        "<div>Answering below: refunds take 14 days.</div>"
-    )
-
-    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        resp = _post_inbound(tenant, payload)
-
     assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
     db_session.expire_all()
     written = (
@@ -1255,7 +1166,14 @@ def test_a_reply_written_below_the_quote_is_still_delivered(
         .filter(Message.chat_id == chat.id, Message.role == MessageRole.operator)
         .one()
     )
-    assert "refunds take 14 days" in written.content
+    if quote_position == "above":
+        assert written.content == "Refunds take 14 days."
+        assert "4111" not in written.content
+        assert ticket.ticket_number not in written.content
+        # The same trimming has to hold on the copy mailed to the visitor.
+        assert "4111" not in send.call_args.args[2]
+    else:
+        assert expect_dropped in written.content.lower()
 
 
 def test_a_reopened_ticket_advertises_an_address_that_works(
@@ -1294,9 +1212,7 @@ def test_a_reopened_ticket_advertises_an_address_that_works(
     assert ticket.reply_token_revoked_at is None
 
     with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        resp = _post_inbound(
-            tenant, _brevo_item(to=address, sender="ann-reopen@agency.example")
-        )
+        resp = _post_inbound(tenant, _brevo_item(to=address, sender="ann-reopen@agency.example"))
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["outcomes"] == [InboundOutcome.ingested.value]
@@ -1329,66 +1245,3 @@ def test_a_from_header_sent_as_a_string_still_identifies_the_operator(
         resp = _post_inbound(tenant, payload)
 
     assert resp.json()["outcomes"] == [InboundOutcome.ingested.value], resp.text
-
-
-def test_an_operator_answering_from_the_address_the_visitor_gave_is_not_dropped(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """The commonest false positive in the loopback guard, and the worst-placed.
-
-    The address on a ticket is whatever the visitor typed. A tenant trying
-    their own widget types their own support address, then answers from it —
-    and an unqualified drop makes the feature look broken on the first contact
-    anyone has with it. Holding a seat is what separates a member of this
-    workspace from a visitor bouncing a forward.
-    """
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-self@example.com", name="Self", seated=True
-    )
-    _colleague(db_session, tenant_id, email="support@theircompany.example", seated=True)
-    chat = _chat(db_session, tenant_id)
-    ticket = _ticket(
-        db_session,
-        tenant_id,
-        chat_id=chat.id,
-        number="ESC-9108",
-        user_email="support@theircompany.example",
-    )
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    with patch("backend.escalation.service.send_email", return_value="<fwd@brevo>"):
-        resp = _post_inbound(
-            tenant,
-            _brevo_item(to=address, sender="support@theircompany.example"),
-        )
-
-    assert resp.json()["outcomes"] == [InboundOutcome.ingested.value], resp.text
-
-
-def test_the_visitor_replying_to_a_forward_is_still_dropped(
-    tenant: TestClient, db_session: Session
-) -> None:
-    """The property the guard exists for has to survive the narrowing.
-
-    A visitor holds no seat, so their own words coming back still stop here
-    rather than being mailed to them again.
-    """
-    _token, tenant_id = _workspace(
-        tenant, db_session, email="owner-ping@example.com", name="Ping", seated=True
-    )
-    chat = _chat(db_session, tenant_id)
-    ticket = _ticket(
-        db_session,
-        tenant_id,
-        chat_id=chat.id,
-        number="ESC-9109",
-        user_email="visitor@example.com",
-    )
-    address = escalation_reply_to(ticket, db_session)
-    db_session.commit()
-
-    resp = _post_inbound(
-        tenant, _brevo_item(to=address, sender="visitor@example.com")
-    )
-    assert resp.json()["outcomes"] == [InboundOutcome.ignored_loopback.value]

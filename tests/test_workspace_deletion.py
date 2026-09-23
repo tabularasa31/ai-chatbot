@@ -108,99 +108,85 @@ def test_collect_addresses_covers_members_inbox_and_visitors(
 # ── Ordering: cleanup is scheduled before anything is destroyed ──────────────
 
 
-def test_delete_refuses_when_cleanup_cannot_be_scheduled(
-    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "scenario",
+    ["cleanup_unschedulable", "cleanup_scheduled_then_deletes", "nothing_configured"],
+)
+def test_delete_ordering_between_cleanup_and_destruction(
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch, scenario: str
 ) -> None:
-    """A workspace deleted with no cleanup queued would leave conversations in
-    Langfuse and no row left in our database naming them. So: 503, and nothing
-    is deleted."""
-    token = register_and_verify_user(tenant, db_session, email="stuck@acme.com")
+    """The three ways the ordering between scheduling cleanup and destroying
+    the workspace can go:
+
+    * cleanup cannot be scheduled -> 503, and nothing is deleted, because a
+      workspace deleted with no cleanup queued would leave conversations in
+      Langfuse and no row left in our database naming them;
+    * cleanup schedules while the workspace row still exists, then the
+      workspace is gone -> the job is handed the tenant id and the
+      addresses, because after the delete there is no row left to read
+      either from;
+    * with nothing external configured, deletion must not be blocked on
+      scheduling a job with no work.
+    """
+    token = register_and_verify_user(tenant, db_session, email=f"{scenario}@acme.com")
     tenant_id = _create_workspace(client=tenant, token=token)
-
-    monkeypatch.setattr(workspace_purge, "external_purge_needed", lambda: True)
-    monkeypatch.setattr(
-        workspace_purge,
-        "enqueue_workspace_purge_sync",
-        lambda **_kwargs: None,
-    )
-
-    response = tenant.delete(
-        f"/tenants/{tenant_id}", headers={"Authorization": f"Bearer {token}"}
-    )
-    assert response.status_code == 503
-
-    still_there = tenant.get(
-        "/tenants/me", headers={"Authorization": f"Bearer {token}"}
-    )
-    assert still_there.status_code == 200
-    assert still_there.json()["id"] == tenant_id
-
-
-def test_delete_schedules_cleanup_then_deletes(
-    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The job is handed the tenant id and the addresses, because after the
-    delete there is no row left to read either from."""
-    token = register_and_verify_user(tenant, db_session, email="leaving@acme.com")
-    tenant_id = _create_workspace(client=tenant, token=token)
-
     scheduled: dict[str, Any] = {}
 
-    def fake_enqueue(*, tenant_id: uuid.UUID, emails: list[str]) -> str:
-        scheduled["tenant_id"] = tenant_id
-        scheduled["emails"] = emails
-        # The whole design rests on this happening while the workspace is still
-        # there. Asserting only that the enqueue happened would pass just as
-        # well against an implementation that scheduled the cleanup *after* the
-        # commit — which is the bug the ordering exists to prevent.
-        scheduled["tenant_present_at_enqueue"] = (
-            db_session.query(Tenant).filter(Tenant.id == tenant_id).first() is not None
+    if scenario == "cleanup_unschedulable":
+        monkeypatch.setattr(workspace_purge, "external_purge_needed", lambda: True)
+        monkeypatch.setattr(
+            workspace_purge, "enqueue_workspace_purge_sync", lambda **_kwargs: None
         )
-        return "job-1"
+    elif scenario == "cleanup_scheduled_then_deletes":
+        def fake_enqueue(*, tenant_id: uuid.UUID, emails: list[str]) -> str:
+            scheduled["tenant_id"] = tenant_id
+            scheduled["emails"] = emails
+            # The whole design rests on this happening while the workspace is
+            # still there. Asserting only that the enqueue happened would pass
+            # just as well against an implementation that scheduled the
+            # cleanup *after* the commit — the bug the ordering prevents.
+            scheduled["tenant_present_at_enqueue"] = (
+                db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+                is not None
+            )
+            return "job-1"
 
-    monkeypatch.setattr(workspace_purge, "external_purge_needed", lambda: True)
-    monkeypatch.setattr(workspace_purge, "enqueue_workspace_purge_sync", fake_enqueue)
+        monkeypatch.setattr(workspace_purge, "external_purge_needed", lambda: True)
+        monkeypatch.setattr(workspace_purge, "enqueue_workspace_purge_sync", fake_enqueue)
+    else:
+        # State the precondition rather than inheriting it: conftest pops the
+        # Langfuse and Brevo env vars, and this test is meaningless if that
+        # stops being true.
+        assert workspace_purge.external_purge_needed() is False
 
-    response = tenant.delete(
-        f"/tenants/{tenant_id}", headers={"Authorization": f"Bearer {token}"}
-    )
-    assert response.status_code == 204
+        def explode(**_kwargs: Any) -> str:
+            raise AssertionError("cleanup must not be scheduled when unconfigured")
 
-    assert scheduled["tenant_present_at_enqueue"] is True
-    assert str(scheduled["tenant_id"]) == tenant_id
-    assert "leaving@acme.com" in [e.lower() for e in scheduled["emails"]]
-
-    # ...and gone afterwards, so the assertion above was about ordering rather
-    # than about the delete never having happened.
-    db_session.expire_all()
-    assert (
-        db_session.query(Tenant).filter(Tenant.id == uuid.UUID(tenant_id)).first()
-        is None
-    )
-
-
-def test_delete_skips_cleanup_when_nothing_is_configured(
-    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """With no Langfuse and no Brevo there is nothing out there to purge, so a
-    deletion must not be blocked on scheduling a job with no work."""
-    token = register_and_verify_user(tenant, db_session, email="local@acme.com")
-    tenant_id = _create_workspace(client=tenant, token=token)
-
-    # State the precondition rather than inheriting it: conftest pops the
-    # Langfuse and Brevo env vars, and this test is meaningless if that stops
-    # being true.
-    assert workspace_purge.external_purge_needed() is False
-
-    def explode(**_kwargs: Any) -> str:
-        raise AssertionError("cleanup must not be scheduled when unconfigured")
-
-    monkeypatch.setattr(workspace_purge, "enqueue_workspace_purge_sync", explode)
+        monkeypatch.setattr(workspace_purge, "enqueue_workspace_purge_sync", explode)
 
     response = tenant.delete(
         f"/tenants/{tenant_id}", headers={"Authorization": f"Bearer {token}"}
     )
-    assert response.status_code == 204
+
+    if scenario == "cleanup_unschedulable":
+        assert response.status_code == 503
+        still_there = tenant.get(
+            "/tenants/me", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert still_there.status_code == 200
+        assert still_there.json()["id"] == tenant_id
+    else:
+        assert response.status_code == 204
+        if scenario == "cleanup_scheduled_then_deletes":
+            assert scheduled["tenant_present_at_enqueue"] is True
+            assert str(scheduled["tenant_id"]) == tenant_id
+            assert f"{scenario}@acme.com" in [e.lower() for e in scheduled["emails"]]
+        # ...and gone afterwards either way.
+        db_session.expire_all()
+        assert (
+            db_session.query(Tenant).filter(Tenant.id == uuid.UUID(tenant_id)).first()
+            is None
+        )
 
 
 # ── The purge job ────────────────────────────────────────────────────────────

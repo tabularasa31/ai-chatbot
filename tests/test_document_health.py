@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -52,6 +53,33 @@ def _create_ready_document(
     db_session.commit()
     db_session.refresh(doc)
     return doc
+
+
+_STRUCTURED_TEXT = "\n".join(
+    [
+        "# TurboFlare",
+        "",
+        "## Setup",
+        "",
+        (
+            "Install the agent, verify DNS delegation, confirm the SSL status, and review cache rules. "
+            "Map the origin IP, update the registrar settings, and check the readiness states in the panel. "
+            "Use the troubleshooting section if propagation takes longer than expected. "
+            "Document the exact registrar fields, the expected propagation timing, and the recovery steps for failed validation. "
+        ).strip(),
+        "",
+        "## SSL",
+        "",
+        (
+            "Enable HTTPS, validate the certificate, verify redirect behavior, and confirm fallback settings. "
+            "Review stale cache behavior, query string settings, and cookie-aware cache options. "
+            "Test the final domain over HTTPS after traffic is switched. "
+            "Record the expected panel statuses, the final smoke checks, and the rollback steps if traffic cutover fails. "
+        ).strip(),
+    ]
+)
+
+_REPETITIVE_LINE = "Status page overview and status page overview for every status page visitor."
 
 
 def test_compute_health_score_penalties() -> None:
@@ -142,176 +170,123 @@ def test_document_health_ownership_enforced(
     assert r_run.status_code == 404
 
 
-def test_run_document_health_check_flags_short_document(db_session: Session) -> None:
+@pytest.mark.parametrize(
+    "parsed_text, file_type, embedding_chunk_text, expected_score, must_include, must_exclude",
+    [
+        pytest.param(
+            "# Title\n\nTiny note.",
+            DocumentType.markdown,
+            None,
+            80,
+            ["empty_or_too_short"],
+            [],
+            id="short_document",
+        ),
+        pytest.param(
+            _STRUCTURED_TEXT,
+            DocumentType.markdown,
+            ("Unstructured content without headings. " * 80).strip(),
+            100,
+            [],
+            ["poor_structure", "incomplete_section", "empty_or_too_short", "low_information_density"],
+            id="structure_ignores_embedding_chunks",
+        ),
+        pytest.param(
+            "# Big Guide\n\n" + ("One long section without subheadings. " * 140),
+            DocumentType.markdown,
+            None,
+            None,
+            ["poor_structure"],
+            [],
+            id="poor_structure",
+        ),
+        pytest.param(
+            "# Guide\n\n## Next steps\n\nRun the verification workflow:\n\n```bash\nmake verify\n",
+            DocumentType.markdown,
+            None,
+            None,
+            ["incomplete_section"],
+            [],
+            id="unclosed_code_fence",
+        ),
+        pytest.param(
+            "# Guide\n\n## Next steps\n\nThe remaining verification steps are:",
+            DocumentType.markdown,
+            None,
+            None,
+            ["incomplete_section"],
+            [],
+            id="text_ends_mid_thought",
+        ),
+        pytest.param(
+            "# Guide\n\n## Setup\n\n### Step 1\n\nFollow the setup instructions here.",
+            DocumentType.markdown,
+            None,
+            None,
+            [],
+            ["incomplete_section"],
+            id="nested_subsections_allowed",
+        ),
+        pytest.param(
+            "# Guide\n\n## Setup\n\n## Next steps\n\nThe next section has body text.",
+            DocumentType.markdown,
+            None,
+            None,
+            ["incomplete_section"],
+            [],
+            id="empty_h2_section",
+        ),
+        pytest.param(
+            "Valid intro text.\n\nBroken field: ���",
+            DocumentType.pdf,
+            None,
+            None,
+            ["parse_or_extraction_issue"],
+            [],
+            id="parse_issue",
+        ),
+        pytest.param(
+            "# Status\n\n" + "\n".join([_REPETITIVE_LINE] * 16),
+            DocumentType.markdown,
+            None,
+            None,
+            ["low_information_density"],
+            [],
+            id="low_information_density",
+        ),
+    ],
+)
+def test_run_document_health_check_flags(
+    db_session: Session,
+    parsed_text: str,
+    file_type: DocumentType,
+    embedding_chunk_text: str | None,
+    expected_score: int | None,
+    must_include: list[str],
+    must_exclude: list[str],
+) -> None:
     doc = _create_ready_document(
         db_session,
-        email="short@example.com",
+        email="health-flags@example.com",
         filename="f.md",
-        parsed_text="# Title\n\nTiny note.",
+        parsed_text=parsed_text,
+        file_type=file_type,
     )
-
-    result = run_document_health_check(doc.id, db_session)
-
-    assert result["score"] == 80
-    assert [warning["type"] for warning in result["warnings"]] == ["empty_or_too_short"]
-
-
-def test_run_document_health_check_uses_parsed_text_not_embedding_chunks(
-    db_session: Session,
-) -> None:
-    structured_text = "\n".join(
-        [
-            "# TurboFlare",
-            "",
-            "## Setup",
-            "",
-            (
-                "Install the agent, verify DNS delegation, confirm the SSL status, and review cache rules. "
-                "Map the origin IP, update the registrar settings, and check the readiness states in the panel. "
-                "Use the troubleshooting section if propagation takes longer than expected. "
-                "Document the exact registrar fields, the expected propagation timing, and the recovery steps for failed validation. "
-            ).strip(),
-            "",
-            "## SSL",
-            "",
-            (
-                "Enable HTTPS, validate the certificate, verify redirect behavior, and confirm fallback settings. "
-                "Review stale cache behavior, query string settings, and cookie-aware cache options. "
-                "Test the final domain over HTTPS after traffic is switched. "
-                "Record the expected panel statuses, the final smoke checks, and the rollback steps if traffic cutover fails. "
-            ).strip(),
-        ]
-    )
-    doc = _create_ready_document(
-        db_session,
-        email="structure@example.com",
-        filename="structured.md",
-        parsed_text=structured_text,
-    )
-    db_session.add(
-        Embedding(
-            document_id=doc.id,
-            chunk_text=("Unstructured content without headings. " * 80).strip(),
-            vector=None,
-            metadata_json={},
+    if embedding_chunk_text is not None:
+        db_session.add(
+            Embedding(document_id=doc.id, chunk_text=embedding_chunk_text, vector=None, metadata_json={})
         )
-    )
-    db_session.commit()
+        db_session.commit()
 
     result = run_document_health_check(doc.id, db_session)
+    types = [warning["type"] for warning in result["warnings"]]
 
-    assert result["warnings"] == []
-    assert result["score"] == 100
-
-
-def test_run_document_health_check_flags_poor_structure(db_session: Session) -> None:
-    doc = _create_ready_document(
-        db_session,
-        email="poor-structure@example.com",
-        filename="long.md",
-        parsed_text="# Big Guide\n\n"
-        + ("One long section without subheadings. " * 140),
-    )
-
-    result = run_document_health_check(doc.id, db_session)
-
-    assert "poor_structure" in [warning["type"] for warning in result["warnings"]]
-
-
-def test_run_document_health_check_flags_unclosed_code_fence(
-    db_session: Session,
-) -> None:
-    doc = _create_ready_document(
-        db_session,
-        email="incomplete@example.com",
-        filename="cut-off.md",
-        parsed_text="# Guide\n\n## Next steps\n\nRun the verification workflow:\n\n```bash\nmake verify\n",
-    )
-
-    result = run_document_health_check(doc.id, db_session)
-
-    assert "incomplete_section" in [warning["type"] for warning in result["warnings"]]
-
-
-def test_run_document_health_check_flags_text_ending_mid_thought(
-    db_session: Session,
-) -> None:
-    doc = _create_ready_document(
-        db_session,
-        email="mid-thought@example.com",
-        filename="dangling.md",
-        parsed_text="# Guide\n\n## Next steps\n\nThe remaining verification steps are:",
-    )
-
-    result = run_document_health_check(doc.id, db_session)
-
-    assert "incomplete_section" in [warning["type"] for warning in result["warnings"]]
-
-
-def test_run_document_health_check_allows_nested_subsections(
-    db_session: Session,
-) -> None:
-    doc = _create_ready_document(
-        db_session,
-        email="nested-sections@example.com",
-        filename="nested.md",
-        parsed_text="# Guide\n\n## Setup\n\n### Step 1\n\nFollow the setup instructions here.",
-    )
-
-    result = run_document_health_check(doc.id, db_session)
-
-    assert "incomplete_section" not in [
-        warning["type"] for warning in result["warnings"]
-    ]
-
-
-def test_run_document_health_check_flags_empty_h2_section(db_session: Session) -> None:
-    doc = _create_ready_document(
-        db_session,
-        email="empty-h2@example.com",
-        filename="empty-h2.md",
-        parsed_text="# Guide\n\n## Setup\n\n## Next steps\n\nThe next section has body text.",
-    )
-
-    result = run_document_health_check(doc.id, db_session)
-
-    assert "incomplete_section" in [warning["type"] for warning in result["warnings"]]
-
-
-def test_run_document_health_check_flags_parse_issue(db_session: Session) -> None:
-    doc = _create_ready_document(
-        db_session,
-        email="parse@example.com",
-        filename="broken.pdf",
-        parsed_text="Valid intro text.\n\nBroken field: \ufffd\ufffd\ufffd",
-        file_type=DocumentType.pdf,
-    )
-
-    result = run_document_health_check(doc.id, db_session)
-
-    assert "parse_or_extraction_issue" in [
-        warning["type"] for warning in result["warnings"]
-    ]
-
-
-def test_run_document_health_check_flags_low_information_density(
-    db_session: Session,
-) -> None:
-    repetitive_line = (
-        "Status page overview and status page overview for every status page visitor."
-    )
-    doc = _create_ready_document(
-        db_session,
-        email="density@example.com",
-        filename="repetitive.md",
-        parsed_text="# Status\n\n" + "\n".join(repetitive_line for _ in range(16)),
-    )
-
-    result = run_document_health_check(doc.id, db_session)
-
-    assert "low_information_density" in [
-        warning["type"] for warning in result["warnings"]
-    ]
+    for warning_type in must_include:
+        assert warning_type in types
+    for warning_type in must_exclude:
+        assert warning_type not in types
+    if expected_score is not None:
+        assert result["score"] == expected_score
 
 
 def test_get_health_after_run_via_api_without_openai_key(

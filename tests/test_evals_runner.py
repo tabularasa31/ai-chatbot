@@ -53,69 +53,51 @@ class _FakeChat:
         return ChatResponse(
             text=text,
             sources=[],
-            chat_ended=False,
             latency_ms=42,
             escalation_offered=question in self._offers,
             ticket_number=self._tickets.get(question),
         )
 
 
-def test_escalation_offer_is_scored_from_the_backend_flag() -> None:
-    """Offer scoring reads the `done` event, not the wording of the reply.
+@pytest.mark.parametrize(
+    ("input_text", "chat_kwargs"),
+    [
+        pytest.param(
+            "ドメインを追加できません",
+            {"offers": {"ドメインを追加できません"}},
+            id="gate_armed_offer_flag",
+        ),
+        pytest.param(
+            "Соедините меня с человеком",
+            {"tickets": {"Соедините меня с человеком": "ESC-42"}},
+            id="direct_request_mints_ticket_without_arming_gate",
+        ),
+    ],
+)
+def test_escalation_offer_is_scored_from_backend_state_not_reply_wording(
+    input_text: str, chat_kwargs: dict[str, object]
+) -> None:
+    """Offer scoring reads backend state (the `done` event's flag, or a minted
+    ticket), never the wording of the reply.
 
-    It used to run RU/EN regexes over the answer text, so an offer in any other
-    language scored as no offer at all. The backend already knows — the
-    pre-confirm gate is armed — and now says so in the SSE payload.
+    It used to run RU/EN regexes over the answer text, so an offer in any
+    other language scored as no offer at all. A direct human request also
+    escalates without ever arming the gate — `escalation_offered` is False on
+    that turn by design, but the conversation did reach support, which is
+    what `expected_escalation_offered_by_turn` asks about.
     """
     from backend.evals.dataset import Dataset, GoldenCase
 
     case = GoldenCase(
         id="esc",
         category="rag",
-        input="ドメインを追加できません",
+        input=input_text,
         expected_escalation_offered_by_turn=1,
     )
-    chat = _FakeChat(
-        {"ドメインを追加できません": "サポートに転送しましょうか。"},
-        offers={"ドメインを追加できません"},
-    )
+    chat = _FakeChat({input_text: "handled"}, **chat_kwargs)
     report = run(
         RunnerConfig(
             dataset=Dataset(name="esc", cases=[case]),
-            tag="test",
-            chat=chat,
-            judge=None,
-        )
-    )
-
-    result = report.cases[0]
-    assert result.turns_trace[0].escalation_offered is True
-    offer_metrics = [m for m in result.metrics if m.name == "escalation_offer"]
-    assert offer_metrics and all(m.passed for m in offer_metrics)
-
-
-def test_a_minted_ticket_counts_as_reaching_support() -> None:
-    """An explicit human request escalates without ever arming the gate.
-
-    `escalation_offered` is False on that turn by design — the offer was never
-    pending a yes/no — but the conversation did reach support, which is what
-    `expected_escalation_offered_by_turn` asks about.
-    """
-    from backend.evals.dataset import Dataset, GoldenCase
-
-    case = GoldenCase(
-        id="esc-direct",
-        category="rag",
-        input="Соедините меня с человеком",
-        expected_escalation_offered_by_turn=1,
-    )
-    chat = _FakeChat(
-        {"Соедините меня с человеком": "Передал в поддержку, ответят на почту."},
-        tickets={"Соедините меня с человеком": "ESC-42"},
-    )
-    report = run(
-        RunnerConfig(
-            dataset=Dataset(name="esc-direct", cases=[case]),
             tag="test",
             chat=chat,
             judge=None,
@@ -142,36 +124,30 @@ def test_load_chat9_basic_dataset() -> None:
     assert "ru" in langs and "en" in langs
 
 
-def test_dataset_rejects_duplicate_case_ids(tmp_path) -> None:
-    p = tmp_path / "dup.yaml"
-    p.write_text(
-        yaml.safe_dump(
-            {
-                "name": "dup",
-                "cases": [
-                    {"id": "x", "category": "happy_path", "input": "a"},
-                    {"id": "x", "category": "happy_path", "input": "b"},
-                ],
-            }
+@pytest.mark.parametrize(
+    ("name", "cases", "match"),
+    [
+        pytest.param(
+            "dup",
+            [
+                {"id": "x", "category": "happy_path", "input": "a"},
+                {"id": "x", "category": "happy_path", "input": "b"},
+            ],
+            "duplicate case id",
+            id="duplicate_case_ids",
         ),
-        encoding="utf-8",
-    )
-    with pytest.raises(Exception, match="duplicate case id"):
-        load_dataset(p)
-
-
-def test_dataset_rejects_unknown_category(tmp_path) -> None:
-    p = tmp_path / "bad.yaml"
-    p.write_text(
-        yaml.safe_dump(
-            {
-                "name": "bad",
-                "cases": [{"id": "x", "category": "made_up", "input": "a"}],
-            }
+        pytest.param(
+            "bad",
+            [{"id": "x", "category": "made_up", "input": "a"}],
+            None,
+            id="unknown_category",
         ),
-        encoding="utf-8",
-    )
-    with pytest.raises(Exception):
+    ],
+)
+def test_dataset_rejects_invalid_yaml(tmp_path, name, cases, match) -> None:
+    p = tmp_path / f"{name}.yaml"
+    p.write_text(yaml.safe_dump({"name": name, "cases": cases}), encoding="utf-8")
+    with pytest.raises(Exception, match=match):
         load_dataset(p)
 
 
@@ -184,156 +160,147 @@ def _case(**kwargs) -> GoldenCase:
     return GoldenCase(**base)
 
 
-def test_must_contain_passes_with_substring() -> None:
-    c = _case(must_contain=["Free", "early"])
-    assert check_must_contain(c, "Chat9 is free during early access").passed
-
-
 def test_must_contain_fails_with_missing() -> None:
     c = _case(must_contain=["paid"])
     r = check_must_contain(c, "Chat9 is free")
     assert not r.passed and "missing" in r.detail
 
 
-def test_must_not_contain_blocks_banned_phrase() -> None:
-    c = _case(must_not_contain=["claude"])
-    r = check_must_not_contain(c, "We use Claude under the hood.")
-    assert not r.passed and "claude" in r.detail.lower()
+@pytest.mark.parametrize(
+    ("needle", "haystack", "expected"),
+    [
+        pytest.param(["Free", "early"], "Chat9 is free during early access", True, id="plain_substring"),
+        # Real prod failure on #547: bot said `1,000 characters` but the case
+        # demanded substring `1000`. Both forms refer to the same number —
+        # strip thousands separators before comparing.
+        pytest.param(["1000"], "Maximum 1,000 characters per message.", True, id="thousands_comma"),
+        pytest.param(["1000"], "Maximum 1 000 characters per message.", True, id="thousands_space"),
+        pytest.param(["1000"], "Максимум 1 000 символов на сообщение.", True, id="thousands_nbsp"),
+        pytest.param(["1000"], "Maximum 1000 characters per message.", True, id="thousands_unseparated"),
+        # `1,000,000` / `1 000 000` must both collapse to `1000000`.
+        pytest.param(["1000000"], "We saw 1,000,000 events.", True, id="chained_thousands_comma"),
+        pytest.param(["1000000"], "We saw 1 000 000 events.", True, id="chained_thousands_space"),
+        # The normaliser must not touch anything outside a digit-comma-digit
+        # run, or it would silently mutate prose (`limit, then` -> `limitthen`).
+        pytest.param(["limit, then"], "There is a limit, then a fallback.", True, id="prose_comma_preserved"),
+        pytest.param(["limit, then"], "There is no such phrase here.", False, id="prose_comma_still_missing"),
+        # In Russian/EU locales comma is the decimal separator: `0,5` means
+        # 0.5, not 05. Only collapse comma before a canonical 3-digit group.
+        pytest.param(["05"], "Задержка примерно 0,5 секунды.", False, id="decimal_comma_not_collapsed"),
+        pytest.param(["0,5"], "Задержка примерно 0,5 секунды.", True, id="decimal_comma_matches_itself"),
+    ],
+)
+def test_must_contain_normalises_thousands_separators(needle, haystack, expected) -> None:
+    c = _case(must_contain=needle)
+    assert check_must_contain(c, haystack).passed is expected
 
 
-def test_must_contain_normalises_thousands_separators() -> None:
-    """Real prod failure on #547: bot said `1,000 characters` but the
-    case demanded substring `1000`. Both forms refer to the same
-    number — strip thousands separators before comparing."""
-
-    c = _case(must_contain=["1000"])
-    # Comma (US/EN locale)
-    assert check_must_contain(c, "Maximum 1,000 characters per message.").passed
-    # Plain space
-    assert check_must_contain(c, "Maximum 1 000 characters per message.").passed
-    # NBSP (Russian-style typography for thousands)
-    assert check_must_contain(c, "Максимум 1 000 символов на сообщение.").passed
-    # And the unseparated form keeps working
-    assert check_must_contain(c, "Maximum 1000 characters per message.").passed
-
-
-def test_must_contain_does_not_collapse_separators_outside_numbers() -> None:
-    """The normaliser must not change anything that isn't between two
-    digits — otherwise we'd silently mutate prose (e.g. ``cap, then``
-    becoming ``capthen``) and start matching things we shouldn't."""
-
-    c = _case(must_contain=["limit, then"])
-    # Caller asked for the exact prose snippet — we must NOT eat the comma+space.
-    assert check_must_contain(c, "There is a limit, then a fallback.").passed
-    # And we must NOT match if the snippet really is missing.
-    assert not check_must_contain(c, "There is no such phrase here.").passed
+@pytest.mark.parametrize(
+    ("needle", "haystack", "expected_detail_substr"),
+    [
+        pytest.param(["claude"], "We use Claude under the hood.", "claude", id="banned_phrase"),
+        # The same normalisation has to apply to the negative check, or a
+        # banned `1000` would slip through as `1,000` in the output.
+        pytest.param(["1000"], "Cap is 1,000 messages.", "1000", id="thousands_separator"),
+    ],
+)
+def test_must_not_contain_blocks_normalised_matches(needle, haystack, expected_detail_substr) -> None:
+    c = _case(must_not_contain=needle)
+    r = check_must_not_contain(c, haystack)
+    assert not r.passed and expected_detail_substr in r.detail.lower()
 
 
-def test_must_not_contain_also_normalises_numbers() -> None:
-    """The same normalisation has to apply to the negative check, or
-    a banned `1000` would slip through as `1,000` in the output."""
-
-    c = _case(must_not_contain=["1000"])
-    r = check_must_not_contain(c, "Cap is 1,000 messages.")
-    assert not r.passed and "1000" in r.detail
-
-
-def test_must_contain_does_not_collapse_decimal_comma() -> None:
-    """In Russian / EU locales comma is the decimal separator, so
-    `0,5` means 0.5 — NOT 05. Only collapse comma when it's followed
-    by a canonical three-digit group (`1,000`), not before single or
-    double-digit fractions (`0,5`, `0,55`)."""
-
-    # The Russian-locale answer `0,5 секунды` must not start matching
-    # the unrelated needle `05` after normalisation.
-    c = _case(must_contain=["05"])
-    assert not check_must_contain(c, "Задержка примерно 0,5 секунды.").passed
-
-    # And the natural needle `0,5` keeps matching itself even though
-    # its haystack is unchanged after normalisation.
-    c = _case(must_contain=["0,5"])
-    assert check_must_contain(c, "Задержка примерно 0,5 секунды.").passed
-
-
-def test_must_contain_handles_chained_thousands_separators() -> None:
-    """`1,000,000` and `1 000 000` should both collapse to `1000000`
-    so a needle of `1000000` matches either form."""
-
-    c = _case(must_contain=["1000000"])
-    assert check_must_contain(c, "We saw 1,000,000 events.").passed
-    assert check_must_contain(c, "We saw 1 000 000 events.").passed
+@pytest.mark.parametrize(
+    ("lang", "text", "expected_pass", "detail_substr"),
+    [
+        pytest.param("any", "anything", True, None, id="any_skips_check"),
+        pytest.param(
+            "ru",
+            "Chat9 — это платформа для встроенных AI-ботов на сайте поддержки клиентов.",
+            True,
+            None,
+            id="detects_russian",
+        ),
+        pytest.param(
+            "en",
+            "Это платформа для встроенных AI-ботов на сайте поддержки клиентов.",
+            False,
+            "expected=en",
+            id="flags_mismatch",
+        ),
+    ],
+)
+def test_language_check(lang, text, expected_pass, detail_substr) -> None:
+    c = _case(lang=lang)
+    r = check_language(c, text)
+    assert r.passed is expected_pass
+    if detail_substr:
+        assert detail_substr in r.detail
 
 
-def test_language_check_skipped_for_any() -> None:
-    c = _case(lang="any")
-    assert check_language(c, "anything").passed
-
-
-def test_language_check_detects_russian() -> None:
-    c = _case(lang="ru")
-    r = check_language(
-        c, "Chat9 — это платформа для встроенных AI-ботов на сайте поддержки клиентов."
-    )
-    assert r.passed, r.detail
-
-
-def test_language_check_flags_mismatch() -> None:
-    c = _case(lang="en")
-    r = check_language(
-        c, "Это платформа для встроенных AI-ботов на сайте поддержки клиентов."
-    )
-    assert not r.passed and "expected=en" in r.detail
-
-
-# ─── judge response parser ──────────────────────────────────────────────────
-
-
-def test_judge_parser_strict_json() -> None:
-    raw = '{"score": 0.85, "rationale": "good answer"}'
+@pytest.mark.parametrize(
+    ("raw", "expected_score", "expected_rationale"),
+    [
+        pytest.param('{"score": 0.85, "rationale": "good answer"}', 0.85, "good answer", id="strict_json"),
+        pytest.param(
+            'Sure! Here is my evaluation:\n\n{"score": 0.4, "rationale": "weak"}\n\nThanks.',
+            0.4,
+            "weak",
+            id="prose_around_json",
+        ),
+        pytest.param('{"score": 1.7, "rationale": "x"}', 1.0, None, id="clamps_above_range"),
+        pytest.param('{"score": -0.3, "rationale": "x"}', 0.0, None, id="clamps_below_range"),
+        pytest.param("not json at all", 0.0, None, id="falls_back_on_invalid_json"),
+    ],
+)
+def test_judge_parser(raw, expected_score, expected_rationale) -> None:
     r = _parse_judge_response(raw, model="m")
-    assert r.score == 0.85 and "good" in r.rationale and r.model == "m"
-
-
-def test_judge_parser_handles_prose_around_json() -> None:
-    raw = 'Sure! Here is my evaluation:\n\n{"score": 0.4, "rationale": "weak"}\n\nThanks.'
-    r = _parse_judge_response(raw, model="m")
-    assert r.score == 0.4 and r.rationale == "weak"
-
-
-def test_judge_parser_clamps_out_of_range_scores() -> None:
-    raw = '{"score": 1.7, "rationale": "x"}'
-    assert _parse_judge_response(raw, "m").score == 1.0
-    raw = '{"score": -0.3, "rationale": "x"}'
-    assert _parse_judge_response(raw, "m").score == 0.0
-
-
-def test_judge_parser_falls_back_on_invalid_json() -> None:
-    r = _parse_judge_response("not json at all", "m")
-    assert r.score == 0.0
+    assert r.score == expected_score
+    if expected_rationale is not None:
+        assert r.rationale == expected_rationale and r.model == "m"
 
 
 # ─── SSE client helpers ─────────────────────────────────────────────────────
 
 
-def test_sse_aggregator_concatenates_chunks_and_uses_done_text() -> None:
-    events = [
-        {"type": "chunk", "text": "Hello "},
-        {"type": "chunk", "text": "world."},
-        {"type": "done", "text": "Hello world.", "chat_ended": False, "sources": [{"title": "x", "url": "y"}]},
-    ]
+@pytest.mark.parametrize(
+    ("events", "expected_text", "expect_sources", "expected_error_code"),
+    [
+        pytest.param(
+            [
+                {"type": "chunk", "text": "Hello "},
+                {"type": "chunk", "text": "world."},
+                {
+                    "type": "done",
+                    "text": "Hello world.",
+                    "sources": [{"title": "x", "url": "y"}],
+                },
+            ],
+            "Hello world.",
+            True,
+            None,
+            id="concatenates_chunks_and_uses_done_text",
+        ),
+        pytest.param(
+            [
+                {"type": "chunk", "text": "partial"},
+                {"type": "error", "code": 503, "message": "OpenAI service unavailable"},
+            ],
+            "partial",  # chunks before the error are still preserved on .text
+            False,
+            503,
+            id="surfaces_error_event",
+        ),
+    ],
+)
+def test_sse_aggregator(events, expected_text, expect_sources, expected_error_code) -> None:
     r = _aggregate_events(events, latency_ms=10)
-    assert r.text == "Hello world." and r.sources and r.error is None
-
-
-def test_sse_aggregator_surfaces_error_event() -> None:
-    events = [
-        {"type": "chunk", "text": "partial"},
-        {"type": "error", "code": 503, "message": "OpenAI service unavailable"},
-    ]
-    r = _aggregate_events(events, latency_ms=5)
-    assert r.error is not None and r.error["code"] == 503
-    # chunks before the error are still preserved on .text
-    assert r.text == "partial"
+    assert r.text == expected_text
+    assert bool(r.sources) == expect_sources
+    if expected_error_code is None:
+        assert r.error is None
+    else:
+        assert r.error is not None and r.error["code"] == expected_error_code
 
 
 def test_sse_data_parser_skips_non_data_lines() -> None:
@@ -358,7 +325,7 @@ class _StubStreamResp:
         return None
 
     def iter_lines(self):
-        yield 'data: {"type":"done","text":"ok","chat_ended":false}'
+        yield 'data: {"type":"done","text":"ok"}'
 
 
 class _StubPostResp:
@@ -386,19 +353,34 @@ class _StubHttp:
         return _StubPostResp(self._post_payload)
 
 
-def test_chat_client_omits_session_id_when_caller_did_not_pass_one() -> None:
+@pytest.mark.parametrize(
+    ("session_id", "expected_params"),
+    [
+        pytest.param(None, {"bot_id": "ch_test"}, id="omits_when_not_passed"),
+        pytest.param(
+            "00000000-0000-0000-0000-000000000123",
+            {"bot_id": "ch_test", "session_id": "00000000-0000-0000-0000-000000000123"},
+            id="forwards_when_passed",
+        ),
+    ],
+)
+def test_chat_client_session_id_forwarding(session_id, expected_params) -> None:
     """Regression: passing a random UUID to /widget/chat returns 409
     session_not_found because the backend treats session_id as 'resume
     this existing chat'. The runner must let the backend create the
-    session (i.e. NOT include session_id at all)."""
+    session (i.e. NOT include session_id unless a caller passed one) —
+    but multi-turn callers must still be able to continue an existing
+    conversation by passing session_id explicitly."""
 
     from backend.evals.client import ChatClient
 
     http = _StubHttp()
     client = ChatClient(bot_public_id="ch_test", http=http)
-    client.ask("hello")
-    assert http.calls[0]["params"] == {"bot_id": "ch_test"}
-    assert "session_id" not in http.calls[0]["params"]
+    if session_id is None:
+        client.ask("hello")
+    else:
+        client.ask("hello", session_id=session_id)
+    assert http.calls[0]["params"] == expected_params
 
 
 def test_start_session_sends_bot_id_in_json_body_not_query_params() -> None:
@@ -419,21 +401,6 @@ def test_start_session_sends_bot_id_in_json_body_not_query_params() -> None:
             "params": None,
         }
     ]
-
-
-def test_chat_client_forwards_session_id_when_caller_passes_one() -> None:
-    """Multi-turn callers must still be able to continue an existing
-    conversation by passing session_id explicitly."""
-
-    from backend.evals.client import ChatClient
-
-    http = _StubHttp()
-    client = ChatClient(bot_public_id="ch_test", http=http)
-    client.ask("hello", session_id="00000000-0000-0000-0000-000000000123")
-    assert http.calls[0]["params"] == {
-        "bot_id": "ch_test",
-        "session_id": "00000000-0000-0000-0000-000000000123",
-    }
 
 
 # ─── runner end-to-end (mocked chat + judge) ────────────────────────────────

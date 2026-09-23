@@ -1050,7 +1050,7 @@ def _spy_on_classifier(monkeypatch, name: str) -> list[str]:
     generic chat-completion stub cannot express, so a single canned string
     makes the outcome depend on prompt-matching luck.
     """
-    from backend.chat import service as chat_service
+    from backend.chat.handlers import escalation as escalation_handler
 
     calls: list[str] = []
 
@@ -1058,7 +1058,7 @@ def _spy_on_classifier(monkeypatch, name: str) -> list[str]:
         calls.append(latest_user_text)
         return "unclear", 0
 
-    monkeypatch.setattr(chat_service, name, _spy)
+    monkeypatch.setattr(escalation_handler, name, _spy)
     return calls
 
 

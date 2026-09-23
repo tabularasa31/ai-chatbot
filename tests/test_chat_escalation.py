@@ -245,7 +245,7 @@ def test_chat_followup_no_keeps_chat_open(
     db_session.commit()
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(
                 message_to_user="Glad to help. Write here anytime.",
@@ -292,7 +292,7 @@ def test_chat_followup_no_keeps_chat_open(
         raise AssertionError("a question after the goodbye must reach RAG, not the escalation FSM")
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn", _fail_escalation_turn
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn", _fail_escalation_turn
     )
 
     followup = tenant.post(
@@ -354,7 +354,7 @@ def test_chat_followup_no_keeps_active_user_session_open(
     db_session.commit()
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(
                 message_to_user="Glad to help. Write here anytime.",
@@ -426,7 +426,7 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
     db_session.commit()
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(
                 message_to_user="Understood, we will continue.",
@@ -491,7 +491,7 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
     db_session.commit()
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(
                 message_to_user="Could you clarify?",
@@ -760,7 +760,7 @@ def test_pre_confirm_null_reply_with_explicit_human_request_still_escalates(
         },
     )
     monkeypatch.setattr(
-        "backend.chat.service.classify_pre_confirm_reply", _async_esc_stub((None, 0))
+        "backend.chat.handlers.escalation.classify_pre_confirm_reply", _async_esc_stub((None, 0))
     )
     monkeypatch.setattr(
         "backend.chat.service.detect_human_request",
@@ -817,7 +817,7 @@ def test_stale_followup_falls_through_to_rag_after_session_ended(
             "stale follow-up must fall through to RAG, not run the escalation LLM"
         )
 
-    monkeypatch.setattr("backend.chat.service.complete_escalation_openai_turn", _fail_if_classified)
+    monkeypatch.setattr("backend.chat.handlers.escalation.complete_escalation_openai_turn", _fail_if_classified)
 
     [resp] = drive(
         tenant, api_key, chat.session_id, "why was the A www record not added to the list?"
@@ -921,7 +921,7 @@ def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
     async def _pre_confirm_stub(**kwargs):
         return next(pre_confirm_replies)
 
-    monkeypatch.setattr("backend.chat.service.classify_pre_confirm_reply", _pre_confirm_stub)
+    monkeypatch.setattr("backend.chat.handlers.escalation.classify_pre_confirm_reply", _pre_confirm_stub)
 
     r1, r2 = drive(
         tenant,
@@ -955,14 +955,14 @@ def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
     async def _gate_new_question(**kwargs):
         return ("new_question", 7)
 
-    monkeypatch.setattr("backend.chat.service.classify_followup_reply", _gate_new_question)
+    monkeypatch.setattr("backend.chat.handlers.escalation.classify_followup_reply", _gate_new_question)
 
     async def _fail_full_turn(**kwargs):
         raise AssertionError(
             "new-question follow-up must be answered by RAG, not the full-turn escalation LLM"
         )
 
-    monkeypatch.setattr("backend.chat.service.complete_escalation_openai_turn", _fail_full_turn)
+    monkeypatch.setattr("backend.chat.handlers.escalation.complete_escalation_openai_turn", _fail_full_turn)
 
     [r4] = drive(tenant, api_key, chat.session_id, "do you support wildcard domain names?")
     assert r4["text"] == "Yes, wildcard domains are supported."
@@ -1714,7 +1714,7 @@ def test_ticket_notify_journey_l2_recipient_then_threaded_update_then_failure_me
     db_session.commit()
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(
                 message_to_user="Noted, forwarding to support.",
@@ -1754,7 +1754,7 @@ def test_ticket_notify_journey_l2_recipient_then_threaded_update_then_failure_me
     db_session.commit()
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(message_to_user="Noted.", followup_decision="unclear", tokens_used=2)
         ),
@@ -1789,7 +1789,7 @@ def test_ticket_update_notify_skipped_for_administrative_reply_or_resolved_ticke
     chat = _make_chat(db_session, tenant_id, escalation_followup_pending=True)
     _make_open_ticket(db_session, tenant_id, chat, notification_message_id="<anchor-1@brevo>")
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(message_to_user="Glad to help.", followup_decision="no", tokens_used=2)
         ),
@@ -1810,7 +1810,7 @@ def test_ticket_update_notify_skipped_for_administrative_reply_or_resolved_ticke
         user_email="enduser@example.com",
     )
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _async_esc_stub(
             Mock(
                 message_to_user="Noted.",

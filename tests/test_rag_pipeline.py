@@ -122,11 +122,11 @@ def test_embedding_once(
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate",
+        "backend.chat.steps.generate.should_escalate",
         lambda *_, **__: (False, None),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **_: FAQMatchResult(
             strategy="rag_only",
             faq_items=[],
@@ -139,7 +139,7 @@ def test_embedding_once(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service._start_mode_b_followup",
+        "backend.chat.post_turn._start_mode_b_followup",
         lambda _tenant_id: None,
     )
     # Suppress LLM-driven query rewrites so the test isolates the embedding
@@ -149,11 +149,11 @@ def test_embedding_once(
         return None
 
     monkeypatch.setattr(
-        "backend.chat.service.async_semantic_query_rewrite",
+        "backend.chat.steps.pre_retrieval.async_semantic_query_rewrite",
         _no_rewrite,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_semantic_query_rewrite_for_kb",
+        "backend.chat.steps.pre_retrieval.async_semantic_query_rewrite_for_kb",
         _no_rewrite,
     )
 
@@ -183,11 +183,11 @@ def test_faq_context_in_prompt(
     cl_row, api_key = _create_client(tenant, db_session, email="faq-prompt@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="Some docs chunk.")
 
-    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+    monkeypatch.setattr("backend.chat.steps.generate.should_escalate", lambda *_, **__: (False, None))
 
     # Keep retrieval deterministic and fast.
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_, **__: RetrievalContext(
             chunk_texts=["Retrieved chunk"],
             document_ids=[uuid.uuid4()],
@@ -209,7 +209,7 @@ def test_faq_context_in_prompt(
         score=0.9,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **_: FAQMatchResult(
             strategy="faq_context",
             faq_items=[faq_item],
@@ -254,10 +254,10 @@ def test_langfuse_faq_match_span(
     cl_row, api_key = _create_client(tenant, db_session, email="faq-span@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
-    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+    monkeypatch.setattr("backend.chat.steps.generate.should_escalate", lambda *_, **__: (False, None))
 
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_, **__: RetrievalContext(
             chunk_texts=["Retrieved chunk"],
             document_ids=[uuid.uuid4()],
@@ -279,7 +279,7 @@ def test_langfuse_faq_match_span(
         score=0.81,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **_: FAQMatchResult(
             strategy="faq_context",
             faq_items=[faq_item],
@@ -293,7 +293,7 @@ def test_langfuse_faq_match_span(
     )
 
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_, **__: ("Answer", 1)),
     )
 
@@ -333,10 +333,10 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
     cl_row, api_key = _create_client(tenant, db_session, email="embed-span@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
-    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+    monkeypatch.setattr("backend.chat.steps.generate.should_escalate", lambda *_, **__: (False, None))
 
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **_: FAQMatchResult(
             strategy="rag_only",
             faq_items=[],
@@ -349,7 +349,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_, **__: RetrievalContext(
             chunk_texts=["Retrieved chunk"],
             document_ids=[uuid.uuid4()],
@@ -363,7 +363,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_, **__: ("Answer", 1)),
     )
     # Suppress LLM-driven query rewrites so only the base embedding batch runs.
@@ -371,11 +371,11 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
         return None
 
     monkeypatch.setattr(
-        "backend.chat.service.async_semantic_query_rewrite",
+        "backend.chat.steps.pre_retrieval.async_semantic_query_rewrite",
         _no_rewrite,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_semantic_query_rewrite_for_kb",
+        "backend.chat.steps.pre_retrieval.async_semantic_query_rewrite_for_kb",
         _no_rewrite,
     )
 
@@ -402,7 +402,7 @@ def test_faq_direct_skips_retrieval_and_generation(
 ) -> None:
     cl_row, api_key = _create_client(tenant, db_session, email="faq-direct@example.com")
 
-    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+    monkeypatch.setattr("backend.chat.steps.generate.should_escalate", lambda *_, **__: (False, None))
 
     faq_answer = "Direct FAQ answer"
     faq_row = FAQRow(
@@ -413,7 +413,7 @@ def test_faq_direct_skips_retrieval_and_generation(
         score=0.99,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **_: FAQMatchResult(
             strategy="faq_direct",
             faq_items=[faq_row],
@@ -432,9 +432,9 @@ def test_faq_direct_skips_retrieval_and_generation(
     def _unexpected_generate(*_: object, **__: object):
         raise AssertionError("generate_answer must not be called")
 
-    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(_unexpected_retrieve))
+    monkeypatch.setattr("backend.chat.steps.retrieval.async_retrieve_context", _as_async(_unexpected_retrieve))
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(_unexpected_generate),
     )
 
@@ -461,7 +461,7 @@ def test_guard_error_degrades_to_context(
     cl_row, api_key = _create_client(tenant, db_session, email="guard-error@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
-    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+    monkeypatch.setattr("backend.chat.steps.generate.should_escalate", lambda *_, **__: (False, None))
 
     top = FAQRow(
         id=uuid.uuid4(),
@@ -486,7 +486,7 @@ def test_guard_error_degrades_to_context(
     # Ensure retrieval and generation run (rag_only/direct not allowed).
     called = {"retrieval": False, "generation": False}
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_, **__: (
             called.__setitem__("retrieval", True)
             or RetrievalContext(
@@ -503,7 +503,7 @@ def test_guard_error_degrades_to_context(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_, **__: (called.__setitem__("generation", True) or "Answer", 1)),
     )
 
@@ -532,7 +532,7 @@ def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
 ) -> None:
     import asyncio
 
-    from backend.chat.handlers.rag import (
+    from backend.chat.steps.generate import (
         async_generate_answer,
     )
 

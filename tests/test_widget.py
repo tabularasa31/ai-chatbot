@@ -536,10 +536,8 @@ def test_widget_stream_language_mismatch_aborts_before_client_sees_it(
     generation running to completion)."""
     import uuid as _uuid
 
-    from backend.chat.handlers.rag import (
-        detect_language as _real_detect,
-    )
     from backend.chat.language import LanguageDetectionResult
+    from backend.chat.language import detect_language as _real_detect
     from backend.chat.types import RetrievalContext
     from backend.search.service import build_reliability_assessment
     from tests._async_utils import as_async as _as_async
@@ -590,12 +588,13 @@ def test_widget_stream_language_mismatch_aborts_before_client_sees_it(
         return _real_detect(text)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context", _as_async(_fake_retrieve)
+        "backend.chat.steps.retrieval.async_retrieve_context", _as_async(_fake_retrieve)
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer", _fake_async_generate
+        "backend.chat.steps.generate.async_generate_answer", _fake_async_generate
     )
-    monkeypatch.setattr("backend.chat.handlers.rag.detect_language", _fake_detect)
+    monkeypatch.setattr("backend.chat.streaming.detect_language", _fake_detect)
+    monkeypatch.setattr("backend.chat.steps.generate.detect_language", _fake_detect)
 
     r = tenant.post(
         _widget_url(bot_public_id),

@@ -8,26 +8,35 @@ Encapsulates the escalation states that previously lived inline in
   * explicit human request (T-3 trigger) before RAG runs
 
 Behaviour is byte-equivalent to the legacy inline branches; this module is
-purely a structural extraction. Persistence helpers, OpenAI escalation calls,
-ticket creation and event emission still live in ``backend.chat.service`` and
-``backend.escalation.*`` and are looked up lazily to avoid a circular import
-with ``service.py``.
+purely a structural extraction.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import Any
 
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
-from backend.chat.events import _check_escalation_rate
+from backend.chat.events import _check_escalation_rate, _emit_chat_escalated_event
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
-from backend.chat.language import async_localize_text_to_language_result
+from backend.chat.language import (
+    ResolvedLanguageContext,
+    async_localize_text_to_language_result,
+)
+from backend.chat.persistence import _persist_turn_with_response_language
 from backend.core.config import settings
-from backend.escalation.openai_escalation import pre_confirm_fallback_result
+from backend.escalation.openai_escalation import (
+    EscalationLlmResult,
+    classify_followup_reply,
+    classify_pre_confirm_reply,
+    complete_escalation_openai_turn,
+    pre_confirm_fallback_result,
+    render_pre_confirm_text,
+)
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
@@ -35,6 +44,9 @@ from backend.escalation.service import (
     _set_escalation_clarify_flag,
     advance_notification_marker_to_current,
     apply_collected_contact_email,
+    build_chat_messages_for_openai,
+    create_escalation_ticket,
+    fact_from_ticket,
     get_latest_escalation_ticket_for_chat,
     get_open_escalation_ticket_for_chat,
     note_repeat_human_request,
@@ -43,10 +55,13 @@ from backend.escalation.service import (
     raise_ticket_priority_if_higher,
 )
 from backend.models import (
+    Chat,
     EscalationPhase,
     EscalationTicket,
     EscalationTrigger,
+    TurnOutcome,
 )
+from backend.observability import TraceHandle
 
 # Canonical (English) copy shown when the user asks for a human but has not yet
 # stated a forwardable problem. Localized to the user's language at runtime via
@@ -62,15 +77,63 @@ _AWAITING_REQUEST_CANONICAL_TEXT = (
 )
 
 
-def _svc_lookup() -> Any:
-    """Resolve callables via the service module so test monkeypatches against
-    ``backend.chat.service.X`` continue to affect these call sites after the
-    move. Inline import avoids a circular dependency at module load.
-    """
-    from backend.chat import service as _svc
-    return _svc
-
 logger = logging.getLogger(__name__)
+
+
+def _escalation_turn_response(
+    *,
+    db: Session,
+    chat: Chat,
+    tenant_id: uuid.UUID,
+    language_context: ResolvedLanguageContext,
+    question: str,
+    out: EscalationLlmResult,
+    trace: TraceHandle,
+    trace_source: str,
+    escalated: bool,
+    ticket_number: str | None = None,
+) -> ChatTurnOutcome:
+    """Persist an escalation turn and return the outcome. Single commit for all mutations.
+
+    The user-facing message is always written in ``response_language`` (the
+    user's language), not in ``escalation_language``. ``escalation_language``
+    is the tenant-side artifact language (ticket text / support team) and
+    must not leak into the chat reply.
+    """
+    _persist_turn_with_response_language(
+        db=db,
+        chat=chat,
+        tenant_id=tenant_id,
+        response_language=language_context.response_language,
+        resolution_reason=language_context.response_language_resolution_reason,
+        user_content=question,
+        assistant_content=out.message_to_user,
+        document_ids=[],
+        extra_tokens=out.tokens_used,
+        # Every reply through this helper is a step of the escalation FSM
+        # (offer, decline, clarify-reask, follow-up ack, handoff) — including
+        # the ``escalated=False`` decline/ack turns, whose chat-state flags are
+        # already cleared by the time this runs and would otherwise infer
+        # "unanswered" from the empty document list.
+        turn_outcome=TurnOutcome.escalation,
+        language_context=language_context,
+        trace=trace,
+    )
+    trace.update(
+        output={"answer": out.message_to_user, "source": trace_source},
+        metadata={
+            "escalated": escalated,
+            "response_language": language_context.response_language,
+            "escalation_language": language_context.escalation_language,
+        },
+    )
+    return ChatTurnOutcome(
+        text=out.message_to_user,
+        document_ids=[],
+        tokens_used=out.tokens_used,
+        ticket_number=ticket_number,
+        escalation_offered=bool(chat.escalation_pre_confirm_pending),
+    )
 
 
 class EscalationStateMachine(PipelineHandler):
@@ -178,7 +241,6 @@ class EscalationStateMachine(PipelineHandler):
 
     def _handle_awaiting_email(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         """Returns None if the awaited ticket vanished — caller should fall through."""
-        _svc = _svc_lookup()
         chat = ctx.chat
         awaiting_email_span = (
             ctx.trace.span(
@@ -211,14 +273,14 @@ class EscalationStateMachine(PipelineHandler):
                 ctx.db.refresh(ticket)
                 ctx.db.refresh(chat)
                 ctx.db.expire(chat, ["messages"])
-                msgs = _svc.build_chat_messages_for_openai(
+                msgs = build_chat_messages_for_openai(
                     chat, ctx.redacted_question
                 )
                 out = await_only(
-                    _svc.complete_escalation_openai_turn(
+                    complete_escalation_openai_turn(
                         phase=EscalationPhase.handoff_email_known,
                         chat_messages=msgs,
-                        fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                        fact_json=fact_from_ticket(ticket, chat=chat),
                         latest_user_text=ctx.redacted_question,
                         api_key=ctx.api_key,
                         response_language=ctx.language_context.response_language,
@@ -228,7 +290,7 @@ class EscalationStateMachine(PipelineHandler):
                     awaiting_email_span.end(
                         output={"ticket_found": True, "email_captured": True}
                     )
-                outcome = _svc._escalation_turn_response(
+                outcome = _escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
                     tenant_id=ctx.tenant_id,
@@ -256,14 +318,14 @@ class EscalationStateMachine(PipelineHandler):
                     )
                     ctx.db.rollback()
                 return outcome
-            msgs = _svc.build_chat_messages_for_openai(
+            msgs = build_chat_messages_for_openai(
                 chat, ctx.redacted_question
             )
             out = await_only(
-                _svc.complete_escalation_openai_turn(
+                complete_escalation_openai_turn(
                     phase=EscalationPhase.email_parse_failed,
                     chat_messages=msgs,
-                    fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                    fact_json=fact_from_ticket(ticket, chat=chat),
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
                     response_language=ctx.language_context.response_language,
@@ -273,7 +335,7 @@ class EscalationStateMachine(PipelineHandler):
                 awaiting_email_span.end(
                     output={"ticket_found": True, "email_captured": False}
                 )
-            return _svc._escalation_turn_response(
+            return _escalation_turn_response(
                 db=ctx.db,
                 chat=chat,
                 tenant_id=ctx.tenant_id,
@@ -294,7 +356,6 @@ class EscalationStateMachine(PipelineHandler):
             raise
 
     def _handle_followup_yes_no(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
-        _svc = _svc_lookup()
         chat = ctx.chat
         followup_span = (
             ctx.trace.span(name="escalation-followup", input={"pending": True})
@@ -306,7 +367,7 @@ class EscalationStateMachine(PipelineHandler):
         # reads such questions as "unclear" (= ticket context) and re-emits
         # the handoff copy. Classifier failure → "unclear" → existing flow.
         gate_decision, gate_tokens = await_only(
-            _svc.classify_followup_reply(
+            classify_followup_reply(
                 latest_user_text=ctx.redacted_question,
                 api_key=ctx.api_key,
             )
@@ -323,16 +384,16 @@ class EscalationStateMachine(PipelineHandler):
                 )
             return None
         ticket = get_latest_escalation_ticket_for_chat(chat.id, ctx.db)
-        msgs = _svc.build_chat_messages_for_openai(
+        msgs = build_chat_messages_for_openai(
             chat, ctx.redacted_question
         )
         try:
             out = await_only(
-                _svc.complete_escalation_openai_turn(
+                complete_escalation_openai_turn(
                     phase=EscalationPhase.followup_awaiting_yes_no,
                     chat_messages=msgs,
                     fact_json={
-                        **_svc.fact_from_ticket(ticket, chat=chat),
+                        **fact_from_ticket(ticket, chat=chat),
                         "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
                     },
                     latest_user_text=ctx.redacted_question,
@@ -353,7 +414,7 @@ class EscalationStateMachine(PipelineHandler):
                 ctx.db.add(chat)
                 if followup_span is not None:
                     followup_span.end(output={"decision": decision})
-                return _svc._escalation_turn_response(
+                return _escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
                     tenant_id=ctx.tenant_id,
@@ -373,7 +434,7 @@ class EscalationStateMachine(PipelineHandler):
             ctx.db.add(chat)
             if followup_span is not None:
                 followup_span.end(output={"decision": decision})
-            outcome = _svc._escalation_turn_response(
+            outcome = _escalation_turn_response(
                 db=ctx.db,
                 chat=chat,
                 tenant_id=ctx.tenant_id,
@@ -422,7 +483,6 @@ class EscalationStateMachine(PipelineHandler):
         the canonical ticket question and retrieval context; for the direct
         human-request path it is synthesised on the fly.
         """
-        _svc = _svc_lookup()
         chat = ctx.chat
         chat.escalation_pre_confirm_pending = False
         _clear_escalation_clarify_flag(chat)
@@ -475,7 +535,7 @@ class EscalationStateMachine(PipelineHandler):
             # email that has already gone out (re-sending the delta later).
             ctx.db.commit()
         else:
-            ticket = _svc.create_escalation_ticket(
+            ticket = create_escalation_ticket(
                 ctx.tenant_id,
                 pre_confirm_ctx.get("primary_question") or ctx.question,
                 esc_trigger,
@@ -494,14 +554,14 @@ class EscalationStateMachine(PipelineHandler):
             if not ticket.user_email
             else EscalationPhase.handoff_email_known
         )
-        msgs = _svc.build_chat_messages_for_openai(
+        msgs = build_chat_messages_for_openai(
             chat, ctx.redacted_question
         )
         out_handoff = await_only(
-            _svc.complete_escalation_openai_turn(
+            complete_escalation_openai_turn(
                 phase=phase,
                 chat_messages=msgs,
-                fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                fact_json=fact_from_ticket(ticket, chat=chat),
                 latest_user_text=ctx.redacted_question,
                 api_key=ctx.api_key,
                 response_language=ctx.language_context.response_language,
@@ -532,7 +592,7 @@ class EscalationStateMachine(PipelineHandler):
         # Only a genuinely new ticket is an escalation. Emitting on reuse would
         # count one handed-off conversation N times in the escalation metrics.
         if not reused:
-            _svc._emit_chat_escalated_event(
+            _emit_chat_escalated_event(
                 tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
                 bot_public_id=ctx.bot_public_id,
                 chat_id=str(chat.id),
@@ -541,7 +601,7 @@ class EscalationStateMachine(PipelineHandler):
                 plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
                 priority=ticket.priority,
             )
-        outcome = _svc._escalation_turn_response(
+        outcome = _escalation_turn_response(
             db=ctx.db,
             chat=chat,
             tenant_id=ctx.tenant_id,
@@ -694,8 +754,6 @@ class EscalationStateMachine(PipelineHandler):
     def _emit_awaiting_request_message(
         self, ctx: HandlerContext, *, trace_source: str
     ) -> ChatTurnOutcome:
-        _svc = _svc_lookup()
-
         # We run inside a run_sync greenlet ON the event loop thread; the
         # localization helper is a coroutine, so bridge it back onto the loop
         # with await_only.
@@ -709,7 +767,7 @@ class EscalationStateMachine(PipelineHandler):
                 chat_id=str(ctx.chat.id),
             )
         )
-        _svc._persist_turn_with_response_language(
+        _persist_turn_with_response_language(
             db=ctx.db,
             chat=ctx.chat,
             tenant_id=ctx.tenant_id,
@@ -761,7 +819,6 @@ class EscalationStateMachine(PipelineHandler):
                answers the new message afresh and re-offers escalation
                itself if the KB still can't resolve it.
         """
-        _svc = _svc_lookup()
         chat = ctx.chat
         pre_confirm_span = (
             ctx.trace.span(name="escalation-pre-confirm", input={"pending": True})
@@ -771,7 +828,7 @@ class EscalationStateMachine(PipelineHandler):
         pre_confirm_ctx = chat.escalation_pre_confirm_context or {}
         try:
             decision, classify_tokens = await_only(
-                _svc.classify_pre_confirm_reply(
+                classify_pre_confirm_reply(
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
                 )
@@ -800,7 +857,7 @@ class EscalationStateMachine(PipelineHandler):
                 try:
                     out_declined = await_only(
                         asyncio.wait_for(
-                            _svc.render_pre_confirm_text(
+                            render_pre_confirm_text(
                                 variant="declined",
                                 response_language=ctx.language_context.response_language,
                                 api_key=ctx.api_key,
@@ -814,7 +871,7 @@ class EscalationStateMachine(PipelineHandler):
                 except TimeoutError:
                     out_declined = pre_confirm_fallback_result("declined")
                 out_declined.tokens_used += classify_tokens
-                return _svc._escalation_turn_response(
+                return _escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
                     tenant_id=ctx.tenant_id,
@@ -856,7 +913,7 @@ class EscalationStateMachine(PipelineHandler):
             try:
                 out_clarify = await_only(
                     asyncio.wait_for(
-                        _svc.render_pre_confirm_text(
+                        render_pre_confirm_text(
                             variant="clarify",
                             response_language=ctx.language_context.response_language,
                             api_key=ctx.api_key,
@@ -870,7 +927,7 @@ class EscalationStateMachine(PipelineHandler):
             except TimeoutError:
                 out_clarify = pre_confirm_fallback_result("clarify")
             out_clarify.tokens_used += classify_tokens
-            return _svc._escalation_turn_response(
+            return _escalation_turn_response(
                 db=ctx.db,
                 chat=chat,
                 tenant_id=ctx.tenant_id,

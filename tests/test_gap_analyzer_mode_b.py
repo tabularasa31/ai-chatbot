@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import (
+from backend.chat.post_turn import (
     _start_mode_b_followup,
     _try_ingest_gap_signal,
 )
@@ -401,7 +401,7 @@ def test_gap_signal_ingestion_triggers_mode_b(
 
     trigger_calls: list[uuid.UUID] = []
     monkeypatch.setattr(
-        "backend.chat.service._start_mode_b_followup",
+        "backend.chat.post_turn._start_mode_b_followup",
         lambda tenant_id: trigger_calls.append(tenant_id),
     )
 
@@ -428,7 +428,7 @@ def test_mode_b_followup_enqueues_durable_job(
     tenant_id = uuid.uuid4()
     calls: list[tuple[uuid.UUID, GapJobKind, str]] = []
     monkeypatch.setattr(
-        "backend.chat.service.enqueue_gap_job_for_tenant_best_effort",
+        "backend.chat.post_turn.enqueue_gap_job_for_tenant_best_effort",
         lambda queued_tenant_id, *, job_kind, trigger: calls.append((queued_tenant_id, job_kind, trigger)),
     )
 

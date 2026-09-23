@@ -102,9 +102,9 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         "backend.chat.language.detect_language",
         lambda text: LanguageDetectionResult("en", 0.99, True),
     )
-    monkeypatch.setattr("backend.chat.service._try_ingest_gap_signal", lambda **kwargs: None)
+    monkeypatch.setattr("backend.chat.handlers.rag._try_ingest_gap_signal", lambda **kwargs: None)
     monkeypatch.setattr(
-        "backend.chat.service._trigger_log_analysis_threshold",
+        "backend.chat.handlers.rag._trigger_log_analysis_threshold",
         lambda *_a, **_k: None,
     )
 
@@ -121,7 +121,10 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         )()
 
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text", _fake_render_pre_confirm
+        "backend.chat.handlers.rag.render_pre_confirm_text", _fake_render_pre_confirm
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text", _fake_render_pre_confirm
     )
     return events
 

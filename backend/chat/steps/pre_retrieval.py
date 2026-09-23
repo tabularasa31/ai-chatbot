@@ -16,10 +16,6 @@ Everything that runs before vector/lexical retrieval, in orchestrator order:
 * :func:`relevance_guard` — awaits the guard verdict and routes rejects.
 * :func:`load_generation_inputs` — profile hints + quick answers for the
   generation prompt.
-
-LLM-backed helpers are looked up via ``backend.chat.service`` at call time so
-test monkeypatches against ``backend.chat.service.<name>`` keep intercepting
-them.
 """
 
 from __future__ import annotations
@@ -45,15 +41,24 @@ from backend.chat.types import (
 )
 from backend.core.config import settings
 from backend.core.scripts import NO_SCRIPT_BUCKET
-from backend.faq.faq_matcher import FAQMatchResult
+from backend.faq.faq_matcher import FAQMatchResult, async_match_faq
+from backend.guards.injection_detector import async_detect_injection
 from backend.guards.relevance_checker import (
     CATEGORY_SOCIAL,
     CATEGORY_SOCIAL_QUESTION,
     CATEGORY_SUPPORT_COMPLAINT,
+    async_check_relevance_with_profile,
 )
 from backend.models import TenantProfile
 from backend.observability import record_stage_ms
-from backend.search.service import detect_query_script_bucket
+from backend.search.service import (
+    async_detect_tenant_kb_scripts,
+    async_embed_queries,
+    async_semantic_query_rewrite,
+    async_semantic_query_rewrite_for_kb,
+    detect_query_script_bucket,
+    expand_query,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -231,8 +236,6 @@ async def prepare_turn(run: PipelineRun) -> None:
     tail and the query-rewrite skip decision. Releases the DB connection at
     the end so the injection guard's OpenAI call runs connectionless.
     """
-    from backend.chat import service as _svc
-
     state = run.state
     # Pre-fetch guard profile; use preloaded value if supplied by caller.
     state.guard_profile = (
@@ -241,9 +244,9 @@ async def prepare_turn(run: PipelineRun) -> None:
         else await run.db.get(TenantProfile, run.tenant_id)
     )
 
-    state.kb_scripts = await _svc.async_detect_tenant_kb_scripts(run.tenant_id, run.db)
+    state.kb_scripts = await async_detect_tenant_kb_scripts(run.tenant_id, run.db)
     state.query_script = detect_query_script_bucket(run.question)
-    state.base_query_variants = list(_svc.expand_query(run.question))
+    state.base_query_variants = list(expand_query(run.question))
 
     target_kb_scripts = [s for s in state.kb_scripts if s != state.query_script]
     state.cross_lingual_triggered = len(target_kb_scripts) > 0
@@ -305,13 +308,12 @@ async def injection_guard(run: PipelineRun) -> ChatPipelineResult | None:
     weighted p50 effect is a net win (-575 ms expected at the current
     traffic mix).
     """
-    from backend.chat import service as _svc
     from backend.guards.types import VerdictReason
 
     _inj_start = perf_counter()
     # The guard records its own verdict to guard_events (co-located with the
     # cache-hit flag it knows); chat_id marks this as a real chat turn.
-    injection_verdict = await _svc.async_detect_injection(
+    injection_verdict = await async_detect_injection(
         run.question,
         tenant_id=str(run.tenant_id),
         api_key=run.api_key,
@@ -366,8 +368,6 @@ def launch_concurrent_tasks(run: PipelineRun) -> None:
     latency reflects the guard's full wall-clock (2-10 s OpenAI call) rather
     than the residual wait after FAQ/embed work already overlapped with it.
     """
-    from backend.chat import service as _svc
-
     state = run.state
 
     if run.status_callback is not None:
@@ -378,7 +378,7 @@ def launch_concurrent_tasks(run: PipelineRun) -> None:
 
     state.rel_started_at = perf_counter()
     state.rel_task = asyncio.create_task(
-        _svc.async_check_relevance_with_profile(
+        async_check_relevance_with_profile(
             tenant_id=run.tenant_id,
             user_question=run.question,
             profile=state.guard_profile,
@@ -389,7 +389,7 @@ def launch_concurrent_tasks(run: PipelineRun) -> None:
         )
     )
     state.base_embed_task = asyncio.create_task(
-        _svc.async_embed_queries(
+        async_embed_queries(
             list(state.base_query_variants),
             api_key=run.api_key,
             timeout=settings.embedding_http_timeout_seconds,
@@ -398,7 +398,7 @@ def launch_concurrent_tasks(run: PipelineRun) -> None:
     skip_rewrite = state.query_rewrite_skip_reason == "eligible_to_skip"
     if not skip_rewrite:
         state.rewrite_task = asyncio.create_task(
-            _svc.async_semantic_query_rewrite(
+            async_semantic_query_rewrite(
                 run.question,
                 api_key=run.api_key,
                 timeout=settings.semantic_query_rewrite_timeout_sec,
@@ -411,7 +411,7 @@ def launch_concurrent_tasks(run: PipelineRun) -> None:
     for target_script in target_kb_scripts:
         state.cross_lingual_tasks.append(
             asyncio.create_task(
-                _svc.async_semantic_query_rewrite_for_kb(
+                async_semantic_query_rewrite_for_kb(
                     run.question,
                     kb_script=target_script,
                     api_key=run.api_key,
@@ -424,8 +424,6 @@ def launch_concurrent_tasks(run: PipelineRun) -> None:
 
 async def build_query_plan(run: PipelineRun) -> None:
     """Collect rewrite/cross-lingual variants and embed the query plan."""
-    from backend.chat import service as _svc
-
     state = run.state
     trace = run.trace
 
@@ -512,7 +510,7 @@ async def build_query_plan(run: PipelineRun) -> None:
     extra_variant_vectors: list[list[float]] = []
     if extra_variants and base_variant_vectors:
         try:
-            extra_variant_vectors = await _svc.async_embed_queries(
+            extra_variant_vectors = await async_embed_queries(
                 extra_variants,
                 api_key=run.api_key,
                 timeout=settings.embedding_http_timeout_seconds,
@@ -572,7 +570,6 @@ async def build_query_plan(run: PipelineRun) -> None:
 
 async def match_faq(run: PipelineRun) -> ChatPipelineResult | None:
     """FAQ matching; short-circuits the pipeline on a ``faq_direct`` hit."""
-    from backend.chat import service as _svc
     from backend.chat.language import render_direct_faq_answer_result
 
     state = run.state
@@ -581,7 +578,7 @@ async def match_faq(run: PipelineRun) -> ChatPipelineResult | None:
 
     faq_start = perf_counter()
     try:
-        state.faq_match = await _svc.async_match_faq(
+        state.faq_match = await async_match_faq(
             tenant_id=run.tenant_id,
             question=run.question,
             question_embedding=base_question_embedding,
@@ -785,11 +782,7 @@ async def load_generation_inputs(run: PipelineRun) -> None:
     )
     selected_quick_answer_keys = _quick_answer_keys_for_question(run.question_intent)
     if selected_quick_answer_keys:
-        # Looked up via the service module so test monkeypatches on
-        # ``backend.chat.service._async_lookup_quick_answers`` intercept it.
-        from backend.chat import service as _svc
-
-        state.quick_answer_items = await _svc._async_lookup_quick_answers(
+        state.quick_answer_items = await _async_lookup_quick_answers(
             run.tenant_id, selected_quick_answer_keys, run.db
         )
         _emit_quick_answer_lookup_event(

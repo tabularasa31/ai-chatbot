@@ -118,7 +118,7 @@ def test_handle_falls_through_when_awaiting_ticket_vanished_and_no_human_request
             "pointer recovery without an explicit human request"
         )
 
-    with patch("backend.chat.service.create_escalation_ticket", _no_ticket_create):
+    with patch("backend.chat.handlers.escalation.create_escalation_ticket", _no_ticket_create):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
 
     assert outcome is None, "Handler must yield to RagHandler, not return an outcome"

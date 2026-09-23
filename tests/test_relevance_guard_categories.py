@@ -70,15 +70,15 @@ def _nonempty_retrieval() -> RetrievalContext:
 def _stub_common(monkeypatch: pytest.MonkeyPatch) -> None:
     """Injection clean, FAQ no-match, no rewrites, no legacy escalation."""
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection",
+        "backend.chat.steps.pre_retrieval.async_detect_injection",
         _as_async(lambda *_a, **_kw: Verdict.of(VerdictReason.OK)),
     )
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate",
+        "backend.chat.steps.generate.should_escalate",
         lambda *_a, **_kw: (False, None),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **_kw: FAQMatchResult(
             strategy="rag_only",
             faq_items=[],
@@ -91,18 +91,18 @@ def _stub_common(monkeypatch: pytest.MonkeyPatch) -> None:
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service._start_mode_b_followup", lambda _tenant_id: None
+        "backend.chat.post_turn._start_mode_b_followup", lambda _tenant_id: None
     )
 
     async def _no_rewrite(*_a, **_kw):
         return None
 
-    monkeypatch.setattr("backend.chat.service.async_semantic_query_rewrite", _no_rewrite)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_semantic_query_rewrite", _no_rewrite)
     monkeypatch.setattr(
-        "backend.chat.service.async_semantic_query_rewrite_for_kb", _no_rewrite
+        "backend.chat.steps.pre_retrieval.async_semantic_query_rewrite_for_kb", _no_rewrite
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: _nonempty_retrieval()),
     )
 
@@ -129,7 +129,10 @@ def _stub_guard_verdict(
         return resolved
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile", _guard
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile", _guard
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile", _guard
     )
     return calls
 
@@ -157,7 +160,7 @@ def test_followup_guard_receives_dialog_context(
     _stub_common(monkeypatch)
     calls = _stub_guard_verdict(monkeypatch, (True, "relevant", _PROFILE_STUB))
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_a, **_kw: ("You can use it, yes.", 7)),
     )
 
@@ -207,7 +210,7 @@ def test_support_complaint_offers_escalation_not_refusal(
     _stub_common(monkeypatch)
     _stub_guard_verdict(monkeypatch, (False, "support_complaint", _PROFILE_STUB))
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_a, **_kw: (_ for _ in ()).throw(
             AssertionError("answer LLM must not run on a support complaint")
         )),
@@ -222,7 +225,8 @@ def test_support_complaint_offers_escalation_not_refusal(
             tokens_used=1,
         )
 
-    monkeypatch.setattr("backend.chat.service.render_pre_confirm_text", _render)
+    monkeypatch.setattr("backend.chat.handlers.rag.render_pre_confirm_text", _render)
+    monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _render)
 
     session_id = uuid.uuid4()
     outcome = process_chat_message(
@@ -259,7 +263,7 @@ def test_social_turn_gets_polite_acknowledgement(
     _stub_guard_verdict(monkeypatch, (False, "social", _PROFILE_STUB))
     _identity_localize(monkeypatch)
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_a, **_kw: (_ for _ in ()).throw(
             AssertionError("answer LLM must not run on a social turn")
         )),
@@ -302,7 +306,7 @@ def test_social_question_about_bot_gets_short_reply(
     _stub_guard_verdict(monkeypatch, (False, "social_question", _PROFILE_STUB))
     _identity_localize(monkeypatch)
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_a, **_kw: (_ for _ in ()).throw(
             AssertionError("answer LLM must not run on a social question")
         )),
@@ -345,7 +349,7 @@ def test_short_social_question_classified_on_first_zero_hits_turn(
     _stub_common(monkeypatch)
     # Retrieval comes back empty so the zero-hits fast path runs.
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: RetrievalContext(
             chunk_texts=[],
             document_ids=[],
@@ -368,10 +372,13 @@ def test_short_social_question_classified_on_first_zero_hits_turn(
         return Verdict.of(VerdictReason.SHORT_QUERY_BYPASS)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile", _guard
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile", _guard
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile", _guard
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_a, **_kw: (_ for _ in ()).throw(
             AssertionError("answer LLM must not run on a social question")
         )),
@@ -404,7 +411,7 @@ def test_offtopic_is_still_rejected_with_support_offer(
     _stub_guard_verdict(monkeypatch, (False, "offtopic", _PROFILE_STUB))
     _identity_localize(monkeypatch)
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *_a, **_kw: (_ for _ in ()).throw(
             AssertionError("answer LLM must not run on an off-topic turn")
         )),

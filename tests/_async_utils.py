@@ -43,7 +43,7 @@ def as_async_generate(fn: Callable[..., Any]) -> Callable[..., Any]:
     returned ``(text, total_tokens)``; ``async_generate_answer`` returns
     ``(text, total_tokens, input_tokens, output_tokens, offered_ticket,
     needs_human, clarifying)``. Wraps the old-style fake for
-    ``monkeypatch.setattr("backend.chat.handlers.rag.async_generate_answer", ...)``
+    ``monkeypatch.setattr("backend.chat.steps.generate.async_generate_answer", ...)``
     and pads any shorter tuple to the current shape.
     """
 

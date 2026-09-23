@@ -561,7 +561,7 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
     async def _guard_embed_queries(texts: list[str], **_kwargs) -> list[list[float]]:
         return [_unit_vector_for(text) for text in texts]
 
-    monkeypatch.setattr("backend.chat.service.async_embed_queries", _embed)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_embed_queries", _embed)
     monkeypatch.setattr(
         "backend.guards.injection_detector.async_embed_query", _guard_embed_query
     )
@@ -571,11 +571,11 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
     # Force the lazily-cached seed embeddings to recompute with the patched
     # embedder above instead of reusing whatever another test cached first.
     monkeypatch.setattr("backend.guards.injection_detector._reference_embeddings", None)
-    monkeypatch.setattr("backend.chat.handlers.rag.async_generate_answer", _generate)
-    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _retrieve)
-    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+    monkeypatch.setattr("backend.chat.steps.generate.async_generate_answer", _generate)
+    monkeypatch.setattr("backend.chat.steps.retrieval.async_retrieve_context", _retrieve)
+    monkeypatch.setattr("backend.chat.steps.generate.should_escalate", lambda *_, **__: (False, None))
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(
             lambda **_: FAQMatchResult(
                 strategy="rag_only",
@@ -589,9 +589,9 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
             )
         ),
     )
-    monkeypatch.setattr("backend.chat.service._start_mode_b_followup", lambda _tenant_id: None)
-    monkeypatch.setattr("backend.chat.service.async_semantic_query_rewrite", _no_rewrite)
-    monkeypatch.setattr("backend.chat.service.async_semantic_query_rewrite_for_kb", _no_rewrite)
+    monkeypatch.setattr("backend.chat.post_turn._start_mode_b_followup", lambda _tenant_id: None)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_semantic_query_rewrite", _no_rewrite)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_semantic_query_rewrite_for_kb", _no_rewrite)
     return counters
 
 
@@ -644,7 +644,7 @@ def test_repeated_question_is_served_from_cache_without_openai(
         await asyncio.sleep(5)
         raise AssertionError("an exact cache hit must not wait for the classifiers")
 
-    monkeypatch.setattr("backend.chat.service.async_detect_injection", _must_not_run)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_detect_injection", _must_not_run)
     monkeypatch.setattr("backend.chat.service.detect_human_request", _slow_classifier)
     monkeypatch.setattr("backend.chat.service.classify_question_intent", _slow_classifier)
     trace = _Trace()
@@ -782,7 +782,7 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
 
     # An escalating reply is never stored.
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate",
+        "backend.chat.steps.generate.should_escalate",
         lambda *_, **__: (True, EscalationTrigger.low_similarity),
     )
     _ask(cl_row, api_key, db_session, "Do you support SAML?")
@@ -807,7 +807,7 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
     db_session.add_all([pre_confirm, held])
     db_session.commit()
     monkeypatch.setattr(
-        "backend.chat.service.classify_pre_confirm_reply", _as_async(lambda **_: ("unclear", 0))
+        "backend.chat.handlers.escalation.classify_pre_confirm_reply", _as_async(lambda **_: ("unclear", 0))
     )
     before = cache_lookups()
     assert _ask(cl_row, api_key, db_session, session_id=pre_confirm.session_id).text != "Answer"

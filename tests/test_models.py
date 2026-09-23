@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import datetime as dt
 import uuid
 
@@ -271,3 +274,38 @@ def test_before_flush_converts_non_utc_aware_to_utc_then_strips_tzinfo(db_sessio
         "the instant by 4 hours"
     )
     assert chat.session_ended_event_at.tzinfo is None
+
+
+# ---------------------------------------------------------------------------
+# Alembic migration file checks
+# ---------------------------------------------------------------------------
+
+_MIGRATIONS_DIR = (
+    Path(__file__).resolve().parents[1] / "backend" / "migrations" / "versions"
+)
+_MAX_REVISION_LEN = 32
+
+
+def _load_revision(path: Path) -> str | None:
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, "revision", None)
+
+
+def test_alembic_revisions_fit_limit_and_are_unique() -> None:
+    seen: dict[str, str] = {}
+    duplicates: list[tuple[str, str]] = []
+    too_long: list[tuple[str, int]] = []
+    for path in sorted(_MIGRATIONS_DIR.glob("*.py")):
+        revision = _load_revision(path)
+        assert revision is not None, f"{path.name} must define revision"
+        if len(revision) > _MAX_REVISION_LEN:
+            too_long.append((path.name, len(revision)))
+        if revision in seen:
+            duplicates.append((revision, path.name))
+        else:
+            seen[revision] = path.name
+    assert not too_long, f"Revision ids too long: {too_long}"
+    assert not duplicates, f"Duplicate revision ids: {duplicates}"

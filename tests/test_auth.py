@@ -314,3 +314,27 @@ def test_health(tenant: TestClient) -> None:
     body = response.json()
     assert body["status"] == "ok"
     assert body["redis"] in {"ok", "unavailable", "disabled"}
+
+
+@pytest.mark.parametrize("kind", ["expired_token", "unknown_token"])
+def test_verify_email_rejects_expired_or_unknown_token(
+    tenant: TestClient, db_session, kind: str
+) -> None:
+    import datetime as dt
+
+    from backend.models import User
+
+    if kind == "expired_token":
+        resp = tenant.post(
+            "/auth/register",
+            json={"email": "verify-expired@example.com", "password": "SecurePass1!"},
+        )
+        assert resp.status_code == 200
+        user = db_session.query(User).filter(User.email == "verify-expired@example.com").one()
+        user.verification_expires_at = dt.datetime.utcnow() - dt.timedelta(hours=1)
+        db_session.commit()
+        token = user.verification_token
+    else:
+        token = "nonexistent-token-12345"
+    resp = tenant.post("/auth/verify-email", json={"token": token})
+    assert resp.status_code == 400

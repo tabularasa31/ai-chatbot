@@ -37,12 +37,12 @@ def async_assert_not_called(name: str) -> Callable[..., Any]:
 
 
 def as_async_generate(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Adapt a legacy sync ``generate_answer`` fake to the async 7-tuple contract.
+    """Adapt a legacy sync ``generate_answer`` fake to the async 8-tuple contract.
 
     The sync ``generate_answer`` twin (removed with the async-only migration)
     returned ``(text, total_tokens)``; ``async_generate_answer`` returns
     ``(text, total_tokens, input_tokens, output_tokens, offered_ticket,
-    needs_human, clarifying)``. Wraps the old-style fake for
+    needs_human, clarifying, checklist)``. Wraps the old-style fake for
     ``monkeypatch.setattr("backend.chat.steps.generate.async_generate_answer", ...)``
     and pads any shorter tuple to the current shape.
     """
@@ -51,11 +51,10 @@ def as_async_generate(fn: Callable[..., Any]) -> Callable[..., Any]:
         out = fn(*args, **kwargs)
         if isinstance(out, tuple) and len(out) == 2:
             text, total = out
-            return (text, total, 0, 0, False, False, False)
-        # Pre-needs_human (5) and pre-clarifying (6) fakes: default the markers
-        # they predate to absent.
-        if isinstance(out, tuple) and 5 <= len(out) < 7:
-            return (*out, *(False,) * (7 - len(out)))
+            return (text, total, 0, 0, False, False, False, False)
+        # Fakes that predate a marker default it to absent.
+        if isinstance(out, tuple) and 5 <= len(out) < 8:
+            return (*out, *(False,) * (8 - len(out)))
         return out
 
     return _wrapped

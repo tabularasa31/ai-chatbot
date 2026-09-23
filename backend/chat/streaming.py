@@ -111,7 +111,18 @@ HANDOFF_MARKER = "<needs_human/>"
 # question differently (a Chinese 吗-question closing on 。, Ethiopic ፧).
 CLARIFY_MARKER = "<clarifying/>"
 
-ALL_MARKERS: tuple[str, ...] = (OFFER_MARKER, HANDOFF_MARKER, CLARIFY_MARKER)
+# Sentinel the LLM appends when its reply hands the user steps to carry out
+# themselves and asks them to report back. The backend holds the handoff until
+# that report: no offer underneath this reply, and a bare "just forward it" on
+# the next turn gets one re-ask for the result instead of a ticket.
+CHECKLIST_MARKER = "<checklist/>"
+
+ALL_MARKERS: tuple[str, ...] = (
+    OFFER_MARKER,
+    HANDOFF_MARKER,
+    CLARIFY_MARKER,
+    CHECKLIST_MARKER,
+)
 
 
 def _terminal_marker_re(marker: str) -> re.Pattern[str]:
@@ -164,26 +175,29 @@ def _strip_and_detect_clarify_marker(text: str) -> tuple[str, bool]:
     return _strip_and_detect_terminal_marker(text, CLARIFY_MARKER)
 
 
-def _strip_and_detect_markers(text: str) -> tuple[str, bool, bool, bool]:
+def _strip_and_detect_markers(text: str) -> tuple[str, bool, bool, bool, bool]:
     """Peel every terminal sentinel off ``text``.
 
-    Returns ``(cleaned_text, offered_ticket, needs_human, clarifying)``. A reply
-    may carry several markers in any order, so peel until none matches the tail
-    instead of assuming a single trailing sentinel.
+    Returns ``(cleaned_text, offered_ticket, needs_human, clarifying, checklist)``.
+    A reply may carry several markers in any order, so peel until none matches
+    the tail instead of assuming a single trailing sentinel.
     """
     offered = False
     needs_human = False
     clarifying = False
+    checklist = False
     cleaned = text
     while True:
         cleaned, hit_offer = _strip_and_detect_offer_marker(cleaned)
         cleaned, hit_handoff = _strip_and_detect_handoff_marker(cleaned)
         cleaned, hit_clarify = _strip_and_detect_clarify_marker(cleaned)
+        cleaned, hit_checklist = _strip_and_detect_terminal_marker(cleaned, CHECKLIST_MARKER)
         offered = offered or hit_offer
         needs_human = needs_human or hit_handoff
         clarifying = clarifying or hit_clarify
-        if not (hit_offer or hit_handoff or hit_clarify):
-            return cleaned, offered, needs_human, clarifying
+        checklist = checklist or hit_checklist
+        if not (hit_offer or hit_handoff or hit_clarify or hit_checklist):
+            return cleaned, offered, needs_human, clarifying, checklist
 
 
 def _strip_trailing_partial_marker(text: str) -> str:

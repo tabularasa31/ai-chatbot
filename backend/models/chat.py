@@ -205,6 +205,16 @@ class Chat(Base):
         default=False,
         server_default="false",
     )
+    # True iff the immediately preceding assistant reply handed the user a
+    # checklist of steps to run and asked for the result. A bare "just forward
+    # it" on the next turn then gets one re-ask for that result instead of a
+    # ticket. Reset on any other reply, the re-ask included.
+    last_reply_was_checklist = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     # --- Live operator handoff ---
     # ``live`` mutes the bot for this chat: the visitor's turns are persisted
     # and no reply is generated. Never means "waiting" — that is derived from

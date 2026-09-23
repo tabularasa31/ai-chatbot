@@ -246,6 +246,7 @@ def build_store_candidate(
         or result.llm_offered_ticket
         or result.llm_needs_human
         or result.llm_clarifying
+        or result.llm_checklist
         or result.clarify_required_reason is not None
     ):
         return None

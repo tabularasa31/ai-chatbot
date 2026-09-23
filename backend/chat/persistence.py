@@ -108,6 +108,7 @@ def _finalize_persisted_messages(
     extra_tokens: int,
     set_rephrase_flag: bool = False,
     set_low_confidence_flag: bool = False,
+    set_checklist_flag: bool = False,
     count_user_turn: bool = True,
 ) -> None:
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
@@ -121,6 +122,7 @@ def _finalize_persisted_messages(
     # that did not come from weak retrieval resets it, so two weak turns
     # separated by a good one never collapse into the second-attempt path.
     chat.last_reply_was_low_confidence = set_low_confidence_flag
+    chat.last_reply_was_checklist = set_checklist_flag
     db.add(chat)
     # Flush the turn's own rows (messages + chat update) BEFORE the best-effort
     # session-turn tracking savepoint. ``begin_nested()`` implicitly flushes all
@@ -245,6 +247,7 @@ def _persist_turn(
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
     set_low_confidence_flag: bool = False,
+    set_checklist_flag: bool = False,
     turn_outcome: TurnOutcome | None = None,
 ) -> tuple[Message, Message]:
     _persist_start = perf_counter()
@@ -279,6 +282,7 @@ def _persist_turn(
         extra_tokens=extra_tokens,
         set_rephrase_flag=set_rephrase_flag,
         set_low_confidence_flag=set_low_confidence_flag,
+        set_checklist_flag=set_checklist_flag,
     )
     if _persist_span is not None:
         _persist_span.end(
@@ -303,6 +307,7 @@ def _persist_turn_with_response_language(
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
     set_low_confidence_flag: bool = False,
+    set_checklist_flag: bool = False,
     turn_outcome: TurnOutcome | None = None,
 ) -> tuple[Message, Message]:
     _set_last_response_language(
@@ -324,6 +329,7 @@ def _persist_turn_with_response_language(
         trace=trace,
         set_rephrase_flag=set_rephrase_flag,
         set_low_confidence_flag=set_low_confidence_flag,
+        set_checklist_flag=set_checklist_flag,
         turn_outcome=turn_outcome,
     )
 

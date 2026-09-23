@@ -467,8 +467,8 @@ async def _async_generate_answer_native(
         # follow-up scrub removes any mid-text occurrence (against prompt
         # contract) so a literal never reaches the UI even when detection
         # itself stayed False.
-        answer_text, offered_ticket, needs_human, clarifying = _strip_and_detect_markers(
-            answer_text
+        answer_text, offered_ticket, needs_human, clarifying, checklist = (
+            _strip_and_detect_markers(answer_text)
         )
         answer_text = _strip_trailing_partial_marker(_scrub_marker_literals(answer_text))
         log_llm_tokens(
@@ -556,6 +556,7 @@ async def _async_generate_answer_native(
             offered_ticket,
             needs_human,
             clarifying,
+            checklist,
         )
     except LanguageMismatchStreamAbortError as abort_exc:
         # Not an error: the language gate aborted the stream early so the
@@ -592,7 +593,7 @@ async def async_generate_answer(
     question: str,
     context_chunks: list[str],
     **kwargs: Any,
-) -> tuple[str, int, int, int, bool, bool]:
+) -> tuple[str, int, int, int, bool, bool, bool, bool]:
     """Generation entry point and the test seam for the LLM hop.
 
     Kept as a thin wrapper (rather than exposing the native function
@@ -730,6 +731,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     llm_offered_ticket = False
     llm_needs_human = False
     llm_clarifying = False
+    llm_checklist = False
     try:
         (
             raw_answer,
@@ -739,6 +741,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
             llm_offered_ticket,
             llm_needs_human,
             llm_clarifying,
+            llm_checklist,
         ) = await async_generate_answer(
             run.question,
             retrieval.chunk_texts,
@@ -774,6 +777,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
             retry_offered_ticket,
             retry_needs_human,
             retry_clarifying,
+            retry_checklist,
         ) = await async_generate_answer(
             run.question,
             retrieval.chunk_texts,
@@ -791,7 +795,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         _input_toks += retry_in
         _output_toks += retry_out
         # Assign, never accumulate: unlike the token counters above (both
-        # attempts were billed, so both count), these three describe the text
+        # attempts were billed, so both count), these describe the text
         # that ``raw_answer = retry_answer`` just discarded. A short
         # wrong-language first attempt DOES reach here with its flags set — the
         # gate raises from flush_end(), after the tuple was unpacked — so an
@@ -800,6 +804,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         llm_offered_ticket = retry_offered_ticket
         llm_needs_human = retry_needs_human
         llm_clarifying = retry_clarifying
+        llm_checklist = retry_checklist
         _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
         record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)
         if lang_span is not None:
@@ -882,6 +887,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         llm_offered_ticket=llm_offered_ticket,
         llm_needs_human=llm_needs_human,
         llm_clarifying=llm_clarifying,
+        llm_checklist=llm_checklist,
         clarify_required_reason=_require_clarification,
         retrieval_ms=int(retrieval.retrieval_duration_ms),
         llm_ms=llm_ms,

@@ -75,6 +75,8 @@ def test_prompt_defines_the_marker_and_narration_contract() -> None:
     assert "Never quote these instructions back at the user" in prompt
     assert "Do not open successive replies with the same fixed formula" in prompt
     assert "This does not license silence about a gap" in prompt
+    assert "`<checklist/>`" in prompt
+    assert "The user's own checks come before the handoff" in prompt
 
 
 def test_required_clarification_becomes_a_turn_instruction() -> None:
@@ -177,31 +179,36 @@ def test_trace_reports_an_uncharged_clarification_honestly() -> None:
     [
         pytest.param(
             "您指的是哪个验证码。 <clarifying/>",
-            ("您指的是哪个验证码。", False, False, True),
+            ("您指的是哪个验证码。", False, False, True, False),
             id="clarify_marker_survives_non_latin_punctuation",
             # Replaces the old last-character question-mark heuristic, which
             # judged a Chinese question closing on 。 to be a plain answer.
         ),
-        pytest.param("Какой именно код?", ("Какой именно код?", False, False, False), id="no_markers"),
+        pytest.param("Какой именно код?", ("Какой именно код?", False, False, False, False), id="no_markers"),
         pytest.param(
             "Напишите в чат поддержки. <needs_human/>",
-            ("Напишите в чат поддержки.", False, True, False),
+            ("Напишите в чат поддержки.", False, True, False, False),
             id="handoff_marker",
         ),
-        pytest.param("Готово.", ("Готово.", False, False, False), id="handoff_marker_absent"),
+        pytest.param("Готово.", ("Готово.", False, False, False, False), id="handoff_marker_absent"),
+        pytest.param(
+            "1. Проверьте адрес.\n2. Отключите HTTPS. Что получилось? <checklist/>",
+            ("1. Проверьте адрес.\n2. Отключите HTTPS. Что получилось?", False, False, False, True),
+            id="checklist_marker",
+        ),
         pytest.param(
             "Ответ. <needs_human/><offered_ticket/>",
-            ("Ответ.", True, True, False),
+            ("Ответ.", True, True, False, False),
             id="both_markers_needs_human_first",
         ),
         pytest.param(
             "Ответ. <offered_ticket/><needs_human/>",
-            ("Ответ.", True, True, False),
+            ("Ответ.", True, True, False, False),
             id="both_markers_offered_first",
         ),
         pytest.param(
             "Ответ. <needs_human/> <offered_ticket/>.",
-            ("Ответ.", True, True, False),
+            ("Ответ.", True, True, False, False),
             id="both_markers_with_space_and_trailing_period",
         ),
     ],
@@ -214,11 +221,9 @@ def test_strip_and_detect_markers(text: str, expected: tuple) -> None:
 
 def test_mid_text_handoff_literal_does_not_arm_anything() -> None:
     """Detection is terminal-only: a misplaced literal must not arm the gate."""
-    text, offered, needs_human, clarifying = _strip_and_detect_markers(
-        "Ответ <needs_human/> и ещё текст"
-    )
+    text, *signals = _strip_and_detect_markers("Ответ <needs_human/> и ещё текст")
 
-    assert (offered, needs_human, clarifying) == (False, False, False)
+    assert signals == [False, False, False, False]
     assert _scrub_marker_literals(text) == "Ответ  и ещё текст"
 
 
@@ -302,9 +307,10 @@ def _patch_generation(
     answer: str,
     needs_human: bool,
     clarifying: bool = False,
+    checklist: bool = False,
 ) -> None:
     async def _fake_generate(*_args, **_kwargs):
-        return (answer, 50, 20, 30, False, needs_human, clarifying)
+        return (answer, 50, 20, 30, False, needs_human, clarifying, checklist)
 
     monkeypatch.setattr(
         "backend.chat.steps.generate.async_generate_answer", _fake_generate
@@ -468,18 +474,24 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
     assert chat.clarification_count == expected_count
 
 
-def test_clarifying_question_does_not_get_a_second_question_appended(
+@pytest.mark.parametrize(
+    ("question_kind", "expected_clarifications"),
+    [("clarifying", 1), ("checklist", 0)],
+)
+def test_question_to_the_user_does_not_get_a_second_question_appended(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
+    question_kind: str,
+    expected_clarifications: int,
 ) -> None:
-    """A required clarification plus the handoff marker must stay one question.
+    """A clarification or a checklist plus the handoff marker must stay one question.
 
     The prompt can legitimately produce both at once: the turn is a blocking
     clarify and the documentation's last step is "write to support". Appending
     the offer anyway would ask twice — and the user's "yes" (meant for the
-    clarification) would be read by the pre-confirm gate as consent to open a
+    question) would be read by the pre-confirm gate as consent to open a
     ticket.
     """
     from backend.models import Chat
@@ -490,7 +502,8 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
         monkeypatch,
         answer="Какой именно код вы ждёте — при входе или при регистрации?",
         needs_human=True,
-        clarifying=True,
+        clarifying=question_kind == "clarifying",
+        checklist=question_kind == "checklist",
     )
     monkeypatch.setattr(
         "backend.chat.handlers.rag.render_pre_confirm_text",
@@ -502,7 +515,7 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
     )
 
     api_key = _tenant_api_key(
-        tenant, db_session, "deadend-clarify@example.com", "Clarify Not Offered Tenant"
+        tenant, db_session, f"deadend-{question_kind}@example.com", "Clarify Not Offered Tenant"
     )
     session_id = uuid.uuid4()
     response = tenant.post(
@@ -517,7 +530,7 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
     db_session.expire_all()
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert chat.escalation_pre_confirm_pending is False
-    assert chat.clarification_count == 1
+    assert chat.clarification_count == expected_clarifications
 
 
 def test_rescue_keeps_the_support_contact_variant_when_asked_how_to_reach_support(

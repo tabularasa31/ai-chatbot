@@ -76,6 +76,15 @@ _AWAITING_REQUEST_CANONICAL_TEXT = (
     "pass it on."
 )
 
+# Canonical (English) re-ask shown once when the previous reply handed the user
+# a checklist and they asked to forward the conversation without reporting
+# what the checks showed. Localized at runtime like the copy above.
+_CHECKLIST_REASK_CANONICAL_TEXT = (
+    "Before I pass this on: did you go through the steps from my previous "
+    "message? What happened when you tried them? Support will ask the same "
+    "first, so your result gets the request solved faster."
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +238,12 @@ class EscalationStateMachine(PipelineHandler):
         if ctx.explicit_human_request:
             if not ctx.human_request_explicit:
                 return self._decline_implied_request(ctx)
+            if chat.last_reply_was_checklist and not ctx.message_has_request_content:
+                return self._emit_localized_message(
+                    ctx,
+                    canonical_text=_CHECKLIST_REASK_CANONICAL_TEXT,
+                    trace_source="escalation_checklist_reask",
+                )
             if self._has_forwardable_request(ctx):
                 return self._handle_explicit_request(ctx)
             return self._enter_awaiting_request(ctx)
@@ -716,8 +731,10 @@ class EscalationStateMachine(PipelineHandler):
         chat = ctx.chat
         chat.escalation_awaiting_request = True
         ctx.db.add(chat)
-        return self._emit_awaiting_request_message(
-            ctx, trace_source="escalation_awaiting_request"
+        return self._emit_localized_message(
+            ctx,
+            canonical_text=_AWAITING_REQUEST_CANONICAL_TEXT,
+            trace_source="escalation_awaiting_request",
         )
 
     def _handle_awaiting_request(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
@@ -744,22 +761,24 @@ class EscalationStateMachine(PipelineHandler):
                 trace_source="escalation_request_detail_provided",
             )
         if ctx.explicit_human_request:
-            return self._emit_awaiting_request_message(
-                ctx, trace_source="escalation_awaiting_request_repeat"
+            return self._emit_localized_message(
+                ctx,
+                canonical_text=_AWAITING_REQUEST_CANONICAL_TEXT,
+                trace_source="escalation_awaiting_request_repeat",
             )
         chat.escalation_awaiting_request = False
         ctx.db.add(chat)
         return None
 
-    def _emit_awaiting_request_message(
-        self, ctx: HandlerContext, *, trace_source: str
+    def _emit_localized_message(
+        self, ctx: HandlerContext, *, canonical_text: str, trace_source: str
     ) -> ChatTurnOutcome:
         # We run inside a run_sync greenlet ON the event loop thread; the
         # localization helper is a coroutine, so bridge it back onto the loop
         # with await_only.
         localized = await_only(
             async_localize_text_to_language_result(
-                canonical_text=_AWAITING_REQUEST_CANONICAL_TEXT,
+                canonical_text=canonical_text,
                 target_language=ctx.language_context.response_language,
                 api_key=ctx.api_key,
                 tenant_id=str(ctx.tenant_id),
@@ -784,7 +803,7 @@ class EscalationStateMachine(PipelineHandler):
                 output={"answer": localized.text, "source": trace_source},
                 metadata={
                     "escalated": False,
-                    "awaiting_request": True,
+                    "awaiting_request": bool(ctx.chat.escalation_awaiting_request),
                     "response_language": ctx.language_context.response_language,
                 },
             )

@@ -542,8 +542,8 @@ class RagHandler(PipelineHandler):
 
         # The escalate branch below replaces the reply wholesale, so a
         # retrieval-score escalation would swap the model's ``<clarifying/>``
-        # troubleshooting question for the handoff offer.
-        _clarifying_stood_down = escalate and result.llm_clarifying
+        # troubleshooting question or ``<checklist/>`` for the handoff offer.
+        _clarifying_stood_down = escalate and (result.llm_clarifying or result.llm_checklist)
         if _clarifying_stood_down:
             escalate = False
             esc_trigger = None
@@ -736,8 +736,8 @@ class RagHandler(PipelineHandler):
         # disarmed the gate and left the raw RAG answer standing — exactly the
         # dead end this block exists to close.
         #
-        # A reply the model marked as a clarifying question is left alone, as
-        # is one it marked as its own offer. Appending "shall I forward this?"
+        # A reply the model marked as a clarifying question or a checklist is
+        # left alone, as is one it marked as its own offer. Appending "shall I forward this?"
         # after either asks twice in one reply — and after this turn's required
         # clarification it is worse than noise, because the user's "yes"
         # answers the clarification while the gate reads it as consent to open
@@ -748,6 +748,7 @@ class RagHandler(PipelineHandler):
             and result.llm_needs_human
             and not result.llm_offered_ticket
             and not result.llm_clarifying
+            and not result.llm_checklist
         ):
             _handoff_start = perf_counter()
             # "You can reach our support team right here" only informs a user
@@ -853,6 +854,7 @@ class RagHandler(PipelineHandler):
             # tracker armed: the turn was still weak, so the next weak one
             # counts as consecutive instead of restarting the two-strike count.
             set_low_confidence_flag=_defer_weak_turn or _clarifying_stood_down,
+            set_checklist_flag=result.llm_checklist and not escalate,
             document_ids=document_ids,
             extra_tokens=tokens_used,
             language_context=ctx.language_context,

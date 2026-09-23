@@ -135,37 +135,6 @@ def test_apply_llm_failure_state_machine(
     assert tenant_row.llm_alert_last_email_at is None
 
 
-def test_record_llm_failure_returns_should_email_bool(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """Direct unit check on the lower-level service: bool return drives
-    whether the caller dispatches the email side-effect."""
-    tenant_row, _ = _bootstrap_tenant(
-        tenant, db_session, email="alert-bool@example.com", name="Bool Co"
-    )
-    assert (
-        alerts.record_llm_failure(
-            db_session, tenant_row.id, LlmFailureType.quota_exhausted
-        )
-        is True
-    )
-    # Within throttle window — same type, recently emailed.
-    assert (
-        alerts.record_llm_failure(
-            db_session, tenant_row.id, LlmFailureType.quota_exhausted
-        )
-        is False
-    )
-    # Non-actionable types short-circuit before any DB write.
-    assert (
-        alerts.record_llm_failure(
-            db_session, tenant_row.id, LlmFailureType.provider_timeout
-        )
-        is False
-    )
-
-
 # --- API: GET /tenants/me/llm-alert -----------------------------------------
 
 

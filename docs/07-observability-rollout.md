@@ -215,7 +215,7 @@ into the root chat trace metadata in `backend/chat/handlers/rag.py`:
   `low_confidence_no_path`, `guard_reject`, or `None`
 
 **PostHog event** — `chat.turn` (emitted from
-`backend/chat/service.py::_emit_chat_turn_event`) carries `decision`,
+`backend/chat/events.py::_emit_chat_turn_event`) carries `decision`,
 `decision_reason`, `clarify_type`, `clarify_reason`, `budget_blocked`
 and `escalation_reason` as event properties.
 

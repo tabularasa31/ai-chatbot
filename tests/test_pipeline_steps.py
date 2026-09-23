@@ -483,9 +483,6 @@ def test_low_retrieval_guard_short_query_bypass_recheck(
         return Verdict.of(guard_verdict)
 
     monkeypatch.setattr(
-        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile", _guard
-    )
-    monkeypatch.setattr(
         "backend.chat.steps.retrieval.async_check_relevance_with_profile", _guard
     )
 
@@ -516,9 +513,6 @@ def test_low_retrieval_guard_no_recheck_when_not_bypassed(
     async def _guard(**kwargs):
         raise AssertionError("relevance re-check must not run for non-bypassed turns")
 
-    monkeypatch.setattr(
-        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile", _guard
-    )
     monkeypatch.setattr(
         "backend.chat.steps.retrieval.async_check_relevance_with_profile", _guard
     )

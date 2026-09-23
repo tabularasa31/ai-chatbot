@@ -164,8 +164,7 @@ def _monitor_injection(ctx: HandlerContext, chat: Chat) -> None:
 
     Best-effort like every other guard-event write — nothing here may cost the
     visitor their message. The lazy import is inside the ``try`` for that
-    reason and not only to break the cycle: an import that can fail belongs
-    where its failure is caught.
+    reason: an import that can fail belongs where its failure is caught.
     """
     try:
         from backend.guards.injection_detector import monitor_injection_structural

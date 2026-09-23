@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Logo } from "@/components/Logo";
 
 export function Footer() {
   return (
@@ -6,8 +7,8 @@ export function Footer() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           {/* Logo */}
-          <Link href="/" className="text-nd-text text-xl font-semibold">
-            Chat9
+          <Link href="/" aria-label="Chat9 home">
+            <Logo size={22} textClassName="text-xl" />
           </Link>
 
           {/* Links */}

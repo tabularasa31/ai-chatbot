@@ -215,7 +215,14 @@ def test_bot_instructions_layering_journey(tenant: TestClient, db_session: Sessi
     resp = tenant.patch(
         f"/bots/{bot_id}",
         headers={"Authorization": f"Bearer {token}"},
-        json={"custom_instructions": ""},
+        json={"custom_instructions": "Custom text."},
+    )
+    assert resp.json()["instructions_source"] == "preset+custom"
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"custom_instructions": "   "},
     )
     body = resp.json()
     assert body["custom_instructions"] is None

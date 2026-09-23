@@ -158,11 +158,12 @@ def test_chat_awaiting_email_valid_email_transitions_to_followup(
     db_session.add(chat)
     db_session.commit()
 
-    drive(tenant, api_key, chat.session_id, "reach me at user@example.com")
+    [reply] = drive(tenant, api_key, chat.session_id, "reach me at user@example.com")
 
     db_session.refresh(chat)
     db_session.refresh(ticket)
     assert ticket.user_email == "user@example.com"
+    assert reply["ticket_number"] == ticket.ticket_number
     assert chat.escalation_awaiting_ticket_id is None
     assert chat.escalation_followup_pending is True
 
@@ -649,6 +650,80 @@ def test_implied_human_request_after_prior_substantive_content_falls_through_to_
 
     db_session.refresh(chat)
     assert chat.has_substantive_content is True
+    assert chat.escalation_awaiting_request is False
+    assert (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
+        == 0
+    )
+
+
+@pytest.mark.escalation
+def test_explicit_human_request_after_prior_substantive_content_escalates_immediately(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import EscalationTicket
+
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="explicit-sticky@example.com", name="Explicit Sticky"
+    )
+    chat = _make_chat(db_session, tenant_id)
+    _seed_rag_answer(
+        mock_openai_client, db_session, tenant_id, answer="Your invoice is on the billing page."
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.detect_human_request",
+        _human_request_sequence(
+            HumanRequestResult(human_request=False, message_has_request_content=True),
+            HumanRequestResult(
+                human_request=True,
+                message_has_request_content=False,
+                human_request_explicit=True,
+            ),
+        ),
+    )
+
+    drive(tenant, api_key, chat.session_id, "where do I find my invoice", "connect me to a human")
+
+    db_session.refresh(chat)
+    assert chat.escalation_awaiting_request is False
+    assert (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
+        == 1
+    )
+
+
+@pytest.mark.escalation
+def test_implied_human_request_without_content_on_fresh_chat_falls_through_to_rag(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import EscalationTicket
+
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="implied-fresh@example.com", name="Implied Fresh"
+    )
+    chat = _make_chat(db_session, tenant_id)
+    _seed_rag_answer(mock_openai_client, db_session, tenant_id, answer="How can I help?")
+    monkeypatch.setattr(
+        "backend.chat.service.detect_human_request",
+        _human_request_sequence(
+            HumanRequestResult(
+                human_request=True,
+                message_has_request_content=False,
+                human_request_explicit=False,
+            ),
+        ),
+    )
+
+    [reply] = drive(tenant, api_key, chat.session_id, "please help me")
+
+    assert reply["text"] == "How can I help?"
+    db_session.refresh(chat)
     assert chat.escalation_awaiting_request is False
     assert (
         db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
@@ -1413,10 +1488,6 @@ def test_new_ticket_notify_failure_reports_metric_and_leaves_ticket_retryable(
     assert capture_mock.call_args.kwargs["properties"]["stage"] == "initial"
 
     ticket = db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).one()
-    # `_notify_tenant_new_ticket` itself never assigns `notification_message_id`
-    # except from `send_email`'s return value, so a failed send leaves it null
-    # regardless of caller wiring (unit-level contract, still enforced by
-    # test_notify_tenant_new_ticket_reports_failure_when_* in test_escalation.py).
     assert ticket.notification_message_id is None
 
 

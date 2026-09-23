@@ -533,6 +533,10 @@ def test_chat_no_embeddings_then_pre_confirm_non_yes_no_reply_does_not_escalate(
         .count()
     )
     assert ticket_count == 0
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.escalation_pre_confirm_context is None
+
 
 
 @pytest.mark.smoke

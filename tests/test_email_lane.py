@@ -570,6 +570,19 @@ def test_seat_holders_reply_take_answer_release_journey(
         unseated_result = handle_inbound_reply(reply, db_session)
     assert unseated_result.outcome is InboundOutcome.forwarded
 
+    # The owner role grants nothing on its own: without a seat the owner is
+    # forwarded like anyone else.
+    owner = db_session.query(User).filter(User.email == "owner-ingest@example.com").one()
+    owner.seat_granted_at = None
+    db_session.add(owner)
+    db_session.commit()
+    with patch("backend.escalation.service.send_email", return_value="<fwd3@brevo>"):
+        [reply] = parse_brevo_payload(
+            _brevo_item(to=reply_address(ticket.reply_token), sender="owner-ingest@example.com")
+        )
+        owner_result = handle_inbound_reply(reply, db_session)
+    assert owner_result.outcome is InboundOutcome.forwarded
+
 
 def test_a_seat_holders_reply_the_forward_lost_is_mailed_by_the_job(
     tenant: TestClient, db_session: Session

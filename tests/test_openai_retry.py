@@ -50,7 +50,10 @@ def test_retry_recovers_after_one_transient_failure(
 
     assert call_openai_with_retry("chat_generate", _fn) == "ok"
     assert calls["count"] == 2
-    assert len(sleeps) == 1
+    if isinstance(make_error(), RateLimitError):
+        assert sleeps == [1.0], "Retry-After header drives the pause"
+    else:
+        assert len(sleeps) == 1
 
 
 @pytest.mark.parametrize(

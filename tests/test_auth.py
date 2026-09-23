@@ -316,25 +316,32 @@ def test_health(tenant: TestClient) -> None:
     assert body["redis"] in {"ok", "unavailable", "disabled"}
 
 
-@pytest.mark.parametrize("kind", ["expired_token", "unknown_token"])
-def test_verify_email_rejects_expired_or_unknown_token(
+@pytest.mark.parametrize("kind", ["valid_token", "expired_token", "unknown_token"])
+def test_verify_email_accepts_valid_token_and_rejects_expired_or_unknown(
     tenant: TestClient, db_session, kind: str
 ) -> None:
     import datetime as dt
 
     from backend.models import User
 
-    if kind == "expired_token":
-        resp = tenant.post(
-            "/auth/register",
-            json={"email": "verify-expired@example.com", "password": "SecurePass1!"},
-        )
-        assert resp.status_code == 200
-        user = db_session.query(User).filter(User.email == "verify-expired@example.com").one()
-        user.verification_expires_at = dt.datetime.utcnow() - dt.timedelta(hours=1)
-        db_session.commit()
-        token = user.verification_token
-    else:
+    email = f"verify-{kind}@example.com"
+    if kind == "unknown_token":
         token = "nonexistent-token-12345"
+    else:
+        resp = tenant.post("/auth/register", json={"email": email, "password": "SecurePass1!"})
+        assert resp.status_code == 200
+        user = db_session.query(User).filter(User.email == email).one()
+        assert user.is_verified is False and user.verification_token
+        if kind == "expired_token":
+            user.verification_expires_at = dt.datetime.utcnow() - dt.timedelta(hours=1)
+            db_session.commit()
+        token = user.verification_token
     resp = tenant.post("/auth/verify-email", json={"token": token})
-    assert resp.status_code == 400
+    if kind != "valid_token":
+        assert resp.status_code == 400
+        return
+    assert resp.status_code == 200
+    assert resp.json()["token"] and resp.json()["expires_in"] == 24 * 60 * 60
+    db_session.expire_all()
+    user = db_session.query(User).filter(User.email == email).one()
+    assert user.is_verified is True and user.verification_token is None

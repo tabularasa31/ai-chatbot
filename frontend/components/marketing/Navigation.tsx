@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Menu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { hasSession } from '@/lib/api';
+import { Logo } from '@/components/Logo';
 
 export function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -19,8 +20,8 @@ export function Navigation() {
       <div className="max-w-7xl mx-auto px-6 py-4">
         <div className="flex items-center justify-between">
           {/* Logo */}
-          <Link href="/" className="text-[#FAF5FF] text-xl font-semibold">
-            Chat9
+          <Link href="/" aria-label="Chat9 home">
+            <Logo size={22} textClassName="text-xl" />
           </Link>
 
           {/* Desktop Navigation */}

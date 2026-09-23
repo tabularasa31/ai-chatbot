@@ -1,7 +1,9 @@
 "use client";
 
 import { ReactNode } from "react";
+import Link from "next/link";
 import { strings } from "@/lib/strings";
+import { Logo } from "@/components/Logo";
 
 const cardShell =
   "bg-nd-surface border border-nd-border rounded-lg shadow-md p-8";
@@ -16,6 +18,11 @@ function AuthShell({
   return (
     <div className="min-h-screen bg-nd-base flex items-center justify-center p-4">
       <div className="w-full max-w-md">
+        <div className="flex justify-center mb-6">
+          <Link href="/" aria-label="Chat9 home" className="rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-nd-accent">
+            <Logo />
+          </Link>
+        </div>
         <div className={centered ? `${cardShell} text-center` : cardShell}>{children}</div>
       </div>
     </div>

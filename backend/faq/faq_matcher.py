@@ -126,73 +126,6 @@ def _bound_db_url(db: Session | AsyncSession) -> str:
     return str(url) if url is not None else ""
 
 
-def _fetch_top_faq_rows(
-    *,
-    tenant_id: uuid.UUID,
-    question_embedding: list[float],
-    db: Session,
-    limit: int = 3,
-) -> list[FAQRow]:
-    """
-    Fetch top FAQ candidates by semantic similarity (cosine).
-
-    Production: use cosine_distance via pgvector operator.
-    SQLite tests: fall back to Python cosine over parsed TEXT vectors.
-    """
-    db_url = _bound_db_url(db)
-    if "sqlite" in db_url:
-        rows = (
-            db.query(TenantFaq)
-            .filter(TenantFaq.tenant_id == tenant_id)
-            .limit(max(limit * 5, limit))
-            .all()
-        )
-        scored: list[FAQRow] = []
-        for r in rows:
-            vec = _parse_sqlite_vector_text(r.question_embedding)
-            if vec is None:
-                continue
-            score = cosine_similarity(question_embedding, vec)
-            scored.append(
-                FAQRow(
-                    id=r.id,
-                    question=r.question,
-                    answer=r.answer,
-                    approved=bool(r.approved),
-                    score=float(score),
-                )
-            )
-        scored.sort(key=lambda x: x.score, reverse=True)
-        return scored[:limit]
-
-    # Postgres path: delegate similarity to pgvector via SQLAlchemy.
-    # cosine_distance returns a distance in [0..2] sometimes; we convert to similarity.
-    distance_expr = TenantFaq.question_embedding.cosine_distance(question_embedding)
-    results = (
-        db.query(TenantFaq, distance_expr.label("distance"))
-        .filter(TenantFaq.tenant_id == tenant_id)
-        .order_by(distance_expr)
-        .limit(limit)
-        .all()
-    )
-    out: list[FAQRow] = []
-    for faq, distance in results:
-        try:
-            sim = max(0.0, 1.0 - float(distance))
-        except (TypeError, ValueError):
-            sim = 0.0
-        out.append(
-            FAQRow(
-                id=faq.id,
-                question=faq.question,
-                answer=faq.answer,
-                approved=bool(faq.approved),
-                score=float(sim),
-            )
-        )
-    return out
-
-
 def direct_applicability_guard(
     *,
     question: str,
@@ -240,7 +173,6 @@ async def _async_fetch_top_faq_rows(
     db: AsyncSession,
     limit: int = 3,
 ) -> list[FAQRow]:
-    """Async counterpart of :func:`_fetch_top_faq_rows`."""
     db_url = _bound_db_url(db)
     if "sqlite" in db_url:
         result = await db.execute(

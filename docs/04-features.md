@@ -377,8 +377,7 @@ The chat pipeline routes every turn through a single decision engine
 `escalate`, `reject`). The full block-rules contract is documented in the
 **Clarification** subsection below. The chat reply is a JSON object
 whose message content lives in a single `text` field (alongside
-`session_id`, an optional `ticket_number`, and `chat_ended`, which is
-always `false` and kept only for older integrations); there is no
+`session_id` and an optional `ticket_number`); there is no
 structured `message_type` discriminator and no quick-reply payload in v1.
 
 ---
@@ -475,8 +474,8 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 
 Public response contracts:
 
-- `POST /chat` returns a JSON body with a canonical `text` field (plus `session_id`, optional `ticket_number`, trace fields, and `chat_ended` — always `false`, kept for older integrations)
-- `POST /widget/chat` streams Server-Sent Events: `status` → `chunk`* → exactly one terminal `done` frame whose payload carries the same `text` / `session_id` / `chat_ended` / optional `ticket_number` / optional `sources`
+- `POST /chat` returns a JSON body with a canonical `text` field (plus `session_id`, optional `ticket_number` and trace fields)
+- `POST /widget/chat` streams Server-Sent Events: `status` → `chunk`* → exactly one terminal `done` frame whose payload carries the same `text` / `session_id` / optional `ticket_number` / optional `sources`
 - both channels may return the localized default greeting as a normal `text` reply when a brand-new empty conversation starts
 
 v1 note: structured `clarification` payload (`message_type`, `options`, `option_id`, quick-reply buttons) is **not implemented**. The bot may embed a clarifying question in plain text as part of the normal answer, but no structured clarification object is returned and the widget does not render quick-reply buttons.
@@ -542,7 +541,7 @@ Rollout note:
 
 #### Adjudication-driven cap suppression
 
-The contradiction cap can be suppressed by the LLM contradiction adjudicator when the `CONTRADICTION_ADJUDICATION_FILTER_CAP_ENABLED` global flag is enabled (default `false`). The flag is intentionally asymmetric: adjudication can only **drop** a deterministic cap, never add a new one. Suppression applies only when **all** of the following hold:
+The contradiction cap can be suppressed by the LLM contradiction adjudicator. The rule is intentionally asymmetric: adjudication can only **drop** a deterministic cap, never add a new one. Suppression applies only when **all** of the following hold:
 
 - the global flag is on,
 - adjudication ran and finished with status `completed` or `completed_with_errors`,

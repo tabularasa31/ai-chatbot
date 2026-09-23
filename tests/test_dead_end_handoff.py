@@ -292,7 +292,7 @@ def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
         )
 
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context", _as_async(_fake_retrieve)
+        "backend.chat.steps.retrieval.async_retrieve_context", _as_async(_fake_retrieve)
     )
 
 
@@ -307,7 +307,7 @@ def _patch_generation(
         return (answer, 50, 20, 30, False, needs_human, clarifying)
 
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer", _fake_generate
+        "backend.chat.steps.generate.async_generate_answer", _fake_generate
     )
 
 
@@ -320,7 +320,10 @@ def _capture_offer_variant(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         return Mock(message_to_user=OFFER_TEXT, tokens_used=0)
 
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text", _as_async(_render)
+        "backend.chat.handlers.rag.render_pre_confirm_text", _as_async(_render)
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text", _as_async(_render)
     )
     return seen
 
@@ -385,7 +388,11 @@ def test_plain_answer_is_left_alone(
     _patch_retrieval(monkeypatch, score=0.5)
     _patch_generation(monkeypatch, answer="Код приходит в течение 2 минут.", needs_human=False)
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text",
+        "backend.chat.handlers.rag.render_pre_confirm_text",
+        _as_async(lambda **_kw: Mock(message_to_user=OFFER_TEXT, tokens_used=0)),
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text",
         _as_async(lambda **_kw: Mock(message_to_user=OFFER_TEXT, tokens_used=0)),
     )
 
@@ -486,7 +493,11 @@ def test_clarifying_question_does_not_get_a_second_question_appended(
         clarifying=True,
     )
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text",
+        "backend.chat.handlers.rag.render_pre_confirm_text",
+        _as_async(lambda **_kw: Mock(message_to_user=OFFER_TEXT, tokens_used=0)),
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text",
         _as_async(lambda **_kw: Mock(message_to_user=OFFER_TEXT, tokens_used=0)),
     )
 
@@ -555,7 +566,8 @@ def test_offer_render_failure_still_arms_the_gate(
     async def _boom(**_kw):
         raise RuntimeError("localization backend is down")
 
-    monkeypatch.setattr("backend.chat.service.render_pre_confirm_text", _boom)
+    monkeypatch.setattr("backend.chat.handlers.rag.render_pre_confirm_text", _boom)
+    monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _boom)
 
     api_key = _tenant_api_key(
         tenant, db_session, "deadend-render-fail@example.com", "Render Failure Tenant"

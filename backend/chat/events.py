@@ -92,11 +92,8 @@ def _emit_quick_answer_lookup_event(
     # distinct_id="unknown" and polluting per-tenant rollups.
     if tenant_public_id is None and bot_public_id is None:
         return
-    # Look up capture_event via service module so monkeypatches against
-    # backend.chat.service.capture_event continue to work.
-    from backend.chat import service as _svc
     try:
-        _svc.capture_event(
+        capture_event(
             "quick_answer.lookup",
             distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
             tenant_id=tenant_public_id,
@@ -139,14 +136,13 @@ def _emit_speculative_retrieval_event(
     """
     if tenant_public_id is None and bot_public_id is None:
         return
-    from backend.chat import service as _svc
     strategy = {
         "used": "speculative",
         "fallback": "fallback",
         "wasted_reject": "speculative_cancelled",
     }[outcome]
     try:
-        _svc.capture_event(
+        capture_event(
             "speculative_retrieval.outcome",
             distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
             tenant_id=tenant_public_id,
@@ -192,9 +188,8 @@ def _emit_no_rag_hits_event(
     """
     if tenant_public_id is None and bot_public_id is None:
         return
-    from backend.chat import service as _svc
     try:
-        _svc.capture_event(
+        capture_event(
             "no_rag_hits.outcome",
             distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
             tenant_id=tenant_public_id,

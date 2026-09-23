@@ -44,7 +44,7 @@ def test_chat_pipeline_system_message_contains_bot_custom_and_preset_text(
     monkeypatch.setattr(settings, "observability_capture_full_prompts", True)
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
-    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+    monkeypatch.setattr("backend.chat.steps.generate.should_escalate", lambda *_, **__: (False, None))
 
     cl_row, api_key = _create_client(tenant, db_session, email="preset-e2e@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="Some docs chunk.")
@@ -82,7 +82,7 @@ def test_chat_pipeline_picks_up_preset_change_on_next_turn_no_snapshot(
     monkeypatch.setattr(settings, "observability_capture_full_prompts", True)
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
-    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+    monkeypatch.setattr("backend.chat.steps.generate.should_escalate", lambda *_, **__: (False, None))
 
     cl_row, api_key = _create_client(tenant, db_session, email="preset-e2e-swap@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="Some docs chunk.")

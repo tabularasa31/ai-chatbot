@@ -3,12 +3,6 @@
 Owns the LLM answer call (:func:`async_generate_answer` /
 :func:`_async_generate_answer_native`), the language-mismatch retry and the
 final :class:`ChatPipelineResult` assembly (:func:`run_generation`).
-
-Test seam note: the pipeline resolves ``async_generate_answer``,
-``detect_language`` and ``translate_text_result`` through
-``backend.chat.handlers.rag`` module globals at call time, so existing
-``monkeypatch.setattr("backend.chat.handlers.rag.<name>", ...)`` keeps
-intercepting them.
 """
 
 from __future__ import annotations
@@ -23,7 +17,9 @@ from backend.chat.decision import requires_blocking_clarify
 from backend.chat.language import (
     _language_root,
     async_localize_text_to_language_result,
+    detect_language,
     log_llm_tokens,
+    translate_text_result,
 )
 from backend.chat.pii import redact_for_egress
 from backend.chat.prompts import build_rag_messages
@@ -42,27 +38,15 @@ from backend.chat.streaming import (
 )
 from backend.chat.types import ChatPipelineResult, PipelineRun
 from backend.core.config import settings
-from backend.core.openai_client import is_reasoning_model
+from backend.core.openai_client import get_async_openai_client, is_reasoning_model
 from backend.core.openai_retry import async_call_openai_with_retry, provider_response_stamps
+from backend.escalation.service import should_escalate
 from backend.faq.faq_matcher import FAQRow
 from backend.models import Chat, MessageRole
 from backend.observability import TraceHandle, record_stage_ms
 from backend.observability.formatters import truncate_text
 
 logger = logging.getLogger(__name__)
-
-
-def _rag_module():
-    """The ``backend.chat.handlers.rag`` module, resolved lazily.
-
-    ``rag`` is the documented monkeypatch surface for the generation seams
-    (``async_generate_answer``, ``detect_language``, ``translate_text_result``);
-    resolving it at call time keeps ``monkeypatch.setattr`` on that module
-    effective for the call sites that now live here.
-    """
-    from backend.chat.handlers import rag
-
-    return rag
 
 
 def _safe_int(value: Any) -> int:
@@ -252,12 +236,11 @@ async def _enforce_response_language(
     """
     from backend.chat.language import LangDetectError
 
-    _rag = _rag_module()
     stripped = (answer_text or "").strip()
     if not stripped or not api_key:
         return answer_text, 0
     try:
-        detection = _rag.detect_language(stripped)
+        detection = detect_language(stripped)
     except LangDetectError:
         return answer_text, 0
     if not detection.is_reliable or detection.detected_language == "unknown":
@@ -265,7 +248,7 @@ async def _enforce_response_language(
     if _language_root(detection.detected_language) == _language_root(response_language):
         return answer_text, 0
     try:
-        result = await _rag.translate_text_result(
+        result = await translate_text_result(
             source_text=answer_text,
             target_language=response_language,
             api_key=api_key,
@@ -310,8 +293,6 @@ async def _async_generate_answer_native(
     ``stream_callback`` is kept sync — it's a thin synchronous push to the
     queue backing the SSE response.
     """
-    from backend.chat import service as _svc
-
     if not context_chunks and not faq_context_items and not quick_answer_items:
         result = await async_localize_text_to_language_result(
             canonical_text="I don't have information about this.",
@@ -344,7 +325,7 @@ async def _async_generate_answer_native(
     prompt_cache_prefix_tokens_estimate = _estimate_prompt_tokens(system_prompt)
     prompt_cache_prefix_fingerprint = _prompt_prefix_fingerprint(system_prompt)
     _cache_kwargs = _prompt_cache_kwargs(metrics_bot_id, retry_bot_id)
-    openai_client = _svc.get_async_openai_client(api_key)
+    openai_client = get_async_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
     _sampling_kwargs = _generation_sampling_kwargs(_reasoning)
     _request_kwargs = _generation_request_kwargs(_sampling_kwargs, _cache_kwargs)
@@ -615,18 +596,13 @@ async def async_generate_answer(
     """Generation entry point and the test seam for the LLM hop.
 
     Kept as a thin wrapper (rather than exposing the native function
-    directly) so tests can monkeypatch
-    ``backend.chat.handlers.rag.async_generate_answer`` with an async fake;
-    the pipeline resolves that name from the rag module at call time.
+    directly) so tests can monkeypatch it with an async fake.
     """
     return await _async_generate_answer_native(question, context_chunks, **kwargs)
 
 
 async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     """LLM answer (+ language-mismatch retry), validate, escalation decision."""
-    from backend.chat import service as _svc
-
-    _rag = _rag_module()
     state = run.state
     trace = run.trace
     language_context = run.language_context
@@ -662,7 +638,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     # the question itself. For any other confirmed non-English language, trust the
     # pre-resolved value and skip the extra detect_language call on the question.
     if not _expected_lang or _expected_lang in ("auto", "en"):
-        _q_lang = _rag.detect_language(run.question)
+        _q_lang = detect_language(run.question)
         _expected_lang = (
             _q_lang.detected_language
             if _q_lang.is_reliable and _q_lang.detected_language not in ("unknown", "en")
@@ -702,7 +678,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     # verdict: when retrieval cleared the handoff threshold, the model is told
     # not to volunteer a support ticket on top of an answer it can give from
     # the context. The result is reused for the pipeline result below.
-    escalate, esc_trigger = _svc.should_escalate(
+    escalate, esc_trigger = should_escalate(
         retrieval.best_confidence_score,
         len(retrieval.chunk_texts),
         best_rank_score=retrieval.best_rank_score,
@@ -763,7 +739,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
             llm_offered_ticket,
             llm_needs_human,
             llm_clarifying,
-        ) = await _rag.async_generate_answer(
+        ) = await async_generate_answer(
             run.question,
             retrieval.chunk_texts,
             response_language=language_context.response_language,
@@ -798,7 +774,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
             retry_offered_ticket,
             retry_needs_human,
             retry_clarifying,
-        ) = await _rag.async_generate_answer(
+        ) = await async_generate_answer(
             run.question,
             retrieval.chunk_texts,
             response_language=_expected_lang,
@@ -844,7 +820,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
     # this covers the residual case where response_language was an "en"
     # fallback while the question was reliably non-English.)
     if run.stream_callback is None and _expected_lang and _expected_lang != "en":
-        a_lang = _rag.detect_language(raw_answer)
+        a_lang = detect_language(raw_answer)
         if (
             a_lang.is_reliable
             and a_lang.detected_language != "unknown"
@@ -861,7 +837,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
                     },
                 )
             try:
-                _translation = await _rag.translate_text_result(
+                _translation = await translate_text_result(
                     source_text=raw_answer,
                     target_language=_expected_lang,
                     api_key=run.api_key,

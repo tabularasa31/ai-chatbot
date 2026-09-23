@@ -20,6 +20,10 @@ from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import LocalizationResult, generate_greeting_in_language_result
+from backend.chat.persistence import (
+    _persist_assistant_message_with_response_language,
+    _persist_turn_with_response_language,
+)
 from backend.guards.injection_detector import detect_injection_structural
 from backend.models import Tenant, TenantProfile, TurnOutcome
 
@@ -150,15 +154,6 @@ class GreetingHandler(PipelineHandler):
     def _handle_sync(
         self, ctx: HandlerContext, sync_db: Session, greeting: LocalizationResult
     ) -> ChatTurnOutcome:
-        # Lazy import: service.py imports the router at module load, so importing
-        # the persistence helpers at module top would create a cycle.
-        from backend.chat.persistence import (
-            _persist_assistant_message_with_response_language,
-        )
-        from backend.chat.service import (
-            _persist_turn_with_response_language,
-        )
-
         ctx.db = sync_db
 
         is_bootstrap = not ctx.question_text

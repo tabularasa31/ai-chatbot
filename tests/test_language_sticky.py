@@ -372,8 +372,8 @@ def _patch_process_chat_dependencies(
         "backend.chat.service.async_run_chat_pipeline",
         _fake_async_pipeline,
     )
-    monkeypatch.setattr("backend.chat.service._try_ingest_gap_signal", lambda **kwargs: None)
-    monkeypatch.setattr("backend.chat.service._trigger_log_analysis_threshold", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("backend.chat.handlers.rag._try_ingest_gap_signal", lambda **kwargs: None)
+    monkeypatch.setattr("backend.chat.handlers.rag._trigger_log_analysis_threshold", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "backend.chat.language.detect_language",
         _detect_from_map(detection_map),
@@ -546,7 +546,7 @@ def test_chat_escalation_uses_user_response_language(
         target_db.flush()
         return ticket
 
-    monkeypatch.setattr("backend.chat.service.create_escalation_ticket", _create_ticket)
+    monkeypatch.setattr("backend.chat.handlers.escalation.create_escalation_ticket", _create_ticket)
 
     captured: dict[str, str] = {}
 
@@ -559,11 +559,15 @@ def test_chat_escalation_uses_user_response_language(
         )()
 
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text",
+        "backend.chat.handlers.rag.render_pre_confirm_text",
         _fake_render_pre_confirm,
     )
-    monkeypatch.setattr("backend.chat.service.fact_from_ticket", lambda *args, **kwargs: {})
-    monkeypatch.setattr("backend.chat.service.build_chat_messages_for_openai", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text",
+        _fake_render_pre_confirm,
+    )
+    monkeypatch.setattr("backend.chat.handlers.escalation.fact_from_ticket", lambda *args, **kwargs: {})
+    monkeypatch.setattr("backend.chat.handlers.escalation.build_chat_messages_for_openai", lambda *args, **kwargs: [])
 
     with caplog.at_level("INFO"):
         process_chat_message(
@@ -646,7 +650,11 @@ def test_rag_escalation_engages_pre_confirm_fsm(
         )()
 
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text",
+        "backend.chat.handlers.rag.render_pre_confirm_text",
+        _fake_render_pre_confirm,
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text",
         _fake_render_pre_confirm,
     )
 

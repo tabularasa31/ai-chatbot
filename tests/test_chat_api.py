@@ -466,10 +466,14 @@ def test_chat_no_embeddings_then_pre_confirm_non_yes_no_reply_does_not_escalate(
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
     monkeypatch.setattr(
-        "backend.chat.service.classify_pre_confirm_reply", _as_async(lambda **_kw: (None, 0))
+        "backend.chat.handlers.escalation.classify_pre_confirm_reply", _as_async(lambda **_kw: (None, 0))
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
+        _as_async(lambda **_kw: Verdict.of(VerdictReason.RELEVANT)),
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
         _as_async(lambda **_kw: Verdict.of(VerdictReason.RELEVANT)),
     )
 
@@ -552,7 +556,7 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
     doc_id = uuid.uuid4()
 
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *args, **kwargs: RetrievalContext(
             chunk_texts=["Maximum 100 documents per account."],
             document_ids=[doc_id],
@@ -564,7 +568,7 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(
             lambda *args, **kwargs: ("Максимум 100 документов можно загрузить на аккаунт.", 8)
         ),
@@ -573,7 +577,7 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
     def _unexpected_ticket(*args, **kwargs):
         raise AssertionError("create_escalation_ticket should not be called for grounded hybrid answers")
 
-    monkeypatch.setattr("backend.chat.service.create_escalation_ticket", _unexpected_ticket)
+    monkeypatch.setattr("backend.chat.handlers.escalation.create_escalation_ticket", _unexpected_ticket)
 
     response = tenant.post(
         "/chat",
@@ -688,23 +692,24 @@ def test_chat_injection_detected_journey(
         counters["rewrite_kb"] += 1
         return None
 
-    monkeypatch.setattr("backend.chat.service.async_detect_injection", _async_inject_detected)
-    monkeypatch.setattr("backend.chat.service.async_check_relevance_with_profile", _count_relevance)
-    monkeypatch.setattr("backend.chat.service.async_embed_queries", _count_embed)
-    monkeypatch.setattr("backend.chat.service.async_semantic_query_rewrite", _count_rewrite)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_detect_injection", _async_inject_detected)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_check_relevance_with_profile", _count_relevance)
+    monkeypatch.setattr("backend.chat.steps.retrieval.async_check_relevance_with_profile", _count_relevance)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_embed_queries", _count_embed)
+    monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_semantic_query_rewrite", _count_rewrite)
     monkeypatch.setattr(
-        "backend.chat.service.async_semantic_query_rewrite_for_kb", _count_rewrite_kb
+        "backend.chat.steps.pre_retrieval.async_semantic_query_rewrite_for_kb", _count_rewrite_kb
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **kwargs: (_ for _ in ()).throw(AssertionError("match_faq called"))),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         async_assert_not_called("async_generate_answer"),
     )
 
@@ -752,11 +757,15 @@ def test_chat_faq_direct(
         return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection",
+        "backend.chat.steps.pre_retrieval.async_detect_injection",
         _async_no_inject,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
+        _async_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
         _async_relevance,
     )
 
@@ -768,7 +777,7 @@ def test_chat_faq_direct(
         score=0.95,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **kwargs: FAQMatchResult(
             strategy="faq_direct",
             faq_items=[faq_row],
@@ -781,11 +790,11 @@ def test_chat_faq_direct(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         async_assert_not_called("async_generate_answer"),
     )
 
@@ -829,11 +838,15 @@ def test_chat_not_relevant_returns_localized_reject(
         return Verdict.of(VerdictReason.OFFTOPIC)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection",
+        "backend.chat.steps.pre_retrieval.async_detect_injection",
         _async_no_inject,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
+        _async_relevance_off_topic,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
         _async_relevance_off_topic,
     )
     # Retrieval may run speculatively (it starts concurrently with the guard),
@@ -849,11 +862,11 @@ def test_chat_not_relevant_returns_localized_reject(
         confidence_source="vector_similarity",
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *args, **kwargs: speculative_retrieval),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         async_assert_not_called("async_generate_answer"),
     )
     async def _fake_localize(**kwargs: object) -> LocalizationResult:

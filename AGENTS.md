@@ -75,7 +75,7 @@ The RAG turn pipeline is split into explicit steps with typed I/O:
 - `types.py` — `PipelineRun` / `PipelineState` / `RetrievalContext` / `ChatPipelineResult`.
 - `prompts.py` — system-prompt blocks + `build_rag_prompt` / `build_rag_messages` (see the prompt caching contract below).
 - `streaming.py` — SSE stream filters (citations, thought tags, offer marker, language gate).
-- `handlers/rag.py` — `RagHandler` (persistence / analytics / escalation side effects) and the pipeline's re-export + **test-seam surface**: tests monkeypatch `backend.chat.handlers.rag.async_generate_answer` / `detect_language` / `translate_text_result`, and the steps resolve those names through that module at call time. LLM-backed helpers are likewise resolved via `backend.chat.service` at call time.
+- `handlers/rag.py` — `RagHandler` (persistence / analytics / escalation side effects). Tests monkeypatch collaborators on the module that calls them (`backend.chat.steps.generate.async_generate_answer`, `backend.chat.steps.pre_retrieval.async_detect_injection`, …), never through `backend.chat.service`.
 
 Every step is wrapped in (or internally creates) a Langfuse span — `injection guard`, `query_rewrite`, `query-embedding`, `faq_match`, relevance guard, `retrieval`, `zero-hits-check`, `refusal`, `llm-generation`, `language-check`, `escalation-check` — so a trace shows exactly where a turn short-circuited.
 

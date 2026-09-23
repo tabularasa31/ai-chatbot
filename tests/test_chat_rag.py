@@ -16,7 +16,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.handlers import rag as rag_handler
 from backend.chat.steps.generate import (
     async_generate_answer,
 )
@@ -627,7 +626,7 @@ def test_enforce_response_language_translates_when_language_drifts(
         captured["target_language"] = target_language
         return LocalizationResult(text="TRANSLATED-EN", tokens_used=12)
 
-    monkeypatch.setattr(rag_handler, "translate_text_result", _fake_translate)
+    monkeypatch.setattr(generate_step, "translate_text_result", _fake_translate)
     text, extra_tokens = asyncio.run(generate_step._enforce_response_language(
         russian_answer, response_language="en", api_key="sk-test"
     ))
@@ -646,7 +645,7 @@ def test_enforce_response_language_noop_when_languages_match(
     def _should_not_be_called(**_kwargs: object) -> LocalizationResult:
         raise AssertionError("translate_text_result must not be called when languages match")
 
-    monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
+    monkeypatch.setattr(generate_step, "translate_text_result", _should_not_be_called)
     russian = "Я покажу вам, как настроить SSL-сертификат для основного домена."
     text, extra_tokens = asyncio.run(generate_step._enforce_response_language(
         russian, response_language="ru", api_key="sk-test"
@@ -674,7 +673,7 @@ def test_enforce_response_language_skips_unreliable_detection(
     def _should_not_be_called(**_kwargs: object) -> LocalizationResult:
         raise AssertionError("translate_text_result must not be called for unreliable detection")
 
-    monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
+    monkeypatch.setattr(generate_step, "translate_text_result", _should_not_be_called)
     text, extra_tokens = asyncio.run(generate_step._enforce_response_language(
         "OK.", response_language="ru", api_key="sk-test"
     ))
@@ -695,7 +694,7 @@ def test_generate_answer_skips_language_guard_when_streaming(
     def _should_not_be_called(**_kwargs: object) -> LocalizationResult:
         raise AssertionError("language guard must not invoke translation in stream mode")
 
-    monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
+    monkeypatch.setattr(generate_step, "translate_text_result", _should_not_be_called)
 
     russian_text = (
         "Откройте панель управления TurboFlare и перейдите в раздел CDN. "
@@ -740,7 +739,7 @@ def test_generate_answer_adds_translation_tokens_to_total(
     async def _fake_translate(**_kwargs: object) -> LocalizationResult:
         return LocalizationResult(text="Translated answer in English.", tokens_used=25)
 
-    monkeypatch.setattr(rag_handler, "translate_text_result", _fake_translate)
+    monkeypatch.setattr(generate_step, "translate_text_result", _fake_translate)
 
     answer, tokens, *_ = asyncio.run(
         async_generate_answer(
@@ -898,7 +897,7 @@ def test_classified_intent_reaches_generation_as_quick_answers(
             reliability=build_reliability_assessment(top_score=0.8, result_count=1),
         )
 
-    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _fake_retrieve)
+    monkeypatch.setattr("backend.chat.steps.retrieval.async_retrieve_context", _fake_retrieve)
 
     async def _fake_classifier(*_args, **_kwargs) -> QuestionIntentResult:
         return QuestionIntentResult(pricing=True)
@@ -914,7 +913,7 @@ def test_classified_intent_reaches_generation_as_quick_answers(
         return ("Answer.", 50, 20, 30, False, False, False)
 
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer", _fake_generate
+        "backend.chat.steps.generate.async_generate_answer", _fake_generate
     )
 
     response = tenant.post(
@@ -1443,19 +1442,23 @@ def _zh_stub_pre_retrieval(
 ) -> None:
     """Common monkeypatches: injection clean, FAQ no-match, no escalation, no rewrites."""
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection",
+        "backend.chat.steps.pre_retrieval.async_detect_injection",
         _as_async(lambda *_a, **_kw: Verdict.of(VerdictReason.OK)),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
         _as_async(lambda **_kw: _as_verdict(relevance)),
     )
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
+        _as_async(lambda **_kw: _as_verdict(relevance)),
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.generate.should_escalate",
         lambda *_a, **_kw: (False, None),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_match_faq",
+        "backend.chat.steps.pre_retrieval.async_match_faq",
         _as_async(lambda **_kw: FAQMatchResult(
             strategy="rag_only",
             faq_items=[],
@@ -1468,7 +1471,7 @@ def _zh_stub_pre_retrieval(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service._start_mode_b_followup",
+        "backend.chat.post_turn._start_mode_b_followup",
         lambda _tenant_id: None,
     )
 
@@ -1476,10 +1479,10 @@ def _zh_stub_pre_retrieval(
         return None
 
     monkeypatch.setattr(
-        "backend.chat.service.async_semantic_query_rewrite", _no_rewrite
+        "backend.chat.steps.pre_retrieval.async_semantic_query_rewrite", _no_rewrite
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_semantic_query_rewrite_for_kb", _no_rewrite
+        "backend.chat.steps.pre_retrieval.async_semantic_query_rewrite_for_kb", _no_rewrite
     )
 
 
@@ -1494,7 +1497,7 @@ def test_first_zero_hits_emits_soft_reply_and_sets_flag(
 
     _zh_stub_pre_retrieval(monkeypatch)
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
     )
     # Asserts the answer LLM is never reached on the zero-hits path.
@@ -1502,7 +1505,7 @@ def test_first_zero_hits_emits_soft_reply_and_sets_flag(
         raise AssertionError("answer LLM must not be called on zero hits")
 
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer", as_async_generate(_fail_generate)
+        "backend.chat.steps.generate.async_generate_answer", as_async_generate(_fail_generate)
     )
 
     session_id = uuid.uuid4()
@@ -1545,11 +1548,15 @@ def test_consecutive_zero_hits_relevant_escalates(
         return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
         _post_retrieval_relevance,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
+        _post_retrieval_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
     )
 
@@ -1565,7 +1572,16 @@ def test_consecutive_zero_hits_relevant_escalates(
 
     # Pre-confirm rendering hits OpenAI in production; stub it.
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text",
+        "backend.chat.handlers.rag.render_pre_confirm_text",
+        _as_async(
+            lambda **_kw: SimpleNamespace(
+                message_to_user="Want me to escalate this to a human?",
+                tokens_used=1,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text",
         _as_async(
             lambda **_kw: SimpleNamespace(
                 message_to_user="Want me to escalate this to a human?",
@@ -1613,11 +1629,15 @@ def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
         return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
         _post_retrieval_relevance,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
+        _post_retrieval_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
     )
 
@@ -1639,7 +1659,8 @@ def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
         await asyncio.sleep(0.5)
         return SimpleNamespace(message_to_user="too late", tokens_used=1)
 
-    monkeypatch.setattr("backend.chat.service.render_pre_confirm_text", _slow_render)
+    monkeypatch.setattr("backend.chat.handlers.rag.render_pre_confirm_text", _slow_render)
+    monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _slow_render)
 
     outcome = process_chat_message(
         cl_row.id, "Question with no docs", session_id, db_session,
@@ -1675,11 +1696,15 @@ def test_consecutive_zero_hits_not_relevant_emits_offtopic_reject(
         return Verdict.of(VerdictReason.OFFTOPIC)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
         _post_retrieval_relevance,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
+        _post_retrieval_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
     )
 
@@ -1719,11 +1744,11 @@ def test_successful_turn_resets_rephrase_flag(
 
     _zh_stub_pre_retrieval(monkeypatch)
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: _zh_nonempty_retrieval()),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         _as_async(lambda *_a, **_kw: ("OK answer", 5, 10, 5, False, False, False)),
     )
 
@@ -1825,11 +1850,15 @@ def test_no_profile_relevance_verdict_does_not_escalate(
         return Verdict.of(VerdictReason.NO_PROFILE)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
         _no_profile_relevance,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
+        _no_profile_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
     )
 
@@ -1888,11 +1917,15 @@ def test_session_ended_event_stales_rephrase_flag(
         return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
         _no_force_check_allowed,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
+        _no_force_check_allowed,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *_a, **_kw: _zh_empty_retrieval()),
     )
 
@@ -2077,9 +2110,9 @@ def _nodocs_patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         "backend.chat.language.detect_language",
         lambda text: LanguageDetectionResult("en", 0.99, True),
     )
-    monkeypatch.setattr("backend.chat.service._try_ingest_gap_signal", lambda **kwargs: None)
+    monkeypatch.setattr("backend.chat.handlers.rag._try_ingest_gap_signal", lambda **kwargs: None)
     monkeypatch.setattr(
-        "backend.chat.service._trigger_log_analysis_threshold",
+        "backend.chat.handlers.rag._trigger_log_analysis_threshold",
         lambda *_a, **_k: None,
     )
 
@@ -2096,7 +2129,10 @@ def _nodocs_patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         )()
 
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text", _fake_render_pre_confirm
+        "backend.chat.handlers.rag.render_pre_confirm_text", _fake_render_pre_confirm
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text", _fake_render_pre_confirm
     )
     return events
 
@@ -2378,9 +2414,9 @@ def _lowconf_patch_weak_turn(monkeypatch: pytest.MonkeyPatch) -> None:
         "backend.chat.language.detect_language",
         lambda text: LanguageDetectionResult("en", 0.99, True),
     )
-    monkeypatch.setattr("backend.chat.service._try_ingest_gap_signal", lambda **kwargs: None)
+    monkeypatch.setattr("backend.chat.handlers.rag._try_ingest_gap_signal", lambda **kwargs: None)
     monkeypatch.setattr(
-        "backend.chat.service._trigger_log_analysis_threshold",
+        "backend.chat.handlers.rag._trigger_log_analysis_threshold",
         lambda *_a, **_k: None,
     )
 
@@ -2406,7 +2442,10 @@ def _lowconf_patch_weak_turn(monkeypatch: pytest.MonkeyPatch) -> None:
         )()
 
     monkeypatch.setattr(
-        "backend.chat.service.render_pre_confirm_text", _fake_render_pre_confirm
+        "backend.chat.handlers.rag.render_pre_confirm_text", _fake_render_pre_confirm
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.render_pre_confirm_text", _fake_render_pre_confirm
     )
 
 
@@ -2528,7 +2567,7 @@ def test_process_chat_message_ends_followup_span_on_exception(
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
+        "backend.chat.handlers.escalation.complete_escalation_openai_turn",
         _boom_escalation,
     )
 
@@ -2588,7 +2627,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     fake_trace = FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: fake_trace)
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(lambda *args, **kwargs: RetrievalContext(
             chunk_texts=["reset password in settings"],
             document_ids=[uuid.uuid4()],
@@ -2632,11 +2671,11 @@ def test_process_chat_message_adds_variant_summary_to_trace(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *args, **kwargs: ("Use the reset link in settings.", 17)),
     )
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate",
+        "backend.chat.steps.generate.should_escalate",
         lambda *args, **kwargs: (False, None),
     )
 
@@ -2768,7 +2807,7 @@ def test_trace_metadata_language_confidence_and_response_language_across_turns(
 
     monkeypatch.setattr("backend.chat.service.begin_trace", _begin_trace)
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         _as_async(
             lambda *args, **kwargs: RetrievalContext(
                 chunk_texts=["Чтобы сбросить пароль, откройте настройки аккаунта."],
@@ -2783,13 +2822,13 @@ def test_trace_metadata_language_confidence_and_response_language_across_turns(
         ),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(
             lambda *args, **kwargs: ("Откройте настройки и сбросьте пароль.", 12)
         ),
     )
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate",
+        "backend.chat.steps.generate.should_escalate",
         lambda *args, **kwargs: (False, None),
     )
 

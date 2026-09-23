@@ -1,4 +1,4 @@
-"""RAG handler module — and the chat pipeline's public / test-seam surface.
+"""RAG handler module.
 
 The pipeline itself lives in ``backend/chat/pipeline.py`` (orchestrator) and
 ``backend/chat/steps/`` (one module per step); shared dataclasses are in
@@ -12,19 +12,6 @@ stream filters in ``backend/chat/streaming.py``. This module keeps:
   escalation side effects only.
 * The decision-side helpers the handler feeds into ``decide()``
   (:func:`_classify_kb_confidence`, :func:`_compute_loop_signal`, …).
-* Re-exports of every pipeline symbol that used to be defined here, so
-  existing imports keep working.
-
-Test seams: this module is the documented monkeypatch surface for the
-generation hop. The pipeline resolves ``async_generate_answer``,
-``detect_language`` and ``translate_text_result`` through THIS module's
-globals at call time, so
-``monkeypatch.setattr("backend.chat.handlers.rag.<name>", ...)`` intercepts
-the call sites that live in ``backend/chat/steps/generate.py`` and
-``backend/chat/streaming.py``. Helpers that tests monkeypatch on
-``backend.chat.service`` (e.g. ``async_detect_injection``, ``match_faq``,
-``capture_event``, ``async_retrieve_context``) are likewise looked up
-dynamically via ``backend.chat.service`` inside the steps.
 """
 
 from __future__ import annotations
@@ -44,35 +31,17 @@ from backend.chat.decision import (
     classify_kb_confidence,
     floor_kb_confidence,
 )
-
-# --- Pipeline surface (moved out of this module; re-exported for callers) ---
+from backend.chat.events import _emit_chat_turn_event
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
-
-# Looked up late as ``rag.<name>`` by chat/steps/generate.py and chat/streaming.py
-# to break the import cycle; not dead imports.
-from backend.chat.language import (
-    detect_language,
-    translate_text_result,
-)
-from backend.chat.steps.generate import (
-    async_generate_answer,
-)
-
-# Language helpers: imported here (not only in the language module) because
-# this module is the monkeypatch surface for detect_language /
-# translate_text_result — see the module docstring.
+from backend.chat.persistence import _persist_turn_with_response_language
+from backend.chat.post_turn import _trigger_log_analysis_threshold, _try_ingest_gap_signal
 from backend.chat.types import (
     ChatPipelineResult,
 )
 from backend.core.config import settings
+from backend.escalation.openai_escalation import render_pre_confirm_text
 from backend.models import Chat, EscalationTrigger, MessageRole, TurnOutcome
 from backend.observability import record_stage_ms
-
-__all__ = (
-    "async_generate_answer",
-    "detect_language",
-    "translate_text_result",
-)
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +309,6 @@ class RagHandler(PipelineHandler):
         ctx.db = sync_db
         from time import perf_counter
 
-        from backend.chat import service as _svc
         from backend.chat.decision import (
             MAX_CLARIFICATIONS_PER_SESSION,
             Decision,
@@ -361,15 +329,6 @@ class RagHandler(PipelineHandler):
             build_variant_trace_metadata,
             build_variant_trace_tag,
         )
-
-        # Pull side-effecting helpers via the service module so tests' monkey-
-        # patches against ``backend.chat.service.X`` keep affecting these calls.
-        _emit_chat_escalated_event = _svc._emit_chat_escalated_event
-        _emit_chat_turn_event = _svc._emit_chat_turn_event
-        _persist_turn_with_response_language = _svc._persist_turn_with_response_language
-        _trigger_log_analysis_threshold = _svc._trigger_log_analysis_threshold
-        _try_ingest_gap_signal = _svc._try_ingest_gap_signal
-        render_pre_confirm_text = _svc.render_pre_confirm_text
 
         chat = ctx.chat
         # ``_async_dispatch`` always pre-computes the async pipeline result and

@@ -37,7 +37,9 @@ from typing import TYPE_CHECKING
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
+from backend.chat.persistence import _persist_user_only_turn
 from backend.core.config import settings
+from backend.escalation.service import notify_support_of_visitor_turn
 from backend.models import (
     Chat,
     Message,
@@ -46,6 +48,7 @@ from backend.models import (
     OperatorState,
 )
 from backend.models.base import _utcnow
+from backend.operator.sessions import emit_operator_session_ended
 
 if TYPE_CHECKING:
     from backend.operator.sessions import ClosedStretch
@@ -161,8 +164,7 @@ def _monitor_injection(ctx: HandlerContext, chat: Chat) -> None:
 
     Best-effort like every other guard-event write — nothing here may cost the
     visitor their message. The lazy import is inside the ``try`` for that
-    reason and not only to break the cycle: an import that can fail belongs
-    where its failure is caught.
+    reason: an import that can fail belongs where its failure is caught.
     """
     try:
         from backend.guards.injection_detector import monitor_injection_structural
@@ -197,14 +199,6 @@ class OperatorHandler(PipelineHandler):
         return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
 
     def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome | None:
-        # Lazy import: service.py imports the router at module load, so
-        # importing the persistence helpers at module top would cycle.
-        from backend.chat.persistence import (
-            _persist_user_only_turn,
-        )
-        from backend.escalation.service import notify_support_of_visitor_turn
-        from backend.operator.sessions import emit_operator_session_ended
-
         ctx.db = sync_db
         chat = ctx.chat
 

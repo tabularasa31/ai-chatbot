@@ -3,11 +3,6 @@
 Every class here wraps the downstream SSE emit callback and filters the token
 stream in real time; the module-level helpers do the equivalent cleanup on
 assembled (non-streamed) answer text.
-
-Test seam note: :class:`LanguageGateStreamFilter` resolves ``detect_language``
-through ``backend.chat.handlers.rag`` module globals at call time, so existing
-``monkeypatch.setattr("backend.chat.handlers.rag.detect_language", ...)``
-continues to intercept it.
 """
 
 from __future__ import annotations
@@ -16,7 +11,7 @@ import logging
 import re
 from collections.abc import Callable
 
-from backend.chat.language import LangDetectError, _language_root
+from backend.chat.language import LangDetectError, _language_root, detect_language
 
 logger = logging.getLogger(__name__)
 
@@ -448,13 +443,9 @@ class LanguageGateStreamFilter:
             self._check_and_flush()
 
     def _check_and_flush(self) -> None:
-        # Resolved via the rag module so test monkeypatches on
-        # ``backend.chat.handlers.rag.detect_language`` keep intercepting it.
-        from backend.chat.handlers import rag as _rag
-
         head = "".join(self._buf)
         try:
-            detection = _rag.detect_language(head)
+            detection = detect_language(head)
         except LangDetectError:
             detection = None
         if (

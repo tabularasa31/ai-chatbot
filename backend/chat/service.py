@@ -16,28 +16,19 @@ from sqlalchemy.orm import Session, selectinload
 from backend.chat.decision import (
     MAX_CLARIFICATIONS_PER_SESSION,
 )
-
-# Looked up late as ``service.<name>`` by chat handlers and steps to break the
-# service <-> handlers import cycle; not dead imports.
-from backend.chat.events import (
-    _emit_chat_escalated_event,
-    _emit_chat_turn_event,
-)
 from backend.chat.handlers import (
     ChatTurnOutcome,
     HandlerContext,
     HandlerRouter,
     default_router,
 )
+from backend.chat.handlers.rag import RagHandler
 from backend.chat.language import (
     ResolvedLanguageContext,
 )
 from backend.chat.language_context import (
     _is_bootstrap_question,
     _resolve_chat_language_context,
-)
-from backend.chat.persistence import (
-    _persist_turn_with_response_language,
 )
 from backend.chat.pii import redact
 from backend.chat.pipeline import (
@@ -49,75 +40,25 @@ from backend.chat.prompts import (
 )
 from backend.chat.rotation import latest_chat_query, should_rotate
 from backend.chat.steps import answer_cache as answer_cache_steps
-from backend.chat.steps.pre_retrieval import (
-    _async_lookup_quick_answers,
-)
-from backend.chat.steps.retrieval import (
-    async_retrieve_context,
-)
 from backend.chat.types import (
     QuestionIntentResult,
 )
 from backend.contact_sessions.service import touch_user_session
 from backend.core import db as core_db
 from backend.core.db import async_commit_or_rollback, run_sync
-from backend.core.openai_client import (
-    get_async_openai_client,
-)
-
-# Symbols below are re-exported so that tests can monkeypatch them through
-# ``backend.chat.service.<name>`` and the lazy ``_svc.*`` lookups in handlers
-# still see the patched versions.
 from backend.documents.service import async_knowledge_base_updated_at
-from backend.escalation.openai_escalation import (
-    EscalationLlmResult,
-    classify_followup_reply,
-    classify_pre_confirm_reply,
-    complete_escalation_openai_turn,
-    render_pre_confirm_text,
-)
 from backend.escalation.service import (
-    build_chat_messages_for_openai,
     classify_question_intent,
-    create_escalation_ticket,
     detect_human_request,
-    fact_from_ticket,
-    should_escalate,
     visitor_identity_context,
-)
-from backend.faq.faq_matcher import (
-    async_match_faq,
-)
-from backend.gap_analyzer.enums import GapJobKind
-from backend.gap_analyzer.events import GapSignal
-from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
-from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
-from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.injection_detector import (
-    async_detect_injection,
-)
-from backend.guards.relevance_checker import (
-    async_check_relevance_with_profile,
 )
 from backend.models import (
     Bot,
     Chat,
-    Message,
     Tenant,
     TenantProfile,
-    TurnOutcome,
 )
 from backend.observability import TraceHandle, begin_trace, record_stage_ms
-from backend.observability.metrics import (
-    capture_event,
-)
-from backend.search.service import (
-    async_detect_tenant_kb_scripts,
-    async_embed_queries,
-    async_semantic_query_rewrite,
-    async_semantic_query_rewrite_for_kb,
-    expand_query,
-)
 from backend.tenants.cache import (
     get_cached_tenant,
     get_cached_tenant_profile,
@@ -125,38 +66,9 @@ from backend.tenants.cache import (
     set_cached_tenant_profile,
 )
 
-__all__ = (
-    "_async_lookup_quick_answers",
-    "_emit_chat_escalated_event",
-    "_emit_chat_turn_event",
-    "async_check_relevance_with_profile",
-    "async_detect_injection",
-    "async_detect_tenant_kb_scripts",
-    "async_embed_queries",
-    "async_match_faq",
-    "async_retrieve_context",
-    "async_semantic_query_rewrite",
-    "async_semantic_query_rewrite_for_kb",
-    "build_chat_messages_for_openai",
-    "capture_event",
-    "classify_followup_reply",
-    "classify_pre_confirm_reply",
-    "complete_escalation_openai_turn",
-    "create_escalation_ticket",
-    "expand_query",
-    "fact_from_ticket",
-    "get_async_openai_client",
-    "render_pre_confirm_text",
-    "should_escalate",
-)
-
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
-
-# Re-exports above are kept at module top so that tests can monkeypatch them
-# through ``backend.chat.service.<name>`` and handlers looking them up via
-# the lazy ``_svc = from backend.chat import service`` pattern still see the patches.
 
 _HANDLER_ROUTER: HandlerRouter = default_router()
 
@@ -171,145 +83,6 @@ def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any])
     if trace is None:
         return
     trace.span(name=name, metadata=metadata).end(output=metadata)
-
-
-def _escalation_turn_response(
-    *,
-    db: Session,
-    chat: Chat,
-    tenant_id: uuid.UUID,
-    language_context: ResolvedLanguageContext,
-    question: str,
-    out: EscalationLlmResult,
-    trace: TraceHandle,
-    trace_source: str,
-    escalated: bool,
-    ticket_number: str | None = None,
-) -> ChatTurnOutcome:
-    """Persist an escalation turn and return the outcome. Single commit for all mutations.
-
-    The user-facing message is always written in ``response_language`` (the
-    user's language), not in ``escalation_language``. ``escalation_language``
-    is the tenant-side artifact language (ticket text / support team) and
-    must not leak into the chat reply.
-    """
-    _persist_turn_with_response_language(
-        db=db,
-        chat=chat,
-        tenant_id=tenant_id,
-        response_language=language_context.response_language,
-        resolution_reason=language_context.response_language_resolution_reason,
-        user_content=question,
-        assistant_content=out.message_to_user,
-        document_ids=[],
-        extra_tokens=out.tokens_used,
-        # Every reply through this helper is a step of the escalation FSM
-        # (offer, decline, clarify-reask, follow-up ack, handoff) — including
-        # the ``escalated=False`` decline/ack turns, whose chat-state flags are
-        # already cleared by the time this runs and would otherwise infer
-        # "unanswered" from the empty document list.
-        turn_outcome=TurnOutcome.escalation,
-        language_context=language_context,
-        trace=trace,
-    )
-    trace.update(
-        output={"answer": out.message_to_user, "source": trace_source},
-        metadata={
-            "escalated": escalated,
-            "response_language": language_context.response_language,
-            "escalation_language": language_context.escalation_language,
-        },
-    )
-    return ChatTurnOutcome(
-        text=out.message_to_user,
-        document_ids=[],
-        tokens_used=out.tokens_used,
-        ticket_number=ticket_number,
-        escalation_offered=bool(chat.escalation_pre_confirm_pending),
-    )
-
-
-def _try_ingest_gap_signal(
-    *,
-    chat: Chat,
-    tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
-    user_message: Message,
-    assistant_message: Message,
-    question_text: str,
-    answer_confidence: float | None,
-    was_rejected: bool,
-    had_fallback: bool,
-    was_escalated: bool,
-    language: str | None = None,
-) -> None:
-    ingestion_db = core_db.SessionLocal()
-    try:
-        orchestrator = GapAnalyzerOrchestrator(
-            repository=SqlAlchemyGapAnalyzerRepository(ingestion_db)
-        )
-        orchestrator.ingest_signal(
-            GapSignal(
-                tenant_id=tenant_id,
-                chat_id=chat.id,
-                session_id=session_id,
-                user_message_id=user_message.id,
-                assistant_message_id=assistant_message.id,
-                question_text=question_text,
-                answer_confidence=answer_confidence,
-                was_rejected=was_rejected,
-                had_fallback=had_fallback,
-                was_escalated=was_escalated,
-                language=language,
-            )
-        )
-        ingestion_db.commit()
-        _start_mode_b_followup(tenant_id)
-    except ValueError:
-        ingestion_db.rollback()
-        logger.warning(
-            "gap_analyzer_signal_ingestion_contract_failed: tenant_id=%s session_id=%s assistant_message_id=%s",
-            tenant_id,
-            session_id,
-            assistant_message.id,
-            exc_info=True,
-        )
-    except Exception:
-        ingestion_db.rollback()
-        logger.exception(
-            "gap_analyzer_signal_ingestion_failed: tenant_id=%s session_id=%s assistant_message_id=%s",
-            tenant_id,
-            session_id,
-            assistant_message.id,
-        )
-    finally:
-        ingestion_db.close()
-
-
-def _start_mode_b_followup(tenant_id: uuid.UUID) -> None:
-    enqueue_gap_job_for_tenant_best_effort(
-        tenant_id,
-        job_kind=GapJobKind.mode_b,
-        trigger="chat_signal",
-    )
-
-
-def _trigger_log_analysis_threshold(
-    tenant_id: uuid.UUID,
-    api_key: str,
-) -> None:
-    import threading
-
-    def _run() -> None:
-        try:
-            from backend.jobs.analyze_chat_logs import (
-                increment_and_check_threshold,
-            )
-            increment_and_check_threshold(tenant_id=tenant_id, api_key=api_key)
-        except Exception:
-            logger.debug("Log analysis threshold check failed", exc_info=True)
-
-    threading.Thread(target=_run, daemon=True).start()
 
 
 def process_chat_message(
@@ -651,10 +424,6 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
     each handler is responsible for its own sync/async bridging (currently
     via an internal ``run_sync`` wrapper around its persistence body).
     """
-    from backend.chat.handlers.rag import (
-        RagHandler,
-    )
-
     ctx.async_db = db
     for handler in _HANDLER_ROUTER.handlers:
         if not handler.can_handle(ctx):

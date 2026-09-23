@@ -162,7 +162,7 @@ def test_injection_guard_short_circuits_before_concurrent_tasks(
         return _FakeLocalization(text="refused")
 
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection", _fake_detect
+        "backend.chat.steps.pre_retrieval.async_detect_injection", _fake_detect
     )
     monkeypatch.setattr(
         "backend.chat.steps.refusal.build_reject_response_result", _fake_reject
@@ -185,7 +185,7 @@ def test_injection_guard_passes_clean_question(
         return Verdict.of(VerdictReason.OK)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection", _fake_detect
+        "backend.chat.steps.pre_retrieval.async_detect_injection", _fake_detect
     )
     run = _make_run()
     assert asyncio.run(pre_retrieval.injection_guard(run)) is None
@@ -483,7 +483,7 @@ def test_low_retrieval_guard_short_query_bypass_recheck(
         return Verdict.of(guard_verdict)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile", _guard
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile", _guard
     )
 
     run = _make_run(question=question)
@@ -514,7 +514,7 @@ def test_low_retrieval_guard_no_recheck_when_not_bypassed(
         raise AssertionError("relevance re-check must not run for non-bypassed turns")
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile", _guard
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile", _guard
     )
 
     run = _make_run()  # guard_bypassed_short_query defaults to False
@@ -546,10 +546,10 @@ def _capture_generation_kwargs(
         return ("generated answer", 11, 5, 6, False, False, False)
 
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer", _fake_generate
+        "backend.chat.steps.generate.async_generate_answer", _fake_generate
     )
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate",
+        "backend.chat.steps.generate.should_escalate",
         lambda *args, **kwargs: (escalate, None),
     )
 
@@ -656,11 +656,10 @@ def test_run_generation_strong_and_low_context_flags(
         assert calls["require_clarification"] == expected_require_clarification
 
 
-def test_run_generation_resolves_seam_via_rag_module(
+def test_run_generation_assembles_result_from_generated_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run_generation must call ``backend.chat.handlers.rag.async_generate_answer``
-    at call time so the historical monkeypatch surface keeps working."""
+    """run_generation carries the generated text and token counts into the result."""
     calls: dict = {}
 
     async def _fake_generate(question, chunks, **kwargs):
@@ -673,10 +672,10 @@ def test_run_generation_resolves_seam_via_rag_module(
         return (False, None)
 
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer", _fake_generate
+        "backend.chat.steps.generate.async_generate_answer", _fake_generate
     )
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate", _fake_should_escalate
+        "backend.chat.steps.generate.should_escalate", _fake_should_escalate
     )
 
     from backend.chat.steps import generate

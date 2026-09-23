@@ -32,7 +32,7 @@ def test_passthrough_when_language_matches(
     emitted: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.detect_language", lambda text: _detection("ru")
+        "backend.chat.streaming.detect_language", lambda text: _detection("ru")
     )
     gate = LanguageGateStreamFilter(emitted.append, expected_language="ru", min_chars=10)
 
@@ -50,7 +50,7 @@ def test_abort_on_reliable_mismatch_before_any_emit(
     emitted: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.detect_language", lambda text: _detection("en")
+        "backend.chat.streaming.detect_language", lambda text: _detection("en")
     )
     gate = LanguageGateStreamFilter(emitted.append, expected_language="kk", min_chars=10)
 
@@ -64,7 +64,7 @@ def test_short_answer_checked_on_flush_end(
     emitted: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.detect_language", lambda text: _detection("en")
+        "backend.chat.streaming.detect_language", lambda text: _detection("en")
     )
     gate = LanguageGateStreamFilter(emitted.append, expected_language="kk", min_chars=500)
 
@@ -79,7 +79,7 @@ def test_short_matching_answer_flushed_on_flush_end(
     emitted: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.detect_language", lambda text: _detection("en")
+        "backend.chat.streaming.detect_language", lambda text: _detection("en")
     )
     gate = LanguageGateStreamFilter(emitted.append, expected_language="en", min_chars=500)
 
@@ -92,7 +92,7 @@ def test_unreliable_detection_fails_open(
     emitted: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.detect_language",
+        "backend.chat.streaming.detect_language",
         lambda text: _detection("en", reliable=False),
     )
     gate = LanguageGateStreamFilter(emitted.append, expected_language="kk", min_chars=10)
@@ -105,7 +105,7 @@ def test_language_root_comparison_tolerates_regional_tags(
     emitted: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.detect_language", lambda text: _detection("pt-BR")
+        "backend.chat.streaming.detect_language", lambda text: _detection("pt-BR")
     )
     gate = LanguageGateStreamFilter(emitted.append, expected_language="pt", min_chars=10)
 

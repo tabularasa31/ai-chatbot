@@ -62,19 +62,23 @@ def test_injection_rejects_before_rag(
         raise AssertionError("relevance called")
 
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection",
+        "backend.chat.steps.pre_retrieval.async_detect_injection",
         _async_inject_detected,
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
         _async_relevance_unused,
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
+        _async_relevance_unused,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.generate.async_generate_answer",
         async_assert_not_called("async_generate_answer"),
     )
 
@@ -104,7 +108,7 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
         return Verdict.of(VerdictReason.OK)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection",
+        "backend.chat.steps.pre_retrieval.async_detect_injection",
         _async_no_inject,
     )
     # The guard no longer echoes a profile back; the pipeline reads it from the
@@ -118,7 +122,11 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
         return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
+        _async_relevance_ok,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
         _async_relevance_ok,
     )
 
@@ -133,18 +141,18 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
         reliability=build_reliability_assessment(top_score=0.2, result_count=2),
         vector_similarities=[None, 0.1],
     )
-    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(lambda *args, **kwargs: retrieval))
+    monkeypatch.setattr("backend.chat.steps.retrieval.async_retrieve_context", _as_async(lambda *args, **kwargs: retrieval))
 
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         as_async_generate(lambda *args, **kwargs: ("OK", 5)),
     )
     monkeypatch.setattr(
-        "backend.chat.service.should_escalate",
+        "backend.chat.steps.generate.should_escalate",
         lambda *args, **kwargs: (False, None),
     )
     monkeypatch.setattr(
-        "backend.chat.service.create_escalation_ticket",
+        "backend.chat.handlers.escalation.create_escalation_ticket",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("escalation created")),
     )
 
@@ -170,7 +178,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
         return Verdict.of(VerdictReason.OK)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection",
+        "backend.chat.steps.pre_retrieval.async_detect_injection",
         _async_no_inject,
     )
     # The guard no longer echoes a profile back; the pipeline reads it from the
@@ -184,7 +192,11 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
         return Verdict.of(VerdictReason.RELEVANT)
 
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
+        _async_relevance_ok,
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
         _async_relevance_ok,
     )
 
@@ -199,10 +211,10 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
         reliability=build_reliability_assessment(top_score=0.2, result_count=2),
         vector_similarities=[0.1, 0.2],
     )
-    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(lambda *args, **kwargs: retrieval))
+    monkeypatch.setattr("backend.chat.steps.retrieval.async_retrieve_context", _as_async(lambda *args, **kwargs: retrieval))
 
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         async_assert_not_called("async_generate_answer"),
     )
 

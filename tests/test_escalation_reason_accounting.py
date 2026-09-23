@@ -54,7 +54,8 @@ def _capture_offer_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]
         calls.append(kwargs)
         return Mock(message_to_user=PRE_CONFIRM, tokens_used=1)
 
-    monkeypatch.setattr("backend.chat.service.render_pre_confirm_text", _render)
+    monkeypatch.setattr("backend.chat.handlers.rag.render_pre_confirm_text", _render)
+    monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _render)
     return calls
 
 
@@ -71,8 +72,8 @@ def _patch_confirmation_turn(monkeypatch: pytest.MonkeyPatch) -> None:
             tokens_used=0,
         )
 
-    monkeypatch.setattr("backend.chat.service.classify_pre_confirm_reply", _yes)
-    monkeypatch.setattr("backend.chat.service.complete_escalation_openai_turn", _handoff)
+    monkeypatch.setattr("backend.chat.handlers.escalation.classify_pre_confirm_reply", _yes)
+    monkeypatch.setattr("backend.chat.handlers.escalation.complete_escalation_openai_turn", _handoff)
     monkeypatch.setattr(
         "backend.escalation.service._notify_tenant_new_ticket",
         lambda *_a, **_k: None,

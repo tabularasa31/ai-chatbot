@@ -231,22 +231,26 @@ def test_guard_rejected_chat_turn_persists_filtered_end_to_end(
         return Verdict.of(VerdictReason.INJECTION_STRUCTURAL, evidence="x")
 
     monkeypatch.setattr(
-        "backend.chat.service.async_detect_injection", _async_inject_detected
+        "backend.chat.steps.pre_retrieval.async_detect_injection", _async_inject_detected
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_check_relevance_with_profile",
+        "backend.chat.steps.pre_retrieval.async_check_relevance_with_profile",
         _as_async(lambda **kwargs: (_ for _ in ()).throw(AssertionError("relevance called"))),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_embed_queries",
+        "backend.chat.steps.retrieval.async_check_relevance_with_profile",
+        _as_async(lambda **kwargs: (_ for _ in ()).throw(AssertionError("relevance called"))),
+    )
+    monkeypatch.setattr(
+        "backend.chat.steps.pre_retrieval.async_embed_queries",
         _as_async(lambda *a, **k: (_ for _ in ()).throw(AssertionError("embed called"))),
     )
     monkeypatch.setattr(
-        "backend.chat.service.async_retrieve_context",
+        "backend.chat.steps.retrieval.async_retrieve_context",
         async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.async_generate_answer",
+        "backend.chat.steps.generate.async_generate_answer",
         async_assert_not_called("async_generate_answer"),
     )
 

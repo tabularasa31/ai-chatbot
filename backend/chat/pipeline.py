@@ -46,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.chat.answer_cache import AnswerCacheScope
 from backend.chat.language import ResolvedLanguageContext
+from backend.chat.language_context import _is_bootstrap_question, _resolve_chat_language_context
 from backend.chat.steps import answer_cache, generate, pre_retrieval, retrieval
 from backend.chat.types import ChatPipelineResult, PipelineRun, QuestionIntentResult
 from backend.models import Chat, TenantProfile
@@ -81,13 +82,11 @@ async def async_run_chat_pipeline(
     # The language context is resolved by the caller on the normal chat path;
     # this fallback covers direct pipeline invocations (evals, tests).
     if language_context is None:
-        from backend.chat import service as _svc
-
-        language_context = _svc._resolve_chat_language_context(
+        language_context = _resolve_chat_language_context(
             current_turn_text=question,
             tenant_row=None,
             tenant_profile=None,
-            is_bootstrap_turn=_svc._is_bootstrap_question(question),
+            is_bootstrap_turn=_is_bootstrap_question(question),
             bootstrap_user_locale=None,
             browser_locale=None,
         )

@@ -41,6 +41,7 @@ from backend.guards.relevance_checker import (
     CATEGORY_SOCIAL,
     CATEGORY_SOCIAL_QUESTION,
     CATEGORY_SUPPORT_COMPLAINT,
+    async_check_relevance_with_profile,
 )
 from backend.observability import TraceHandle, record_stage_ms
 
@@ -154,11 +155,7 @@ async def async_retrieve_context(
 
 
 async def _execute_retrieval(run: PipelineRun, session: AsyncSession) -> RetrievalContext:
-    # Looked up via the service module so test monkeypatches on
-    # ``backend.chat.service.async_retrieve_context`` intercept the call.
-    from backend.chat import service as _svc
-
-    return await _svc.async_retrieve_context(
+    return await async_retrieve_context(
         run.tenant_id,
         run.question,
         session,
@@ -352,7 +349,6 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
     Answer items. If any auxiliary knowledge source matched, fall through
     so the answer LLM can still produce a real reply.
     """
-    from backend.chat import service as _svc
     from backend.models import EscalationTrigger
 
     state = run.state
@@ -428,7 +424,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
             # verdicts (in-domain / off-topic / complaint) keep the existing
             # turn-1 rephrase and only escalate on the next consecutive miss.
             if state.guard_bypassed_short_query:
-                _short_verdict = await _svc.async_check_relevance_with_profile(
+                _short_verdict = await async_check_relevance_with_profile(
                     tenant_id=run.tenant_id,
                     user_question=run.question,
                     profile=state.profile,
@@ -459,7 +455,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
             _end_span("soft_reply")
             return result
 
-        _rel_verdict = await _svc.async_check_relevance_with_profile(
+        _rel_verdict = await async_check_relevance_with_profile(
             tenant_id=run.tenant_id,
             user_question=run.question,
             profile=state.profile,
@@ -611,9 +607,7 @@ async def _social_recheck_reject(
     if not state.guard_bypassed_short_query:
         return None
 
-    from backend.chat import service as _svc
-
-    verdict = await _svc.async_check_relevance_with_profile(
+    verdict = await async_check_relevance_with_profile(
         tenant_id=run.tenant_id,
         user_question=run.question,
         profile=state.profile,

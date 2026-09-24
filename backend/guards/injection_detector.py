@@ -272,7 +272,9 @@ def _emit_semantic_cache_metric(tenant_id: str, cache_hit: bool) -> None:
     """Mirror the relevance guard: emit a per-turn cache hit/miss signal.
 
     ``tenant_id`` here is the internal UUID (no public tenant id available at
-    this call site) — same value used for distinct_id and the tenant group.
+    this call site), used only for distinct_id. ``groups=False``: a tenant
+    group keyed by the internal UUID would create phantom PostHog groups
+    disjoint from the public-id-keyed groups everywhere else.
     """
     from backend.observability.metrics import emit_tenant_event
 
@@ -281,6 +283,7 @@ def _emit_semantic_cache_metric(tenant_id: str, cache_hit: bool) -> None:
         tenant_public_id=tenant_id,
         bot_public_id=None,
         properties={"cache_hit": cache_hit},
+        groups=False,
     )
 
 

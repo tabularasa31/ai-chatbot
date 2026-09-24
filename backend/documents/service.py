@@ -26,7 +26,7 @@ from backend.documents.parsers import (
     parse_txt,
 )
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
-from backend.models import Document, DocumentStatus, DocumentType, Tenant
+from backend.models import Document, DocumentStatus, DocumentType
 from backend.observability.metrics import emit_tenant_event
 
 _HEALTH_WARNING_TYPES = frozenset(
@@ -382,6 +382,7 @@ def upload_document(
     content: bytes,
     file_type: str,
     db: Session,
+    tenant_public_id: str | None = None,
 ) -> Document:
     """
     Upload and parse a document.
@@ -469,10 +470,9 @@ def upload_document(
         doc.status = DocumentStatus.error
     db.commit()
     db.refresh(doc)
-    tenant_public_id = db.query(Tenant.public_id).filter(Tenant.id == tenant_id).scalar()
     emit_tenant_event(
         "document_indexed",
-        tenant_public_id=str(tenant_public_id) if tenant_public_id else None,
+        tenant_public_id=tenant_public_id,
         bot_public_id=None,
         properties={
             "document_id": str(doc.id),

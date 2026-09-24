@@ -29,7 +29,9 @@ def _emit_relevance_guard_metric(
     """Emit relevance_guard.check event to PostHog (cache_hit, blocked, reason).
 
     ``tenant_id`` here is the internal UUID (no public tenant id available at
-    this call site) — same value used for distinct_id and the tenant group.
+    this call site), used only for distinct_id. ``groups=False``: a tenant
+    group keyed by the internal UUID would create phantom PostHog groups
+    disjoint from the public-id-keyed groups everywhere else.
     """
     from backend.observability.metrics import emit_tenant_event
 
@@ -38,6 +40,7 @@ def _emit_relevance_guard_metric(
         tenant_public_id=str(tenant_id),
         bot_public_id=None,
         properties={"cache_hit": cache_hit, "blocked": blocked, "reason": score},
+        groups=False,
     )
 MAX_CACHE_SIZE = 2048
 

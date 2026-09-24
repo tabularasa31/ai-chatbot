@@ -154,6 +154,7 @@ def upload_document_route(
             content=content,
             file_type=file_type,
             db=db,
+            tenant_public_id=str(tenant.public_id),
         )
     except HTTPException:
         raise

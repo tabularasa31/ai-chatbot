@@ -351,6 +351,7 @@ def _upsert_page_document(
     page: ExtractedPage,
     db: Session,
     api_key: str | None,
+    tenant_public_id: str | None = None,
 ) -> tuple[Document, int]:
     existing = (
         db.query(Document)
@@ -428,10 +429,9 @@ def _upsert_page_document(
         tenant_id=source.tenant_id,
         api_key=api_key,
     )
-    source_tenant_public_id = db.query(Tenant.public_id).filter(Tenant.id == source.tenant_id).scalar()
     emit_tenant_event(
         "document_indexed",
-        tenant_public_id=str(source_tenant_public_id) if source_tenant_public_id else None,
+        tenant_public_id=tenant_public_id,
         bot_public_id=None,
         properties={
             "document_id": str(doc.id),
@@ -455,6 +455,7 @@ def _upsert_structured_document(
     chunks: list[OpenAPIChunk],
     db: Session,
     api_key: str | None,
+    tenant_public_id: str | None = None,
 ) -> tuple[Document, int]:
     existing = (
         db.query(Document)
@@ -548,10 +549,9 @@ def _upsert_structured_document(
             tenant_id=source.tenant_id,
             api_key=api_key,
         )
-        openapi_tenant_public_id = db.query(Tenant.public_id).filter(Tenant.id == source.tenant_id).scalar()
         emit_tenant_event(
             "document_indexed",
-            tenant_public_id=str(openapi_tenant_public_id) if openapi_tenant_public_id else None,
+            tenant_public_id=tenant_public_id,
             bot_public_id=None,
             properties={
                 "document_id": str(doc.id),
@@ -854,6 +854,15 @@ def _index_pages(
     TODO: narrow to explicit OpenAI/auth/embedding error recognition rather than
     status-code matching alone.
     """
+    # Resolved once per run — never per page — and best-effort: a telemetry
+    # lookup must never abort indexing, so a failure here just means the
+    # document_indexed events for this run go out without a tenant id.
+    try:
+        tenant_public_id = db.query(Tenant.public_id).filter(Tenant.id == source.tenant_id).scalar()
+        tenant_public_id = str(tenant_public_id) if tenant_public_id else None
+    except Exception:
+        tenant_public_id = None
+
     structured_source = _fetch_openapi_source(source.url)
     if structured_source is not None:
         quick_answers = {
@@ -873,6 +882,7 @@ def _index_pages(
             chunks=structured_source.chunks,
             db=db,
             api_key=api_key,
+            tenant_public_id=tenant_public_id,
         )
         source.metadata_json = {
             **(source.metadata_json or {}),
@@ -926,7 +936,9 @@ def _index_pages(
             failures.append({"url": url, "reason": "No readable content extracted"})
             continue
         try:
-            _, page_chunks = _upsert_page_document(source=source, page=page, db=db, api_key=api_key)
+            _, page_chunks = _upsert_page_document(
+                source=source, page=page, db=db, api_key=api_key, tenant_public_id=tenant_public_id
+            )
         except HTTPException as exc:
             if exc.status_code in {400, 401, 500}:
                 source.status = SourceStatus.paused

@@ -586,10 +586,11 @@ export type AuthUser = { id: string; email: string; created_at: string };
 export type AuthSession = { token: string; expires_in: number; user: AuthUser };
 
 async function parseJsonSafe(res: Response): Promise<unknown> {
-  return res.json().catch(() => ({}));
+  if (res.status === 204 || res.headers.get("content-length") === "0") return undefined;
+  return res.json();
 }
 
-type RequestInit_ = {
+type RequestOptions = {
   method?: string;
   json?: unknown;
   body?: BodyInit;
@@ -597,8 +598,8 @@ type RequestInit_ = {
   skipAuthRedirect?: boolean;
 };
 
-/** Fetch → parse JSON (tolerating an empty/204 body) → throw with the server's message on failure. */
-async function request<T>(url: string, fallback: string, init: RequestInit_ = {}): Promise<T> {
+/** Fetch → parse JSON (tolerating only an empty/204 body) → throw with the server's message on failure. */
+async function request<T>(url: string, fallback: string, init: RequestOptions = {}): Promise<T> {
   const { json, headers, body, ...rest } = init;
   const res = await apiFetch(url, {
     ...rest,
@@ -609,6 +610,10 @@ async function request<T>(url: string, fallback: string, init: RequestInit_ = {}
   if (!res.ok) throw new Error(getErrorMessage(data, fallback));
   return data as T;
 }
+
+/** Same as `request`, but always resolves to `undefined` — for endpoints callers treat as void. */
+const requestVoid = (url: string, fallback: string, init: RequestOptions = {}): Promise<void> =>
+  request<unknown>(url, fallback, init).then(() => undefined);
 
 const getJson = <T>(url: string, fallback: string): Promise<T> => request<T>(url, fallback);
 const sendJson = <T>(url: string, method: string, json: unknown, fallback: string): Promise<T> =>
@@ -696,7 +701,7 @@ export const api = {
      * just deleted their workspace on purpose that their session expired.
      */
     delete(tenantId: string): Promise<void> {
-      return request(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the workspace", {
+      return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the workspace", {
         method: "DELETE",
         skipAuthRedirect: true,
       });
@@ -726,7 +731,7 @@ export const api = {
       return sendJson(`${BASE_URL}/tenants/members/invite`, "POST", { email }, "Failed to send the invite");
     },
     remove(memberId: string): Promise<void> {
-      return request(`${BASE_URL}/tenants/members/${memberId}`, "Failed to remove the member", { method: "DELETE" });
+      return requestVoid(`${BASE_URL}/tenants/members/${memberId}`, "Failed to remove the member", { method: "DELETE" });
     },
     /**
      * Take a seat for yourself. Owner-only, and about the caller alone —
@@ -778,16 +783,16 @@ export const api = {
       return request(`${BASE_URL}/documents/sources/${id}/refresh`, "Failed to refresh source", { method: "POST" });
     },
     deleteSource(id: string): Promise<void> {
-      return request(`${BASE_URL}/documents/sources/${id}`, "Failed to delete source", { method: "DELETE" });
+      return requestVoid(`${BASE_URL}/documents/sources/${id}`, "Failed to delete source", { method: "DELETE" });
     },
     deleteSourcePage(sourceId: string, documentId: string): Promise<void> {
-      return request(`${BASE_URL}/documents/sources/${sourceId}/pages/${documentId}`, "Failed to delete source page", { method: "DELETE" });
+      return requestVoid(`${BASE_URL}/documents/sources/${sourceId}/pages/${documentId}`, "Failed to delete source page", { method: "DELETE" });
     },
     getById(id: string): Promise<DocumentDetail> {
       return getJson(`${BASE_URL}/documents/${id}`, "Failed to get document");
     },
     delete(id: string): Promise<void> {
-      return request(`${BASE_URL}/documents/${id}`, "Failed to delete document", { method: "DELETE" });
+      return requestVoid(`${BASE_URL}/documents/${id}`, "Failed to delete document", { method: "DELETE" });
     },
     runHealth(docId: string): Promise<DocumentHealthStatus> {
       return request(`${BASE_URL}/documents/${docId}/health/run`, "Health check failed", { method: "POST" });

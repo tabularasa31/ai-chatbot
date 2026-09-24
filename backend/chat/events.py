@@ -414,36 +414,6 @@ def _emit_chat_escalated_event(
         logger.warning("Failed to emit chat_escalated event", exc_info=True)
 
 
-def _emit_escalation_ticket_event(
-    *,
-    reused: bool,
-    tenant_public_id: str | None,
-    bot_public_id: str | None,
-    chat_id: str,
-    escalation_reason: str,
-    escalation_trigger: str | None,
-    plan_tier: str | None,
-    priority: Any,
-) -> None:
-    """Runaway-loop / analytics bookkeeping for one ticket creation-or-reuse.
-
-    Only a genuinely new ticket is an escalation — reuse still feeds the
-    runaway-loop detector but must not double-count in the escalation metric.
-    """
-    if reused:
-        _check_escalation_rate(tenant_public_id, bot_public_id)
-        return
-    _emit_chat_escalated_event(
-        tenant_public_id=tenant_public_id,
-        bot_public_id=bot_public_id,
-        chat_id=chat_id,
-        escalation_reason=escalation_reason,
-        escalation_trigger=escalation_trigger,
-        plan_tier=plan_tier,
-        priority=priority,
-    )
-
-
 def _emit_ai_generation_event(
     *,
     tenant_public_id: str | None,
@@ -616,7 +586,6 @@ def emit_pipeline_span(
     latency_s: float,
     extra: dict[str, Any] | None = None,
 ) -> None:
-    """One ``$ai_span`` PostHog event for a pipeline stage (retrieval, guards, ...)."""
     if run.tenant_public_id is None and run.bot_public_id is None:
         return
     trace_id = getattr(run.trace, "posthog_trace_id", None) if run.trace is not None else None

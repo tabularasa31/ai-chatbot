@@ -960,16 +960,13 @@ def _send_support_mail(
     headers: dict[str, str],
     stage: str,
 ) -> tuple[bool, str | None]:
-    """Shared tail of every escalation-notify path: Brevo send + failure report.
-
-    Returns ``(sent, message_id)``; ``stage`` labels the caller for
-    :func:`_report_escalation_email_failure` (``initial``/``followup``/``claim_bounce``).
-    """
+    """Shared tail of every escalation-notify path: Brevo send + failure report."""
     try:
         send_result = _send_email_off_loop(
             recipient,
             subject,
             body,
+            # Seat holders get the inbound token address; others get the visitor's email.
             reply_to=escalation_reply_to(ticket, db),
             extra_headers=headers,
         )
@@ -983,8 +980,6 @@ def _send_support_mail(
         return False, None
 
     if send_result is None:
-        # Brevo refused the send (HTTP 4xx/5xx) or the call raised internally.
-        # Callers must not advance any "already notified" marker on this.
         _report_escalation_email_failure(tenant, ticket, reason="brevo_refused", stage=stage)
         return False, None
 

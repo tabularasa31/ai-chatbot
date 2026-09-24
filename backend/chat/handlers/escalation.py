@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
-from backend.chat.events import _emit_escalation_ticket_event
+from backend.chat.events import _check_escalation_rate, _emit_chat_escalated_event
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import (
     async_localize_text_to_language_result,
@@ -84,7 +84,6 @@ logger = logging.getLogger(__name__)
 
 
 def _span(ctx: HandlerContext, name: str, input: dict[str, Any]) -> Any | None:
-    """A trace span for ``name``, or ``None`` when the turn is untraced."""
     return ctx.trace.span(name=name, input=input) if ctx.trace is not None else None
 
 
@@ -198,13 +197,7 @@ class EscalationStateMachine(PipelineHandler):
         escalated: bool,
         ticket_number: str | None = None,
     ) -> ChatTurnOutcome:
-        """Persist an escalation turn and return the outcome. Single commit for all mutations.
-
-        The user-facing message is always written in ``response_language`` (the
-        user's language), not in ``escalation_language``. ``escalation_language``
-        is the tenant-side artifact language (ticket text / support team) and
-        must not leak into the chat reply.
-        """
+        """Persist an escalation turn and return the outcome. Single commit for all mutations."""
         chat = ctx.chat
         language_context = ctx.language_context
         _persist_turn_with_response_language(
@@ -217,11 +210,7 @@ class EscalationStateMachine(PipelineHandler):
             assistant_content=out.message_to_user,
             document_ids=[],
             extra_tokens=out.tokens_used,
-            # Every reply through this helper is a step of the escalation FSM
-            # (offer, decline, clarify-reask, follow-up ack, handoff) — including
-            # the ``escalated=False`` decline/ack turns, whose chat-state flags are
-            # already cleared by the time this runs and would otherwise infer
-            # "unanswered" from the empty document list.
+            # Every reply through this helper is a step of the escalation FSM.
             turn_outcome=TurnOutcome.escalation,
             language_context=language_context,
             trace=ctx.trace,
@@ -250,7 +239,6 @@ class EscalationStateMachine(PipelineHandler):
         chat_messages: list[dict[str, str]],
         fact_json: dict[str, Any],
     ) -> EscalationLlmResult:
-        """Run one escalation-phase OpenAI turn, bridged onto the loop via ``await_only``."""
         return await_only(
             complete_escalation_openai_turn(
                 phase=phase,
@@ -566,16 +554,20 @@ class EscalationStateMachine(PipelineHandler):
                     "reused_ticket": reused,
                 }
             )
-        _emit_escalation_ticket_event(
-            reused=reused,
-            tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-            bot_public_id=ctx.bot_public_id,
-            chat_id=str(chat.id),
-            escalation_reason=escalation_reason,
-            escalation_trigger=esc_trigger.value,
-            plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
-            priority=ticket.priority,
-        )
+        if reused:
+            _check_escalation_rate(
+                getattr(ctx.tenant_row, "public_id", None), ctx.bot_public_id
+            )
+        else:
+            _emit_chat_escalated_event(
+                tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+                bot_public_id=ctx.bot_public_id,
+                chat_id=str(chat.id),
+                escalation_reason=escalation_reason,
+                escalation_trigger=esc_trigger.value,
+                plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
+                priority=ticket.priority.value,
+            )
         outcome = self._turn_response(
             ctx,
             out=out_handoff,

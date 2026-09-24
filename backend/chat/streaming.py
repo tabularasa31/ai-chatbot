@@ -285,10 +285,6 @@ class MarkerStreamFilter:
                 best_idx, best_marker = idx, marker
         return best_idx, best_marker
 
-    def _boundary_suffix_len(self) -> int:
-        """Longest tail of the buffer that could still grow into a marker."""
-        return _split_boundary_suffix_len(self._buf, self._markers)
-
     def feed(self, text: str) -> None:
         self._buf += text
         while True:
@@ -300,7 +296,7 @@ class MarkerStreamFilter:
                 continue
             # Preserve a possible split-boundary suffix so no marker is
             # partially leaked when it straddles two chunks.
-            safe_end = len(self._buf) - self._boundary_suffix_len()
+            safe_end = len(self._buf) - _split_boundary_suffix_len(self._buf, self._markers)
             if safe_end > 0:
                 self._emit(self._buf[:safe_end])
             self._buf = self._buf[safe_end:]

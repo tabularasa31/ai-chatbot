@@ -89,7 +89,7 @@ def enqueue_crawl_for_source_sync(
     ``asyncio.run_coroutine_threadsafe`` and waits up to 5 s for the result.
     Returns None if the loop is unavailable (startup edge case) or on timeout.
     """
-    return run_coro_sync(
+    job_id = run_coro_sync(
         lambda: enqueue_crawl_for_source(
             source_id=source_id, api_key=api_key, tenant_id=tenant_id
         ),
@@ -97,6 +97,9 @@ def enqueue_crawl_for_source_sync(
         default=None,
         label=f"crawl_enqueue_sync source_id={source_id}",
     )
+    if job_id is None:
+        logger.warning("crawl_enqueue_sync_failed source_id=%s", source_id)
+    return job_id
 
 
 async def _tick_scheduled_crawls(ctx: dict[str, Any]) -> None:

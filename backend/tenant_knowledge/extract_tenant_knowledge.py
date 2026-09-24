@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_json import chat_json
 from backend.models import Document, DocumentType, Embedding, TenantProfile
 from backend.models.base import _utcnow
 from backend.tenant_knowledge.faq_service import (
@@ -170,23 +171,20 @@ def run_extract_client_knowledge_for_document(
             "Return ONLY the JSON object. No explanation. No markdown.\n"
         )
 
-        response = openai_client.chat.completions.create(
+        extracted = chat_json(
+            "tenant_knowledge_extraction",
+            openai_client,
             model=settings.extraction_model,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             response_format={"type": "json_object"},
             temperature=0.2,
         )
-        raw_content = response.choices[0].message.content or "{}"
-        import json
-
-        extracted = json.loads(raw_content)
-        if not isinstance(extracted, dict):
+        if extracted is None:
             logger.warning(
-                "Tenant knowledge extraction returned non-dict payload "
-                "(document_id=%s tenant_id=%s payload_type=%s)",
+                "Tenant knowledge extraction returned malformed payload "
+                "(document_id=%s tenant_id=%s)",
                 document_id,
                 tenant_id,
-                type(extracted).__name__,
             )
             return
         raw_faq = extracted.get("faq_candidates") or []

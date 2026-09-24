@@ -13,7 +13,6 @@ Key design decisions:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -22,7 +21,8 @@ from itertools import pairwise
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
-from backend.core.openai_client import get_openai_client
+from backend.core.openai_client import get_async_openai_client
+from backend.core.openai_json import async_chat_json
 
 logger = logging.getLogger(__name__)
 
@@ -90,37 +90,31 @@ async def _call_alias_llm(
     api_key: str,
 ) -> list[AliasEntry]:
     """Call LLM to extract aliases. Throttled by semaphore (max 3 parallel)."""
-    oai = get_openai_client(api_key)
+    oai = get_async_openai_client(api_key)
     user_content = "Questions:\n" + "\n".join(cluster_questions)
 
     async with _get_semaphore():
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: oai.chat.completions.create(
-                model=settings.extraction_model,
-                messages=[
-                    {"role": "system", "content": ALIAS_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.0,
-                max_completion_tokens=512,
-            ),
+        data = await async_chat_json(
+            "alias_extraction",
+            oai,
+            model=settings.extraction_model,
+            messages=[
+                {"role": "system", "content": ALIAS_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.0,
+            max_completion_tokens=512,
         )
 
-    raw = response.choices[0].message.content or ""
-    try:
-        data = json.loads(raw)
-        entries = []
-        for item in data.get("aliases", []):
-            phrase = (item.get("user_phrase") or "").strip()
-            canonical = (item.get("canonical_term") or "").strip()
-            if phrase and canonical:
-                entries.append(AliasEntry(user_phrase=phrase, canonical_term=canonical))
-        return entries
-    except Exception:
-        logger.warning("Failed to parse alias LLM response: %r", raw[:200])
+    if data is None:
         return []
+    entries = []
+    for item in data.get("aliases", []):
+        phrase = (item.get("user_phrase") or "").strip()
+        canonical = (item.get("canonical_term") or "").strip()
+        if phrase and canonical:
+            entries.append(AliasEntry(user_phrase=phrase, canonical_term=canonical))
+    return entries
 
 
 # ── Confidence management ─────────────────────────────────────────────────────

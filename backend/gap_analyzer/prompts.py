@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_json import chat_json
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,9 @@ def extract_mode_a_candidates(
         + "\n\n---\n\n".join(sampled_chunks)
     )
 
-    response = openai_client.chat.completions.create(
+    parsed = chat_json(
+        "gap_analyzer_extract_mode_a_candidates",
+        openai_client,
         model=settings.extraction_model,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -49,8 +51,6 @@ def extract_mode_a_candidates(
         response_format={"type": "json_object"},
         temperature=0.2,
     )
-    raw_content = response.choices[0].message.content or "{}"
-    parsed = json.loads(raw_content)
     raw_topics = parsed.get("topics") if isinstance(parsed, dict) else []
     if not isinstance(raw_topics, list):
         return []

@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { mutate as mutateGlobal } from "swr";
 import { api, type HandoffState, type InboxRow, type Thread, type ThreadMessage } from "@/lib/api";
 import { useClientMe, useInbox, useThread } from "@/hooks/useApi";
-import { INBOX_CHANGED_EVENT } from "@/components/Sidebar";
 import { parseApiDate, formatDateTime, formatTime } from "@/lib/format";
 
 type Scope = "attention" | "all";

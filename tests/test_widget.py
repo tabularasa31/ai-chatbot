@@ -795,9 +795,7 @@ def test_widget_history_uses_session_gate(
     mutate_tenant,
     expected_status: int,
 ) -> None:
-    """/widget/history is gated by get_bot_and_tenant_for_widget_session:
-    it works when the tenant has no OpenAI key configured, and rejects an
-    inactive tenant with 403 (not the chat gate's 400)."""
+    """History works without an OpenAI key, and rejects an inactive tenant with 403."""
     tenant_uuid, bot_public_id = _setup_widget_tenant(
         tenant, db_session, f"widget-hist-gate-{expected_status}@example.com"
     )

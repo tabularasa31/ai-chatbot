@@ -153,9 +153,7 @@ async def chat(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         except APIError as exc:
-            # RateLimitError is an APIError subclass; classify_llm_failure
-            # disambiguates quota exhaustion from ordinary throttling and from
-            # an invalid/revoked key, all of which raise a tenant-level alert.
+            # RateLimitError is an APIError subclass; classify_llm_failure disambiguates it.
             failure_state = classify_llm_failure(exc)
             if failure_state.type is LlmFailureType.quota_exhausted:
                 lang = detect_language(body.question).detected_language

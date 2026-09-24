@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-#: Shared across every "no OpenAI key on the tenant" 400 response.
 OPENAI_KEY_NOT_CONFIGURED_MESSAGE = (
     "OpenAI API key not configured. Add your key in dashboard settings."
 )
@@ -161,11 +160,7 @@ def _notify_quota_exceeded(tenant: Tenant, db: Session) -> str:
 async def quota_exceeded_detail(
     tenant: Tenant, db: AsyncSession, *, lang: str, api_key: str | None
 ) -> str:
-    """Sentry notification + localized user-facing detail for the 402 path.
-
-    Shared by the chat and widget routes so quota exhaustion produces the
-    same message and side effect regardless of entry point.
-    """
+    """Sentry notification + localized user-facing detail for the 402 path."""
     canonical = await run_sync(db, lambda s: _notify_quota_exceeded(tenant, s))
     result = await async_localize_text_to_language_result(
         canonical_text=canonical,

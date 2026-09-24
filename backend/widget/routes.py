@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -84,27 +85,19 @@ logger = logging.getLogger(__name__)
 widget_router = APIRouter(prefix="/widget", tags=["widget"])
 _WIDGET_MESSAGE_MAX_CHARS = settings.widget_message_max_chars
 
-#: Shared Query() declarations for the two identifiers every public widget
-#: endpoint takes.
 BotIdQuery = Annotated[str, Query(description="Bot public ID")]
 SessionIdQuery = Annotated[str, Query(description="Chat session UUID")]
-
-_WidgetGate = Any  # Callable[[Session, str], tuple[Bot, Tenant]]
 
 
 async def _bot_tenant_or_error(
     db: AsyncSession,
-    gate: _WidgetGate,
+    gate: Callable[[Session, str], tuple[Bot, Tenant]],
     bot_id: str,
     *,
     no_openai_detail: str,
     reject_log_event: str | None = None,
 ) -> tuple[Bot, Tenant]:
-    """Run a widget_chat_gate lookup and map its error to the shared HTTP contract.
-
-    NOT_FOUND -> 404, INACTIVE -> 403, NO_OPENAI -> 400 with a caller-supplied
-    detail (the wording differs across endpoints and must not shift).
-    """
+    """Run a widget_chat_gate lookup, map NOT_FOUND/INACTIVE/NO_OPENAI to HTTP."""
     try:
         return await run_sync(db, lambda s: gate(s, bot_id))
     except WidgetChatTenantGateError as e:
@@ -117,35 +110,24 @@ async def _bot_tenant_or_error(
         raise HTTPException(status_code=400, detail=no_openai_detail) from e
 
 
-def _parse_session_id(value: str, *, detail: Any = "Invalid session_id") -> uuid.UUID:
+def _parse_uuid(value: str, *, detail: Any = "Invalid session_id") -> uuid.UUID:
     try:
         return uuid.UUID(value)
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail=detail) from None
 
 
-def _session_chats_query(s: Session, *, tenant_id: Any, bot_id: Any, session_id: uuid.UUID):
-    """Base query for every widget_chat_gate lookup keyed by (tenant, session).
-
-    ``bot_id`` also matches a chat whose ``bot_id`` was never backfilled.
-    """
+def _session_chats_query(s: Session, *, bot: Bot, tenant: Tenant, session_id: uuid.UUID):
+    """Chats for (tenant, session); bot_id also matches an unbackfilled chat."""
     return (
         s.query(Chat)
         .filter(
-            Chat.tenant_id == tenant_id,
+            Chat.tenant_id == tenant.id,
             Chat.session_id == session_id,
-            or_(Chat.bot_id == bot_id, Chat.bot_id.is_(None)),
+            or_(Chat.bot_id == bot.id, Chat.bot_id.is_(None)),
         )
         .order_by(Chat.created_at.desc())
     )
-
-
-def _latest_session_chat(
-    s: Session, *, tenant_id: Any, bot_id: Any, session_id: uuid.UUID
-) -> Chat | None:
-    return _session_chats_query(
-        s, tenant_id=tenant_id, bot_id=bot_id, session_id=session_id
-    ).first()
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -439,15 +421,15 @@ async def widget_chat(
     )
 
     if session_id:
-        sid = _parse_session_id(
+        sid = _parse_uuid(
             session_id,
             detail=widget_session_error_detail(SESSION_INVALID_CODE, "Invalid session_id"),
         )
 
         def _lookup_existing_chat(s):
-            existing_chat = _latest_session_chat(
-                s, tenant_id=tenant.id, bot_id=_bot.id, session_id=sid
-            )
+            existing_chat = _session_chats_query(
+                s, bot=_bot, tenant=tenant, session_id=sid
+            ).first()
             if existing_chat is None:
                 return None
             rotation_pending = should_rotate(existing_chat)
@@ -873,25 +855,20 @@ async def widget_history(
     session_id: SessionIdQuery,
     db: AsyncSession = Depends(get_async_db),
 ) -> WidgetHistoryResponse:
-    """Return message history for a widget session (public, no auth).
-
-    Gated by :func:`get_bot_and_tenant_for_widget_session` — it does not
-    require an OpenAI key, so history still works while the tenant's key is
-    missing or the widget/chat turn itself would be blocked.
-    """
+    """Return message history for a widget session (public, no auth)."""
     _bot, tenant = await _bot_tenant_or_error(
         db,
         get_bot_and_tenant_for_widget_session,
         bot_id,
         no_openai_detail="Bot not available",
     )
-    sid = _parse_session_id(session_id)
+    sid = _parse_uuid(session_id)
 
     def _load_history(s) -> WidgetHistoryResponse | None:
         # Latest two conversations: the current one plus the previous one as
         # read-only context after rotation (oldest first after the slice).
         chats = _session_chats_query(
-            s, tenant_id=tenant.id, bot_id=_bot.id, session_id=sid
+            s, bot=_bot, tenant=tenant, session_id=sid
         ).limit(2).all()
         if not chats:
             return None
@@ -1009,15 +986,15 @@ async def widget_messages(
         bot_id,
         no_openai_detail="Bot not available",
     )
-    sid = _parse_session_id(session_id)
+    sid = _parse_uuid(session_id)
     cursor = (
-        _parse_session_id(after_message_id, detail="Invalid after_message_id")
+        _parse_uuid(after_message_id, detail="Invalid after_message_id")
         if after_message_id
         else None
     )
 
     def _load_tail(s) -> WidgetMessagesResponse | None:
-        chat = _latest_session_chat(s, tenant_id=tenant.id, bot_id=_bot.id, session_id=sid)
+        chat = _session_chats_query(s, bot=_bot, tenant=tenant, session_id=sid).first()
         if chat is None:
             return None
 
@@ -1103,10 +1080,10 @@ async def widget_messages_read(
         bot_id,
         no_openai_detail="Bot not available",
     )
-    sid = _parse_session_id(session_id)
+    sid = _parse_uuid(session_id)
 
     def _mark(s) -> WidgetReadReceiptResponse | None:
-        chat = _latest_session_chat(s, tenant_id=tenant.id, bot_id=_bot.id, session_id=sid)
+        chat = _session_chats_query(s, bot=_bot, tenant=tenant, session_id=sid).first()
         if chat is None:
             return None
         if not mark_visitor_read(s, chat=chat, message_id=body.message_id):
@@ -1137,7 +1114,7 @@ async def widget_escalate(
         bot_id,
         no_openai_detail="Bot configuration is incomplete.",
     )
-    sid = _parse_session_id(session_id)
+    sid = _parse_uuid(session_id)
     try:
         msg, tnum = await perform_manual_escalation(
             db,
@@ -1155,11 +1132,7 @@ async def widget_escalate(
     except APIError as exc:
         failure_state = classify_llm_failure(exc)
         if failure_state.type is LlmFailureType.quota_exhausted:
-            lang = (
-                detect_language(body.user_note).detected_language
-                if body.user_note
-                else "en"
-            )
+            lang = detect_language(body.user_note).detected_language if body.user_note else "en"
             detail = await quota_exceeded_detail(
                 tenant, db, lang=lang, api_key=tenant.openai_api_key
             )

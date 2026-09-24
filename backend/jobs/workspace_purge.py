@@ -347,7 +347,6 @@ def enqueue_workspace_purge_sync(
         default=None,
         # No address in the log line: tenant id only.
         label=f"workspace_purge_enqueue_sync tenant_id={tenant_id}",
-        cancel_on_timeout=False,
-        warn_on_failure=True,
-        exc_info_on_error=False,
+        background_enqueue=True,
+        exc_info=False,
     )

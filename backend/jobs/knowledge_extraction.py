@@ -93,6 +93,5 @@ def enqueue_knowledge_extraction_sync(
         timeout=5,
         default=None,
         label=f"knowledge_enqueue_sync document_id={document_id}",
-        cancel_on_timeout=False,
-        warn_on_failure=True,
+        background_enqueue=True,
     )

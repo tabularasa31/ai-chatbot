@@ -296,8 +296,7 @@ def _bridge_to_loop(make: Callable[[], Awaitable[str | None]]) -> str | None:
         timeout=_ENQUEUE_WAIT_SECONDS,
         default=None,
         label="unread_reply_enqueue_sync",
-        cancel_on_timeout=False,
-        warn_on_failure=True,
+        background_enqueue=True,
     )
 
 

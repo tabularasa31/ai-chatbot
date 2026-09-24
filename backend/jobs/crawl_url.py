@@ -96,8 +96,7 @@ def enqueue_crawl_for_source_sync(
         timeout=5,
         default=None,
         label=f"crawl_enqueue_sync source_id={source_id}",
-        cancel_on_timeout=False,
-        warn_on_failure=True,
+        background_enqueue=True,
     )
 
 

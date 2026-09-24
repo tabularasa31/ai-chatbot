@@ -854,7 +854,7 @@ class RagHandler(PipelineHandler):
             # tracker armed: the turn was still weak, so the next weak one
             # counts as consecutive instead of restarting the two-strike count.
             set_low_confidence_flag=_defer_weak_turn or _clarifying_stood_down,
-            set_checklist_flag=result.llm_checklist and not escalate,
+            set_checklist_flag=result.llm_checklist and not _reply_replaced_by_handoff,
             document_ids=document_ids,
             extra_tokens=tokens_used,
             language_context=ctx.language_context,

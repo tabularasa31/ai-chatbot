@@ -2097,6 +2097,7 @@ def _perform_manual_escalation_impl(
         )
     )
     chat.tokens_used = int(chat.tokens_used or 0) + tokens_used
+    chat.last_reply_was_checklist = False
     db.add(chat)
     db.commit()
 

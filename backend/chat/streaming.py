@@ -111,10 +111,7 @@ HANDOFF_MARKER = "<needs_human/>"
 # question differently (a Chinese 吗-question closing on 。, Ethiopic ፧).
 CLARIFY_MARKER = "<clarifying/>"
 
-# Sentinel the LLM appends when its reply hands the user steps to carry out
-# themselves and asks them to report back. The backend holds the handoff until
-# that report: no offer underneath this reply, and a bare "just forward it" on
-# the next turn gets one re-ask for the result instead of a ticket.
+# Sentinel for a reply that hands the user steps to run and asks for the result.
 CHECKLIST_MARKER = "<checklist/>"
 
 ALL_MARKERS: tuple[str, ...] = (

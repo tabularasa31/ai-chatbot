@@ -697,12 +697,10 @@ def test_explicit_human_request_after_prior_substantive_content_escalates_immedi
 
 @pytest.mark.escalation
 @pytest.mark.parametrize(
-    ("follow_up", "reports_result", "tickets_after_follow_up"),
+    ("follow_ups", "reports_result", "tickets_per_turn"),
     [
-        pytest.param("just have support write to me", False, 0, id="bare_forward_is_reasked"),
-        pytest.param(
-            "did both, still 502, please forward it", True, 1, id="reported_result_escalates"
-        ),
+        pytest.param(("just have support write to me",) * 2, False, (0, 1), id="bare_forward"),
+        pytest.param(("did both, still 502, please forward it",), True, (1,), id="with_result"),
     ],
 )
 def test_checklist_reply_holds_handoff_until_user_reports_result(
@@ -710,14 +708,13 @@ def test_checklist_reply_holds_handoff_until_user_reports_result(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
-    follow_up: str,
+    follow_ups: tuple[str, ...],
     reports_result: bool,
-    tickets_after_follow_up: int,
+    tickets_per_turn: tuple[int, ...],
 ) -> None:
-    """A reply that hands the user a checklist carries no handoff offer. A bare
-    request to forward the conversation on the next turn gets one re-ask for
-    the result, and only a second request creates the ticket; a request that
-    reports what the checks showed escalates at once."""
+    """After a checklist reply, a bare request to forward the conversation gets
+    one re-ask for the result and only a second request creates the ticket; a
+    request that reports what the checks showed escalates at once."""
     from backend.chat.handlers.escalation import _CHECKLIST_REASK_CANONICAL_TEXT
     from backend.models import EscalationTicket
 
@@ -736,29 +733,22 @@ def test_checklist_reply_holds_handoff_until_user_reports_result(
         "backend.chat.service.detect_human_request",
         _human_request_sequence(
             HumanRequestResult(human_request=False, message_has_request_content=True),
-            forward_request,
-            forward_request,
+            *(forward_request,) * len(follow_ups),
         ),
     )
 
-    def tickets() -> int:
-        return (
+    [r1] = drive(tenant, api_key, chat.session_id, "https gives 502")
+    assert r1["text"] == checklist
+    for follow_up, expected_tickets in zip(follow_ups, tickets_per_turn):
+        [reply] = drive(tenant, api_key, chat.session_id, follow_up)
+        tickets = (
             db_session.query(EscalationTicket)
             .filter(EscalationTicket.tenant_id == tenant_id)
             .count()
         )
-
-    r1, r2 = drive(tenant, api_key, chat.session_id, "https gives 502", follow_up)
-    assert r1["text"] == checklist
-    assert tickets() == tickets_after_follow_up
-    if reports_result:
-        return
-    assert r2["text"] == _CHECKLIST_REASK_CANONICAL_TEXT
-    db_session.refresh(chat)
-    assert chat.escalation_pre_confirm_pending is False
-
-    drive(tenant, api_key, chat.session_id, follow_up)
-    assert tickets() == 1
+        assert tickets == expected_tickets
+        if expected_tickets == 0:
+            assert reply["text"] == _CHECKLIST_REASK_CANONICAL_TEXT
 
 
 @pytest.mark.escalation

@@ -76,13 +76,11 @@ _AWAITING_REQUEST_CANONICAL_TEXT = (
     "pass it on."
 )
 
-# Canonical (English) re-ask shown once when the previous reply handed the user
-# a checklist and they asked to forward the conversation without reporting
-# what the checks showed. Localized at runtime like the copy above.
 _CHECKLIST_REASK_CANONICAL_TEXT = (
-    "Before I pass this on: did you go through the steps from my previous "
-    "message? What happened when you tried them? Support will ask the same "
-    "first, so your result gets the request solved faster."
+    "Before I pass this on: what happened when you went through the steps "
+    "from my previous message — did anything change, or did you see an "
+    "error? Support will ask this first, so including it gets your request "
+    "solved faster."
 )
 
 

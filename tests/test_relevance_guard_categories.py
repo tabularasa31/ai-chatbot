@@ -142,7 +142,7 @@ def _identity_localize(monkeypatch: pytest.MonkeyPatch) -> None:
         return LocalizationResult(text=kwargs["canonical_text"], tokens_used=0)
 
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_result",
+        "backend.guards.reject_response.async_localize_text_to_language_result",
         _localize,
     )
 

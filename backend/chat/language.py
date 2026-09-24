@@ -847,75 +847,31 @@ async def generate_greeting_in_language_result(
         log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
         return LocalizationResult(text=fallback_text, tokens_used=0)
 
-    try:
-        client = get_async_openai_client(api_key)
-        response = await async_call_openai_with_retry(
-            operation,
-            lambda: client.chat.completions.create(
-                model=settings.localization_model,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Write a single brief welcome message for a customer support assistant "
-                            f"in {normalized_target}. Preserve the product name exactly. "
-                            "Return only the message, no explanation."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Product name: {product_name}\n"
-                            "Capabilities: documentation, product setup, integrations, and finding the right information. "
-                            "The message should end by inviting the user to ask their question."
-                        ),
-                    },
-                ],
-            ),
-            langfuse_observation=langfuse_observation,
-        )
-        tokens_used = response.usage.total_tokens if response.usage else 0
-        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=tokens_used)
-        if not response.choices:
-            return LocalizationResult(text=fallback_text, tokens_used=tokens_used)
-        generated = (response.choices[0].message.content or "").strip()
-        return LocalizationResult(text=generated or fallback_text, tokens_used=tokens_used)
-    except Exception as exc:
-        logger.warning("generate_greeting_in_language failed; using fallback: %s", exc)
-        return LocalizationResult(text=fallback_text, tokens_used=0)
-
-
-async def localize_text_result(
-    *,
-    canonical_text: str,
-    response_language: str,
-    api_key: str | None,
-    operation: str = "localize",
-    tenant_id: str | None = None,
-    bot_id: str | None = None,
-    chat_id: str | None = None,
-) -> LocalizationResult:
-    if not canonical_text.strip():
-        return LocalizationResult(text=canonical_text, tokens_used=0)
-
-    normalized_target = _normalize_language_tag(response_language) or "en"
-    if not api_key or _language_matches(normalized_target, "en"):
-        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
-
-    if _already_in_target_language(canonical_text, normalized_target):
-        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
-
-    return await _async_invoke_localize_llm(
-        canonical_text=canonical_text,
+    return await _run_text_llm(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    f"Write a single brief welcome message for a customer support assistant "
+                    f"in {normalized_target}. Preserve the product name exactly. "
+                    "Return only the message, no explanation."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Product name: {product_name}\n"
+                    "Capabilities: documentation, product setup, integrations, and finding the right information. "
+                    "The message should end by inviting the user to ask their question."
+                ),
+            },
+        ],
+        operation=operation,
         target_language=normalized_target,
         api_key=api_key,
-        operation=operation,
-        tenant_id=tenant_id,
-        bot_id=bot_id,
-        chat_id=chat_id,
+        fallback=fallback_text,
+        langfuse_observation=langfuse_observation,
+        fail_log="generate_greeting_in_language failed; using fallback: %s",
     )
 
 
@@ -938,42 +894,32 @@ async def translate_text_result(
         log_llm_tokens(operation="translate", target_language=normalized_target, tokens=0)
         return LocalizationResult(text=source_text, tokens_used=0)
 
-    try:
-        client = get_async_openai_client(api_key)
-        response = await async_call_openai_with_retry(
-            "chat_translate",
-            lambda: client.chat.completions.create(
-                model=settings.localization_model,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You translate support FAQ answers. Translate the FAQ answer strictly "
-                            f"into {normalized_target}. Preserve semantic equivalence and do not "
-                            "broaden or invent information beyond the provided answer. Preserve links, "
-                            "product names, commands, field names, code snippets, quoted config keys, "
-                            "identifiers, placeholders, and ticket tokens exactly. Return only the "
-                            "translated FAQ answer."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": f"FAQ answer to translate:\n{source_text}",
-                    },
-                ],
-            ),
-            langfuse_observation=langfuse_observation,
-        )
-        tokens_used = response.usage.total_tokens if response.usage else 0
-        log_llm_tokens(operation="translate", target_language=normalized_target, tokens=tokens_used)
-        if not response.choices:
-            return LocalizationResult(text=source_text, tokens_used=tokens_used)
-        translated = (response.choices[0].message.content or "").strip()
-        return LocalizationResult(text=translated or source_text, tokens_used=tokens_used)
-    except Exception as exc:
-        logger.warning("FAQ translation failed; using source text: %s", exc)
-        return LocalizationResult(text=source_text, tokens_used=0)
+    return await _run_text_llm(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You translate support FAQ answers. Translate the FAQ answer strictly "
+                    f"into {normalized_target}. Preserve semantic equivalence and do not "
+                    "broaden or invent information beyond the provided answer. Preserve links, "
+                    "product names, commands, field names, code snippets, quoted config keys, "
+                    "identifiers, placeholders, and ticket tokens exactly. Return only the "
+                    "translated FAQ answer."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"FAQ answer to translate:\n{source_text}",
+            },
+        ],
+        operation="translate",
+        retry_operation="chat_translate",
+        target_language=normalized_target,
+        api_key=api_key,
+        fallback=source_text,
+        langfuse_observation=langfuse_observation,
+        fail_log="FAQ translation failed; using source text: %s",
+    )
 
 
 async def render_direct_faq_answer_result(
@@ -1049,11 +995,14 @@ async def async_localize_text_to_language_result(
     if fast is not None:
         return fast
 
-    return await _async_invoke_localize_llm(
-        canonical_text=canonical_text,
+    return await _run_text_llm(
+        messages=_localize_llm_messages(canonical_text, normalized_target),
+        operation=operation,
         target_language=normalized_target,
         api_key=api_key,
-        operation=operation,
+        fallback=canonical_text,
+        fail_log="Localization failed; using canonical text: %s",
+        emit_event=True,
         tenant_id=tenant_id,
         bot_id=bot_id,
         chat_id=chat_id,
@@ -1088,72 +1037,58 @@ def _localize_llm_messages(canonical_text: str, target_language: str) -> list[di
     ]
 
 
-def _localize_result_from_response(
-    response: Any,
+async def _run_text_llm(
     *,
-    canonical_text: str,
-    target_language: str,
+    messages: list[dict[str, str]],
     operation: str,
-    started_at: float,
-    tenant_id: str | None,
-    bot_id: str | None,
-    chat_id: str | None,
-) -> LocalizationResult:
-    tokens_used = response.usage.total_tokens if response.usage else 0
-    log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
-    if not response.choices:
-        return LocalizationResult(text=canonical_text, tokens_used=tokens_used)
-    localized = (response.choices[0].message.content or "").strip()
-    output_text = localized or canonical_text
-    _emit_localized_event_safely(
-        canonical_text=canonical_text,
-        output_text=output_text,
-        target_language=target_language,
-        operation=operation,
-        started_at=started_at,
-        tenant_id=tenant_id,
-        bot_id=bot_id,
-        chat_id=chat_id,
-    )
-    return LocalizationResult(text=output_text, tokens_used=tokens_used)
-
-
-async def _async_invoke_localize_llm(
-    *,
-    canonical_text: str,
     target_language: str,
     api_key: str | None,
-    operation: str,
+    fallback: str,
+    fail_log: str,
+    retry_operation: str | None = None,
+    langfuse_observation: Any | None = None,
+    emit_event: bool = False,
     tenant_id: str | None = None,
     bot_id: str | None = None,
     chat_id: str | None = None,
-    langfuse_observation: Any | None = None,
 ) -> LocalizationResult:
+    """Shared call+fallback shape for the small text-generation LLM calls below.
+
+    Always logs token usage on success, falls back to ``fallback`` on a
+    missing/empty completion or any provider failure, and never raises.
+    """
     started_at = time.monotonic()
     try:
         client = get_async_openai_client(api_key)
         response = await async_call_openai_with_retry(
-            operation,
+            retry_operation or operation,
             lambda: client.chat.completions.create(
                 model=settings.localization_model,
                 temperature=0,
-                messages=_localize_llm_messages(canonical_text, target_language),
+                messages=messages,
             ),
             langfuse_observation=langfuse_observation,
         )
-        return _localize_result_from_response(
-            response,
-            canonical_text=canonical_text,
-            target_language=target_language,
-            operation=operation,
-            started_at=started_at,
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-            chat_id=chat_id,
-        )
+        tokens_used = response.usage.total_tokens if response.usage else 0
+        log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
+        if not response.choices:
+            return LocalizationResult(text=fallback, tokens_used=tokens_used)
+        output_text = (response.choices[0].message.content or "").strip() or fallback
+        if emit_event:
+            _emit_localized_event_safely(
+                canonical_text=fallback,
+                output_text=output_text,
+                target_language=target_language,
+                operation=operation,
+                started_at=started_at,
+                tenant_id=tenant_id,
+                bot_id=bot_id,
+                chat_id=chat_id,
+            )
+        return LocalizationResult(text=output_text, tokens_used=tokens_used)
     except Exception as exc:
-        logger.warning("Localization failed; using canonical text: %s", exc)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
+        logger.warning(fail_log, exc)
+        return LocalizationResult(text=fallback, tokens_used=0)
 
 
 def _emit_localized_event_safely(

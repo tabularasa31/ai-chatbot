@@ -200,17 +200,17 @@ def test_concurrent_put_and_stats_does_not_raise() -> None:
 
 @pytest.mark.asyncio
 async def test_build_reject_response_result_caches_response_language_path() -> None:
-    """The explicit ``response_language`` branch (localize_text_result) also caches.
+    """The explicit ``response_language`` branch also caches.
     Cache hit must clear ``tokens_used`` for the same reason as above.
     """
     call_count = {"n": 0}
 
-    async def fake_localize(*, canonical_text, response_language, **_kwargs):
+    async def fake_localize(*, canonical_text, target_language, **_kwargs):
         call_count["n"] += 1
-        return LocalizationResult(text=f"<{response_language}>{canonical_text}", tokens_used=5)
+        return LocalizationResult(text=f"<{target_language}>{canonical_text}", tokens_used=5)
 
     with patch(
-        "backend.guards.reject_response.localize_text_result",
+        "backend.guards.reject_response.async_localize_text_to_language_result",
         side_effect=fake_localize,
     ):
         await build_reject_response_result(

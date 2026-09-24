@@ -876,7 +876,7 @@ def test_chat_not_relevant_returns_localized_reject(
         )
 
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_result",
+        "backend.guards.reject_response.async_localize_text_to_language_result",
         _fake_localize,
     )
 

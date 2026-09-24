@@ -348,7 +348,7 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
     def fake_capture(event: str, **kwargs: object) -> None:
         captured_events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", fake_capture)
     mock_openai_client.chat.completions.create.return_value.choices = [
         Mock(message=Mock(content="The answer is 42"))
     ]
@@ -2119,7 +2119,7 @@ def _nodocs_patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     def _record(event: str, **kwargs: Any) -> None:
         events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", _record)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _record)
 
     async def _fake_render_pre_confirm(**kwargs):
         return type(

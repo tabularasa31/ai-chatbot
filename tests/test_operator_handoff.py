@@ -1608,13 +1608,9 @@ def test_the_inbox_preview_shows_an_operator_reply(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """A chat whose latest reply came from a human showed the bot's older one.
-
-    ``message_count`` already included the operator rows, so the row read as a
-    conversation that had moved on next to a preview that had not.
+    """A chat whose latest reply came from a human shows that reply, and
+    ``message_count`` includes the operator turn.
     """
-    from backend.chat.history_service import list_chat_sessions
-
     ws = _make_workspace(tenant, db_session, email="inbox@example.com", name="Inbox Co")
     chat = _make_chat(db_session, ws.tenant_id)
     base = _utcnow() - timedelta(minutes=10)
@@ -1646,9 +1642,7 @@ def test_the_inbox_preview_shows_an_operator_reply(
     )
 
     db_session.expire_all()
-    row = next(
-        s for s in list_chat_sessions(ws.tenant_id, db_session)
-        if s.session_id == chat.session_id
-    )
-    assert row.message_count == 3
-    assert row.last_answer_preview == "Ann here — reissued, you should see it now."
+    inbox = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()
+    row = next(r for r in inbox["items"] if r["session_id"] == str(chat.session_id))
+    assert row["message_count"] == 3
+    assert row["last_message_preview"] == "Ann here — reissued, you should see it now."

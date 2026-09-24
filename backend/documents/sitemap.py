@@ -19,6 +19,7 @@ from backend.documents.http_client import (
     _log_fetch,
     _request_with_safe_redirects,
 )
+from backend.documents.urls import canonical_url
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +34,7 @@ def _normalize_page_url(url: str, base_domain: str) -> str | None:
         return None
     if parsed.netloc.lower() != base_domain.lower():
         return None
-    path = parsed.path or "/"
-    if path.endswith("/") and path != "/":
-        path = path[:-1]
-    return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", "", ""))
+    return canonical_url(url)
 
 
 def _extract_links(html: str, current_url: str, domain: str) -> list[str]:

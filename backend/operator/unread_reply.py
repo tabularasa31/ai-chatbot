@@ -47,7 +47,6 @@ _JOB_NAME = "mail_unread_operator_reply"
 _MAX_ATTEMPTS = 3
 _RETRY_SECONDS = 120
 _ENQUEUE_WAIT_SECONDS = 5
-_SUBJECT_PREVIEW_CHARS = 60
 
 Position = tuple[Any, uuid.UUID]
 
@@ -178,11 +177,10 @@ def _recipient(chat: Chat, ticket: EscalationTicket | None) -> str | None:
 
 
 def _subject(chat: Chat, ticket: EscalationTicket | None) -> str:
-    from backend.escalation.service import _safe_ticket_question
+    from backend.escalation.service import _ticket_subject
 
     if ticket is not None:
-        preview = _safe_ticket_question(ticket).replace("\n", " ").strip()
-        return f"[{ticket.ticket_number}] {preview[:_SUBJECT_PREVIEW_CHARS]}".rstrip(" —-")
+        return _ticket_subject(ticket)
     if chat.bot is not None and chat.bot.name:
         return chat.bot.name
     return chat.tenant.name

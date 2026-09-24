@@ -26,17 +26,22 @@ CACHE_TTL_SECONDS = 5 * 60
 def _emit_relevance_guard_metric(
     *, tenant_id: uuid.UUID, cache_hit: bool, blocked: bool = False, score: str = ""
 ) -> None:
-    """Emit relevance_guard.check event to PostHog (cache_hit, blocked, reason)."""
-    try:
-        from backend.observability.metrics import capture_event
-        capture_event(
-            "relevance_guard.check",
-            distinct_id=str(tenant_id),
-            tenant_id=str(tenant_id),
-            properties={"cache_hit": cache_hit, "blocked": blocked, "reason": score},
-        )
-    except Exception:
-        pass
+    """Emit relevance_guard.check event to PostHog (cache_hit, blocked, reason).
+
+    ``tenant_id`` here is the internal UUID (no public tenant id available at
+    this call site), used only for distinct_id. ``groups=False``: a tenant
+    group keyed by the internal UUID would create phantom PostHog groups
+    disjoint from the public-id-keyed groups everywhere else.
+    """
+    from backend.observability.metrics import emit_tenant_event
+
+    emit_tenant_event(
+        "relevance_guard.check",
+        tenant_public_id=str(tenant_id),
+        bot_public_id=None,
+        properties={"cache_hit": cache_hit, "blocked": blocked, "reason": score},
+        groups=False,
+    )
 MAX_CACHE_SIZE = 2048
 
 # Circuit breaker: after this many consecutive guard failures (timeouts / errors),

@@ -17,7 +17,7 @@ from backend.chat.language import (
     resolve_language_context,
 )
 from backend.models import Chat, Message, MessageRole, Tenant, TenantProfile
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 from backend.support_config import public_support_config_dict
 
 logger = logging.getLogger(__name__)
@@ -189,10 +189,10 @@ def _emit_detected_language_metric(
     tenant_public_id = getattr(tenant_row, "public_id", None) if tenant_row is not None else None
     if not tenant_public_id:
         return
-    capture_event(
+    emit_tenant_event(
         "chat_detected_language_unknown_rate",
-        distinct_id=str(tenant_public_id),
-        tenant_id=str(tenant_public_id),
+        tenant_public_id=str(tenant_public_id),
+        bot_public_id=None,
         properties={
             "detected_language_raw": raw_detected_language,
             "detected_language": context.detected_language,
@@ -202,7 +202,6 @@ def _emit_detected_language_metric(
             "response_language_resolution_reason": context.response_language_resolution_reason,
             "chat_id": str(chat.id) if chat is not None else None,
         },
-        groups={"tenant": str(tenant_public_id)},
     )
 
 

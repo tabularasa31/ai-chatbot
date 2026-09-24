@@ -42,12 +42,12 @@ from backend.models import (
     Tenant,
     TenantProfile,
     TurnOutcome,
-    User,
 )
 from backend.models.base import _utcnow
 from backend.observability.metrics import capture_event
 from backend.seats.service import tenant_has_any_seat
 from backend.support_config import public_support_config_dict
+from backend.tenants.service import get_tenant_owner
 
 logger = logging.getLogger(__name__)
 
@@ -775,11 +775,27 @@ def _support_inbox_recipient(tenant: Tenant, db: Session) -> str | None:
 
     The configured L2 address if there is one, else the workspace owner.
     """
-    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
+    user = get_tenant_owner(tenant.id, db)
     support_config = public_support_config_dict(
         tenant.settings if isinstance(tenant.settings, dict) else None
     )
     return support_config["l2_email"] or (user.email if user and user.email else None)
+
+
+def _ticket_subject(ticket: EscalationTicket, *, reply: bool = False) -> str:
+    # No priority tier in the subject — it would leak our internal urgency
+    # classification back to the user via a `Re:` reply.
+    preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
+    prefix = "Re: " if reply else ""
+    return f"{prefix}[{ticket.ticket_number}] {preview}".rstrip(" —-")
+
+
+def _threaded_headers(ticket: EscalationTicket, *, chat: Chat | None = None) -> dict[str, str]:
+    """Headers that thread a follow-up e-mail under the ticket's initial notify."""
+    headers = _build_escalation_email_headers(ticket, chat=chat)
+    headers["In-Reply-To"] = ticket.notification_message_id
+    headers["References"] = ticket.notification_message_id
+    return headers
 
 
 def _send_email_off_loop(*args: Any, **kwargs: Any) -> str | None:
@@ -882,6 +898,43 @@ def _report_escalation_email_failure(
     )
 
 
+def _send_support_mail(
+    tenant: Tenant,
+    ticket: EscalationTicket,
+    db: Session,
+    *,
+    recipient: str,
+    subject: str,
+    body: str,
+    headers: dict[str, str],
+    stage: str,
+) -> tuple[bool, str | None]:
+    """Shared tail of every escalation-notify path: Brevo send + failure report."""
+    try:
+        send_result = _send_email_off_loop(
+            recipient,
+            subject,
+            body,
+            # Seat holders get the inbound token address; others get the visitor's email.
+            reply_to=escalation_reply_to(ticket, db),
+            extra_headers=headers,
+        )
+    except Exception as e:
+        logger.warning(
+            "Escalation email failed (stage=%s, ticket=%s): %s", stage, ticket.ticket_number, e
+        )
+        _report_escalation_email_failure(
+            tenant, ticket, reason="send_exception", stage=stage, error=e
+        )
+        return False, None
+
+    if send_result is None:
+        _report_escalation_email_failure(tenant, ticket, reason="brevo_refused", stage=stage)
+        return False, None
+
+    return True, send_result
+
+
 def _notify_tenant_new_ticket(
     tenant: Tenant,
     ticket: EscalationTicket,
@@ -918,9 +971,7 @@ def _notify_tenant_new_ticket(
             )
         return False
 
-    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
-    support_config = public_support_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
-    recipient = support_config["l2_email"] or (user.email if user and user.email else None)
+    recipient = _support_inbox_recipient(tenant, db)
     if not recipient:
         logger.warning("No escalation notification email configured for tenant_id=%s", tenant.id)
         return False
@@ -933,42 +984,17 @@ def _notify_tenant_new_ticket(
         latest_user_at=latest_user_at,
     )
     headers = _build_escalation_email_headers(ticket)
-    question_preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
-    # Subject deliberately omits priority tier (`HIGH`/`CRITICAL`) — the user
-    # will see the subject prefixed with `Re:` if support replies and we don't
-    # want to leak our internal urgency classification back to them. The ticket
-    # number is fine: it's a tenant-facing identifier the user may already
-    # know from the bot's acknowledgement message.
-    subject = f"[{ticket.ticket_number}] {question_preview}".rstrip(" —-")
-    try:
-        send_result = _send_email_off_loop(
-            recipient,
-            subject,
-            body,
-            # The seat branch. A workspace holding a seat gets our inbound
-            # token address, so the reply comes back through us and into the
-            # visitor's widget; one holding none keeps the visitor's own
-            # address and today's straight-to-them path, unchanged.
-            reply_to=escalation_reply_to(ticket, db),
-            extra_headers=headers,
-        )
-    except Exception as e:
-        logger.warning("Escalation email failed: %s", e)
-        _report_escalation_email_failure(
-            tenant, ticket, reason="send_exception", stage="initial", error=e
-        )
-        return False
-
-    if send_result is None:
-        # Brevo refused the send (HTTP 4xx/5xx) or the call raised internally.
+    subject = _ticket_subject(ticket)
+    sent, send_result = _send_support_mail(
+        tenant, ticket, db, recipient=recipient, subject=subject, body=body,
+        headers=headers, stage="initial",
+    )
+    if not sent:
         # Do NOT advance any "already notified" markers — without this guard a
         # failed initial notify would set ``last_notified_*`` while leaving
         # ``notification_message_id`` empty, which makes every subsequent call
         # to ``_notify_tenant_ticket_update`` skip (anchor missing) and
         # permanently suppresses notifications for this ticket.
-        _report_escalation_email_failure(
-            tenant, ticket, reason="brevo_refused", stage="initial"
-        )
         return False
 
     # Mark the high-water line for follow-up update emails. Empty-string
@@ -1176,34 +1202,17 @@ def _notify_tenant_ticket_update(
         return False
 
     body = _format_update_email_body(turns)
-    headers = _build_escalation_email_headers(ticket, chat=chat)
-    headers["In-Reply-To"] = ticket.notification_message_id
-    headers["References"] = ticket.notification_message_id
-    question_preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
-    subject = f"Re: [{ticket.ticket_number}] {question_preview}".rstrip(" —-")
+    headers = _threaded_headers(ticket, chat=chat)
+    subject = _ticket_subject(ticket, reply=True)
 
-    try:
-        send_result = _send_email_off_loop(
-            recipient,
-            subject,
-            body,
-            reply_to=escalation_reply_to(ticket, db),
-            extra_headers=headers,
-        )
-    except Exception as e:
-        logger.warning("Escalation follow-up email failed (ticket=%s): %s", ticket.ticket_number, e)
-        _report_escalation_email_failure(
-            tenant, ticket, reason="send_exception", stage="followup", error=e
-        )
-        return False
-
-    if send_result is None:
+    sent, _ = _send_support_mail(
+        tenant, ticket, db, recipient=recipient, subject=subject, body=body,
+        headers=headers, stage="followup",
+    )
+    if not sent:
         # Brevo refused the send. Do NOT advance the marker — the delta we
         # just tried to deliver must remain eligible for a retry on the next
         # eligible user turn.
-        _report_escalation_email_failure(
-            tenant, ticket, reason="brevo_refused", stage="followup"
-        )
         return False
 
     # ``now`` above is timezone-aware (UTC) and used only for debounce
@@ -1682,11 +1691,8 @@ def notify_support_of_abandoned_claim(ticket: EscalationTicket, db: Session) -> 
     if not recipient:
         return False
 
-    headers = _build_escalation_email_headers(ticket, chat=ticket.chat)
-    headers["In-Reply-To"] = ticket.notification_message_id
-    headers["References"] = ticket.notification_message_id
-    question_preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
-    subject = f"Re: [{ticket.ticket_number}] {question_preview}".rstrip(" —-")
+    headers = _threaded_headers(ticket, chat=ticket.chat)
+    subject = _ticket_subject(ticket, reply=True)
     # User-safe: support replies by hitting Reply, and their mail client
     # quotes this body back to the end user. Nothing here says anything the
     # end user should not read.
@@ -1704,28 +1710,11 @@ def notify_support_of_abandoned_claim(ticket: EscalationTicket, db: Session) -> 
         ]
     )
 
-    try:
-        send_result = _send_email_off_loop(
-            recipient,
-            subject,
-            body,
-            reply_to=escalation_reply_to(ticket, db),
-            extra_headers=headers,
-        )
-    except Exception as e:
-        logger.warning(
-            "Abandoned-claim email failed (ticket=%s): %s", ticket.ticket_number, e
-        )
-        _report_escalation_email_failure(
-            tenant, ticket, reason="send_exception", stage="claim_bounce", error=e
-        )
-        return False
-    if send_result is None:
-        _report_escalation_email_failure(
-            tenant, ticket, reason="brevo_refused", stage="claim_bounce"
-        )
-        return False
-    return True
+    sent, _ = _send_support_mail(
+        tenant, ticket, db, recipient=recipient, subject=subject, body=body,
+        headers=headers, stage="claim_bounce",
+    )
+    return sent
 
 
 def get_open_escalation_ticket_for_chat(

@@ -284,25 +284,18 @@ async def run_retrieval(run: PipelineRun) -> None:
         "retrieval_ms",
         retrieval.retrieval_duration_ms or 0.0,
     )
-    if run.tenant_public_id is not None or run.bot_public_id is not None:
-        from backend.chat.events import _emit_ai_span_event
-        _retrieval_trace_id = (
-            getattr(run.trace, "posthog_trace_id", None) if run.trace is not None else None
-        )
-        _emit_ai_span_event(
-            tenant_public_id=run.tenant_public_id,
-            bot_public_id=run.bot_public_id,
-            span_name="retrieval",
-            latency_s=(retrieval.retrieval_duration_ms or 0.0) / 1000.0,
-            trace_id=_retrieval_trace_id,
-            span_id=uuid.uuid4().hex if _retrieval_trace_id else None,
-            parent_id=_retrieval_trace_id,
-            extra_properties={
-                "chunk_count": len(retrieval.chunk_texts),
-                "mode": retrieval.mode,
-                "best_confidence_score": retrieval.best_confidence_score,
-            },
-        )
+    from backend.chat.events import emit_pipeline_span
+
+    emit_pipeline_span(
+        run,
+        "retrieval",
+        (retrieval.retrieval_duration_ms or 0.0) / 1000.0,
+        {
+            "chunk_count": len(retrieval.chunk_texts),
+            "mode": retrieval.mode,
+            "best_confidence_score": retrieval.best_confidence_score,
+        },
+    )
 
 
 def _fast_path_extras(run: PipelineRun, retrieval_ms: int) -> dict[str, Any]:

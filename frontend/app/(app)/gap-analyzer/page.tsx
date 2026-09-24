@@ -12,14 +12,7 @@ import {
   type GapModeBStatusFilter,
 } from "@/lib/api";
 import { useClientMe } from "@/hooks/useApi";
-
-function formatDateTime(value: string | null): string {
-  if (!value) return "—";
-  return new Date(value).toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
+import { formatDateTime } from "@/lib/format";
 
 function CoverageBadge({ item }: { item: GapItem }) {
   const styles: Record<string, string> = {
@@ -567,7 +560,7 @@ export default function GapAnalyzerPage() {
             <StatCard label="Active gaps" value={summary?.total_active ?? "—"} note={summary?.impact_statement} />
             <StatCard label="Uncovered" value={summary?.uncovered_count ?? "—"} />
             <StatCard label="Partial" value={summary?.partial_count ?? "—"} />
-            <StatCard label="Last updated" value={summary?.last_updated ? formatDateTime(summary.last_updated) : "—"} />
+            <StatCard label="Last updated" value={formatDateTime(summary?.last_updated)} />
           </>
         )}
       </div>

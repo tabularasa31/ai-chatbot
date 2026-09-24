@@ -1,6 +1,7 @@
 "use client";
 
 import type { DocumentHealthStatus } from "@/lib/api";
+import { formatDateTimeLocale } from "@/lib/format";
 import { Tooltip } from "@/components/ui/tooltip";
 
 export function healthLabel(health: DocumentHealthStatus | null | undefined): string {
@@ -68,7 +69,7 @@ export function HealthCell({
   }
 
   const warnings = health?.warnings ?? [];
-  const checkedAt = health?.checked_at ? new Date(health.checked_at).toLocaleString() : null;
+  const checkedAt = health?.checked_at ? formatDateTimeLocale(health.checked_at) : null;
   const tooltipLines =
     health == null
       ? ["Health check is still running."]

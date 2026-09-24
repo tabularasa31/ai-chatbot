@@ -11,7 +11,7 @@ from openai import APIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import get_current_tenant
 from backend.bots.service import (
     get_bot_for_tenant_by_public_id,
     get_default_bot_for_tenant,
@@ -50,7 +50,7 @@ from backend.models import (
     Bot,
     Chat,
     EscalationTrigger,
-    User,
+    Tenant,
 )
 from backend.tenants.llm_alerts import (
     apply_clear_alert,
@@ -59,7 +59,7 @@ from backend.tenants.llm_alerts import (
 from backend.tenants.llm_alerts import (
     is_actionable as is_actionable_llm_failure,
 )
-from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
+from backend.tenants.service import get_tenant_by_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -244,17 +244,13 @@ async def chat_escalate(
 
 @chat_router.get("/sessions", response_model=ChatSessionListResponse)
 def get_sessions(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSessionListResponse:
     """
     List all chat sessions for the authenticated tenant (inbox-style).
     JWT auth required. Returns sessions sorted by last_activity DESC.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     summaries = list_chat_sessions(tenant.id, db)
     return ChatSessionListResponse(
         sessions=[
@@ -273,7 +269,7 @@ def get_sessions(
 @chat_router.get("/logs/session/{session_id}", response_model=ChatMessageLogResponse)
 def get_session_logs_route(
     session_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatMessageLogResponse:
     """
@@ -284,10 +280,6 @@ def get_session_logs_route(
     egress concern applied when text is sent to OpenAI or to a support inbox,
     not to the tenant reading back their own conversations.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     logs = get_session_logs(session_id, tenant.id, db)
     if logs is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -310,7 +302,7 @@ def get_session_logs_route(
 @chat_router.get("/history/{session_id}", response_model=ChatHistoryResponse)
 def get_history(
     session_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatHistoryResponse:
     """
@@ -318,10 +310,6 @@ def get_history(
 
     Returns 404 if session not found or not owner.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     messages = get_chat_history(session_id, tenant.id, db)
     if not messages:
         raise HTTPException(status_code=404, detail="Session not found")

@@ -22,10 +22,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.auth.middleware import require_member, require_seated_member
+from backend.auth.middleware import (
+    get_member_tenant_async,
+    get_seated_tenant_async,
+    require_seated_member,
+)
 from backend.core.db import get_async_db, run_sync
 from backend.escalation.service import request_raised_at
-from backend.models import Chat, EscalationTicket, User
+from backend.models import Chat, EscalationTicket, Tenant, User
 from backend.operator.inbox import (
     InboxRow,
     InboxScope,
@@ -56,7 +60,6 @@ from backend.operator.service import (
     release_chat,
     resolve_from_operator,
 )
-from backend.tenants.service import get_tenant_by_user
 
 operator_router = APIRouter(prefix="/operator", tags=["operator"])
 
@@ -136,24 +139,16 @@ def _thread(thread: Thread) -> ThreadResponse:
     )
 
 
-def _require_tenant_id(db, user: User) -> uuid.UUID:
-    tenant = get_tenant_by_user(user.id, db)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    return tenant.id
-
-
-def _require_chat(db, *, chat_id: uuid.UUID, user: User) -> tuple[Chat, uuid.UUID]:
-    tenant_id = _require_tenant_id(db, user)
+def _require_chat(db, *, chat_id: uuid.UUID, tenant_id: uuid.UUID) -> Chat:
     chat = get_tenant_chat(db, chat_id=chat_id, tenant_id=tenant_id)
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
-    return chat, tenant_id
+    return chat
 
 
 @operator_router.get("/inbox", response_model=InboxListResponse)
 async def inbox(
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant_async)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
     scope: Annotated[InboxScope, Query()] = "attention",
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
@@ -164,9 +159,8 @@ async def inbox(
     """
 
     def _work(sync_db) -> InboxListResponse:
-        tenant_id = _require_tenant_id(sync_db, current_user)
-        rows = list_inbox(sync_db, tenant_id=tenant_id, scope=scope, limit=limit)
-        counts = inbox_counts(sync_db, tenant_id=tenant_id)
+        rows = list_inbox(sync_db, tenant_id=tenant.id, scope=scope, limit=limit)
+        counts = inbox_counts(sync_db, tenant_id=tenant.id)
         return InboxListResponse(
             items=[_row(r) for r in rows],
             waiting_count=counts.waiting,
@@ -178,13 +172,13 @@ async def inbox(
 
 @operator_router.get("/inbox/summary", response_model=InboxSummaryResponse)
 async def inbox_summary(
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant_async)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> InboxSummaryResponse:
     """Just the counts, for the sidebar badge."""
 
     def _work(sync_db) -> InboxSummaryResponse:
-        counts = inbox_counts(sync_db, tenant_id=_require_tenant_id(sync_db, current_user))
+        counts = inbox_counts(sync_db, tenant_id=tenant.id)
         return InboxSummaryResponse(
             waiting_count=counts.waiting, attention_count=counts.attention
         )
@@ -195,7 +189,7 @@ async def inbox_summary(
 @operator_router.get("/sessions/{session_id}", response_model=ThreadResponse)
 async def session_thread(
     session_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant_async)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> ThreadResponse:
     """One visitor's whole session, as stored.
@@ -205,8 +199,7 @@ async def session_thread(
     """
 
     def _work(sync_db) -> ThreadResponse:
-        tenant_id = _require_tenant_id(sync_db, current_user)
-        thread = load_thread(sync_db, tenant_id=tenant_id, session_id=session_id)
+        thread = load_thread(sync_db, tenant_id=tenant.id, session_id=session_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Session not found")
         return _thread(thread)
@@ -220,6 +213,7 @@ async def session_thread(
 )
 async def take_chat(
     chat_id: uuid.UUID,
+    tenant: Annotated[Tenant, Depends(get_seated_tenant_async)],
     current_user: Annotated[User, Depends(require_seated_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorChatStateResponse:
@@ -231,9 +225,9 @@ async def take_chat(
     """
 
     def _work(sync_db) -> OperatorChatStateResponse:
-        chat, tenant_id = _require_chat(sync_db, chat_id=chat_id, user=current_user)
+        chat = _require_chat(sync_db, chat_id=chat_id, tenant_id=tenant.id)
         if not claim_chat(
-            sync_db, chat_id=chat.id, tenant_id=tenant_id, user_id=current_user.id
+            sync_db, chat_id=chat.id, tenant_id=tenant.id, user_id=current_user.id
         ):
             raise HTTPException(
                 status_code=409, detail="Chat is already taken by another operator"
@@ -253,6 +247,7 @@ async def take_chat(
 async def send_operator_message(
     chat_id: uuid.UUID,
     body: OperatorMessageRequest,
+    tenant: Annotated[Tenant, Depends(get_seated_tenant_async)],
     current_user: Annotated[User, Depends(require_seated_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorMessageResponse:
@@ -265,11 +260,11 @@ async def send_operator_message(
     """
 
     def _work(sync_db) -> OperatorMessageResponse:
-        chat, tenant_id = _require_chat(sync_db, chat_id=chat_id, user=current_user)
+        chat = _require_chat(sync_db, chat_id=chat_id, tenant_id=tenant.id)
         result = ingest_from_operator(
             sync_db,
             chat=chat,
-            tenant_id=tenant_id,
+            tenant_id=tenant.id,
             text=body.text,
             actor=OperatorActor(
                 channel=OperatorChannel.console, user_id=current_user.id
@@ -290,7 +285,7 @@ async def send_operator_message(
 )
 async def release_chat_route(
     chat_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_seated_member)],
+    tenant: Annotated[Tenant, Depends(get_seated_tenant_async)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorChatStateResponse:
     """Hand the conversation back to the bot.
@@ -301,7 +296,7 @@ async def release_chat_route(
     """
 
     def _work(sync_db) -> OperatorChatStateResponse:
-        chat, _tenant_id = _require_chat(sync_db, chat_id=chat_id, user=current_user)
+        chat = _require_chat(sync_db, chat_id=chat_id, tenant_id=tenant.id)
         return _state(release_chat(sync_db, chat))
 
     return await run_sync(db, _work)
@@ -314,7 +309,7 @@ async def release_chat_route(
 async def resolve_chat_route(
     chat_id: uuid.UUID,
     body: OperatorResolveRequest,
-    current_user: Annotated[User, Depends(require_seated_member)],
+    tenant: Annotated[Tenant, Depends(get_seated_tenant_async)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorResolveResponse:
     """Mark the conversation dealt with: close its tickets, hand it back.
@@ -324,11 +319,11 @@ async def resolve_chat_route(
     """
 
     def _work(sync_db) -> OperatorResolveResponse:
-        chat, tenant_id = _require_chat(sync_db, chat_id=chat_id, user=current_user)
+        chat = _require_chat(sync_db, chat_id=chat_id, tenant_id=tenant.id)
         result = resolve_from_operator(
             sync_db,
             chat=chat,
-            tenant_id=tenant_id,
+            tenant_id=tenant.id,
             resolution_text=body.resolution_text,
         )
         return OperatorResolveResponse(

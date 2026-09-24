@@ -143,6 +143,20 @@ def get_tenant_by_user(user_id: uuid.UUID, db: Session) -> Tenant | None:
     )
 
 
+def get_tenant_owner(tenant_id: uuid.UUID, db: Session) -> User | None:
+    """The one member holding ``owner`` for this tenant, or ``None``.
+
+    A workspace always has exactly one, but callers reachable before a
+    tenant finishes provisioning (or reading a row mid-delete) may find none.
+    """
+    # Imported here rather than at module scope: see the note in
+    # ``create_tenant`` — a top-level import of the roles constant closes an
+    # import cycle through ``backend.auth``.
+    from backend.auth.roles import ROLE_OWNER
+
+    return db.query(User).filter(User.tenant_id == tenant_id, User.role == ROLE_OWNER).first()
+
+
 def get_tenant_by_id(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
@@ -155,11 +169,13 @@ def get_tenant_by_id(
     Raises 404 if not found or not a member.
     Pass require_owner=True for destructive operations (delete, rotate keys).
     """
+    from backend.auth.roles import ROLE_OWNER
+
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     user = db.query(User).filter(User.id == user_id).first()
     if not tenant or not user or user.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    if require_owner and user.role != "owner":
+    if require_owner and user.role != ROLE_OWNER:
         raise HTTPException(status_code=403, detail="Owner role required")
     return tenant
 
@@ -189,7 +205,7 @@ def get_support_settings_for_user(user_id: uuid.UUID, db: Session) -> dict[str, 
     tenant = get_tenant_by_user(user_id, db)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    owner = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").limit(1).first()
+    owner = get_tenant_owner(tenant.id, db)
     raw = tenant.settings if isinstance(tenant.settings, dict) else None
     config = public_support_config_dict(raw)
     return {

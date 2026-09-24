@@ -19,7 +19,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.core.utils import generate_api_key
-from backend.models import Tenant, TenantApiKey, User
+from backend.models import Tenant, TenantApiKey
 from backend.models.tenant import (
     TENANT_API_KEY_REASONS,
     TENANT_API_KEY_STATUS_ACTIVE,
@@ -316,9 +316,3 @@ def get_primary_active_key(
     )
 
 
-def assert_owner(user: User, tenant_id: uuid.UUID) -> None:
-    """Owner-only guard for destructive key operations."""
-    if user.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    if getattr(user, "role", None) != "owner":
-        raise HTTPException(status_code=403, detail="Owner role required")

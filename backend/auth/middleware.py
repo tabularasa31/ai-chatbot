@@ -15,13 +15,15 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.auth.roles import ROLE_OPERATOR, ROLE_OWNER
-from backend.core.db import get_db
+from backend.core.db import get_async_db, get_db
 from backend.core.rls import clear_tenant_context, set_tenant_context
 from backend.core.security import decode_access_token
-from backend.models import User
+from backend.models import Tenant, User
 from backend.seats.service import holds_seat
 
 security = HTTPBearer(auto_error=False)
@@ -169,6 +171,79 @@ require_member = require_role(ROLE_OWNER, ROLE_OPERATOR)
 #: still administers everything; their replies simply take the ordinary e-mail
 #: path like anyone else's.
 require_seated_member = require_role(ROLE_OWNER, ROLE_OPERATOR, seat=True)
+
+
+def _tenant_dependency(
+    user_dependency: Callable[..., Awaitable[User]],
+) -> Callable[..., Awaitable[Tenant]]:
+    """Build a dependency resolving the caller's tenant, 404 if none.
+
+    Layers on ``user_dependency`` (one of the ``require_*`` role gates above),
+    so the tenant-or-404 lookup every tenant-scoped route repeated by hand
+    collapses to one ``Depends``. The tenant a member belongs to is the same
+    row regardless of which role gate admitted them, so this factory covers
+    every caller rather than duplicating the lookup per role.
+    """
+
+    async def _dependency(
+        current_user: User = Depends(user_dependency),
+        db: Session = Depends(get_db),
+    ) -> Tenant:
+        tenant = (
+            db.query(Tenant)
+            .join(User, User.tenant_id == Tenant.id)
+            .filter(User.id == current_user.id)
+            .first()
+        )
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        return tenant
+
+    return _dependency
+
+
+#: Tenant for any verified user — chat, embeddings, and the document routes
+#: that must stay reachable by an unseated verified member, not just owner
+#: or operator.
+get_current_tenant = _tenant_dependency(require_verified_user)
+
+#: Tenant for owner-only surfaces (settings, keys, knowledge edits).
+get_owner_tenant = _tenant_dependency(require_owner)
+
+#: Tenant for any workspace member (inbox, knowledge reads, gap analyzer).
+get_member_tenant = _tenant_dependency(require_member)
+
+
+def _async_tenant_dependency(
+    user_dependency: Callable[..., Awaitable[User]],
+) -> Callable[..., Awaitable[Tenant]]:
+    """Async twin of :func:`_tenant_dependency` for AsyncSession routes."""
+
+    async def _dependency(
+        current_user: User = Depends(user_dependency),
+        db: AsyncSession = Depends(get_async_db),
+    ) -> Tenant:
+        result = await db.execute(
+            select(Tenant)
+            .join(User, User.tenant_id == Tenant.id)
+            .filter(User.id == current_user.id)
+        )
+        tenant = result.scalars().first()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        return tenant
+
+    return _dependency
+
+
+#: Async tenant for any verified user (search).
+get_current_tenant_async = _async_tenant_dependency(require_verified_user)
+
+#: Async tenant for any workspace member (operator inbox reads).
+get_member_tenant_async = _async_tenant_dependency(require_member)
+
+#: Async tenant for a seated member (operator take/answer/release).
+get_seated_tenant_async = _async_tenant_dependency(require_seated_member)
 
 
 async def require_admin_user(

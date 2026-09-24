@@ -8,10 +8,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from openai import APIError
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import get_current_tenant_async, require_verified_user
 from backend.core.db import get_async_db
 from backend.core.limiter import limiter
 from backend.models import Tenant, User
@@ -34,6 +33,7 @@ async def search_route(
     request: Request,
     body: SearchRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant_async)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> SearchResponse:
     """
@@ -42,14 +42,6 @@ async def search_route(
     Embeds the query, searches across tenant's embeddings, returns top_k results.
     Errors: 401 (no/invalid JWT), 404 (user has no tenant), 503 (OpenAI unavailable).
     """
-    result = await db.execute(
-        select(Tenant)
-        .join(User, User.tenant_id == Tenant.id)
-        .filter(User.id == current_user.id)
-    )
-    tenant = result.scalars().first()
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,

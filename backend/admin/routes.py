@@ -20,6 +20,7 @@ from backend.admin.schemas import (
     AdminTenantMetricsList,
 )
 from backend.auth.middleware import get_platform_admin_user
+from backend.auth.roles import ROLE_OWNER
 from backend.core.db import get_db
 from backend.models import (
     Chat,
@@ -115,7 +116,7 @@ def get_tenant_metrics(
     # Pre-fetch one owner email per tenant in a single query to avoid N+1.
     owner_rows = (
         db.query(User.tenant_id, func.min(User.email))
-        .filter(User.role == "owner", User.tenant_id.isnot(None))
+        .filter(User.role == ROLE_OWNER, User.tenant_id.isnot(None))
         .group_by(User.tenant_id)
         .all()
     )

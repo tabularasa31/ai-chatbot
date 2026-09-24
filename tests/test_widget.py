@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.chat.service import (
     ChatTurnOutcome,
 )
-from backend.models import Bot, Chat, ContactSession, Document, DocumentStatus, DocumentType, Embedding
+from backend.models import Bot, Chat, ContactSession, Document, DocumentStatus, DocumentType, Embedding, Tenant
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -772,6 +772,50 @@ def test_widget_history_rotation_flags(
     assert data["conversation_rotated"] is expected["conversation_rotated"]
     if "boundary_indices" in expected:
         assert data["boundary_indices"] == expected["boundary_indices"]
+
+
+@pytest.mark.parametrize(
+    "mutate_tenant,expected_status",
+    [
+        pytest.param(
+            lambda t: setattr(t, "openai_api_key", None),
+            200,
+            id="no_openai_key_still_returns_history",
+        ),
+        pytest.param(
+            lambda t: setattr(t, "is_active", False),
+            403,
+            id="inactive_tenant_rejected",
+        ),
+    ],
+)
+def test_widget_history_uses_session_gate(
+    tenant: TestClient,
+    db_session: Session,
+    mutate_tenant,
+    expected_status: int,
+) -> None:
+    """/widget/history is gated by get_bot_and_tenant_for_widget_session:
+    it works when the tenant has no OpenAI key configured, and rejects an
+    inactive tenant with 403 (not the chat gate's 400)."""
+    tenant_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, f"widget-hist-gate-{expected_status}@example.com"
+    )
+    session_id = uuid.uuid4()
+    _make_session_chat(
+        db_session,
+        tenant_uuid,
+        session_id=session_id,
+        idle_minutes=1,
+        messages=[("user", "hi")],
+    )
+    tenant_row = db_session.get(Tenant, tenant_uuid)
+    mutate_tenant(tenant_row)
+    db_session.commit()
+
+    r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
+
+    assert r.status_code == expected_status
 
 
 def test_widget_chat_empty_message_allowed_when_rotation_pending(

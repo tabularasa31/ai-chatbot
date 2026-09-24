@@ -27,10 +27,10 @@ from backend.documents.parsers import (
     extract_openapi_chunks_from_rendered_text,
 )
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
-from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.knowledge.entity_extractor import extract_entities_from_passage
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 from backend.models.base import _utcnow
+from backend.search.service import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +244,7 @@ def create_embeddings_for_document(
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     doc.updated_at = _utcnow()
     db.commit()
-    invalidate_bm25_cache_for_tenant(doc.tenant_id)
+    invalidate_tenant_search_caches(doc.tenant_id)
 
     if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)
@@ -421,5 +421,6 @@ def delete_embeddings_for_document(
     if doc is not None:
         doc.updated_at = _utcnow()
     db.commit()
-    invalidate_bm25_cache_for_tenant(tenant_id)
+    if tenant_id is not None:
+        invalidate_tenant_search_caches(tenant_id)
     return result

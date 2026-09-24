@@ -25,6 +25,7 @@ from backend.models import (
     Tenant,
     LogAnalysisState,
     Message,
+    MessageEmbedding,
     MessageRole,
     TenantFaq,
     User,
@@ -519,3 +520,40 @@ def test_swallowed_visitor_turns_get_no_answer(db_session, client_row, chat_sess
     # The post-release turn keeps its own answer.
     text = _get_answer_for_message(db_session, after_release.id, chat_session.id)
     assert text == unrelated_answer.content
+
+
+# ── test_run_embedding_retention ───────────────────────────────────────────────
+
+
+def test_run_embedding_retention_deletes_only_rows_past_cutoff(
+    db_session, client_row
+):
+    """Retention deletes embeddings whose last_used_at is older than the
+    configured window, and leaves fresher rows untouched."""
+    from backend.jobs.analyze_chat_logs import run_embedding_retention
+
+    now = datetime.now(timezone.utc)
+    retention_days = 90  # settings.log_embeddings_retention_days default
+
+    stale = MessageEmbedding(
+        message_id=uuid.uuid4(),
+        tenant_id=client_row.id,
+        embedding=[0.0] * 1536,
+        last_used_at=now - timedelta(days=retention_days + 1),
+    )
+    fresh = MessageEmbedding(
+        message_id=uuid.uuid4(),
+        tenant_id=client_row.id,
+        embedding=[0.0] * 1536,
+        last_used_at=now - timedelta(days=retention_days - 1),
+    )
+    db_session.add_all([stale, fresh])
+    db_session.commit()
+
+    deleted = run_embedding_retention(db_session)
+
+    assert deleted == 1
+    remaining_ids = {
+        row.message_id for row in db_session.query(MessageEmbedding).all()
+    }
+    assert remaining_ids == {fresh.message_id}

@@ -22,12 +22,14 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from arq.cron import cron
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.chat.pii import redact_for_egress
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
+from backend.core.queue import _CRON_JOBS
 from backend.models import (
     LogAnalysisState,
     Message,
@@ -795,23 +797,68 @@ def increment_and_check_threshold(
 
 # ── Retention cron ────────────────────────────────────────────────────────────
 
-def run_embedding_retention(db: Session) -> int:
-    """Delete message embeddings older than retention window.
+_EMBEDDING_RETENTION_BATCH_SIZE = 1000
 
-    Should be called once daily from a cron/scheduler.
-    Returns number of deleted rows.
+
+def run_embedding_retention(
+    db: Session, *, batch_size: int = _EMBEDDING_RETENTION_BATCH_SIZE
+) -> int:
+    """Delete message embeddings older than the retention window.
+
+    Called once daily from the ARQ cron. Deletes in committed batches so the
+    purge never holds a long lock on this table; the cutoff is fixed at call
+    time so rows written during the run are never eligible and the loop
+    always terminates. Returns the number of rows deleted.
     """
     from datetime import timedelta
 
     from sqlalchemy import delete as sa_delete
+    from sqlalchemy import select
 
     cutoff = datetime.now(UTC) - timedelta(
         days=settings.log_embeddings_retention_days
     )
-    result = db.execute(
-        sa_delete(MessageEmbedding).where(MessageEmbedding.last_used_at < cutoff)
-    )
-    db.commit()
-    deleted = result.rowcount or 0
-    logger.info("Retention: deleted %d stale message embeddings", deleted)
-    return deleted
+    condition = MessageEmbedding.last_used_at < cutoff
+
+    total = 0
+    while True:
+        ids = (
+            db.execute(
+                select(MessageEmbedding.message_id).where(condition).limit(batch_size)
+            )
+            .scalars()
+            .all()
+        )
+        if not ids:
+            break
+        db.execute(
+            sa_delete(MessageEmbedding).where(MessageEmbedding.message_id.in_(ids))
+        )
+        db.commit()
+        total += len(ids)
+        if len(ids) < batch_size:
+            break
+    if total:
+        logger.info("Retention: deleted %d stale message embeddings", total)
+    return total
+
+
+async def _tick_message_embedding_retention(ctx: dict) -> None:
+    """Daily ARQ cron: purge message embeddings past the retention window.
+
+    No Sentry Crons monitor here — the one monitor slot is held by
+    ``scheduled_crawl_tick``.
+    """
+    from backend.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        run_embedding_retention(db)
+    finally:
+        db.close()
+
+
+message_embedding_retention_cron = cron(
+    _tick_message_embedding_retention, hour={4}, minute={5}
+)
+_CRON_JOBS.append(message_embedding_retention_cron)

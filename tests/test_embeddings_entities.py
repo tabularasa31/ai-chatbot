@@ -23,7 +23,7 @@ from unittest.mock import Mock, patch
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Embedding
+from backend.models import Document, Embedding
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -99,6 +99,8 @@ def test_entities_populated_from_ner(
     assert mock_extract.call_count == len(rows)
     assert mock_enqueue.call_count == 1
     assert mock_enqueue.call_args.kwargs["document_id"] == uuid.UUID(doc_id)
+    document = db_session.query(Document).filter(Document.id == uuid.UUID(doc_id)).one()
+    assert mock_enqueue.call_args.kwargs["tenant_id"] == document.tenant_id
 
 
 # ── NER outage / failure ─────────────────────────────────────────────────────

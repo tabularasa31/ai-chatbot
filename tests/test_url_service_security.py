@@ -566,6 +566,7 @@ def test_upsert_page_document_persists_detected_script(
         .order_by(Embedding.created_at.asc())
         .all()
     )
+    assert len(rows) == 1
     assert len(extract_calls) == len(rows)
     for row in rows:
         assert row.entities == ["Acme CRM"]

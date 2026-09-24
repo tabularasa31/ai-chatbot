@@ -113,7 +113,7 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     def _record(event: str, **kwargs: Any) -> None:
         events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", _record)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _record)
 
     async def _fake_render_pre_confirm(**kwargs):
         return type(

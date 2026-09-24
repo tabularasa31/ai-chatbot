@@ -621,7 +621,7 @@ def test_repeated_question_is_served_from_cache_without_openai(
         if event == "chat.turn":
             turn_events.append(kwargs["properties"])
 
-    monkeypatch.setattr("backend.chat.events.capture_event", _capture)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _capture)
     cl_row, api_key = _create_client(tenant, db_session, email="answer-cache-hit@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
     counters = _patch_pipeline_fakes(monkeypatch, answer="Use the reset link in Settings.")

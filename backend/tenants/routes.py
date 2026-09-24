@@ -14,7 +14,7 @@ from backend.auth.middleware import (
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import RerankerStrategy, User
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 from backend.seats.service import holds_seat
 from backend.tenants.api_keys_service import (
     assert_owner,
@@ -151,18 +151,15 @@ def rotate_api_key_route(
         revoke_old_immediately=body.revoke_old_immediately,
         actor_user_id=current_user.id,
     )
-    try:
-        capture_event(
-            "tenant.api_key.rotated",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={
-                "reason": body.reason,
-                "revoke_old_immediately": body.revoke_old_immediately,
-            },
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "tenant.api_key.rotated",
+        tenant_public_id=str(tenant.public_id),
+        bot_public_id=None,
+        properties={
+            "reason": body.reason,
+            "revoke_old_immediately": body.revoke_old_immediately,
+        },
+    )
     return RotateTenantApiKeyResponse(
         api_key=plaintext,
         key=TenantApiKeyResponse.model_validate(new_row),
@@ -187,15 +184,12 @@ def revoke_api_key_route(
         raise HTTPException(status_code=404, detail="Tenant not found")
     assert_owner(current_user, tenant.id)
     row = revoke_api_key(tenant.id, key_id, db, reason="manual")
-    try:
-        capture_event(
-            "tenant.api_key.revoked",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={"key_id": str(key_id)},
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "tenant.api_key.revoked",
+        tenant_public_id=str(tenant.public_id),
+        bot_public_id=None,
+        properties={"key_id": str(key_id)},
+    )
     return TenantApiKeyResponse.model_validate(row)
 
 

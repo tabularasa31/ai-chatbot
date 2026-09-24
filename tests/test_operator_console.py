@@ -481,7 +481,7 @@ def test_resolving_a_held_chat_emits_ticket_resolved(
 
     captured: list[dict] = []
     monkeypatch.setattr(
-        "backend.chat.events.capture_event",
+        "backend.observability.metrics.capture_event",
         lambda event, **kwargs: captured.append({"event": event, **kwargs}),
     )
 
@@ -528,7 +528,7 @@ def test_resolving_a_chat_never_taken_still_emits_with_chat_was_with_operator_fa
 
     captured: list[dict] = []
     monkeypatch.setattr(
-        "backend.chat.events.capture_event",
+        "backend.observability.metrics.capture_event",
         lambda event, **kwargs: captured.append({"event": event, **kwargs}),
     )
 
@@ -556,7 +556,7 @@ def test_resolving_with_no_active_ticket_emits_nothing(
 
     captured: list[dict] = []
     monkeypatch.setattr(
-        "backend.chat.events.capture_event",
+        "backend.observability.metrics.capture_event",
         lambda event, **kwargs: captured.append({"event": event, **kwargs}),
     )
 

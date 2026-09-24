@@ -58,7 +58,7 @@ from backend.models import (
     UrlSource,
     UrlSourceRun,
 )
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 
 logger = logging.getLogger(__name__)
 
@@ -428,23 +428,21 @@ def _upsert_page_document(
         tenant_id=source.tenant_id,
         api_key=api_key,
     )
-    try:
-        capture_event(
-            "document_indexed",
-            distinct_id=str(source.tenant_id),
-            tenant_id=str(source.tenant_id),
-            properties={
-                "document_id": str(doc.id),
-                "file_type": "url",
-                "source_kind": "url_crawl",
-                "language": doc.language,
-                "language_detected": doc.language is not None,
-                "parsed_text_chars": len(doc.parsed_text or ""),
-                "chunks_created": len(page.chunks),
-            },
-        )
-    except Exception:
-        pass
+    source_tenant_public_id = db.query(Tenant.public_id).filter(Tenant.id == source.tenant_id).scalar()
+    emit_tenant_event(
+        "document_indexed",
+        tenant_public_id=str(source_tenant_public_id) if source_tenant_public_id else None,
+        bot_public_id=None,
+        properties={
+            "document_id": str(doc.id),
+            "file_type": "url",
+            "source_kind": "url_crawl",
+            "language": doc.language,
+            "language_detected": doc.language is not None,
+            "parsed_text_chars": len(doc.parsed_text or ""),
+            "chunks_created": len(page.chunks),
+        },
+    )
     return doc, len(page.chunks)
 
 
@@ -550,23 +548,21 @@ def _upsert_structured_document(
             tenant_id=source.tenant_id,
             api_key=api_key,
         )
-        try:
-            capture_event(
-                "document_indexed",
-                distinct_id=str(source.tenant_id),
-                tenant_id=str(source.tenant_id),
-                properties={
-                    "document_id": str(doc.id),
-                    "file_type": "swagger",
-                    "source_kind": "openapi",
-                    "language": doc.language,
-                    "language_detected": doc.language is not None,
-                    "parsed_text_chars": len(doc.parsed_text or ""),
-                    "chunks_created": len(rendered_chunks),
-                },
-            )
-        except Exception:
-            pass
+        openapi_tenant_public_id = db.query(Tenant.public_id).filter(Tenant.id == source.tenant_id).scalar()
+        emit_tenant_event(
+            "document_indexed",
+            tenant_public_id=str(openapi_tenant_public_id) if openapi_tenant_public_id else None,
+            bot_public_id=None,
+            properties={
+                "document_id": str(doc.id),
+                "file_type": "swagger",
+                "source_kind": "openapi",
+                "language": doc.language,
+                "language_detected": doc.language is not None,
+                "parsed_text_chars": len(doc.parsed_text or ""),
+                "chunks_created": len(rendered_chunks),
+            },
+        )
         return doc, len(rendered_chunks)
     except (APIError, SQLAlchemyError, ValueError) as exc:
         logger.warning("Structured source embedding failed", extra={"url": url, "error": str(exc)})

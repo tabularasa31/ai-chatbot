@@ -35,22 +35,16 @@ export default function OpengraphImage() {
             fontWeight: 700,
           }}
         >
-          <div
-            style={{
-              width: 64,
-              height: 64,
-              borderRadius: 16,
-              background: "#E879F9",
-              color: "#0A0A0F",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 34,
-              fontWeight: 800,
-            }}
-          >
-            C9
-          </div>
+          <svg width="64" height="64" viewBox="5 5 22 22">
+            <path
+              d="M5 8a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3h-7l-4 3v-3a3 3 0 0 1-3-3z"
+              fill="#E879F9"
+            />
+            <path
+              d="M13 20h6a4 4 0 0 0 4-4v-4h1a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3v3l-4-3h-4a3 3 0 0 1-3-3z"
+              fill="#38BDF8"
+            />
+          </svg>
           Chat9
         </div>
 

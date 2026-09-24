@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { RootProvider } from 'fumadocs-ui/provider';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { source } from '@/lib/source';
+import { Logo } from '@/components/Logo';
 import './docs.css';
 
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {
@@ -11,11 +12,7 @@ export default function DocsSectionLayout({ children }: { children: ReactNode })
         tree={source.pageTree}
         nav={{
           enabled: true,
-          title: (
-            <span className="font-bold tracking-tight text-nd-text text-[15px]">
-              Chat9
-            </span>
-          ),
+          title: <Logo size={18} textClassName="text-[15px]" />,
         }}
         sidebar={{
           defaultOpenLevel: 1,

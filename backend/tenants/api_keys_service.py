@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.utils import generate_api_key
 from backend.models import Tenant, TenantApiKey, User
+from backend.models.base import utcnow_naive as _utcnow
 from backend.models.tenant import (
     TENANT_API_KEY_REASONS,
     TENANT_API_KEY_STATUS_ACTIVE,
@@ -97,7 +98,7 @@ def list_api_keys(tenant_id: uuid.UUID, db: Session) -> list[TenantApiKey]:
         .order_by(TenantApiKey.created_at.desc())
         .all()
     )
-    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    now = _utcnow()
     dirty = False
     for r in rows:
         if r.status != TENANT_API_KEY_STATUS_REVOKING:
@@ -168,7 +169,7 @@ def rotate_api_key(
     # holds because SQLite serializes writers at the file level.
     db.query(Tenant).filter(Tenant.id == tenant_id).with_for_update().first()
 
-    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    now = _utcnow()
     expires_at = (
         None
         if revoke_old_immediately
@@ -253,7 +254,7 @@ def revoke_api_key(
     if row.status == TENANT_API_KEY_STATUS_REVOKED:
         return row
 
-    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    now = _utcnow()
     # Refuse only when revoking would leave the tenant with no key the
     # widget would accept — counting both ACTIVE rows and REVOKING rows
     # whose grace window has not yet elapsed.

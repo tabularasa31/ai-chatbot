@@ -32,13 +32,17 @@ def compile_vector_sqlite(type_, compiler, **kw) -> str:  # type: ignore[overrid
     return "TEXT"  # Store as text in SQLite (tests only)
 
 
-def _utcnow() -> dt.datetime:
+def utcnow_naive() -> dt.datetime:
     # Naive UTC: every column using this default is declared as ``DateTime``
     # without ``timezone=True`` (i.e. ``TIMESTAMP WITHOUT TIME ZONE`` in
     # Postgres). psycopg2 silently drops ``tzinfo`` on insert, but asyncpg
     # rejects tz-aware values for naive columns with
     # ``can't subtract offset-naive and offset-aware datetimes``.
     return dt.datetime.now(dt.UTC).replace(tzinfo=None)
+
+
+# Old name, kept as an alias — widely imported across the codebase.
+_utcnow = utcnow_naive
 
 
 def _strip_tzinfo_for_naive_datetime_columns(

@@ -58,6 +58,7 @@ from backend.models import (
     UrlSource,
     UrlSourceRun,
 )
+from backend.models.base import utcnow_naive as _utcnow
 from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
@@ -103,17 +104,6 @@ class UrlPreflightResult:
     title: str | None
     estimated_pages: int
     warnings: list[str]
-
-
-def _utcnow() -> dt.datetime:
-    # Naive UTC — every ``DateTime`` column this value lands on is declared
-    # without ``timezone=True`` (see ``backend/models/base._utcnow``). Returning
-    # aware would either crash asyncpg (``can't subtract offset-naive and
-    # offset-aware datetimes``) on write or get silently rewritten to naive by
-    # the ``before_flush`` listener mid-function — see ``_mark_run_finished``
-    # below where the listener was caught stripping ``run.finished_at`` between
-    # the assignment and the duration calculation.
-    return dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
 
 def _count_tenant_documents(db: Session, tenant_id: uuid.UUID) -> int:

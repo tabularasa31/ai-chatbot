@@ -1,7 +1,5 @@
 export type WidgetSource = { title: string; url: string };
 
-// Public Chat9Widget API surface (window.Chat9Widget). Mirrors the loader's
-// implementation in apps/widget-loader/src/index.ts.
 export type UserHints = {
   user_id?: string;
   email?: string;
@@ -22,6 +20,25 @@ export type Chat9StartConfig = {
   widgetBase?: string;
 };
 
+// Who is answering, as the server sees it: "bot" (nobody has escalated),
+// "waiting" (an open request nobody has picked up) or "live" (a human is in
+// the conversation). The third state is derived server-side, never stored.
+export type HandoffState = "bot" | "waiting" | "live";
+
+// Shared shape of a completed widget turn — used both for the non-streaming
+// (greeting) response and the accumulated payload of a streamed reply.
+export type WidgetTurnPayload = {
+  detail?: unknown;
+  text?: string;
+  session_id?: string;
+  ticket_number?: string | null;
+  sources?: WidgetSource[];
+  outcome?: string | null;
+  failure_state?: LlmFailureState | null;
+};
+
+// Public Chat9Widget API surface (window.Chat9Widget). Mirrors the loader's
+// implementation in apps/widget-loader/src/index.ts.
 export type Chat9WidgetApi = {
   start: (config?: Chat9StartConfig) => void;
   stop: () => void;

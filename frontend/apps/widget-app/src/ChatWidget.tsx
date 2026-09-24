@@ -1,25 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { type Components } from "react-markdown";
 import "highlight.js/styles/github-dark.css";
-import { rehypeHighlightSubset } from "./highlight";
 import { MessageCircle, Send, Ticket } from "lucide-react";
 import { cn, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { MarkdownBody } from "./MarkdownBody";
 import {
   appendSystemMarker,
   createLlmUnavailableMessage,
   createSystemMessage,
   createTextMessage,
   type ChatWidgetMessage,
+  type HandoffState,
   type LlmFailureState,
+  type UserHints,
   type WidgetSource,
+  type WidgetTurnPayload,
 } from "@chat9/widget-shared";
 import { t as tString } from "./strings";
-import type { UserHints } from "./main";
 
 export type ChatWidgetBelowAssistantContext = {
   messageIndex: number;
@@ -286,7 +287,7 @@ export function ChatWidget({
   // "waiting" (an open request nobody has picked up) or "live" (a human is in
   // the conversation). Drives the poll cadence and nothing else — the third
   // state is derived server-side, never stored.
-  const [handoffState, setHandoffState] = useState<"bot" | "waiting" | "live">("bot");
+  const [handoffState, setHandoffState] = useState<HandoffState>("bot");
   // Byline above a human's reply, localized server-side into the language the
   // conversation is being held in. English until the server says otherwise.
   const [operatorLabel, setOperatorLabel] = useState("Operator");
@@ -443,7 +444,7 @@ export function ChatWidget({
     payload: {
       text: string;
       ticket_number?: string | null;
-      sources?: { title: string; url: string }[];
+      sources?: WidgetSource[];
     },
   ) => {
     if (payload.ticket_number) setActiveTicket(payload.ticket_number);
@@ -479,15 +480,7 @@ export function ChatWidget({
     });
 
     if (!res.ok || !res.body) {
-      const payload = (await res.json().catch(() => ({}))) as {
-        detail?: unknown;
-        text?: string;
-        session_id?: string;
-        ticket_number?: string | null;
-        sources?: { title: string; url: string }[];
-        outcome?: string | null;
-        failure_state?: LlmFailureState | null;
-      };
+      const payload = (await res.json().catch(() => ({}))) as WidgetTurnPayload;
       return { res, payload };
     }
 
@@ -495,15 +488,7 @@ export function ChatWidget({
     const decoder = new TextDecoder();
     let buffer = "";
     let fullText = "";
-    const payload: {
-      detail?: unknown;
-      text?: string;
-      session_id?: string;
-      ticket_number?: string | null;
-      sources?: { title: string; url: string }[];
-      outcome?: string | null;
-      failure_state?: LlmFailureState | null;
-    } = {};
+    const payload: WidgetTurnPayload = {};
 
     const handleEvent = (eventData: string) => {
       const raw = eventData.trim();
@@ -596,7 +581,7 @@ export function ChatWidget({
       text: string;
       session_id: string;
       ticket_number?: string | null;
-      sources?: { title: string; url: string }[];
+      sources?: WidgetSource[];
     };
     applyAssistantMessage(data);
     setSessionId(data.session_id);
@@ -627,7 +612,7 @@ export function ChatWidget({
           ticket_number?: string | null;
           boundary_indices?: number[];
           conversation_rotated?: boolean;
-          handoff_state?: "bot" | "waiting" | "live";
+          handoff_state?: HandoffState;
           operator_label?: string;
         }>;
       })
@@ -732,7 +717,7 @@ export function ChatWidget({
       if (!res.ok) return;
       const data = (await res.json()) as {
         messages?: { id: string; role: string; content: string }[];
-        handoff_state?: "bot" | "waiting" | "live";
+        handoff_state?: HandoffState;
         operator_label?: string;
         cursor_stale?: boolean;
       };
@@ -947,7 +932,7 @@ export function ChatWidget({
       const data = payload as {
         text: string;
         session_id: string;
-        sources?: { title: string; url: string }[];
+        sources?: WidgetSource[];
       };
 
       applyAssistantMessage(data);
@@ -1146,15 +1131,7 @@ export function ChatWidget({
                         <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-violet-600">
                           {operatorLabel}
                         </p>
-                        <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            rehypePlugins={[rehypeHighlightSubset]}
-                            components={markdownComponents}
-                          >
-                            {msg.text}
-                          </ReactMarkdown>
-                        </div>
+                        <MarkdownBody text={msg.text} components={markdownComponents} />
                       </div>
                     </div>
                   );
@@ -1216,15 +1193,7 @@ export function ChatWidget({
                         {isError ? (
                           <p className="whitespace-pre-wrap">{msg.text}</p>
                         ) : (
-                          <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              rehypePlugins={[rehypeHighlightSubset]}
-                              components={markdownComponents}
-                            >
-                              {msg.text}
-                            </ReactMarkdown>
-                          </div>
+                          <MarkdownBody text={msg.text} components={markdownComponents} />
                         )}
                       </div>
                     </div>
@@ -1281,15 +1250,7 @@ export function ChatWidget({
             {loading && streamingText ? (
               <div className="flex items-end gap-3">
                 <div className="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2 text-gray-800">
-                  <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      rehypePlugins={[rehypeHighlightSubset]}
-                      components={markdownComponents}
-                    >
-                      {streamingText}
-                    </ReactMarkdown>
-                  </div>
+                  <MarkdownBody text={streamingText} components={markdownComponents} />
                 </div>
               </div>
             ) : loading ? (

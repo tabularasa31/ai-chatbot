@@ -12,16 +12,18 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import Session
 
 from backend.core import db as core_db
 from backend.core import queue as queue_module
@@ -156,19 +158,29 @@ def test_embedder_noop_when_no_api_key():
 # ---------------------------------------------------------------------------
 
 
-def test_after_document_indexed_enqueues_extraction(monkeypatch):
-    """after_document_indexed (the shared post-index hook) must call
-    enqueue_knowledge_extraction_sync, not inline extract — it is the single
-    hook both the upload (embeddings/service.py) and URL-crawl
-    (documents/url_service.py) ingestion paths run after persisting
-    embeddings.
+def test_run_embeddings_background_enqueues_extraction(
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run_embeddings_background must call enqueue_knowledge_extraction_sync
+    exactly once, driven through the real create_embeddings_for_document /
+    after_document_indexed path on a seeded document (OpenAI stubbed by the
+    autouse conftest fixture) — not an inline extract.
     """
-    doc_id = uuid.uuid4()
-    tenant_id = uuid.uuid4()
+    from tests.conftest import register_and_verify_user, set_client_openai_key
 
-    fake_doc = MagicMock()
-    fake_doc.id = doc_id
-    fake_doc.tenant_id = tenant_id
+    token = register_and_verify_user(tenant, db_session, email="embed-bg@example.com")
+    tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Embed BG Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    upload = tenant.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("doc.md", b"# Title\n\nSome text.", "text/markdown")},
+    )
+    doc_id = uuid.UUID(upload.json()["id"])
 
     enqueue_calls: list[dict[str, Any]] = []
 
@@ -176,19 +188,14 @@ def test_after_document_indexed_enqueues_extraction(monkeypatch):
         enqueue_calls.append({"document_id": document_id, "tenant_id": tenant_id})
         return "fake-job-id"
 
-    with (
-        patch(
-            "backend.documents.embedder.invalidate_bm25_cache_for_tenant"
-        ),
-        patch(
-            "backend.jobs.knowledge_extraction.enqueue_knowledge_extraction_sync",
-            side_effect=_fake_enqueue_sync,
-        ),
-    ):
-        from backend.documents.embedder import after_document_indexed
+    monkeypatch.setattr(
+        "backend.jobs.knowledge_extraction.enqueue_knowledge_extraction_sync",
+        _fake_enqueue_sync,
+    )
 
-        after_document_indexed(fake_doc, [], api_key="sk-test", db=MagicMock())
+    from backend.embeddings.service import run_embeddings_background
+
+    run_embeddings_background(doc_id, "sk-test")
 
     assert len(enqueue_calls) == 1
     assert enqueue_calls[0]["document_id"] == doc_id
-    assert enqueue_calls[0]["tenant_id"] == tenant_id

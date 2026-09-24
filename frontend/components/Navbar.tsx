@@ -15,7 +15,7 @@ export function Navbar({
   const router = useRouter();
   const { data: client } = useClientMe();
   const isVerified = client ? client.is_verified : null;
-  const { data: authUser } = useAuthUser();
+  const { data: authUser } = useAuthUser(!initialEmail);
   const userEmail = initialEmail ?? authUser?.email ?? null;
 
   function handleLogout() {

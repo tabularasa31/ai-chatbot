@@ -1,30 +1,39 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useActiveBot } from "@/hooks/useApi";
 
 export default function WidgetSettingsPage() {
-  const { activeBot: defaultBot, isLoading: loading, error: loadError, mutate: mutateBots } = useActiveBot();
+  const {
+    activeBot: defaultBot,
+    isLoading: loading,
+    isValidating,
+    error: loadError,
+    mutate: mutateBots,
+  } = useActiveBot();
   const [error, setError] = useState("");
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [copiedBotId, setCopiedBotId] = useState(false);
   const [linkSafetyEnabled, setLinkSafetyEnabled] = useState(false);
   const [allowedDomainsInput, setAllowedDomainsInput] = useState("");
   const [settingsSavedOk, setSettingsSavedOk] = useState(false);
+  const seededBotId = useRef<string | null>(null);
 
   useEffect(() => {
     if (loadError) setError(loadError instanceof Error ? loadError.message : "Failed to load");
   }, [loadError]);
 
-  // Seed the editable fields once the active bot arrives; a background SWR
-  // revalidation afterwards must not clobber in-progress edits.
+  // Seed the editable fields once the active bot's revalidation settles, and
+  // only once per bot id — a warm cache must not leave stale values, and a
+  // later background revalidation must not clobber in-progress edits.
   useEffect(() => {
-    if (!defaultBot) return;
+    if (!defaultBot || isValidating) return;
+    if (seededBotId.current === defaultBot.id) return;
+    seededBotId.current = defaultBot.id;
     setLinkSafetyEnabled(defaultBot.link_safety_enabled ?? false);
     setAllowedDomainsInput((defaultBot.allowed_domains ?? []).join("\n"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultBot?.id]);
+  }, [defaultBot, isValidating]);
 
   async function copyBotId() {
     if (!defaultBot?.public_id) return;

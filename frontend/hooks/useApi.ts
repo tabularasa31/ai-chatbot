@@ -18,8 +18,8 @@ export function useClientMe() {
   return useSWR<TenantMeResponse>("client/me", () => api.clients.getMe());
 }
 
-export function useAuthUser() {
-  return useSWR<AuthUser>("auth/me", () => api.auth.getMe());
+export function useAuthUser(enabled = true) {
+  return useSWR<AuthUser>(enabled ? "auth/me" : null, () => api.auth.getMe());
 }
 
 export function useBots() {
@@ -27,10 +27,10 @@ export function useBots() {
 }
 
 export function useActiveBot({ fallbackToFirst = false }: { fallbackToFirst?: boolean } = {}) {
-  const { data: bots, isLoading, error, mutate } = useBots();
+  const { data: bots, isLoading, isValidating, error, mutate } = useBots();
   const activeBot =
     bots?.find((b) => b.is_active) ?? (fallbackToFirst ? bots?.[0] : undefined) ?? null;
-  return { bots, activeBot, isLoading, error, mutate };
+  return { bots, activeBot, isLoading, isValidating, error, mutate };
 }
 
 export function useMembers() {

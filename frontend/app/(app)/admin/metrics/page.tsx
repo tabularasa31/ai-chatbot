@@ -12,6 +12,7 @@ export default function AdminMetricsPage() {
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<AdminMetricsSummary | null>(null);
   const [clients, setClients] = useState<AdminTenantMetricsItem[]>([]);
+  const [forbidden, setForbidden] = useState(false);
   const isAdmin = clientLoading ? null : client?.is_admin ?? false;
 
   useEffect(() => {
@@ -31,6 +32,7 @@ export default function AdminMetricsPage() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : "";
         if (msg.includes("403") || msg.includes("Admin only")) {
+          setForbidden(true);
           return;
         }
         setError(msg || "Failed to load metrics, please try again.");
@@ -43,10 +45,10 @@ export default function AdminMetricsPage() {
 
   useEffect(() => {
     if (loading) return;
-    if (isAdmin === false) {
+    if (isAdmin === false || forbidden) {
       router.replace("/dashboard");
     }
-  }, [loading, isAdmin, router]);
+  }, [loading, isAdmin, forbidden, router]);
 
   if (loading) {
     return (
@@ -56,7 +58,7 @@ export default function AdminMetricsPage() {
     );
   }
 
-  if (!isAdmin) {
+  if (!isAdmin || forbidden) {
     return null;
   }
 

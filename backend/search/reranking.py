@@ -14,7 +14,6 @@ import inspect
 import json
 import logging
 import math
-import re
 import threading
 import uuid
 from dataclasses import dataclass
@@ -25,6 +24,7 @@ from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
 from backend.models import Embedding, RerankerStrategy
+from backend.utils.text import token_set
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +93,10 @@ def embedding_tiebreak_key(embedding: Embedding) -> tuple[str, int, str]:
 
 
 def lexical_overlap_score(query: str, chunk_text: str) -> float:
-    query_tokens = set(re.findall(r"\w+", query.casefold(), flags=re.UNICODE))
+    query_tokens = token_set(query)
     if not query_tokens:
         return 0.0
-    chunk_tokens = set(re.findall(r"\w+", (chunk_text or "").casefold(), flags=re.UNICODE))
+    chunk_tokens = token_set(chunk_text or "")
     if not chunk_tokens:
         return 0.0
     overlap = len(query_tokens & chunk_tokens)

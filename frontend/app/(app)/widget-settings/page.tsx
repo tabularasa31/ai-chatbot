@@ -72,7 +72,7 @@ export default function WidgetSettingsPage() {
     }
   }
 
-  if (loading) {
+  if (loading || (defaultBot && seededBotId.current !== defaultBot.id)) {
     return <p className="text-slate-600">Loading…</p>;
   }
 

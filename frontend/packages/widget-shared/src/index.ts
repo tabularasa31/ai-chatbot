@@ -26,28 +26,6 @@ export type WidgetTurnPayload = {
   failure_state?: LlmFailureState | null;
 };
 
-// The loader's public start() config and the window.Chat9Widget surface it
-// installs. Shared between the loader (which implements it) and any consumer
-// typing against `window.Chat9Widget`.
-export type StartConfig = {
-  userHints?: UserHints;
-  mode?: "bubble" | "inline";
-  color?: string;
-  position?: "right" | "left";
-  target?: string;
-  topClearance?: number;
-  apiBase?: string;
-  widgetBase?: string;
-};
-
-export type Chat9WidgetApi = {
-  start: (config?: StartConfig) => void;
-  stop: () => void;
-  setHints: (hints: UserHints | null) => void;
-  isStarted: () => boolean;
-  destroy: () => void;
-};
-
 export type LlmFailureType =
   | "provider_unavailable"
   | "provider_timeout"

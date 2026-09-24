@@ -41,33 +41,7 @@
 // stricter rules; the IIFE wrapper still produces a side-effect-only bundle.
 export {};
 
-type UserHints = {
-  user_id?: string;
-  email?: string;
-  name?: string;
-  locale?: string;
-  plan_tier?: string;
-  audience_tag?: string;
-};
-
-type StartConfig = {
-  userHints?: UserHints;
-  mode?: "bubble" | "inline";
-  color?: string;
-  position?: "right" | "left";
-  target?: string;
-  topClearance?: number;
-  apiBase?: string;
-  widgetBase?: string;
-};
-
-type Chat9WidgetApi = {
-  start: (config?: StartConfig) => void;
-  stop: () => void;
-  setHints: (hints: UserHints | null) => void;
-  isStarted: () => boolean;
-  destroy: () => void;
-};
+import type { UserHints, StartConfig, Chat9WidgetApi } from "@chat9/widget-shared";
 
 declare global {
   interface Window {

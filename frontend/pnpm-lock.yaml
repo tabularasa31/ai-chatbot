@@ -186,6 +186,10 @@ importers:
         version: 5.4.21(@types/node@20.19.39)
 
   apps/widget-loader:
+    dependencies:
+      '@chat9/widget-shared':
+        specifier: workspace:*
+        version: link:../../packages/widget-shared
     devDependencies:
       typescript:
         specifier: ^5.6.3

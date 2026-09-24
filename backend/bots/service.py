@@ -63,10 +63,6 @@ def get_bot_by_id(bot_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> Bot:
     return bot
 
 
-def get_bot_by_public_id(public_id: str, db: Session) -> Bot | None:
-    return db.query(Bot).filter(Bot.public_id == public_id).first()
-
-
 def get_bot_for_tenant_by_public_id(
     tenant_id: uuid.UUID, public_id: str, db: Session
 ) -> Bot | None:

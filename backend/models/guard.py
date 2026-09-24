@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-from backend.models.base import Base, _utcnow
+from backend.models.base import Base, UUIDPKMixin, _utcnow
 
 
-class GuardEvent(Base):
+class GuardEvent(UUIDPKMixin, Base):
     """One guard verdict for one chat turn.
 
     Structured record of what the guards subsystem decided, so we can measure
@@ -46,7 +44,6 @@ class GuardEvent(Base):
         ),
     )
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("tenants.id", ondelete="CASCADE"),

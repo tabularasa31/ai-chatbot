@@ -184,7 +184,7 @@ def test_handle_typed_greeting_persists_user_and_assistant(
     outcome = GreetingHandler()._handle_sync(
         ctx,
         db_session,
-        LocalizationResult(text="Здравствуйте! Чем помочь?", tokens_used=5),
+        greeting=LocalizationResult(text="Здравствуйте! Чем помочь?", tokens_used=5),
     )
 
     assert outcome.text == "Здравствуйте! Чем помочь?"
@@ -206,7 +206,7 @@ def test_handle_produces_outcome_and_persists_only_assistant_message(
     outcome = GreetingHandler()._handle_sync(
         ctx,
         db_session,
-        LocalizationResult(text="Hello, I am the Acme assistant.", tokens_used=7),
+        greeting=LocalizationResult(text="Hello, I am the Acme assistant.", tokens_used=7),
     )
 
     assert outcome.text == "Hello, I am the Acme assistant."

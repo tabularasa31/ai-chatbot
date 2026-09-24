@@ -19,6 +19,7 @@ from backend.tenant_knowledge.faq_service import (
 from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
 from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
 from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
+from backend.utils.text import word_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ def _support_email_and_urls(support_contacts: list[object]) -> tuple[str | None,
 
 
 def _faq_confidence(question: str, combined_text: str) -> float:
-    tokens = [t for t in re.findall(r"\w+", question.casefold()) if len(t) >= 4]
+    tokens = [t for t in word_tokens(question) if len(t) >= 4]
     if not tokens:
         return 0.3
     total = 0

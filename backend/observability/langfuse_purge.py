@@ -13,8 +13,7 @@ delete through here:
   predates it), so this is the only thing that ever expires a trace.
 
 Every trace we emit carries a ``tenant:<uuid>`` tag (see
-``backend/chat/service.py`` and ``backend/search/routes.py``), which is the
-handle the workspace purge uses. Traces are collected by paging forward and
+``backend/chat/service.py``), which is the handle the workspace purge uses. Traces are collected by paging forward and
 then deleted in batches, rather than re-reading page 1 until it comes back
 empty: Langfuse processes a delete asynchronously, so a just-deleted trace can
 still be listed and a "drain page 1" loop would never terminate.

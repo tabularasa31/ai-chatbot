@@ -62,7 +62,6 @@ from backend.observability import (
     shutdown_sentry,
 )
 from backend.operator.routes import operator_router
-from backend.search.routes import search_router
 from backend.tenants.members_routes import members_router
 from backend.tenants.routes import tenants_router
 from backend.widget.routes import widget_router
@@ -206,7 +205,6 @@ app.include_router(members_router)
 app.include_router(tenants_router, prefix="/tenants")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings", include_in_schema=False)
-app.include_router(search_router, prefix="/search", include_in_schema=False)
 app.include_router(chat_router, prefix="/chat")
 app.include_router(email_router)
 app.include_router(gap_analyzer_router, prefix="/gap-analyzer")

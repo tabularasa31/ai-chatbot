@@ -91,6 +91,8 @@ def test_chat_success_persists_messages(
     assert data["source_documents"] == [str(doc.id)]
     assert data["tokens_used"] == 50
 
+    # No session_id was sent in the request body — the endpoint must
+    # generate one and persist the turn under it.
     session_id = uuid.UUID(data["session_id"])
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
     assert chat is not None

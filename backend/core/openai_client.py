@@ -18,7 +18,7 @@ from collections import OrderedDict
 
 import httpx
 from fastapi import HTTPException
-from openai import AsyncOpenAI, OpenAI, RateLimitError
+from openai import AsyncOpenAI, OpenAI
 
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value
@@ -202,12 +202,3 @@ def completion_kwargs(
     if json:
         kwargs["response_format"] = {"type": "json_object"}
     return kwargs
-
-
-def is_quota_exceeded(exc: RateLimitError) -> bool:
-    """Return True when the OpenAI error is an insufficient_quota / billing error."""
-    body = getattr(exc, "body", None) or {}
-    if isinstance(body, dict):
-        error = body.get("error") or {}
-        return error.get("code") == "insufficient_quota"
-    return "insufficient_quota" in str(body)

@@ -18,16 +18,14 @@ state rather than the only trace the stretch ever leaves.
 
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import Column, DateTime, Enum, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-from backend.models.base import Base, _utcnow
+from backend.models.base import Base, UUIDPKMixin, _utcnow
 from backend.models.enums import OperatorSessionEndReason
 
 
-class OperatorSession(Base):
+class OperatorSession(UUIDPKMixin, Base):
     """One stretch of a chat served by a human, open until it is closed.
 
     Opened when the chat goes ``live`` (an operator claims it, or simply
@@ -61,7 +59,6 @@ class OperatorSession(Base):
         ),
     )
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("tenants.id", ondelete="CASCADE"),

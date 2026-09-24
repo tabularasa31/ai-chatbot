@@ -7,17 +7,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import (
+    get_current_tenant,
+    get_owner_tenant,
     require_member,
     require_owner,
     require_verified_user,
 )
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
-from backend.models import RerankerStrategy, User
-from backend.observability.metrics import capture_event
+from backend.models import RerankerStrategy, Tenant, User
+from backend.observability.metrics import emit_tenant_event
 from backend.seats.service import holds_seat
 from backend.tenants.api_keys_service import (
-    assert_owner,
     list_api_keys,
     revoke_api_key,
     rotate_api_key,
@@ -41,8 +42,6 @@ from backend.tenants.service import (
     delete_tenant,
     get_primary_api_key_hint,
     get_support_settings_for_user,
-    get_tenant_by_id,
-    get_tenant_by_user,
     update_support_settings_for_user,
     update_tenant,
 )
@@ -88,6 +87,7 @@ def create_tenant_route(
 @tenants_router.get("/me", response_model=TenantMeResponse)
 def get_my_client(
     current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantMeResponse:
     """
@@ -95,9 +95,6 @@ def get_my_client(
 
     Returns 403 if email not verified, 404 if no tenant yet.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     base = _tenant_to_response(tenant, db)
     return TenantMeResponse(
         **base.model_dump(),
@@ -113,13 +110,10 @@ def get_my_client(
     response_model=TenantApiKeyListResponse,
 )
 def list_api_keys_route(
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantApiKeyListResponse:
     """List widget API keys for the current tenant (no plaintext)."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     rows = list_api_keys(tenant.id, db)
     return TenantApiKeyListResponse(
         items=[TenantApiKeyResponse.model_validate(r) for r in rows]
@@ -136,14 +130,11 @@ def rotate_api_key_route(
     request: Request,
     body: RotateTenantApiKeyRequest,
     current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> RotateTenantApiKeyResponse:
     """Issue a new widget API key. Existing active key enters a 24h
     grace window unless ``revoke_old_immediately`` is set."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    assert_owner(current_user, tenant.id)
     new_row, plaintext = rotate_api_key(
         tenant.id,
         db,
@@ -151,18 +142,15 @@ def rotate_api_key_route(
         revoke_old_immediately=body.revoke_old_immediately,
         actor_user_id=current_user.id,
     )
-    try:
-        capture_event(
-            "tenant.api_key.rotated",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={
-                "reason": body.reason,
-                "revoke_old_immediately": body.revoke_old_immediately,
-            },
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "tenant.api_key.rotated",
+        tenant_public_id=str(tenant.public_id),
+        bot_public_id=None,
+        properties={
+            "reason": body.reason,
+            "revoke_old_immediately": body.revoke_old_immediately,
+        },
+    )
     return RotateTenantApiKeyResponse(
         api_key=plaintext,
         key=TenantApiKeyResponse.model_validate(new_row),
@@ -177,32 +165,24 @@ def rotate_api_key_route(
 def revoke_api_key_route(
     request: Request,
     key_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> TenantApiKeyResponse:
     """Immediately revoke a single key (no grace). Refuses if it would
     leave the tenant with no usable key."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    assert_owner(current_user, tenant.id)
     row = revoke_api_key(tenant.id, key_id, db, reason="manual")
-    try:
-        capture_event(
-            "tenant.api_key.revoked",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={"key_id": str(key_id)},
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "tenant.api_key.revoked",
+        tenant_public_id=str(tenant.public_id),
+        bot_public_id=None,
+        properties={"key_id": str(key_id)},
+    )
     return TenantApiKeyResponse.model_validate(row)
 
 
 @tenants_router.get("/me/llm-alert", response_model=TenantLlmAlertResponse)
 def get_llm_alert_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
 ) -> TenantLlmAlertResponse:
     """Active LLM-failure alert for the dashboard banner.
 
@@ -210,9 +190,6 @@ def get_llm_alert_route(
     on the next successful chat turn (no manual dismiss endpoint — the
     banner reflects live state, not a sticky notification).
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     return TenantLlmAlertResponse(
         type=tenant.llm_alert_type,
         since=tenant.llm_alert_first_at,
@@ -290,21 +267,6 @@ def update_my_client(
                 detail="Server misconfiguration: encryption is not configured. Contact support.",
             ) from e
         raise
-    return _tenant_to_response(tenant, db)
-
-
-@tenants_router.get("/{tenant_id}", response_model=TenantResponse, include_in_schema=False)
-def get_tenant_by_id_route(
-    tenant_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantResponse:
-    """
-    Get tenant by UUID (protected JWT).
-
-    Returns 404 if not found or not owner.
-    """
-    tenant = get_tenant_by_id(tenant_id, current_user.id, db)
     return _tenant_to_response(tenant, db)
 
 

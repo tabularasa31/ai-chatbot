@@ -279,9 +279,7 @@ class RagHandler(PipelineHandler):
         return bool(ctx.question_text)
 
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
-        from backend.core.db import run_sync
-
-        outcome = await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
+        outcome = await self._in_sync(ctx, self._handle_sync)
         await self._store_answer_cache(ctx, outcome)
         return outcome
 
@@ -306,7 +304,6 @@ class RagHandler(PipelineHandler):
     def _handle_sync(
         self, ctx: HandlerContext, sync_db: Session
     ) -> ChatTurnOutcome:
-        ctx.db = sync_db
         from time import perf_counter
 
         from backend.chat.decision import (

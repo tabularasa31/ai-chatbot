@@ -8,26 +8,13 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_verified_user
+from backend.auth.middleware import get_current_tenant
 from backend.core.db import get_db
 from backend.documents.service import get_document
-from backend.embeddings.schemas import EmbeddingListResponse, EmbeddingResponse
-from backend.embeddings.service import (
-    delete_embeddings_for_document,
-    get_embeddings_for_document,
-    run_embeddings_background,
-)
-from backend.models import DocumentStatus, User
-from backend.tenants.service import get_tenant_by_user
+from backend.embeddings.service import run_embeddings_background
+from backend.models import DocumentStatus, Tenant
 
 embeddings_router = APIRouter(tags=["embeddings"])
-
-
-def _chunk_preview(text: str, max_len: int = 100) -> str:
-    """Return first max_len chars of chunk for response."""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len]
 
 
 @embeddings_router.post(
@@ -37,7 +24,7 @@ def _chunk_preview(text: str, max_len: int = 100) -> str:
 def create_embeddings_route(
     document_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     """
@@ -47,9 +34,6 @@ def create_embeddings_route(
     Poll GET /documents/{id} until status is `ready` or `error`.
     Errors: 404 (doc not found/not owner), 400 (doc not ready/no text).
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,
@@ -76,57 +60,3 @@ def create_embeddings_route(
         "document_id": str(document_id),
         "status": "embedding",
     }
-
-
-@embeddings_router.get(
-    "/documents/{document_id}",
-    response_model=EmbeddingListResponse,
-)
-def list_embeddings_route(
-    document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> EmbeddingListResponse:
-    """
-    List all embeddings for a document (protected JWT).
-
-    Errors: 404 (doc not found or not owner).
-    """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    embeddings = get_embeddings_for_document(document_id, tenant.id, db)
-    return EmbeddingListResponse(
-        embeddings=[
-            EmbeddingResponse(
-                id=emb.id,
-                document_id=emb.document_id,
-                chunk_text=_chunk_preview(emb.chunk_text),
-                created_at=emb.created_at,
-            )
-            for emb in embeddings
-        ],
-        total_chunks=len(embeddings),
-    )
-
-
-@embeddings_router.delete("/documents/{document_id}")
-def delete_embeddings_route(
-    document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> dict:
-    """
-    Delete all embeddings for a document (protected JWT).
-
-    Returns deleted count. Errors: 404 (doc not found or not owner).
-    """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    get_document(document_id, tenant.id, db)  # 404 if not found or not owner
-    deleted = delete_embeddings_for_document(document_id, db)
-    return {"deleted": deleted}
-

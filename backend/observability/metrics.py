@@ -194,3 +194,44 @@ def group_identify(
     properties: dict[str, Any] | None = None,
 ) -> None:
     _service.group_identify(group_type, group_key, properties)
+
+
+def metrics_distinct_id(bot_public_id: str | None, tenant_public_id: str | None) -> str:
+    return bot_public_id or tenant_public_id or "unknown"
+
+
+def emit_tenant_event(
+    event: str,
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None = None,
+    properties: dict[str, Any] | None = None,
+    distinct_id: str | None = None,
+    groups: bool = True,
+) -> None:
+    """Emit one tenant/bot-scoped PostHog event: guard, distinct_id, groups, logging.
+
+    Skips silently when neither id is known, to avoid collapsing events under
+    ``distinct_id="unknown"`` and polluting per-tenant rollups. ``distinct_id``
+    defaults to ``chat_id`` (when given), falling back to bot/tenant public id;
+    pass ``distinct_id`` explicitly to override. ``groups=False`` opts out of
+    the tenant group (used by the ``$ai_*`` observability events, which
+    predate the group convention and are out of scope here).
+    """
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    resolved_distinct_id = distinct_id or chat_id or metrics_distinct_id(
+        bot_public_id, tenant_public_id
+    )
+    try:
+        capture_event(
+            event,
+            distinct_id=resolved_distinct_id,
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties=properties,
+            groups={"tenant": tenant_public_id} if (groups and tenant_public_id) else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit %s event", event, exc_info=True)

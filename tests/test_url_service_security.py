@@ -507,7 +507,8 @@ def test_upsert_page_document_persists_detected_script(
     """Document.script must be written on the crawl path too, not just uploads.
 
     Uses a writing system the old two-bucket detector could not represent, so
-    the assertion cannot pass by accident.
+    the assertion cannot pass by accident. Also covers crawled pages running
+    entity extraction (Step 4), same as uploads.
     """
     tenant, _ = _make_tenant(db_session, "page-script@example.com", "Tenant")
 
@@ -543,6 +544,13 @@ def test_upsert_page_document_persists_detected_script(
         ],
     )
     monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda *a, **k: [[0.1] * 1536])
+    extract_calls: list[str] = []
+
+    def _fake_extract(text: str, api_key: str, *, tenant_id: str | None = None) -> list[str]:
+        extract_calls.append(text)
+        return ["Acme CRM"]
+
+    monkeypatch.setattr(embedder_mod, "extract_entities_from_passage", _fake_extract)
 
     doc, _ = url_service._upsert_page_document(
         source=source,
@@ -552,6 +560,16 @@ def test_upsert_page_document_persists_detected_script(
     )
 
     assert doc.script == "greek"
+    rows = (
+        db_session.query(Embedding)
+        .filter(Embedding.document_id == doc.id)
+        .order_by(Embedding.created_at.asc())
+        .all()
+    )
+    assert len(rows) == 1
+    assert len(extract_calls) == len(rows)
+    for row in rows:
+        assert row.entities == ["Acme CRM"]
 
 
 def test_upsert_structured_document_persists_detected_script(

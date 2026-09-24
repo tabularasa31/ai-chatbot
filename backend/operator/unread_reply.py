@@ -35,7 +35,8 @@ from sqlalchemy.exc import DBAPIError, MissingGreenlet
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
-from backend.core.queue import enqueue, get_main_loop, register_job
+from backend.core.queue import enqueue, register_job
+from backend.core.redis import run_coro_sync
 from backend.email.service import send_email
 from backend.models import Chat, EscalationTicket, Message, MessageRole
 
@@ -46,7 +47,6 @@ _JOB_NAME = "mail_unread_operator_reply"
 _MAX_ATTEMPTS = 3
 _RETRY_SECONDS = 120
 _ENQUEUE_WAIT_SECONDS = 5
-_SUBJECT_PREVIEW_CHARS = 60
 
 Position = tuple[Any, uuid.UUID]
 
@@ -177,11 +177,10 @@ def _recipient(chat: Chat, ticket: EscalationTicket | None) -> str | None:
 
 
 def _subject(chat: Chat, ticket: EscalationTicket | None) -> str:
-    from backend.escalation.service import _safe_ticket_question
+    from backend.escalation.service import _ticket_subject
 
     if ticket is not None:
-        preview = _safe_ticket_question(ticket).replace("\n", " ").strip()
-        return f"[{ticket.ticket_number}] {preview[:_SUBJECT_PREVIEW_CHARS]}".rstrip(" —-")
+        return _ticket_subject(ticket)
     if chat.bot is not None and chat.bot.name:
         return chat.bot.name
     return chat.tenant.name
@@ -290,16 +289,13 @@ def _bridge_to_loop(make: Callable[[], Awaitable[str | None]]) -> str | None:
         return await_only(make())
     except MissingGreenlet:
         pass
-    loop = get_main_loop()
-    if loop is None or not loop.is_running():
-        logger.warning("unread_reply_enqueue_skipped reason=no_loop")
-        return None
-    future = asyncio.run_coroutine_threadsafe(make(), loop)
-    try:
-        return future.result(timeout=_ENQUEUE_WAIT_SECONDS)
-    except Exception:
-        logger.warning("unread_reply_enqueue_failed", exc_info=True)
-        return None
+    return run_coro_sync(
+        make,
+        timeout=_ENQUEUE_WAIT_SECONDS,
+        default=None,
+        label="unread_reply_enqueue_sync",
+        background_enqueue=True,
+    )
 
 
 def schedule_unread_reply_email(*, chat: Chat, message: Message) -> str | None:

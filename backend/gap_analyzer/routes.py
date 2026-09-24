@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import require_member, require_owner
+from backend.auth.middleware import get_member_tenant, get_owner_tenant, require_member
 from backend.core.db import get_db
 from backend.gap_analyzer.enums import GapRunMode, GapSource
 from backend.gap_analyzer.jobs import start_gap_analyzer_job_runner
@@ -40,8 +40,7 @@ from backend.gap_analyzer.schemas import (
     UpdateDraftRequest,
 )
 from backend.knowledge.routes import _generate_faq_embedding_background
-from backend.models import TenantFaq, User
-from backend.tenants.service import get_tenant_by_user
+from backend.models import Tenant, TenantFaq, User
 
 gap_analyzer_router = APIRouter(tags=["gap-analyzer"])
 
@@ -54,26 +53,18 @@ def _resolve_gap_analyzer_repository(*, db: Session) -> SqlAlchemyGapAnalyzerRep
     return SqlAlchemyGapAnalyzerRepository(db)
 
 
-def _resolve_client_id(*, db: Session, current_user: User) -> uuid.UUID:
-    tenant = get_tenant_by_user(current_user.id, db)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    return tenant.id
-
-
 @gap_analyzer_router.get("", response_model=GapAnalyzerResponse)
 def get_gap_analyzer(
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
     mode_a_status: ModeAStatusFilter = Query("active"),
     mode_b_status: ModeBStatusFilter = Query("active"),
     mode_a_sort: ModeASort = Query("coverage_asc"),
     mode_b_sort: ModeBSort = Query("signal_desc"),
 ) -> GapAnalyzerResponse:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     return orchestrator.list_gaps(
-        tenant_id=tenant_id,
+        tenant_id=tenant.id,
         mode_a_status=mode_a_status,
         mode_b_status=mode_b_status,
         mode_a_sort=mode_a_sort,
@@ -83,23 +74,21 @@ def get_gap_analyzer(
 
 @gap_analyzer_router.get("/summary", response_model=GapSummaryOnlyResponse)
 def get_gap_analyzer_summary(
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapSummaryOnlyResponse:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     repository = _resolve_gap_analyzer_repository(db=db)
-    return GapSummaryOnlyResponse(summary=repository.get_gap_summary(tenant_id=tenant_id))
+    return GapSummaryOnlyResponse(summary=repository.get_gap_summary(tenant_id=tenant.id))
 
 
 @gap_analyzer_router.post("/recalculate", response_model=RecalculateCommandResult, status_code=202)
 async def recalculate_gap_analyzer(
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
     mode: GapRunMode = Query(...),
 ) -> RecalculateCommandResult:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
-    response = await orchestrator.request_recalculation(tenant_id=tenant_id, mode=mode)
+    response = await orchestrator.request_recalculation(tenant_id=tenant.id, mode=mode)
     db.commit()
     start_gap_analyzer_job_runner()
     return response
@@ -110,14 +99,14 @@ def dismiss_gap(
     source: GapSource,
     gap_id: uuid.UUID,
     payload: GapDismissRequest,
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     current_user: Annotated[User, Depends(require_member)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapActionResponse:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     try:
         response = orchestrator.dismiss_gap(
-            tenant_id=tenant_id,
+            tenant_id=tenant.id,
             source=source,
             gap_id=gap_id,
             dismissed_by=current_user.id,
@@ -133,14 +122,13 @@ def dismiss_gap(
 def reactivate_gap(
     source: GapSource,
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapActionResponse:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     try:
         response = orchestrator.reactivate_gap(
-            tenant_id=tenant_id,
+            tenant_id=tenant.id,
             source=source,
             gap_id=gap_id,
         )
@@ -153,17 +141,16 @@ def reactivate_gap(
 @gap_analyzer_router.post("/mode_a/{gap_id}/draft", response_model=GapDraftResponse)
 def draft_mode_a_gap(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapDraftResponse:
     """Template-driven transient draft for Mode A docs-side gaps.
 
     Mode B uses the LLM workflow under ``/gap-analyzer/mode_b/{gap_id}/*``.
     """
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     try:
-        return orchestrator.build_draft(tenant_id=tenant_id, source=GapSource.mode_a, gap_id=gap_id)
+        return orchestrator.build_draft(tenant_id=tenant.id, source=GapSource.mode_a, gap_id=gap_id)
     except GapResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
 
@@ -195,13 +182,12 @@ def _handle_draft_errors(call):
 @gap_analyzer_router.post("/mode_b/{gap_id}/draft", response_model=DraftPayload)
 async def generate_mode_b_draft(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     with _map_draft_errors():
-        payload = await orchestrator.start_draft_generation(tenant_id=tenant_id, gap_id=gap_id)
+        payload = await orchestrator.start_draft_generation(tenant_id=tenant.id, gap_id=gap_id)
     db.commit()
     return payload
 
@@ -210,14 +196,13 @@ async def generate_mode_b_draft(
 async def refine_mode_b_draft(
     gap_id: uuid.UUID,
     payload: RefineDraftRequest,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     with _map_draft_errors():
         result = await orchestrator.refine_draft(
-            tenant_id=tenant_id, gap_id=gap_id, guidance=payload.guidance
+            tenant_id=tenant.id, gap_id=gap_id, guidance=payload.guidance
         )
     db.commit()
     return result
@@ -226,13 +211,12 @@ async def refine_mode_b_draft(
 @gap_analyzer_router.get("/mode_b/{gap_id}/draft", response_model=DraftPayload)
 def get_mode_b_draft(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     return _handle_draft_errors(
-        lambda: orchestrator.get_mode_b_draft(tenant_id=tenant_id, gap_id=gap_id)
+        lambda: orchestrator.get_mode_b_draft(tenant_id=tenant.id, gap_id=gap_id)
     )
 
 
@@ -240,14 +224,13 @@ def get_mode_b_draft(
 def update_mode_b_draft(
     gap_id: uuid.UUID,
     payload: UpdateDraftRequest,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DraftPayload:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     result = _handle_draft_errors(
         lambda: orchestrator.update_draft(
-            tenant_id=tenant_id,
+            tenant_id=tenant.id,
             gap_id=gap_id,
             title=payload.title,
             question=payload.question,
@@ -262,13 +245,12 @@ def update_mode_b_draft(
 @gap_analyzer_router.delete("/mode_b/{gap_id}/draft", response_model=DiscardDraftResponse)
 def discard_mode_b_draft(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DiscardDraftResponse:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     result = _handle_draft_errors(
-        lambda: orchestrator.discard_draft(tenant_id=tenant_id, gap_id=gap_id)
+        lambda: orchestrator.discard_draft(tenant_id=tenant.id, gap_id=gap_id)
     )
     db.commit()
     return result
@@ -278,7 +260,7 @@ def discard_mode_b_draft(
 def publish_mode_b_draft(
     gap_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PublishResult:
     """Promote the persisted draft into ``tenant_faq``. Requires explicit admin click.
@@ -286,9 +268,6 @@ def publish_mode_b_draft(
     This is the ONLY endpoint that writes to the knowledge base — generate /
     refine / save endpoints never touch ``tenant_faq``.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     result = _handle_draft_errors(
         lambda: orchestrator.publish_draft(tenant_id=tenant.id, gap_id=gap_id)
@@ -310,13 +289,12 @@ def publish_mode_b_draft(
 @gap_analyzer_router.post("/mode_b/{gap_id}/resolve", response_model=GapActionResponse)
 def resolve_mode_b_gap(
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_member)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapActionResponse:
-    tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     result = _handle_draft_errors(
-        lambda: orchestrator.mark_resolved(tenant_id=tenant_id, gap_id=gap_id)
+        lambda: orchestrator.mark_resolved(tenant_id=tenant.id, gap_id=gap_id)
     )
     db.commit()
     return result

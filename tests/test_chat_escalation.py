@@ -2007,7 +2007,7 @@ def test_manual_escalate_emits_chat_escalated_event(
     def fake_capture(event, **kwargs):
         captured.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", fake_capture)
 
     api_key, tenant_id = _register_tenant_with_key(
         tenant, db_session, email="manual-event@example.com", name="Manual Event Tenant"

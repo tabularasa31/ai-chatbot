@@ -306,7 +306,7 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 - No way to see another tenant's chat history
 
 ### Rate limiting (shipped baseline)
-- **slowapi** on public and sensitive routes: e.g. `GET /tenants/validate/{api_key}` (20/min), `POST /search` (30/min), `POST /chat` (30/min), `POST /widget/session/init` and `POST /widget/chat` (20/min) — see `backend/core/limiter.py` and route decorators.
+- **slowapi** on public and sensitive routes: e.g. `POST /chat` (30/min), `POST /widget/session/init` and `POST /widget/chat` (20/min) — see `backend/core/limiter.py` and route decorators.
 - **Future / Phase 2 embed:** per-client daily quotas, global per-tenant caps, subscription-tier limits — see `docs/BACKLOG_EMBED-PHASE2.md`.
 
 ### OpenAI errors (ongoing)

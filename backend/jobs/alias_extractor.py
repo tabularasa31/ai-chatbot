@@ -119,26 +119,6 @@ async def _call_alias_llm(
 
 # ── Confidence management ─────────────────────────────────────────────────────
 
-def _get_client_aliases(db: Session, tenant_id: uuid.UUID) -> dict[str, float]:
-    """Return {lower(user_phrase): confidence} for existing tenant aliases."""
-    from backend.models import TenantProfile
-
-    profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
-    )
-    if profile is None or not profile.aliases:
-        return {}
-
-    result: dict[str, float] = {}
-    for entry in profile.aliases:
-        if isinstance(entry, dict):
-            phrase = (entry.get("user_phrase") or "").strip().lower()
-            conf = float(entry.get("confidence", ALIAS_BASE_CONFIDENCE))
-            if phrase:
-                result[phrase] = conf
-    return result
-
-
 def _merge_aliases_into_profile(
     db: Session,
     tenant_id: uuid.UUID,

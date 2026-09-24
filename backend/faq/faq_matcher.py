@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import ast
 import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from backend.core.config import settings
+from backend.core.db import is_sqlite
 from backend.models import TenantFaq
-from backend.search.service import cosine_similarity
+from backend.utils.math import coerce_vector, cosine_similarity
+from backend.utils.text import token_set
 
 logger = logging.getLogger(__name__)
 
@@ -76,56 +75,6 @@ def _approved_promotion_delta() -> float:
     return max(settings.faq_approved_promotion_delta, 0.0)
 
 
-def _parse_sqlite_vector_text(raw: Any) -> list[float] | None:
-    """
-    SQLite tests store pgvector as TEXT.
-    Try to parse a list-like string into floats.
-    """
-    if raw is None:
-        return None
-    if isinstance(raw, list):
-        values = raw
-    elif isinstance(raw, tuple):
-        values = list(raw)
-    elif isinstance(raw, str):
-        text = raw.strip()
-        if not text:
-            return None
-        try:
-            values = ast.literal_eval(text)
-        except Exception:
-            return None
-    else:
-        return None
-
-    if not isinstance(values, list):
-        return None
-    out: list[float] = []
-    for v in values:
-        try:
-            out.append(float(v))
-        except (TypeError, ValueError):
-            return None
-    return out
-
-
-def _bound_db_url(db: Session | AsyncSession) -> str:
-    """Return the bound engine's URL as a string, or ``""`` if unbound.
-
-    ``Session.get_bind()`` raises ``UnboundExecutionError`` when no bind has
-    been associated, and the bind's ``.url`` may itself be missing for
-    custom dialects — both cases collapse to an empty string so the caller's
-    branch on ``"sqlite" in db_url`` falls through to the pgvector path
-    instead of crashing.
-    """
-    try:
-        bind = db.get_bind()
-    except Exception:
-        return ""
-    url = getattr(bind, "url", None)
-    return str(url) if url is not None else ""
-
-
 def direct_applicability_guard(
     *,
     question: str,
@@ -150,12 +99,8 @@ def direct_applicability_guard(
     if not q or not f:
         return False
 
-    def _tokens(s: str) -> set[str]:
-        # Keep alnum words only.
-        return {t for t in "".join(ch if ch.isalnum() else " " for ch in s).split() if t}
-
-    q_tokens = _tokens(q)
-    f_tokens = _tokens(f)
+    q_tokens = token_set(q)
+    f_tokens = token_set(f)
     if not q_tokens or not f_tokens:
         return False
 
@@ -173,8 +118,7 @@ async def _async_fetch_top_faq_rows(
     db: AsyncSession,
     limit: int = 3,
 ) -> list[FAQRow]:
-    db_url = _bound_db_url(db)
-    if "sqlite" in db_url:
+    if is_sqlite(db):
         result = await db.execute(
             select(TenantFaq)
             .where(TenantFaq.tenant_id == tenant_id)
@@ -183,7 +127,7 @@ async def _async_fetch_top_faq_rows(
         rows = result.scalars().all()
         scored: list[FAQRow] = []
         for r in rows:
-            vec = _parse_sqlite_vector_text(r.question_embedding)
+            vec = coerce_vector(r.question_embedding)
             if vec is None:
                 continue
             score = cosine_similarity(question_embedding, vec)

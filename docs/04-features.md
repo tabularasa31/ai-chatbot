@@ -340,7 +340,7 @@ Rollout gate: switch the eval test tenant, run the eval before/after (`backend/e
 
 ### Retrieval observability (FI-115)
 
-Retrieval is instrumented with Langfuse-style traces for both chat requests and direct `/search` calls. The search path now records:
+Retrieval is instrumented with Langfuse-style traces for chat requests. The search path now records:
 
 - query variant fan-out (`variant_mode`, `query_variant_count`)
 - extra work caused by expansion (`extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`)
@@ -1273,7 +1273,6 @@ The backend uses `slowapi` limits from route decorators (see `backend/*/routes.p
 | `POST /documents` | `20/hour` | IP (default slowapi key) |
 | `POST /chat` | `30/minute` | IP (default slowapi key) |
 | `POST /chat/{session_id}/escalate` | `30/minute` | IP (default slowapi key) |
-| `POST /search` | `30/minute` | IP (default slowapi key) |
 | `GET /widget/config` | `30/minute` | `bot_id + IP` |
 | `POST /widget/session/init` | `10/minute` | IP (widget-specific key func) |
 | `POST /widget/chat` | `WIDGET_CHAT_PER_CLIENT_RATE` (or `120/minute` by default, `1000/minute` in development when unset) | per `bot_id` |

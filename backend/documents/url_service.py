@@ -9,7 +9,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from openai import APIError
@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session, selectinload
 import backend.documents.embedder as _embedder_mod
 import backend.documents.http_client as _http_client_mod
 import backend.documents.sitemap as _sitemap_mod
-from backend.core.config import settings
 from backend.core.db import SessionLocal
 from backend.core.scripts import detect_script_bucket
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
@@ -44,13 +43,13 @@ from backend.documents.quick_answers import (
     scan_html_for_quick_answers,
 )
 from backend.documents.sitemap import DISCOVERY_ESTIMATE_CAP, MAX_DISCOVERY_DEPTH
+from backend.documents.urls import canonical_url
+from backend.embeddings.service import _build_swagger_chunks
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
-from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import (
     Document,
     DocumentStatus,
     DocumentType,
-    Embedding,
     QuickAnswer,
     SourceSchedule,
     SourceStatus,
@@ -58,7 +57,9 @@ from backend.models import (
     UrlSource,
     UrlSourceRun,
 )
-from backend.observability.metrics import capture_event
+from backend.models.base import utcnow_naive as _utcnow
+from backend.observability.metrics import emit_tenant_event
+from backend.search.service import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 
@@ -73,16 +74,8 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
         )
     if parsed.username or parsed.password:
         raise HTTPException(status_code=400, detail="URLs with credentials are not allowed.")
-    normalized = urlunparse(
-        (
-            parsed.scheme.lower(),
-            parsed.netloc.lower(),
-            parsed.path or "/",
-            "",
-            "",
-            "",
-        )
-    )
+    # Keep the trailing slash: this is also the urljoin() base for the root page's links.
+    normalized = canonical_url(raw_url, strip_trailing_slash=False)
     hostname = parsed.hostname.lower() if parsed.hostname else ""
     _http_client_mod._validate_public_hostname(hostname)
     return normalized, parsed.netloc.lower()
@@ -103,17 +96,6 @@ class UrlPreflightResult:
     title: str | None
     estimated_pages: int
     warnings: list[str]
-
-
-def _utcnow() -> dt.datetime:
-    # Naive UTC — every ``DateTime`` column this value lands on is declared
-    # without ``timezone=True`` (see ``backend/models/base._utcnow``). Returning
-    # aware would either crash asyncpg (``can't subtract offset-naive and
-    # offset-aware datetimes``) on write or get silently rewritten to naive by
-    # the ``before_flush`` listener mid-function — see ``_mark_run_finished``
-    # below where the listener was caught stripping ``run.finished_at`` between
-    # the assignment and the duration calculation.
-    return dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
 
 def _count_tenant_documents(db: Session, tenant_id: uuid.UUID) -> int:
@@ -229,9 +211,11 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
     ordered: list[str] = []
 
     def add_url(url: str) -> None:
-        if url in seen or len(ordered) >= page_cap:
+        # Dedup on the canonical key; keep the original (fetch-safe) form in ordered.
+        key = canonical_url(url)
+        if key in seen or len(ordered) >= page_cap:
             return
-        seen.add(url)
+        seen.add(key)
         ordered.append(url)
 
     add_url(normalized_root)
@@ -345,23 +329,39 @@ def _fetch_openapi_source(url: str) -> StructuredSource | None:
 
 # --- DB upsert (kept here so url_service._embed_chunks patches work in tests) ---
 
+def _find_existing_source_document(source_id: uuid.UUID, url: str, db: Session) -> Document | None:
+    """Find a source's document by URL, tolerant of pre-canonicalization trailing slashes.
+
+    Older rows may have ``source_url`` stored before ``canonical_url`` started
+    stripping non-root trailing slashes; matching both variants at the SQL
+    level keeps a crawl from re-indexing that page as a new document without
+    scanning every document the source has (capacity up to
+    ``KNOWLEDGE_DOCUMENT_CAPACITY``).
+    """
+    target = canonical_url(url)
+    variants = {target} if target.endswith("/") else {target, f"{target}/"}
+    return (
+        db.query(Document)
+        .options(selectinload(Document.embeddings))
+        .filter(Document.source_id == source_id)
+        .filter(Document.source_url.in_(variants))
+        .first()
+    )
+
+
 def _upsert_page_document(
     *,
     source: UrlSource,
     page: ExtractedPage,
     db: Session,
     api_key: str | None,
+    tenant_public_id: str | None = None,
 ) -> tuple[Document, int]:
-    existing = (
-        db.query(Document)
-        .options(selectinload(Document.embeddings))
-        .filter(Document.source_id == source.id)
-        .filter(Document.source_url == page.url)
-        .first()
-    )
+    existing = _find_existing_source_document(source.id, page.url, db)
     content_hash = _embedder_mod._content_hash(page.text)
     if existing and _embedder_mod._content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = page.title[:255]
+        existing.source_url = page.url
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.url
         if _embedder_mod._url_knowledge_extract_when_unchanged():
@@ -373,7 +373,6 @@ def _upsert_page_document(
         return existing, len(existing.embeddings)
 
     if existing:
-        db.query(Embedding).filter(Embedding.document_id == existing.id).delete()
         doc = existing
     else:
         doc = Document(
@@ -396,55 +395,34 @@ def _upsert_page_document(
     doc.status = DocumentStatus.embedding
     db.flush()
 
-    vectors = _embedder_mod._embed_chunks(page.chunks, api_key)
-    for chunk, vector in zip(page.chunks, vectors, strict=True):
-        db.add(
-            Embedding(
-                document_id=doc.id,
-                chunk_text=chunk["chunk_text"],
-                vector=vector,
-                metadata_json={
-                    "chunk_index": chunk["chunk_index"],
-                    "filename": doc.filename,
-                    "file_type": doc.file_type.value,
-                    "source_url": page.url,
-                    "page_title": page.title,
-                    "section_title": chunk["section_title"],
-                    "token_count": chunk["token_count"],
-                    "content_hash": chunk["content_hash"],
-                    "page_content_hash": content_hash,
-                    "raw_text": chunk["raw_text"],
-                    "embedding_model": settings.embedding_model,
-                    **({"language": doc.language} if doc.language else {}),
-                },
-            )
-        )
-    doc.status = DocumentStatus.ready
-    db.flush()
-    db.commit()
-    invalidate_bm25_cache_for_tenant(source.tenant_id)
-    _embedder_mod._run_tenant_knowledge_extraction_best_effort(
-        document_id=doc.id,
-        tenant_id=source.tenant_id,
-        api_key=api_key,
+    embeddings = _embedder_mod.persist_document_embeddings(
+        doc,
+        page.chunks,
+        api_key,
+        db,
+        extra_meta={
+            "source_url": page.url,
+            "page_title": page.title,
+            "page_content_hash": content_hash,
+        },
     )
-    try:
-        capture_event(
-            "document_indexed",
-            distinct_id=str(source.tenant_id),
-            tenant_id=str(source.tenant_id),
-            properties={
-                "document_id": str(doc.id),
-                "file_type": "url",
-                "source_kind": "url_crawl",
-                "language": doc.language,
-                "language_detected": doc.language is not None,
-                "parsed_text_chars": len(doc.parsed_text or ""),
-                "chunks_created": len(page.chunks),
-            },
-        )
-    except Exception:
-        pass
+    doc.status = DocumentStatus.ready
+    db.commit()
+    _embedder_mod.after_document_indexed(doc, embeddings, api_key=api_key, db=db)
+    emit_tenant_event(
+        "document_indexed",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=None,
+        properties={
+            "document_id": str(doc.id),
+            "file_type": "url",
+            "source_kind": "url_crawl",
+            "language": doc.language,
+            "language_detected": doc.language is not None,
+            "parsed_text_chars": len(doc.parsed_text or ""),
+            "chunks_created": len(page.chunks),
+        },
+    )
     return doc, len(page.chunks)
 
 
@@ -457,17 +435,13 @@ def _upsert_structured_document(
     chunks: list[OpenAPIChunk],
     db: Session,
     api_key: str | None,
+    tenant_public_id: str | None = None,
 ) -> tuple[Document, int]:
-    existing = (
-        db.query(Document)
-        .options(selectinload(Document.embeddings))
-        .filter(Document.source_id == source.id)
-        .filter(Document.source_url == url)
-        .first()
-    )
+    existing = _find_existing_source_document(source.id, url, db)
     content_hash = _embedder_mod._content_hash(parsed_text)
     if existing and _embedder_mod._content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = title[:255]
+        existing.source_url = url
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.swagger
         if _embedder_mod._url_knowledge_extract_when_unchanged():
@@ -479,7 +453,6 @@ def _upsert_structured_document(
         return existing, len(existing.embeddings)
 
     if existing:
-        db.query(Embedding).filter(Embedding.document_id == existing.id).delete()
         doc = existing
     else:
         doc = Document(
@@ -502,71 +475,38 @@ def _upsert_structured_document(
     doc.status = DocumentStatus.embedding
     db.flush()
 
-    rendered_chunks = _embedder_mod._render_structured_openapi_chunks(
-        chunks,
-        title=title,
-        source_url=url,
-        source_format=chunks[0].source_format if chunks else "yaml",
-    )
+    source_format = chunks[0].source_format if chunks else "yaml"
+    rendered_chunks = _build_swagger_chunks(parsed_text)
     try:
-        vectors = _embedder_mod._embed_chunks(rendered_chunks, api_key)
-        for chunk, vector in zip(rendered_chunks, vectors, strict=True):
-            db.add(
-                Embedding(
-                    document_id=doc.id,
-                    chunk_text=chunk["chunk_text"],
-                    vector=vector,
-                    metadata_json={
-                        "chunk_index": chunk["chunk_index"],
-                        "filename": doc.filename,
-                        "file_type": doc.file_type.value,
-                        "source_url": url,
-                        "source_kind": "url",
-                        "source_format": chunk.get("source_format"),
-                        "type": chunk.get("type"),
-                        "subtype": chunk.get("subtype"),
-                        "path": chunk.get("path"),
-                        "method": chunk.get("method"),
-                        "operation_id": chunk.get("operation_id"),
-                        "tags": chunk.get("tags"),
-                        "deprecated": chunk.get("deprecated"),
-                        "content_types": chunk.get("content_types"),
-                        "response_codes": chunk.get("response_codes"),
-                        "auth_schemes": chunk.get("auth_schemes"),
-                        "has_examples": chunk.get("has_examples"),
-                        "spec_version": chunk.get("spec_version"),
-                        "page_content_hash": content_hash,
-                        "embedding_model": settings.embedding_model,
-                        **({"language": doc.language} if doc.language else {}),
-                    },
-                )
-            )
-        doc.status = DocumentStatus.ready
-        db.flush()
-        db.commit()
-        invalidate_bm25_cache_for_tenant(source.tenant_id)
-        _embedder_mod._run_tenant_knowledge_extraction_best_effort(
-            document_id=doc.id,
-            tenant_id=source.tenant_id,
-            api_key=api_key,
+        embeddings = _embedder_mod.persist_document_embeddings(
+            doc,
+            rendered_chunks,
+            api_key,
+            db,
+            extra_meta={
+                "page_content_hash": content_hash,
+                "source_url": url,
+                "source_kind": "url",
+                "source_format": _embedder_mod._normalize_source_format(source_format, from_url=True),
+            },
         )
-        try:
-            capture_event(
-                "document_indexed",
-                distinct_id=str(source.tenant_id),
-                tenant_id=str(source.tenant_id),
-                properties={
-                    "document_id": str(doc.id),
-                    "file_type": "swagger",
-                    "source_kind": "openapi",
-                    "language": doc.language,
-                    "language_detected": doc.language is not None,
-                    "parsed_text_chars": len(doc.parsed_text or ""),
-                    "chunks_created": len(rendered_chunks),
-                },
-            )
-        except Exception:
-            pass
+        doc.status = DocumentStatus.ready
+        db.commit()
+        _embedder_mod.after_document_indexed(doc, embeddings, api_key=api_key, db=db)
+        emit_tenant_event(
+            "document_indexed",
+            tenant_public_id=tenant_public_id,
+            bot_public_id=None,
+            properties={
+                "document_id": str(doc.id),
+                "file_type": "swagger",
+                "source_kind": "openapi",
+                "language": doc.language,
+                "language_detected": doc.language is not None,
+                "parsed_text_chars": len(doc.parsed_text or ""),
+                "chunks_created": len(rendered_chunks),
+            },
+        )
         return doc, len(rendered_chunks)
     except (APIError, SQLAlchemyError, ValueError) as exc:
         logger.warning("Structured source embedding failed", extra={"url": url, "error": str(exc)})
@@ -724,7 +664,7 @@ def delete_url_source(source_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -
     source = get_url_source(source_id, tenant_id, db)
     db.delete(source)
     db.commit()
-    invalidate_bm25_cache_for_tenant(tenant_id)
+    invalidate_tenant_search_caches(tenant_id)
 
 
 def delete_source_document(
@@ -749,7 +689,7 @@ def delete_source_document(
     db.flush()
     _recalculate_source_counts(source, db)
     db.commit()
-    invalidate_bm25_cache_for_tenant(tenant_id)
+    invalidate_tenant_search_caches(tenant_id)
 
 
 def trigger_refresh(
@@ -825,7 +765,7 @@ class _CrawlResult:
 def _plan_crawl(source: UrlSource, db: Session) -> _CrawlPlan:
     """Discover URLs and compute which ones to crawl."""
     existing_docs = db.query(Document).filter(Document.source_id == source.id).all()
-    existing_urls = {doc.source_url for doc in existing_docs if doc.source_url}
+    existing_urls = {canonical_url(doc.source_url) for doc in existing_docs if doc.source_url}
     allowed_total, remaining_capacity = _allowed_source_document_total(
         db,
         tenant_id=source.tenant_id,
@@ -834,10 +774,13 @@ def _plan_crawl(source: UrlSource, db: Session) -> _CrawlPlan:
     discovered_urls = _discover_urls(
         source.url, _clean_exclusions(source.exclusion_patterns), DISCOVERY_ESTIMATE_CAP
     )
+    # ``discovered_urls`` may hold the source root in its slash-preserving
+    # fetch form (see ``_normalize_source_url``) while every other set here
+    # is keyed by ``canonical_url`` — compare canonicalized on both sides.
     manually_excluded_urls = set(_manual_excluded_page_urls(source))
-    discovered_urls = [url for url in discovered_urls if url not in manually_excluded_urls]
-    prioritized_existing_urls = [url for url in discovered_urls if url in existing_urls]
-    new_urls = [url for url in discovered_urls if url not in existing_urls]
+    discovered_urls = [url for url in discovered_urls if canonical_url(url) not in manually_excluded_urls]
+    prioritized_existing_urls = [url for url in discovered_urls if canonical_url(url) in existing_urls]
+    new_urls = [url for url in discovered_urls if canonical_url(url) not in existing_urls]
     urls = prioritized_existing_urls + new_urls[: max(0, allowed_total - len(prioritized_existing_urls))]
     return _CrawlPlan(urls=urls, discovered_urls=discovered_urls, remaining_capacity=remaining_capacity)
 
@@ -858,6 +801,15 @@ def _index_pages(
     TODO: narrow to explicit OpenAI/auth/embedding error recognition rather than
     status-code matching alone.
     """
+    # Resolved once per run — never per page — and best-effort: a telemetry
+    # lookup must never abort indexing, so a failure here just means the
+    # document_indexed events for this run go out without a tenant id.
+    try:
+        tenant_public_id = db.query(Tenant.public_id).filter(Tenant.id == source.tenant_id).scalar()
+        tenant_public_id = str(tenant_public_id) if tenant_public_id else None
+    except Exception:
+        tenant_public_id = None
+
     structured_source = _fetch_openapi_source(source.url)
     if structured_source is not None:
         quick_answers = {
@@ -877,6 +829,7 @@ def _index_pages(
             chunks=structured_source.chunks,
             db=db,
             api_key=api_key,
+            tenant_public_id=tenant_public_id,
         )
         source.metadata_json = {
             **(source.metadata_json or {}),
@@ -930,7 +883,9 @@ def _index_pages(
             failures.append({"url": url, "reason": "No readable content extracted"})
             continue
         try:
-            _, page_chunks = _upsert_page_document(source=source, page=page, db=db, api_key=api_key)
+            _, page_chunks = _upsert_page_document(
+                source=source, page=page, db=db, api_key=api_key, tenant_public_id=tenant_public_id
+            )
         except HTTPException as exc:
             if exc.status_code in {400, 401, 500}:
                 source.status = SourceStatus.paused
@@ -993,8 +948,13 @@ def _finalize_crawl(
         .filter(Document.source_url.isnot(None))
         .all()
     )
+    # Drop rows whose canonical key was indexed under a different exact URL too (dedup old duplicates).
+    indexed_by_canonical = {canonical_url(url): url for url in result.indexed_urls}
     for doc in stale_docs:
-        if doc.source_url and doc.source_url not in result.indexed_urls:
+        if not doc.source_url:
+            continue
+        exact_indexed_url = indexed_by_canonical.get(canonical_url(doc.source_url))
+        if exact_indexed_url is None or doc.source_url != exact_indexed_url:
             db.delete(doc)
 
     failure_ratio = (len(result.failures) / len(plan.urls)) if plan.urls else 0.0
@@ -1036,6 +996,7 @@ def _finalize_crawl(
     run.failed_urls = result.failures
     run.duration_seconds = max(0, int(time.monotonic() - started))
     db.commit()
+    invalidate_tenant_search_caches(source.tenant_id)
 
 
 def _summarize_crawl_failure(failures: list[dict[str, str]]) -> str:

@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+
+from backend.documents.urls import canonical_url
 
 SUPPORTED_QUICK_ANSWER_KEYS = {
     "support_email",
@@ -104,12 +106,6 @@ def _log_rejection(*, key: str, reason: str, source_url: str, value: str) -> Non
     )
 
 
-def _normalize_url(url: str) -> str:
-    parsed = urlparse(url.strip())
-    path = parsed.path or "/"
-    if path.endswith("/") and path != "/":
-        path = path[:-1]
-    return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", "", ""))
 
 
 def _is_http_url(value: str) -> bool:
@@ -260,7 +256,7 @@ def _extract_documentation_url(soup: BeautifulSoup, page_url: str, root_url: str
         score = 90 if _same_host(joined, root_url) else 40
         candidate = _candidate(
             "documentation_url",
-            _normalize_url(joined),
+            canonical_url(joined),
             page_url,
             score,
             method="anchor",
@@ -280,7 +276,7 @@ def _extract_pricing_url(soup: BeautifulSoup, page_url: str, root_url: str) -> Q
         joined = urljoin(page_url, href)
         if not _is_http_url(joined):
             continue
-        normalized = _normalize_url(joined)
+        normalized = canonical_url(joined)
         score = 0
         if _PRICING_TEXT_RE.search(text):
             score += 70
@@ -333,7 +329,7 @@ def _extract_status_page_url(soup: BeautifulSoup, page_url: str) -> QuickAnswerC
         joined = urljoin(page_url, href)
         if not _is_http_url(joined):
             continue
-        normalized = _normalize_url(joined)
+        normalized = canonical_url(joined)
         score = 0
         if _STATUS_URL_RE.search(normalized):
             score += 80

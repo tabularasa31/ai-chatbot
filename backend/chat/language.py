@@ -11,7 +11,7 @@ from typing import Any
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 
 logger = logging.getLogger(__name__)
 
@@ -184,13 +184,6 @@ _RESOLUTION_REASON_TO_SOURCE = {
 }
 
 
-def _metrics_distinct_id(
-    bot_id: str | None,
-    tenant_id: str | None,
-) -> str:
-    return bot_id or tenant_id or "unknown"
-
-
 def _emit_language_resolved_event(
     *,
     context: ResolvedLanguageContext,
@@ -199,13 +192,10 @@ def _emit_language_resolved_event(
     bot_id: str | None,
     chat_id: str | None,
 ) -> None:
-    if tenant_id is None and bot_id is None:
-        return
-    capture_event(
+    emit_tenant_event(
         "language.resolved",
-        distinct_id=_metrics_distinct_id(bot_id, tenant_id),
-        tenant_id=tenant_id,
-        bot_id=bot_id,
+        tenant_public_id=tenant_id,
+        bot_public_id=bot_id,
         properties={
             "language": context.response_language,
             "detected": context.detected_language,
@@ -218,7 +208,6 @@ def _emit_language_resolved_event(
             "text_length": text_length,
             "chat_id": chat_id,
         },
-        groups={"tenant": tenant_id} if tenant_id else None,
     )
 
 
@@ -709,17 +698,15 @@ def _resolve_language_context_inner(
     try:
         detection = detect_language(current_turn_text)
     except LangDetectError:
-        capture_event(
+        emit_tenant_event(
             "language.detect_fallback",
-            distinct_id=_metrics_distinct_id(bot_id, tenant_id),
-            tenant_id=tenant_id,
-            bot_id=bot_id,
+            tenant_public_id=tenant_id,
+            bot_public_id=bot_id,
             properties={
                 "reason": "langdetect_error",
                 "text_length": len(current_turn_text or ""),
                 "chat_id": chat_id,
             },
-            groups={"tenant": tenant_id} if tenant_id else None,
         )
         return ResolvedLanguageContext(
             detected_language="unknown",
@@ -732,17 +719,15 @@ def _resolve_language_context_inner(
         )
 
     if detection.detected_language == "unknown":
-        capture_event(
+        emit_tenant_event(
             "language.detect_fallback",
-            distinct_id=_metrics_distinct_id(bot_id, tenant_id),
-            tenant_id=tenant_id,
-            bot_id=bot_id,
+            tenant_public_id=tenant_id,
+            bot_public_id=bot_id,
             properties={
                 "reason": "detector_returned_unknown",
                 "text_length": len(current_turn_text or ""),
                 "chat_id": chat_id,
             },
-            groups={"tenant": tenant_id} if tenant_id else None,
         )
 
     recent_turns = [text for text in (recent_user_turn_texts or [current_turn_text or ""]) if str(text or "").strip()]
@@ -790,11 +775,10 @@ def _resolve_language_context_inner(
     resolution_reason = "detected"
     if previous_root and previous_root != winner:
         resolution_reason = "sticky_switched"
-        capture_event(
+        emit_tenant_event(
             "language.switched",
-            distinct_id=_metrics_distinct_id(bot_id, tenant_id),
-            tenant_id=tenant_id,
-            bot_id=bot_id,
+            tenant_public_id=tenant_id,
+            bot_public_id=bot_id,
             properties={
                 "from": previous_response_language,
                 "to": winner,
@@ -802,7 +786,6 @@ def _resolve_language_context_inner(
                 "margin": votes.get(winner, 0) - votes.get(previous_root, 0),
                 "chat_id": chat_id,
             },
-            groups={"tenant": tenant_id} if tenant_id else None,
         )
     response_language = winner
     for text in recent_turns[:STICKY_WINDOW]:
@@ -1102,31 +1085,21 @@ def _emit_localized_event_safely(
     bot_id: str | None,
     chat_id: str | None,
 ) -> None:
-    # Skip when neither identifier is known — emitting would collapse all
-    # such events under distinct_id="unknown" and pollute per-tenant rollups.
-    # Real production callers gain identifiers in a follow-up PR.
-    if tenant_id is None and bot_id is None:
-        return
     try:
-        try:
-            source_lang = detect_language(canonical_text).detected_language
-        except Exception:
-            source_lang = "unknown"
-        capture_event(
-            "language.localized",
-            distinct_id=_metrics_distinct_id(bot_id, tenant_id),
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-            properties={
-                "source_lang": source_lang,
-                "target_lang": target_language,
-                "input_chars": len(canonical_text),
-                "output_chars": len(output_text),
-                "latency_ms": int((time.monotonic() - started_at) * 1000),
-                "operation": operation,
-                "chat_id": chat_id,
-            },
-            groups={"tenant": tenant_id} if tenant_id else None,
-        )
+        source_lang = detect_language(canonical_text).detected_language
     except Exception:
-        logger.warning("Failed to emit language.localized event", exc_info=True)
+        source_lang = "unknown"
+    emit_tenant_event(
+        "language.localized",
+        tenant_public_id=tenant_id,
+        bot_public_id=bot_id,
+        properties={
+            "source_lang": source_lang,
+            "target_lang": target_language,
+            "input_chars": len(canonical_text),
+            "output_chars": len(output_text),
+            "latency_ms": int((time.monotonic() - started_at) * 1000),
+            "operation": operation,
+            "chat_id": chat_id,
+        },
+    )

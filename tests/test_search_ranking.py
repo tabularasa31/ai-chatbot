@@ -467,7 +467,13 @@ async def test_bm25_search_chunks_finds_match(db_session, async_search_session) 
         vector=None,
         metadata_json={"chunk_index": 2},
     )
-    db_session.add_all([emb, decoy_one, decoy_two])
+    decoy_three = Embedding(
+        document_id=doc.id,
+        chunk_text="CORS headers reference for browsers",
+        vector=None,
+        metadata_json={"chunk_index": 3},
+    )
+    db_session.add_all([emb, decoy_one, decoy_two, decoy_three])
     db_session.commit()
 
     results = await async_bm25_search_chunks(
@@ -476,11 +482,12 @@ async def test_bm25_search_chunks_finds_match(db_session, async_search_session) 
     # decoy_one ("Billing export guide for invoices") shares no tokens with the
     # query and is filtered out at the SQL layer; only chunks containing at
     # least one query token are scored.
-    assert len(results) == 2
+    assert len(results) == 3
     chunk_texts = {emb.chunk_text for emb, _ in results}
     assert chunk_texts == {
         "CORS settings: allow_origins, allow_methods",
         "Rotate API keys in dashboard settings",
+        "CORS headers reference for browsers",
     }
     assert results[0][0].chunk_text == "CORS settings: allow_origins, allow_methods"
     assert 0 < results[0][1] <= 1.0

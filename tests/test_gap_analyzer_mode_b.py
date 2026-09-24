@@ -441,11 +441,12 @@ def test_mode_b_followup_enqueues_durable_job(
 # Math / internal helpers
 # ---------------------------------------------------------------------------
 
-def test_tokenize_preserves_hyphenated_terms() -> None:
-    tokens = _tokenize("Rate-limit guidance for invoice-export flows")
+def test_tokenize_is_unicode_aware() -> None:
+    tokens = _tokenize("Rate-limit guidance for невероятно flows")
 
-    assert "rate-limit" in tokens
-    assert "invoice-export" in tokens
+    assert "rate" in tokens
+    assert "limit" in tokens
+    assert "невероятно" in tokens
 
 
 def test_prepare_mode_b_clusters_skips_unknown_status() -> None:

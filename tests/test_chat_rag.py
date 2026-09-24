@@ -348,7 +348,7 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
     def fake_capture(event: str, **kwargs: object) -> None:
         captured_events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", fake_capture)
     mock_openai_client.chat.completions.create.return_value.choices = [
         Mock(message=Mock(content="The answer is 42"))
     ]
@@ -1982,8 +1982,7 @@ def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
     _cache.clear()
 
     # Reset shared CB state.
-    monkeypatch.setattr(relevance_checker, "_consecutive_failures", 0)
-    monkeypatch.setattr(relevance_checker, "_circuit_opened_at", None)
+    relevance_checker._circuit_breaker.record_success()
 
     async def _always_timeout(*_a, **_kw):  # type: ignore[no-untyped-def]
         raise asyncio.TimeoutError()
@@ -2016,8 +2015,7 @@ def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
     asyncio.run(_run())
 
     # No failures recorded, breaker still closed.
-    assert relevance_checker._consecutive_failures == 0
-    assert relevance_checker._circuit_opened_at is None
+    assert "_global" not in relevance_checker._circuit_breaker._states
 
 
 def test_relevance_checker_comment_hygiene() -> None:
@@ -2121,7 +2119,7 @@ def _nodocs_patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     def _record(event: str, **kwargs: Any) -> None:
         events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", _record)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _record)
 
     async def _fake_render_pre_confirm(**kwargs):
         return type(

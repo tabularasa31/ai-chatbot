@@ -331,25 +331,18 @@ async def injection_guard(run: PipelineRun) -> ChatPipelineResult | None:
     elif injection_verdict.reason is VerdictReason.INJECTION_SEMANTIC:
         _inj_level, _inj_method = 2, "semantic"
 
-    if run.tenant_public_id is not None or run.bot_public_id is not None:
-        from backend.chat.events import _emit_ai_span_event
-        _inj_trace_id = (
-            getattr(run.trace, "posthog_trace_id", None) if run.trace is not None else None
-        )
-        _emit_ai_span_event(
-            tenant_public_id=run.tenant_public_id,
-            bot_public_id=run.bot_public_id,
-            span_name="injection_guard",
-            latency_s=_inj_latency_s,
-            trace_id=_inj_trace_id,
-            span_id=uuid.uuid4().hex if _inj_trace_id else None,
-            parent_id=_inj_trace_id,
-            extra_properties={
-                "detected": injection_verdict.blocked,
-                "level": _inj_level,
-                "method": _inj_method,
-            },
-        )
+    from backend.chat.events import emit_pipeline_span
+
+    emit_pipeline_span(
+        run,
+        "injection_guard",
+        _inj_latency_s,
+        {
+            "detected": injection_verdict.blocked,
+            "level": _inj_level,
+            "method": _inj_method,
+        },
+    )
     if injection_verdict.blocked:
         # Profile is not loaded for the reject render on this path
         # (historical behaviour: the refusal is generic, not product-branded).
@@ -713,21 +706,9 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
     )
     state.guard_bypassed_short_query = guard_reason == "short_query_bypass"
     _rel_latency_s = perf_counter() - state.rel_started_at
-    if run.tenant_public_id is not None or run.bot_public_id is not None:
-        from backend.chat.events import _emit_ai_span_event
-        _rel_trace_id = (
-            getattr(run.trace, "posthog_trace_id", None) if run.trace is not None else None
-        )
-        _emit_ai_span_event(
-            tenant_public_id=run.tenant_public_id,
-            bot_public_id=run.bot_public_id,
-            span_name="relevance_guard",
-            latency_s=_rel_latency_s,
-            trace_id=_rel_trace_id,
-            span_id=uuid.uuid4().hex if _rel_trace_id else None,
-            parent_id=_rel_trace_id,
-            extra_properties={"blocked": not relevant},
-        )
+    from backend.chat.events import emit_pipeline_span
+
+    emit_pipeline_span(run, "relevance_guard", _rel_latency_s, {"blocked": not relevant})
 
     if not relevant:
         await cancel_speculative_retrieval(run)

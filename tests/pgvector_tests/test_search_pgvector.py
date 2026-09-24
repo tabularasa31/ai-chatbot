@@ -15,10 +15,7 @@ import uuid
 from unittest.mock import Mock
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-
-from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 # ---------------------------------------------------------------------------
@@ -409,45 +406,3 @@ async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_
     assert [embedding.id for embedding, _ in with_rewrite.results] == [
         embedding.id for embedding, _ in no_rewrite.results
     ]
-
-
-# ---------------------------------------------------------------------------
-# Full HTTP path on real PostgreSQL
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.pgvector
-def test_search_endpoint_uses_pgvector(
-    mock_openai_client: Mock,
-    pg_client: TestClient,
-    pg_db_session: Session,
-) -> None:
-    """POST /search returns results going through pgvector path end-to-end."""
-    query_vec = [1.0] + [0.0] * 1535
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
-
-    token = register_and_verify_user(pg_client, pg_db_session, email="ep_pv@example.com")
-    cl_resp = pg_client.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "EP PV Tenant"},
-    )
-    assert cl_resp.status_code in (200, 201)
-    set_client_openai_key(pg_client, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    doc_id = _make_document(pg_db_session, tenant_id)
-    vec = [0.9, 0.1] + [0.0] * 1534
-    _insert_embedding(pg_db_session, doc_id, "endpoint pgvector chunk", vec)
-    # Flush so HTTP handler sees the row
-    pg_db_session.commit()
-
-    response = pg_client.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "pgvector endpoint", "top_k": 3},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["results"]) >= 1
-    assert any("pgvector" in r["chunk_text"] for r in data["results"])

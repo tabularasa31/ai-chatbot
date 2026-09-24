@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, event
+from sqlalchemy import Column, DateTime, ForeignKey, event
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -32,13 +33,41 @@ def compile_vector_sqlite(type_, compiler, **kw) -> str:  # type: ignore[overrid
     return "TEXT"  # Store as text in SQLite (tests only)
 
 
-def _utcnow() -> dt.datetime:
+def utcnow_naive() -> dt.datetime:
     # Naive UTC: every column using this default is declared as ``DateTime``
     # without ``timezone=True`` (i.e. ``TIMESTAMP WITHOUT TIME ZONE`` in
     # Postgres). psycopg2 silently drops ``tzinfo`` on insert, but asyncpg
     # rejects tz-aware values for naive columns with
     # ``can't subtract offset-naive and offset-aware datetimes``.
     return dt.datetime.now(dt.UTC).replace(tzinfo=None)
+
+
+# Old name, kept as an alias — widely imported across the codebase.
+_utcnow = utcnow_naive
+
+
+class UUIDPKMixin:
+    """Standard UUID primary key: ``id`` generated client-side via ``uuid.uuid4``."""
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+
+class TenantScopedMixin:
+    """Standard required, indexed, cascading FK to ``tenants.id``."""
+
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+
+class TimestampMixin:
+    """Standard ``created_at``/``updated_at`` pair, both naive UTC (see ``_utcnow``)."""
+
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
 def _strip_tzinfo_for_naive_datetime_columns(

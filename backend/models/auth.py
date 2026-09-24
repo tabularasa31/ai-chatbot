@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
-from backend.models.base import Base, _utcnow
+from backend.models.base import Base, TimestampMixin, UUIDPKMixin
 
 
-class User(Base):
+class User(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "users"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     is_admin = Column(Boolean, nullable=False, default=False, server_default="false")
@@ -45,13 +38,6 @@ class User(Base):
     # NULL is a workspace's own founding owner, who administers without a seat
     # and takes one only to answer from the console themselves.
     seat_granted_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
-    )
 
     tenant = relationship(
         "Tenant",

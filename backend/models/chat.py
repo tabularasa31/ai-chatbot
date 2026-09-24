@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
@@ -22,7 +20,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
-from backend.models.base import Base, _utcnow
+from backend.models.base import Base, TenantScopedMixin, TimestampMixin, UUIDPKMixin, _utcnow
 from backend.models.enums import (
     EscalationPriority,
     EscalationStatus,
@@ -64,7 +62,7 @@ class MessageEmbedding(Base):
     tenant = relationship("Tenant")
 
 
-class AnswerCacheEntry(Base):
+class AnswerCacheEntry(UUIDPKMixin, TenantScopedMixin, Base):
     """Semantic level of the chat answer cache (``backend/chat/answer_cache.py``).
 
     One row per cached answer: the embedding of the question it was generated
@@ -75,13 +73,6 @@ class AnswerCacheEntry(Base):
 
     __tablename__ = "answer_cache_entries"
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     bot_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("bots.id", ondelete="CASCADE"),
@@ -107,20 +98,9 @@ class AnswerCacheEntry(Base):
     )
 
 
-class Chat(Base):
+class Chat(UUIDPKMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "chats"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     bot_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("bots.id", ondelete="SET NULL"),
@@ -267,13 +247,6 @@ class Chat(Base):
         default=False,
         server_default="false",
     )
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
-    )
 
     tenant = relationship("Tenant", back_populates="chats")
     bot = relationship("Bot")
@@ -314,23 +287,12 @@ Index(
 )
 
 
-class EscalationTicket(Base):
+class EscalationTicket(UUIDPKMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "escalation_tickets"
     __table_args__ = (
         UniqueConstraint("tenant_id", "ticket_number", name="uq_escalation_tenant_ticket_number"),
     )
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     ticket_number = Column(String(32), nullable=False, index=True)
 
     # Original user wording. Redaction is applied on the way out (support
@@ -414,14 +376,6 @@ class EscalationTicket(Base):
     forwarded_reply_at = Column(DateTime, nullable=True)
     forwarded_reply_from = Column(String(255), nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
-    )
-
     chat_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("chats.id", ondelete="SET NULL"),
@@ -434,14 +388,9 @@ class EscalationTicket(Base):
     chat = relationship("Chat", foreign_keys=[chat_id])
 
 
-class Message(Base):
+class Message(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "messages"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
     chat_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("chats.id", ondelete="CASCADE"),
@@ -477,18 +426,11 @@ class Message(Base):
     # How this turn resolved (``TurnOutcome``), for analytics reporting.
     # NULL for every row written before this column existed.
     turn_outcome = Column(String(32), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
-    )
 
     chat = relationship("Chat", back_populates="messages")
 
 
-class InboundEmailReceipt(Base):
+class InboundEmailReceipt(UUIDPKMixin, Base):
     """One inbound e-mail we have already acted on.
 
     Brevo re-delivers the whole webhook body on any non-2xx, and a batch can
@@ -504,7 +446,6 @@ class InboundEmailReceipt(Base):
 
     __tablename__ = "inbound_email_receipts"
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     #: Brevo's own id for the message. Unique: the conflict *is* the check.
     provider_message_id = Column(String(998), nullable=False, unique=True, index=True)
     #: Kept for support ("did his reply arrive?"), not used in any decision.

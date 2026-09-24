@@ -88,8 +88,8 @@ def test_create_client_unauthenticated(tenant: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_get_client_success_via_me_and_by_id(tenant: TestClient, db_session: Session) -> None:
-    """Own tenant is fetchable both via /tenants/me and /tenants/{id}."""
+def test_get_client_success_via_me(tenant: TestClient, db_session: Session) -> None:
+    """Own tenant is fetchable via /tenants/me."""
     token = register_and_verify_user(tenant, db_session, email="me@example.com")
     create_resp = tenant.post(
         "/tenants",
@@ -106,13 +106,6 @@ def test_get_client_success_via_me_and_by_id(tenant: TestClient, db_session: Ses
     assert me_data.get("api_key_hint") and len(me_data["api_key_hint"]) == 4
     assert "api_key" not in me_data
 
-    by_id_resp = tenant.get(
-        f"/tenants/{tenant_id}", headers={"Authorization": f"Bearer {token}"}
-    )
-    assert by_id_resp.status_code == 200
-    assert by_id_resp.json()["id"] == tenant_id
-    assert by_id_resp.json()["name"] == "My Tenant"
-
 
 def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> None:
     """Get tenant before creating one → 404."""
@@ -120,25 +113,6 @@ def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> Non
     response = tenant.get(
         "/tenants/me",
         headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 404
-
-
-def test_get_client_by_id_wrong_user(tenant: TestClient, db_session: Session) -> None:
-    """User B tries to get user A's tenant → 404."""
-    token_a = register_and_verify_user(tenant, db_session, email="userA@example.com")
-    create_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "User A Tenant"},
-    )
-    tenant_id = create_resp.json()["id"]
-
-    token_b = register_and_verify_user(tenant, db_session, email="userB@example.com")
-
-    response = tenant.get(
-        f"/tenants/{tenant_id}",
-        headers={"Authorization": f"Bearer {token_b}"},
     )
     assert response.status_code == 404
 

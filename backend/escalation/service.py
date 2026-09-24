@@ -7,8 +7,6 @@ import hashlib
 import json
 import logging
 import re
-import threading
-import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +26,7 @@ from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
+from backend.core.ttl_cache import TTLCache
 from backend.email.reply_lane import escalation_reply_to, revoke_reply_token
 from backend.email.service import send_email
 from backend.models import (
@@ -46,7 +45,6 @@ from backend.models import (
     User,
 )
 from backend.models.base import _utcnow
-from backend.observability.cache_metrics import record_hit, record_miss
 from backend.observability.metrics import capture_event
 from backend.seats.service import tenant_has_any_seat
 from backend.support_config import public_support_config_dict
@@ -95,56 +93,7 @@ class HumanRequestResult:
         return self.human_request
 
 
-class _LockedTTLCache:
-    """Thread-safe TTL cache for classifier results.
-
-    The intent classifiers are now coroutines on the event loop, but the cache
-    is process-global and may still be reached from worker threads (tests,
-    sync tooling), so every operation — including the compound eviction scan —
-    runs under a lock to avoid "dict changed size during iteration". All ops
-    are in-memory and cheap, so holding the lock on the loop is fine.
-    Hits/misses are reported under ``name``.
-    """
-
-    def __init__(self, *, name: str, ttl: float, maxsize: int) -> None:
-        self._name = name
-        self._ttl = ttl
-        self._max = maxsize
-        self._lock = threading.Lock()
-        self._data: dict[str, tuple[float, Any]] = {}
-
-    def get(self, key: str) -> Any | None:
-        with self._lock:
-            item = self._data.get(key)
-            if not item:
-                record_miss(self._name)
-                return None
-            expires_at, result = item
-            if time.time() > expires_at:
-                self._data.pop(key, None)
-                record_miss(self._name)
-                return None
-            record_hit(self._name)
-            return result
-
-    def set(self, key: str, result: Any) -> None:
-        now = time.time()
-        with self._lock:
-            if len(self._data) >= self._max and key not in self._data:
-                expired = [k for k, v in self._data.items() if now > v[0]]
-                for k in expired:
-                    self._data.pop(k, None)
-                if len(self._data) >= self._max:
-                    oldest = min(self._data.items(), key=lambda x: x[1][0])[0]
-                    self._data.pop(oldest, None)
-            self._data[key] = (now + self._ttl, result)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._data.clear()
-
-
-_human_request_cache = _LockedTTLCache(
+_human_request_cache = TTLCache(
     name="human_request", ttl=_HUMAN_REQUEST_CACHE_TTL, maxsize=_HUMAN_REQUEST_CACHE_MAX
 )
 
@@ -353,7 +302,7 @@ async def detect_human_request(
     return result
 
 
-_question_intent_cache = _LockedTTLCache(
+_question_intent_cache = TTLCache(
     name="question_intent", ttl=_HUMAN_REQUEST_CACHE_TTL, maxsize=_HUMAN_REQUEST_CACHE_MAX
 )
 

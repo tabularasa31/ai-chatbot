@@ -1982,8 +1982,7 @@ def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
     _cache.clear()
 
     # Reset shared CB state.
-    monkeypatch.setattr(relevance_checker, "_consecutive_failures", 0)
-    monkeypatch.setattr(relevance_checker, "_circuit_opened_at", None)
+    relevance_checker._circuit_breaker.record_success()
 
     async def _always_timeout(*_a, **_kw):  # type: ignore[no-untyped-def]
         raise asyncio.TimeoutError()
@@ -2016,8 +2015,7 @@ def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
     asyncio.run(_run())
 
     # No failures recorded, breaker still closed.
-    assert relevance_checker._consecutive_failures == 0
-    assert relevance_checker._circuit_opened_at is None
+    assert not relevance_checker._circuit_breaker.is_open()
 
 
 def test_relevance_checker_comment_hygiene() -> None:

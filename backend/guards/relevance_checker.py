@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import threading
 import time
 import uuid
 
@@ -12,10 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
+from backend.core.ttl_cache import TTLCache
+from backend.guards.circuit_breaker import CircuitBreaker
 from backend.guards.types import Verdict, VerdictReason
 from backend.models import TenantProfile as TenantProfileModel
 from backend.observability import TraceHandle, record_stage_ms
-from backend.observability.cache_metrics import record_hit, record_miss
 
 _CACHE_NAME = "relevance_guard"
 
@@ -46,9 +46,10 @@ MAX_CACHE_SIZE = 2048
 CIRCUIT_BREAKER_THRESHOLD = 5
 CIRCUIT_HALF_OPEN_AFTER_SECONDS = 60.0
 
-_cb_lock = threading.Lock()
-_consecutive_failures: int = 0
-_circuit_opened_at: float | None = None
+_circuit_breaker = CircuitBreaker(
+    threshold=lambda: CIRCUIT_BREAKER_THRESHOLD,
+    half_open_after_seconds=lambda: CIRCUIT_HALF_OPEN_AFTER_SECONDS,
+)
 
 # Short queries (≤ SHORT_QUERY_WORD_LIMIT words) bypass the LLM relevance check
 # and are passed through as relevant so the answer LLM can ask a clarifying
@@ -70,35 +71,17 @@ _circuit_opened_at: float | None = None
 # repeated complaint as support_complaint and offers the escalation handoff.
 SHORT_QUERY_WORD_LIMIT = 4
 
-_cache: dict[str, tuple[float, bool, str]] = {}
+_cache: TTLCache[tuple[bool, str]] = TTLCache(
+    name=_CACHE_NAME, ttl=CACHE_TTL_SECONDS, maxsize=MAX_CACHE_SIZE
+)
 
 
 def _cache_get(key: str) -> tuple[bool, str] | None:
-    item = _cache.get(key)
-    if not item:
-        record_miss(_CACHE_NAME)
-        return None
-    expires_at, relevant, reason = item
-    if time.time() > expires_at:
-        _cache.pop(key, None)
-        record_miss(_CACHE_NAME)
-        return None
-    record_hit(_CACHE_NAME)
-    return relevant, reason
+    return _cache.get(key)
 
 
 def _cache_set(key: str, relevant: bool, reason: str) -> None:
-    # Keep memory bounded across requests.
-    if len(_cache) >= MAX_CACHE_SIZE and key not in _cache:
-        # Prefer eviction of expired items; otherwise drop the one with earliest expiry.
-        expired_keys = [k for k, v in _cache.items() if time.time() > v[0]]
-        if expired_keys:
-            for k in expired_keys[: max(1, len(expired_keys))]:
-                _cache.pop(k, None)
-        if len(_cache) >= MAX_CACHE_SIZE:
-            oldest_key = min(_cache.items(), key=lambda item: item[1][0])[0]
-            _cache.pop(oldest_key, None)
-    _cache[key] = (time.time() + CACHE_TTL_SECONDS, relevant, reason)
+    _cache.set(key, (relevant, reason))
 
 
 def _profile_is_empty(profile: TenantProfileModel) -> bool:
@@ -248,31 +231,17 @@ def _parse_llm_response(content: str | None) -> tuple[bool, str]:
 
 def _check_circuit_breaker() -> tuple[bool, str] | None:
     """Return (True, 'circuit_open') if the circuit is open, else None."""
-    global _consecutive_failures, _circuit_opened_at
-    with _cb_lock:
-        if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
-            now = time.monotonic()
-            if _circuit_opened_at is None:
-                _circuit_opened_at = now
-            if now - _circuit_opened_at < CIRCUIT_HALF_OPEN_AFTER_SECONDS:
-                return True, "circuit_open"
-            # Half-open: reset timer so only one probe gets through at a time.
-            _circuit_opened_at = None
+    if _circuit_breaker.is_open():
+        return True, "circuit_open"
     return None
 
 
 def _record_failure() -> None:
-    with _cb_lock:
-        global _consecutive_failures, _circuit_opened_at
-        _consecutive_failures += 1
-        _circuit_opened_at = time.monotonic()
+    _circuit_breaker.record_failure()
 
 
 def _record_success() -> None:
-    with _cb_lock:
-        global _consecutive_failures, _circuit_opened_at
-        _consecutive_failures = 0
-        _circuit_opened_at = None
+    _circuit_breaker.record_success()
 
 
 async def async_check_relevance_with_profile(

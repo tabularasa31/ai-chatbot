@@ -13,12 +13,12 @@ import hashlib
 import json
 import logging
 import re
-import threading
 import unicodedata
-from dataclasses import dataclass, field, replace
-from time import monotonic, perf_counter
+from dataclasses import dataclass, replace
+from time import perf_counter
 
 from backend.core.config import settings
+from backend.guards.circuit_breaker import CircuitBreaker
 from backend.guards.injection_seeds import INJECTION_SEEDS, INJECTION_SEEDS_HASH
 from backend.guards.types import Verdict, VerdictReason
 from backend.observability import TraceHandle, record_stage_ms
@@ -174,17 +174,13 @@ CIRCUIT_HALF_OPEN_AFTER_SECONDS = 60.0
 # the map without limit.
 _CB_MAX_KEYS = 4096
 
-
-@dataclass
-class _BreakerState:
-    consecutive_failures: int = 0
-    circuit_opened_at: float | None = None
-    # Wall-clock-ish ordering token for eviction (monotonic seconds of last touch).
-    last_touch: float = field(default=0.0)
-
-
-_cb_lock = threading.Lock()
-_cb_states: dict[str, _BreakerState] = {}
+_circuit_breaker = CircuitBreaker(
+    # Callables (not the constant values) so tests monkeypatching the module
+    # constants directly still take effect on the shared breaker.
+    threshold=lambda: CIRCUIT_BREAKER_THRESHOLD,
+    half_open_after_seconds=lambda: CIRCUIT_HALF_OPEN_AFTER_SECONDS,
+    max_keys=_CB_MAX_KEYS,
+)
 
 
 def _cb_key(api_key: str) -> str:
@@ -194,42 +190,15 @@ def _cb_key(api_key: str) -> str:
 
 def _circuit_is_open(api_key: str) -> bool:
     """True while this key's breaker is open (level 2 should be skipped)."""
-    key = _cb_key(api_key)
-    with _cb_lock:
-        st = _cb_states.get(key)
-        if st is None or st.consecutive_failures < CIRCUIT_BREAKER_THRESHOLD:
-            return False
-        now = monotonic()
-        if st.circuit_opened_at is None:
-            st.circuit_opened_at = now
-        if now - st.circuit_opened_at < CIRCUIT_HALF_OPEN_AFTER_SECONDS:
-            return True
-        # Half-open: reset timer so only one probe gets through at a time.
-        st.circuit_opened_at = None
-        return False
+    return _circuit_breaker.is_open(_cb_key(api_key))
 
 
 def _record_semantic_failure(api_key: str) -> None:
-    key = _cb_key(api_key)
-    now = monotonic()
-    with _cb_lock:
-        st = _cb_states.get(key)
-        if st is None:
-            if len(_cb_states) >= _CB_MAX_KEYS:
-                # Evict the least-recently-touched breaker to stay bounded.
-                oldest = min(_cb_states, key=lambda k: _cb_states[k].last_touch)
-                _cb_states.pop(oldest, None)
-            st = _BreakerState()
-            _cb_states[key] = st
-        st.consecutive_failures += 1
-        st.circuit_opened_at = now
-        st.last_touch = now
+    _circuit_breaker.record_failure(_cb_key(api_key))
 
 
 def _record_semantic_success(api_key: str) -> None:
-    # A closed breaker needs no state; dropping the entry keeps the map small.
-    with _cb_lock:
-        _cb_states.pop(_cb_key(api_key), None)
+    _circuit_breaker.record_success(_cb_key(api_key))
 
 
 def _passthrough_result(normalized: str) -> InjectionDetectionResult:

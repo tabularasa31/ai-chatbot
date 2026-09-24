@@ -73,7 +73,13 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
         )
     if parsed.username or parsed.password:
         raise HTTPException(status_code=400, detail="URLs with credentials are not allowed.")
-    normalized = canonical_url(raw_url)
+    # Keep the trailing slash the caller gave us: this value is also the
+    # base used to fetch the root page and urljoin() relative links found on
+    # it, and stripping it can change what a server returns for a directory
+    # URL (or misresolve relative hrefs). De-duplication against a
+    # slash-stripped variant of the same page happens at comparison sites
+    # via ``canonical_url``, not here.
+    normalized = canonical_url(raw_url, strip_trailing_slash=False)
     hostname = parsed.hostname.lower() if parsed.hostname else ""
     _http_client_mod._validate_public_hostname(hostname)
     return normalized, parsed.netloc.lower()
@@ -220,9 +226,14 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
     ordered: list[str] = []
 
     def add_url(url: str) -> None:
-        if url in seen or len(ordered) >= page_cap:
+        # Dedup key is canonical (slash-insensitive) so the source root
+        # isn't indexed twice under its slash-preserving fetch form and a
+        # stripped form discovered via a link to the same page; the stored
+        # value keeps whatever form is needed to fetch/urljoin it correctly.
+        key = canonical_url(url)
+        if key in seen or len(ordered) >= page_cap:
             return
-        seen.add(url)
+        seen.add(key)
         ordered.append(url)
 
     add_url(normalized_root)
@@ -340,21 +351,20 @@ def _find_existing_source_document(source_id: uuid.UUID, url: str, db: Session) 
     """Find a source's document by URL, tolerant of pre-canonicalization trailing slashes.
 
     Older rows may have ``source_url`` stored before ``canonical_url`` started
-    stripping non-root trailing slashes; comparing normalized on both sides
-    keeps a crawl from re-indexing that page as a new document.
+    stripping non-root trailing slashes; matching both variants at the SQL
+    level keeps a crawl from re-indexing that page as a new document without
+    scanning every document the source has (capacity up to
+    ``KNOWLEDGE_DOCUMENT_CAPACITY``).
     """
     target = canonical_url(url)
-    docs = (
+    variants = {target} if target.endswith("/") else {target, f"{target}/"}
+    return (
         db.query(Document)
         .options(selectinload(Document.embeddings))
         .filter(Document.source_id == source_id)
-        .filter(Document.source_url.isnot(None))
-        .all()
+        .filter(Document.source_url.in_(variants))
+        .first()
     )
-    for doc in docs:
-        if canonical_url(doc.source_url) == target:
-            return doc
-    return None
 
 
 def _upsert_page_document(
@@ -784,10 +794,13 @@ def _plan_crawl(source: UrlSource, db: Session) -> _CrawlPlan:
     discovered_urls = _discover_urls(
         source.url, _clean_exclusions(source.exclusion_patterns), DISCOVERY_ESTIMATE_CAP
     )
+    # ``discovered_urls`` may hold the source root in its slash-preserving
+    # fetch form (see ``_normalize_source_url``) while every other set here
+    # is keyed by ``canonical_url`` — compare canonicalized on both sides.
     manually_excluded_urls = set(_manual_excluded_page_urls(source))
-    discovered_urls = [url for url in discovered_urls if url not in manually_excluded_urls]
-    prioritized_existing_urls = [url for url in discovered_urls if url in existing_urls]
-    new_urls = [url for url in discovered_urls if url not in existing_urls]
+    discovered_urls = [url for url in discovered_urls if canonical_url(url) not in manually_excluded_urls]
+    prioritized_existing_urls = [url for url in discovered_urls if canonical_url(url) in existing_urls]
+    new_urls = [url for url in discovered_urls if canonical_url(url) not in existing_urls]
     urls = prioritized_existing_urls + new_urls[: max(0, allowed_total - len(prioritized_existing_urls))]
     return _CrawlPlan(urls=urls, discovered_urls=discovered_urls, remaining_capacity=remaining_capacity)
 
@@ -943,9 +956,16 @@ def _finalize_crawl(
         .filter(Document.source_url.isnot(None))
         .all()
     )
-    indexed_canonical = {canonical_url(url) for url in result.indexed_urls}
+    # Map canonical key -> the exact URL this run indexed it under, so a
+    # duplicate row left over from before ``canonical_url`` existed (e.g. an
+    # old "/docs/" row once "/docs" is the one just written) is cleaned up
+    # too, not just rows for pages no longer discovered at all.
+    indexed_by_canonical = {canonical_url(url): url for url in result.indexed_urls}
     for doc in stale_docs:
-        if doc.source_url and canonical_url(doc.source_url) not in indexed_canonical:
+        if not doc.source_url:
+            continue
+        exact_indexed_url = indexed_by_canonical.get(canonical_url(doc.source_url))
+        if exact_indexed_url is None or doc.source_url != exact_indexed_url:
             db.delete(doc)
 
     failure_ratio = (len(result.failures) / len(plan.urls)) if plan.urls else 0.0

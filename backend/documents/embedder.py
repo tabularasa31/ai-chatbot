@@ -74,6 +74,14 @@ def _extract_page(url: str, html: str) -> ExtractedPage | None:
     if not chunks:
         return None
 
+    # gap_analyzer and observability read ``section_title`` from chunk
+    # metadata; the markdown chunker only carries the full heading path, so
+    # derive the nearest heading (its last segment) here, same as the
+    # crawler's own pre-chunker extraction used to.
+    for chunk in chunks:
+        heading_path = chunk.get("heading_path")
+        chunk["section_title"] = heading_path.rsplit(" > ", 1)[-1] if heading_path else title
+
     return ExtractedPage(url=url, title=title, text=markdown_text, chunks=chunks)
 
 

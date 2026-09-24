@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
@@ -19,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
-from backend.models.base import Base, _utcnow
+from backend.models.base import Base, TenantScopedMixin, UUIDPKMixin, _utcnow
 
 
 class TenantProfile(Base):
@@ -52,22 +50,11 @@ class TenantProfile(Base):
     tenant = relationship("Tenant")
 
 
-class TenantFaq(Base):
+class TenantFaq(UUIDPKMixin, TenantScopedMixin, Base):
     """Per-tenant FAQ candidates extracted from documentation."""
 
     __tablename__ = "tenant_faq"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=False)
     question_embedding = Column(Vector(1536), nullable=True)

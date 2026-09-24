@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+
+from backend.documents.urls import canonical_url
 
 SUPPORTED_QUICK_ANSWER_KEYS = {
     "support_email",
@@ -104,12 +106,7 @@ def _log_rejection(*, key: str, reason: str, source_url: str, value: str) -> Non
     )
 
 
-def _normalize_url(url: str) -> str:
-    parsed = urlparse(url.strip())
-    path = parsed.path or "/"
-    if path.endswith("/") and path != "/":
-        path = path[:-1]
-    return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", "", ""))
+_normalize_url = canonical_url
 
 
 def _is_http_url(value: str) -> bool:

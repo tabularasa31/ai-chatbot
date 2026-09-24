@@ -122,6 +122,25 @@ def _fake_extracted_page(url: str, title: str, text: str, *, chunk_text: str | N
 
 
 @pytest.mark.parametrize(
+    "case",
+    ["nested_paragraph_not_duplicated", "root_url_slash_dedup"],
+)
+def test_crawl_chunking_and_url_dedup_cases(case: str) -> None:
+    """Shared HTML chunker guards nested nodes; canonical_url dedups root with/without slash."""
+    if case == "nested_paragraph_not_duplicated":
+        page = embedder_mod._extract_page(
+            "https://docs.example.com/page",
+            "<main><ul><li>Item<p>Nested</p></li></ul></main>",
+        )
+        assert page is not None
+        assert page.text.count("Nested") == 1
+    else:
+        from backend.documents.urls import canonical_url
+
+        assert canonical_url("https://docs.example.com/") == canonical_url("https://docs.example.com")
+
+
+@pytest.mark.parametrize(
     "filename, content, content_type, expected_file_type",
     [
         pytest.param("test.pdf", None, "application/pdf", "pdf", id="pdf"),

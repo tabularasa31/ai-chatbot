@@ -9,7 +9,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from openai import APIError
@@ -43,6 +43,8 @@ from backend.documents.quick_answers import (
     scan_html_for_quick_answers,
 )
 from backend.documents.sitemap import DISCOVERY_ESTIMATE_CAP, MAX_DISCOVERY_DEPTH
+from backend.documents.urls import canonical_url
+from backend.embeddings.service import _build_swagger_chunks
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.models import (
     Document,
@@ -71,16 +73,7 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
         )
     if parsed.username or parsed.password:
         raise HTTPException(status_code=400, detail="URLs with credentials are not allowed.")
-    normalized = urlunparse(
-        (
-            parsed.scheme.lower(),
-            parsed.netloc.lower(),
-            parsed.path or "/",
-            "",
-            "",
-            "",
-        )
-    )
+    normalized = canonical_url(raw_url)
     hostname = parsed.hostname.lower() if parsed.hostname else ""
     _http_client_mod._validate_public_hostname(hostname)
     return normalized, parsed.netloc.lower()
@@ -343,6 +336,27 @@ def _fetch_openapi_source(url: str) -> StructuredSource | None:
 
 # --- DB upsert (kept here so url_service._embed_chunks patches work in tests) ---
 
+def _find_existing_source_document(source_id: uuid.UUID, url: str, db: Session) -> Document | None:
+    """Find a source's document by URL, tolerant of pre-canonicalization trailing slashes.
+
+    Older rows may have ``source_url`` stored before ``canonical_url`` started
+    stripping non-root trailing slashes; comparing normalized on both sides
+    keeps a crawl from re-indexing that page as a new document.
+    """
+    target = canonical_url(url)
+    docs = (
+        db.query(Document)
+        .options(selectinload(Document.embeddings))
+        .filter(Document.source_id == source_id)
+        .filter(Document.source_url.isnot(None))
+        .all()
+    )
+    for doc in docs:
+        if canonical_url(doc.source_url) == target:
+            return doc
+    return None
+
+
 def _upsert_page_document(
     *,
     source: UrlSource,
@@ -350,13 +364,7 @@ def _upsert_page_document(
     db: Session,
     api_key: str | None,
 ) -> tuple[Document, int]:
-    existing = (
-        db.query(Document)
-        .options(selectinload(Document.embeddings))
-        .filter(Document.source_id == source.id)
-        .filter(Document.source_url == page.url)
-        .first()
-    )
+    existing = _find_existing_source_document(source.id, page.url, db)
     content_hash = _embedder_mod._content_hash(page.text)
     if existing and _embedder_mod._content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = page.title[:255]
@@ -437,13 +445,7 @@ def _upsert_structured_document(
     db: Session,
     api_key: str | None,
 ) -> tuple[Document, int]:
-    existing = (
-        db.query(Document)
-        .options(selectinload(Document.embeddings))
-        .filter(Document.source_id == source.id)
-        .filter(Document.source_url == url)
-        .first()
-    )
+    existing = _find_existing_source_document(source.id, url, db)
     content_hash = _embedder_mod._content_hash(parsed_text)
     if existing and _embedder_mod._content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = title[:255]
@@ -480,19 +482,20 @@ def _upsert_structured_document(
     doc.status = DocumentStatus.embedding
     db.flush()
 
-    rendered_chunks = _embedder_mod._render_structured_openapi_chunks(
-        chunks,
-        title=title,
-        source_url=url,
-        source_format=chunks[0].source_format if chunks else "yaml",
-    )
+    source_format = chunks[0].source_format if chunks else "yaml"
+    rendered_chunks = _build_swagger_chunks(parsed_text)
     try:
         embeddings = _embedder_mod.persist_document_embeddings(
             doc,
             rendered_chunks,
             api_key,
             db,
-            extra_meta={"page_content_hash": content_hash},
+            extra_meta={
+                "page_content_hash": content_hash,
+                "source_url": url,
+                "source_kind": "url",
+                "source_format": _embedder_mod._normalize_source_format(source_format, from_url=True),
+            },
         )
         doc.status = DocumentStatus.ready
         db.commit()
@@ -772,7 +775,7 @@ class _CrawlResult:
 def _plan_crawl(source: UrlSource, db: Session) -> _CrawlPlan:
     """Discover URLs and compute which ones to crawl."""
     existing_docs = db.query(Document).filter(Document.source_id == source.id).all()
-    existing_urls = {doc.source_url for doc in existing_docs if doc.source_url}
+    existing_urls = {canonical_url(doc.source_url) for doc in existing_docs if doc.source_url}
     allowed_total, remaining_capacity = _allowed_source_document_total(
         db,
         tenant_id=source.tenant_id,
@@ -940,8 +943,9 @@ def _finalize_crawl(
         .filter(Document.source_url.isnot(None))
         .all()
     )
+    indexed_canonical = {canonical_url(url) for url in result.indexed_urls}
     for doc in stale_docs:
-        if doc.source_url and doc.source_url not in result.indexed_urls:
+        if doc.source_url and canonical_url(doc.source_url) not in indexed_canonical:
             db.delete(doc)
 
     failure_ratio = (len(result.failures) / len(plan.urls)) if plan.urls else 0.0

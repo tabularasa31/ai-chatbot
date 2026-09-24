@@ -68,8 +68,8 @@ def _read_embeddings(document_id: str) -> list[Embedding]:
 # ── happy path ───────────────────────────────────────────────────────────────
 
 
-@patch("backend.embeddings.service.extract_entities_from_passage")
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.extract_entities_from_passage")
+@patch("backend.documents.embedder.get_openai_client")
 def test_entities_populated_from_ner(
     mock_get_openai: Mock,
     mock_extract: Mock,
@@ -81,8 +81,8 @@ def test_entities_populated_from_ner(
     token, doc_id = _setup_tenant_with_doc(tenant, db_session, email="ent1@example.com", body=body)
 
     mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(
-        data=[Mock(embedding=[0.1] * 1536) for _ in range(50)]
+    mock_client.embeddings.create.side_effect = lambda **kwargs: Mock(
+        data=[Mock(embedding=[0.1] * 1536) for _ in kwargs["input"]]
     )
     mock_get_openai.return_value = mock_client
 
@@ -108,8 +108,8 @@ def test_entities_populated_from_ner(
 # ── NER outage / failure ─────────────────────────────────────────────────────
 
 
-@patch("backend.embeddings.service.extract_entities_from_passage")
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.extract_entities_from_passage")
+@patch("backend.documents.embedder.get_openai_client")
 def test_ner_raise_does_not_abort_ingest(
     mock_get_openai: Mock,
     mock_extract: Mock,
@@ -127,8 +127,8 @@ def test_ner_raise_does_not_abort_ingest(
     token, doc_id = _setup_tenant_with_doc(tenant, db_session, email="ent2@example.com", body=body)
 
     mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(
-        data=[Mock(embedding=[0.1] * 1536) for _ in range(50)]
+    mock_client.embeddings.create.side_effect = lambda **kwargs: Mock(
+        data=[Mock(embedding=[0.1] * 1536) for _ in kwargs["input"]]
     )
     mock_get_openai.return_value = mock_client
     mock_extract.side_effect = RuntimeError("ner outage simulation")
@@ -149,8 +149,8 @@ def test_ner_raise_does_not_abort_ingest(
 # ── NER returns empty list (control / no-entities query) ─────────────────────
 
 
-@patch("backend.embeddings.service.extract_entities_from_passage")
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.extract_entities_from_passage")
+@patch("backend.documents.embedder.get_openai_client")
 def test_ner_empty_writes_empty_list(
     mock_get_openai: Mock,
     mock_extract: Mock,
@@ -162,8 +162,8 @@ def test_ner_empty_writes_empty_list(
     token, doc_id = _setup_tenant_with_doc(tenant, db_session, email="ent3@example.com", body=body)
 
     mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(
-        data=[Mock(embedding=[0.1] * 1536) for _ in range(50)]
+    mock_client.embeddings.create.side_effect = lambda **kwargs: Mock(
+        data=[Mock(embedding=[0.1] * 1536) for _ in kwargs["input"]]
     )
     mock_get_openai.return_value = mock_client
     mock_extract.return_value = []
@@ -210,8 +210,8 @@ def test_entities_default_empty_list_on_direct_insert(db_session: Session) -> No
 # ── Per-chunk commit policy (Codex P2 fix) ───────────────────────────────────
 
 
-@patch("backend.embeddings.service.extract_entities_from_passage")
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.extract_entities_from_passage")
+@patch("backend.documents.embedder.get_openai_client")
 def test_per_chunk_commit_isolates_failures(
     mock_get_openai: Mock,
     mock_extract: Mock,
@@ -226,12 +226,12 @@ def test_per_chunk_commit_isolates_failures(
     blast radius: bad commit → that chunk stays at server-default [],
     siblings keep their NER output.
     """
-    body = b"# Title\n\n" + b"some text. " * 50
+    body = b"# Title\n\n" + b"some text. " * 150
     token, doc_id = _setup_tenant_with_doc(tenant, db_session, email="ent5@example.com", body=body)
 
     mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(
-        data=[Mock(embedding=[0.1] * 1536) for _ in range(50)]
+    mock_client.embeddings.create.side_effect = lambda **kwargs: Mock(
+        data=[Mock(embedding=[0.1] * 1536) for _ in kwargs["input"]]
     )
     mock_get_openai.return_value = mock_client
     # Each chunk gets a unique entity list, so we can tell them apart.
@@ -261,8 +261,8 @@ def test_per_chunk_commit_isolates_failures(
 # ── Per-chunk attribution telemetry passthrough ──────────────────────────────
 
 
-@patch("backend.embeddings.service.extract_entities_from_passage")
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.extract_entities_from_passage")
+@patch("backend.documents.embedder.get_openai_client")
 def test_ner_receives_tenant_id_for_telemetry(
     mock_get_openai: Mock,
     mock_extract: Mock,
@@ -274,8 +274,8 @@ def test_ner_receives_tenant_id_for_telemetry(
     token, doc_id = _setup_tenant_with_doc(tenant, db_session, email="ent4@example.com", body=body)
 
     mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(
-        data=[Mock(embedding=[0.1] * 1536) for _ in range(50)]
+    mock_client.embeddings.create.side_effect = lambda **kwargs: Mock(
+        data=[Mock(embedding=[0.1] * 1536) for _ in kwargs["input"]]
     )
     mock_get_openai.return_value = mock_client
     mock_extract.return_value = ["x"]

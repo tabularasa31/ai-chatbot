@@ -146,7 +146,7 @@ def test_create_embeddings_forbidden_for_unverified_user(
 
 
 @patch("backend.auth.routes.send_email")
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.get_openai_client")
 def test_create_embeddings_allowed_for_verified_user(
     mock_get_openai: Mock,
     mock_send_email: Mock,

@@ -156,18 +156,19 @@ def test_embedder_noop_when_no_api_key():
 # ---------------------------------------------------------------------------
 
 
-def test_run_embeddings_background_enqueues_extraction(monkeypatch):
-    """run_embeddings_background must call enqueue_knowledge_extraction_sync, not inline extract."""
+def test_after_document_indexed_enqueues_extraction(monkeypatch):
+    """after_document_indexed (the shared post-index hook) must call
+    enqueue_knowledge_extraction_sync, not inline extract — it is the single
+    hook both the upload (embeddings/service.py) and URL-crawl
+    (documents/url_service.py) ingestion paths run after persisting
+    embeddings.
+    """
     doc_id = uuid.uuid4()
     tenant_id = uuid.uuid4()
 
-    # Minimal fake doc
     fake_doc = MagicMock()
+    fake_doc.id = doc_id
     fake_doc.tenant_id = tenant_id
-
-    # Minimal fake db session
-    fake_db = MagicMock()
-    fake_db.query.return_value.filter.return_value.first.return_value = fake_doc
 
     enqueue_calls: list[dict[str, Any]] = []
 
@@ -176,21 +177,17 @@ def test_run_embeddings_background_enqueues_extraction(monkeypatch):
         return "fake-job-id"
 
     with (
-        patch("backend.core.db.SessionLocal", return_value=fake_db),
         patch(
-            "backend.embeddings.service.create_embeddings_for_document"
-        ),
-        patch(
-            "backend.embeddings.service.run_mode_a_for_tenant_when_queue_empty_best_effort"
+            "backend.documents.embedder.invalidate_bm25_cache_for_tenant"
         ),
         patch(
             "backend.jobs.knowledge_extraction.enqueue_knowledge_extraction_sync",
             side_effect=_fake_enqueue_sync,
         ),
     ):
-        from backend.embeddings.service import run_embeddings_background
+        from backend.documents.embedder import after_document_indexed
 
-        run_embeddings_background(doc_id, "sk-test")
+        after_document_indexed(fake_doc, [], api_key="sk-test", db=MagicMock())
 
     assert len(enqueue_calls) == 1
     assert enqueue_calls[0]["document_id"] == doc_id

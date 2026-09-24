@@ -11,6 +11,10 @@ import {
   type GapModeAStatusFilter,
   type GapModeBStatusFilter,
 } from "@/lib/api";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { StatCard } from "@/components/ui/stat-card";
+import { EmptyState } from "@/components/ui/empty-state";
 
 function formatDateTime(value: string | null): string {
   if (!value) return "—";
@@ -28,9 +32,9 @@ function CoverageBadge({ item }: { item: GapItem }) {
     unknown: "bg-slate-100 text-slate-600",
   };
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[item.classification] ?? styles.unknown}`}>
+    <Badge className={styles[item.classification] ?? styles.unknown}>
       {item.classification}
-    </span>
+    </Badge>
   );
 }
 
@@ -45,9 +49,9 @@ function StatusBadge({ status }: { status: GapItem["status"] }) {
     resolved: "bg-emerald-100 text-emerald-700",
   };
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? styles.dismissed}`}>
+    <Badge className={styles[status] ?? styles.dismissed}>
       {status.replace("_", " ")}
-    </span>
+    </Badge>
   );
 }
 
@@ -70,32 +74,6 @@ function LinkedContextPanel({ item }: { item: GapItem }) {
           ))}
         </ul>
       )}
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  note,
-}: {
-  label: string;
-  value: string | number;
-  note?: string;
-}) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
-      {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
-    </div>
-  );
-}
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
-      {message}
     </div>
   );
 }
@@ -528,8 +506,8 @@ export default function GapAnalyzerPage() {
         </button>
       </div>
 
-      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
-      {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
+      {error && <Alert tone="error" variant="rose">{error}</Alert>}
+      {notice && <Alert tone="success" variant="rose">{notice}</Alert>}
 
       <div className="flex flex-wrap items-center gap-2">
         <button

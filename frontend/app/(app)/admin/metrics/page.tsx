@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type AdminTenantMetricsItem, type AdminMetricsSummary } from "@/lib/api";
+import { Alert } from "@/components/ui/alert";
+import { PageLoader } from "@/components/ui/page-loader";
 
 export default function AdminMetricsPage() {
   const router = useRouter();
@@ -55,9 +57,7 @@ export default function AdminMetricsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-600">Loading…</div>
-      </div>
+      <PageLoader textClassName="text-slate-600" />
     );
   }
 
@@ -67,9 +67,9 @@ export default function AdminMetricsPage() {
 
   if (error) {
     return (
-      <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
+      <Alert tone="error" variant="plain">
         {error}
-      </div>
+      </Alert>
     );
   }
 

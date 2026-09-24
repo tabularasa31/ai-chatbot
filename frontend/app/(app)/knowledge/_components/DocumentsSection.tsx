@@ -14,6 +14,7 @@ import {
 import { HealthCell, SourceHealthCell } from "./HealthPanel";
 import { UrlSourcesSection } from "./UrlSourcesSection";
 import { DocumentPreviewDrawer } from "./DocumentPreviewDrawer";
+import { Alert } from "@/components/ui/alert";
 
 export interface DocumentsSectionProps {
   activeTab: "documents" | "profile" | "faq";
@@ -246,14 +247,14 @@ export function DocumentsSection({
       </div>
 
       {uploadError && (
-        <div className="whitespace-pre-line rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+        <Alert tone="error" variant="preLine">
           {uploadError}
-        </div>
+        </Alert>
       )}
       {error && (
-        <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <Alert tone="error" variant="cardLg">
           {error}
-        </div>
+        </Alert>
       )}
 
       <div className="overflow-x-auto overflow-y-visible rounded-xl border border-slate-200 bg-white">

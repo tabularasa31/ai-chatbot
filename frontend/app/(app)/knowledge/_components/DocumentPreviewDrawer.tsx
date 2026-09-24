@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type DocumentDetail } from "@/lib/api";
+import { Alert } from "@/components/ui/alert";
 
 const REFETCH_DELAY_MS = 5000;
 
@@ -257,9 +258,9 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
             </div>
           )}
           {error && !loading && (
-            <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <Alert tone="error" variant="card">
               {error}
-            </div>
+            </Alert>
           )}
           {showProcessingState && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">

@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { clearSession, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
+import { Alert } from "@/components/ui/alert";
+import { PageLoader } from "@/components/ui/page-loader";
 import { useClientMe, useBots } from "@/hooks/useApi";
 
 const APP_URL =
@@ -49,17 +51,15 @@ function DashboardContent() {
 
   if (clientLoading || botsLoading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
-      </div>
+      <PageLoader />
     );
   }
 
   if (clientError && !(clientError instanceof Error && clientError.message.toLowerCase().includes("email not verified"))) {
     return (
-      <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
+      <Alert tone="error" variant="plain">
         {clientError instanceof Error ? clientError.message : "Failed to load"}
-      </div>
+      </Alert>
     );
   }
 
@@ -147,9 +147,7 @@ function DashboardContent() {
 export default function DashboardPage() {
   return (
     <Suspense fallback={
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
-      </div>
+      <PageLoader />
     }>
       <DashboardContent />
     </Suspense>

@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
+import { Alert } from "@/components/ui/alert";
+import { PageLoader } from "@/components/ui/page-loader";
 
 const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ||
@@ -69,15 +71,13 @@ function EmbedContent() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
-      </div>
+      <PageLoader />
     );
   }
 
   if (error) {
     return (
-      <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">{error}</div>
+      <Alert tone="error" variant="plain">{error}</Alert>
     );
   }
 
@@ -262,9 +262,7 @@ export default function EmbedPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex items-center justify-center py-16">
-          <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
-        </div>
+        <PageLoader />
       }
     >
       <EmbedContent />

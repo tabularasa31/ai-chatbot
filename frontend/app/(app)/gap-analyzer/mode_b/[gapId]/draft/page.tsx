@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { api, type GapDraftPayload } from "@/lib/api";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 
 function StatusPill({ status }: { status: GapDraftPayload["status"] }) {
   const styles: Record<string, string> = {
@@ -13,9 +15,9 @@ function StatusPill({ status }: { status: GapDraftPayload["status"] }) {
     active: "bg-violet-100 text-violet-800",
   };
   return (
-    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${styles[status] ?? "bg-slate-100 text-slate-700"}`}>
+    <Badge className={`px-2.5 ${styles[status] ?? "bg-slate-100 text-slate-700"}`}>
       {status.replace("_", " ")}
-    </span>
+    </Badge>
   );
 }
 
@@ -157,7 +159,7 @@ export default function ModeBDraftReviewPage() {
         <Link href="/gap-analyzer" className="text-sm text-slate-600 hover:underline">
           ← Back to Gap Analyzer
         </Link>
-        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
+        <Alert tone="error" variant="rose">{error}</Alert>
       </div>
     );
   }
@@ -213,8 +215,8 @@ export default function ModeBDraftReviewPage() {
         </div>
       </div>
 
-      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
-      {info && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{info}</div>}
+      {error && <Alert tone="error" variant="rose">{error}</Alert>}
+      {info && <Alert tone="success" variant="rose">{info}</Alert>}
 
       <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <aside className="space-y-3 self-start rounded-xl border border-slate-200 bg-white p-4">

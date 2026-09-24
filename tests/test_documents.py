@@ -695,16 +695,18 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
             Document(
                 tenant_id=tenant_id,
                 source_id=source.id,
-                # page-0 predates canonical_url's trailing-slash stripping;
-                # the discovered URL below is already stripped — this must
-                # still reuse the row, not create a duplicate.
+                # page-0 predates canonical_url's trailing-slash stripping, and its
+                # content matches what this crawl re-extracts (unchanged path) — the
+                # row must still be reused, not deleted as stale + recreated.
                 source_url=f"https://docs.example.com/page-{index}/"
                 if index == 0
                 else f"https://docs.example.com/page-{index}",
                 filename=f"page-{index}",
                 file_type=DocumentType.url,
                 status=DocumentStatus.ready,
-                parsed_text=f"old {index}",
+                parsed_text=(
+                    "updated https://docs.example.com/page-0" if index == 0 else f"old {index}"
+                ),
             )
         )
     db_session.commit()

@@ -73,12 +73,7 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
         )
     if parsed.username or parsed.password:
         raise HTTPException(status_code=400, detail="URLs with credentials are not allowed.")
-    # Keep the trailing slash the caller gave us: this value is also the
-    # base used to fetch the root page and urljoin() relative links found on
-    # it, and stripping it can change what a server returns for a directory
-    # URL (or misresolve relative hrefs). De-duplication against a
-    # slash-stripped variant of the same page happens at comparison sites
-    # via ``canonical_url``, not here.
+    # Keep the trailing slash: this is also the urljoin() base for the root page's links.
     normalized = canonical_url(raw_url, strip_trailing_slash=False)
     hostname = parsed.hostname.lower() if parsed.hostname else ""
     _http_client_mod._validate_public_hostname(hostname)
@@ -226,10 +221,7 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
     ordered: list[str] = []
 
     def add_url(url: str) -> None:
-        # Dedup key is canonical (slash-insensitive) so the source root
-        # isn't indexed twice under its slash-preserving fetch form and a
-        # stripped form discovered via a link to the same page; the stored
-        # value keeps whatever form is needed to fetch/urljoin it correctly.
+        # Dedup on the canonical key; keep the original (fetch-safe) form in ordered.
         key = canonical_url(url)
         if key in seen or len(ordered) >= page_cap:
             return
@@ -378,6 +370,7 @@ def _upsert_page_document(
     content_hash = _embedder_mod._content_hash(page.text)
     if existing and _embedder_mod._content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = page.title[:255]
+        existing.source_url = page.url
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.url
         if _embedder_mod._url_knowledge_extract_when_unchanged():
@@ -459,6 +452,7 @@ def _upsert_structured_document(
     content_hash = _embedder_mod._content_hash(parsed_text)
     if existing and _embedder_mod._content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = title[:255]
+        existing.source_url = url
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.swagger
         if _embedder_mod._url_knowledge_extract_when_unchanged():
@@ -956,10 +950,7 @@ def _finalize_crawl(
         .filter(Document.source_url.isnot(None))
         .all()
     )
-    # Map canonical key -> the exact URL this run indexed it under, so a
-    # duplicate row left over from before ``canonical_url`` existed (e.g. an
-    # old "/docs/" row once "/docs" is the one just written) is cleaned up
-    # too, not just rows for pages no longer discovered at all.
+    # Drop rows whose canonical key was indexed under a different exact URL too (dedup old duplicates).
     indexed_by_canonical = {canonical_url(url): url for url in result.indexed_urls}
     for doc in stale_docs:
         if not doc.source_url:

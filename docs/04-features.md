@@ -340,7 +340,7 @@ Rollout gate: switch the eval test tenant, run the eval before/after (`backend/e
 
 ### Retrieval observability (FI-115)
 
-Retrieval is instrumented with Langfuse-style traces for both chat requests and direct `/search` calls. The search path now records:
+Retrieval is instrumented with Langfuse-style traces for chat requests. The search path now records:
 
 - query variant fan-out (`variant_mode`, `query_variant_count`)
 - extra work caused by expansion (`extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`)

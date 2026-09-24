@@ -381,23 +381,3 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
             db.commit()
     finally:
         db.close()
-
-
-def delete_embeddings_for_document(
-    document_id: uuid.UUID,
-    db: Session,
-) -> int:
-    """
-    Delete all embeddings for a document.
-
-    Returns:
-        Count of deleted embeddings.
-    """
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    tenant_id = doc.tenant_id if doc is not None else None
-    result = db.query(Embedding).filter(Embedding.document_id == document_id).delete()
-    if doc is not None:
-        doc.updated_at = _utcnow()
-    db.commit()
-    invalidate_bm25_cache_for_tenant(tenant_id)
-    return result

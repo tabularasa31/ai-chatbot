@@ -87,15 +87,14 @@ def test_chunk_text_oversized_single_sentence_stays_one_chunk() -> None:
 
 
 @patch("backend.embeddings.service.get_openai_client")
-def test_create_list_rerun_and_delete_embeddings_journey(
+def test_create_and_rerun_embeddings_journey(
     mock_get_openai: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """Full lifecycle of a document's embeddings, one step at a time:
-    - create (via the API): chunks are saved with the expected metadata fields
+    """Lifecycle of a document's embeddings, one step at a time:
+    - create: chunks are saved with the expected metadata fields
     - rerun: calling create again replaces (not duplicates) the old chunks
-    - delete (via the service, no DELETE route left): removes every chunk
     """
     token = register_and_verify_user(tenant, db_session, email="emb@example.com")
     tenant.post(
@@ -169,19 +168,6 @@ def test_create_list_rerun_and_delete_embeddings_journey(
             .all()
         )
     assert len(after_rerun) == len(chunks)
-
-    # Step 3: delete (service function — no DELETE route left)
-    from backend.embeddings.service import delete_embeddings_for_document
-
-    deleted = delete_embeddings_for_document(uuid.UUID(doc_id), db_session)
-    assert deleted == len(chunks)
-    with SessionLocal() as fresh_db:
-        after_delete = (
-            fresh_db.query(Embedding)
-            .filter(Embedding.document_id == uuid.UUID(doc_id))
-            .all()
-        )
-    assert after_delete == []
 
 
 def test_create_embeddings_document_not_found(

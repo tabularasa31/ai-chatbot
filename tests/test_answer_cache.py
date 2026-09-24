@@ -37,7 +37,7 @@ from backend.chat.steps import answer_cache as cache_steps
 from backend.chat.types import ChatPipelineResult, PipelineRun
 from backend.core import redis as redis_mod
 from backend.core.config import settings
-from backend.embeddings.service import delete_embeddings_for_document
+from backend.embeddings.service import create_embeddings_for_document
 from backend.faq.faq_matcher import FAQMatchResult
 from backend.models import (
     AnswerCacheEntry,
@@ -299,7 +299,7 @@ async def test_fingerprint_tracks_documents_bot_config_and_reindex(
 
     # Re-indexing rewrites embeddings without changing any other document
     # column; the embeddings service touches the row so the fingerprint moves.
-    delete_embeddings_for_document(doc.id, db_session)
+    create_embeddings_for_document(doc.id, db_session, api_key="sk-test")
     after_reindex = (await resolve()).kb_fingerprint
     assert after_reindex not in seen
     seen.add(after_reindex)

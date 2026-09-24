@@ -11,10 +11,8 @@ import uuid
 from unittest.mock import Mock
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.search.service import (
     _async_rewrite_query_for_retrieval,
     async_embed_queries,
@@ -571,38 +569,42 @@ async def test_embed_queries_with_stats_reports_actual_request_count(
 @pytest.mark.asyncio
 async def test_search_single_embedding_match(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
     async_search_session,
 ) -> None:
-    """Create user, tenant, document, embedding; mock the embedding call to return a similar vector."""
+    """Create tenant, document, embedding; mock the embedding call to return a similar vector."""
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
     from backend.search.service import search_similar_chunks_detailed_async
+    from tests.test_models import _create_client, _create_user
 
     vec = [0.1] * 1536
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
-    token = register_and_verify_user(tenant, db_session, email="single@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Single Tenant"},
+    user = _create_user(db_session, email="single@example.com")
+    tenant_id = _create_client(db_session, user, name="Single Tenant").id
+
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="doc.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="Relevant content here.",
     )
-    set_client_openai_key(tenant, token)
-    tenant_id = cl_resp.json()["id"]
-    md_content = b"# Doc\n\nRelevant content here."
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("doc.md", md_content, "text/markdown")},
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="Relevant content here.",
+            vector=None,
+            metadata_json={"chunk_index": 0, "vector": vec},
+        )
     )
-    doc_id = upload_resp.json()["id"]
-    tenant.post(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    db_session.commit()
 
     bundle = await search_similar_chunks_detailed_async(
-        tenant_id=uuid.UUID(tenant_id),
+        tenant_id=tenant_id,
         query="relevant content",
         top_k=3,
         db=async_search_session,
@@ -610,7 +612,7 @@ async def test_search_single_embedding_match(
     )
     results = bundle.results
     assert len(results) == 1
-    assert str(results[0][0].document_id) == doc_id
+    assert results[0][0].document_id == doc.id
     assert results[0][1] > 0.0
     assert "Relevant content" in results[0][0].chunk_text
 

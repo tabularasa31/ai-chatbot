@@ -13,14 +13,8 @@ import {
 } from "@/lib/api";
 import { StatCard } from "@/components/ui/stat-card";
 import { EmptyState } from "@/components/ui/empty-state";
-
-function formatDateTime(value: string | null): string {
-  if (!value) return "—";
-  return new Date(value).toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
+import { useClientMe } from "@/hooks/useApi";
+import { formatDateTime } from "@/lib/format";
 
 function CoverageBadge({ item }: { item: GapItem }) {
   const styles: Record<string, string> = {
@@ -339,14 +333,8 @@ export default function GapAnalyzerPage() {
   const [recalculating, setRecalculating] = useState(false);
   const [modeAStatus, setModeAStatus] = useState<GapModeAStatusFilter>("active");
   const [modeBStatus, setModeBStatus] = useState<GapModeBStatusFilter>("active");
-  const [hasOpenAiKey, setHasOpenAiKey] = useState(true);
-
-  useEffect(() => {
-    api.clients
-      .getMe()
-      .then((client) => setHasOpenAiKey(Boolean(client.has_openai_key)))
-      .catch(() => setHasOpenAiKey(false));
-  }, []);
+  const { data: client, error: clientError } = useClientMe();
+  const hasOpenAiKey = clientError ? false : client ? Boolean(client.has_openai_key) : true;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -548,7 +536,7 @@ export default function GapAnalyzerPage() {
             <StatCard label="Active gaps" value={summary?.total_active ?? "—"} note={summary?.impact_statement} />
             <StatCard label="Uncovered" value={summary?.uncovered_count ?? "—"} />
             <StatCard label="Partial" value={summary?.partial_count ?? "—"} />
-            <StatCard label="Last updated" value={summary?.last_updated ? formatDateTime(summary.last_updated) : "—"} />
+            <StatCard label="Last updated" value={formatDateTime(summary?.last_updated)} />
           </>
         )}
       </div>

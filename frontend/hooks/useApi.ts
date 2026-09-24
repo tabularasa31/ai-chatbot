@@ -11,14 +11,26 @@ import type {
   Thread,
   AnalyticsPeriod,
   AnalyticsSummaryResponse,
+  AuthUser,
 } from "@/lib/api";
 
 export function useClientMe() {
   return useSWR<TenantMeResponse>("client/me", () => api.clients.getMe());
 }
 
+export function useAuthUser(enabled = true) {
+  return useSWR<AuthUser>(enabled ? "auth/me" : null, () => api.auth.getMe());
+}
+
 export function useBots() {
   return useSWR<BotResponse[]>("bots", () => api.bots.list());
+}
+
+export function useActiveBot({ fallbackToFirst = false }: { fallbackToFirst?: boolean } = {}) {
+  const { data: bots, isLoading, isValidating, error, mutate } = useBots();
+  const activeBot =
+    bots?.find((b) => b.is_active) ?? (fallbackToFirst ? bots?.[0] : undefined) ?? null;
+  return { bots, activeBot, isLoading, isValidating, error, mutate };
 }
 
 export function useMembers() {

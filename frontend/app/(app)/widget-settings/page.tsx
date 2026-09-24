@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useActiveBot } from "@/hooks/useApi";
 
@@ -18,7 +18,7 @@ export default function WidgetSettingsPage() {
   const [linkSafetyEnabled, setLinkSafetyEnabled] = useState(false);
   const [allowedDomainsInput, setAllowedDomainsInput] = useState("");
   const [settingsSavedOk, setSettingsSavedOk] = useState(false);
-  const seededBotId = useRef<string | null>(null);
+  const [seededBotId, setSeededBotId] = useState<string | null>(null);
 
   useEffect(() => {
     if (loadError) setError(loadError instanceof Error ? loadError.message : "Failed to load");
@@ -29,11 +29,11 @@ export default function WidgetSettingsPage() {
   // later background revalidation must not clobber in-progress edits.
   useEffect(() => {
     if (!defaultBot || isValidating) return;
-    if (seededBotId.current === defaultBot.id) return;
-    seededBotId.current = defaultBot.id;
+    if (seededBotId === defaultBot.id) return;
+    setSeededBotId(defaultBot.id);
     setLinkSafetyEnabled(defaultBot.link_safety_enabled ?? false);
     setAllowedDomainsInput((defaultBot.allowed_domains ?? []).join("\n"));
-  }, [defaultBot, isValidating]);
+  }, [defaultBot, isValidating, seededBotId]);
 
   async function copyBotId() {
     if (!defaultBot?.public_id) return;
@@ -72,7 +72,7 @@ export default function WidgetSettingsPage() {
     }
   }
 
-  if (loading || (defaultBot && seededBotId.current !== defaultBot.id)) {
+  if (loading || (defaultBot && seededBotId !== defaultBot.id)) {
     return <p className="text-slate-600">Loading…</p>;
   }
 

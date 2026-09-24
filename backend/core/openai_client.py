@@ -184,6 +184,34 @@ def is_reasoning_model(model: str) -> bool:
     return any(m == p or m.startswith(p + "-") for p in _REASONING_MODEL_PREFIXES)
 
 
+def completion_kwargs(
+    model: str,
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    json: bool = False,
+) -> dict:
+    """Build the model-dependent sampling kwargs for a chat.completions.create call.
+
+    Reasoning models (see :func:`is_reasoning_model`) reject ``temperature``
+    and a ``response_format`` override, so both are omitted for them; only
+    ``max_completion_tokens`` (when ``max_tokens`` is given) is passed.
+    Non-reasoning models get ``temperature`` (when given), ``max_completion_tokens``
+    (when ``max_tokens`` is given), and ``response_format={"type": "json_object"}``
+    when ``json=True``.
+    """
+    if is_reasoning_model(model):
+        return {"max_completion_tokens": max_tokens} if max_tokens is not None else {}
+    kwargs: dict = {}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if max_tokens is not None:
+        kwargs["max_completion_tokens"] = max_tokens
+    if json:
+        kwargs["response_format"] = {"type": "json_object"}
+    return kwargs
+
+
 def is_quota_exceeded(exc: RateLimitError) -> bool:
     """Return True when the OpenAI error is an insufficient_quota / billing error."""
     body = getattr(exc, "body", None) or {}

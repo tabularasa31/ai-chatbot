@@ -26,7 +26,7 @@ from backend.chat.pii import redact, redact_for_egress
 from backend.chat.types import QuestionIntentResult
 from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
-from backend.core.openai_client import get_async_openai_client
+from backend.core.openai_client import completion_kwargs, get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
 from backend.email.reply_lane import escalation_reply_to, revoke_reply_token
 from backend.email.service import send_email
@@ -315,11 +315,9 @@ async def detect_human_request(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message},
                 ],
-                temperature=0,
                 # Three boolean keys — 30 tokens truncates the JSON, and a
                 # truncated body parses as a classifier failure.
-                max_completion_tokens=60,
-                response_format={"type": "json_object"},
+                **completion_kwargs(settings.human_request_model, temperature=0, max_tokens=60, json=True),
             ),
             langfuse_observation=langfuse_observation,
         )
@@ -429,9 +427,7 @@ async def classify_question_intent(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message},
                 ],
-                temperature=0,
-                max_completion_tokens=60,
-                response_format={"type": "json_object"},
+                **completion_kwargs(settings.human_request_model, temperature=0, max_tokens=60, json=True),
             ),
             langfuse_observation=langfuse_observation,
         )

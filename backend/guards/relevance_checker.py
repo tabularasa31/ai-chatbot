@@ -10,7 +10,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
-from backend.core.openai_client import get_async_openai_client
+from backend.core.openai_client import completion_kwargs, get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
 from backend.guards.types import Verdict, VerdictReason
 from backend.models import TenantProfile as TenantProfileModel
@@ -381,9 +381,9 @@ async def async_check_relevance_with_profile(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0,
-                max_completion_tokens=80,
-                response_format={"type": "json_object"},
+                **completion_kwargs(
+                    settings.relevance_guard_model, temperature=0, max_tokens=80, json=True
+                ),
             ),
             endpoint="chat.completions",
             langfuse_observation=span,

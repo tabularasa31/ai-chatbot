@@ -14,7 +14,11 @@ from backend.chat.language import (
     log_llm_tokens,
 )
 from backend.core.config import settings
-from backend.core.openai_client import get_async_openai_client, is_reasoning_model
+from backend.core.openai_client import (
+    completion_kwargs,
+    get_async_openai_client,
+    is_reasoning_model,
+)
 from backend.core.openai_retry import async_call_openai_with_retry
 from backend.models import EscalationPhase
 
@@ -195,6 +199,11 @@ async def _generate_context_pre_confirm(
     """
     model_name = model or settings.escalation_model
     _reasoning = is_reasoning_model(model_name)
+    _max_tokens = (
+        settings.chat_response_max_tokens_reasoning
+        if _reasoning
+        else settings.escalation_max_completion_tokens
+    )
     user_block = (
         f"RESPONSE_LANGUAGE:\n{response_language}\n\n"
         f"VARIANT:\n{variant}\n\n"
@@ -213,13 +222,7 @@ async def _generate_context_pre_confirm(
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                **({} if _reasoning else {"temperature": 0.3}),
-                max_completion_tokens=(
-                    settings.chat_response_max_tokens_reasoning
-                    if _reasoning
-                    else settings.escalation_max_completion_tokens
-                ),
-                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
+                **completion_kwargs(model_name, temperature=0.3, max_tokens=_max_tokens, json=True),
             ),
         )
         raw = response.choices[0].message.content or "{}"
@@ -353,7 +356,6 @@ async def classify_pre_confirm_reply(
     dropping it. Never raises.
     """
     model_name = model or settings.escalation_model
-    _reasoning = is_reasoning_model(model_name)
     messages = [
         {"role": "system", "content": _PRE_CONFIRM_CLASSIFIER_SYSTEM},
         {
@@ -370,9 +372,7 @@ async def classify_pre_confirm_reply(
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                **({} if _reasoning else {"temperature": 0}),
-                max_completion_tokens=20,
-                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
+                **completion_kwargs(model_name, temperature=0, max_tokens=20, json=True),
             ),
             langfuse_observation=langfuse_observation,
         )
@@ -427,7 +427,6 @@ async def classify_followup_reply(
     dropped on a transient outage. Never raises.
     """
     model_name = model or settings.escalation_model
-    _reasoning = is_reasoning_model(model_name)
     messages = [
         {"role": "system", "content": _FOLLOWUP_CLASSIFIER_SYSTEM},
         {
@@ -444,9 +443,7 @@ async def classify_followup_reply(
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                **({} if _reasoning else {"temperature": 0}),
-                max_completion_tokens=20,
-                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
+                **completion_kwargs(model_name, temperature=0, max_tokens=20, json=True),
             ),
             langfuse_observation=langfuse_observation,
         )
@@ -570,10 +567,9 @@ async def complete_escalation_openai_turn(
         client = get_async_openai_client(
             api_key, timeout=settings.escalation_openai_timeout_seconds
         )
-        _esc_reasoning = is_reasoning_model(model_name)
         _esc_max_tokens = (
             settings.chat_response_max_tokens_reasoning
-            if _esc_reasoning
+            if is_reasoning_model(model_name)
             else settings.escalation_max_completion_tokens
         )
         response = await async_call_openai_with_retry(
@@ -581,9 +577,7 @@ async def complete_escalation_openai_turn(
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                **({} if _esc_reasoning else {"temperature": 0.3}),
-                max_completion_tokens=_esc_max_tokens,
-                **({} if _esc_reasoning else {"response_format": {"type": "json_object"}}),
+                **completion_kwargs(model_name, temperature=0.3, max_tokens=_esc_max_tokens, json=True),
             ),
             langfuse_observation=langfuse_observation,
         )

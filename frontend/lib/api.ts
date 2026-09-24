@@ -598,7 +598,13 @@ type RequestOptions = {
   skipAuthRedirect?: boolean;
 };
 
-/** Fetch → parse JSON (tolerating only an empty/204 body) → throw with the server's message on failure. */
+/**
+ * Fetch → parse JSON → throw with the server's message on failure.
+ * Parsing is strict on success (an unparsable 200 body is a real bug worth
+ * surfacing), but tolerant on failure — an error response can be non-JSON
+ * (a 502 HTML page, say), and losing the status-derived fallback message to
+ * a JSON.parse error would be worse than losing the body.
+ */
 async function request<T>(url: string, fallback: string, init: RequestOptions = {}): Promise<T> {
   const { json, headers, body, ...rest } = init;
   const res = await apiFetch(url, {
@@ -606,7 +612,7 @@ async function request<T>(url: string, fallback: string, init: RequestOptions = 
     headers: json !== undefined ? { "Content-Type": "application/json", ...headers } : headers,
     body: json !== undefined ? JSON.stringify(json) : body,
   });
-  const data = await parseJsonSafe(res);
+  const data = res.ok ? await parseJsonSafe(res) : await parseJsonSafe(res).catch(() => undefined);
   if (!res.ok) throw new Error(getErrorMessage(data, fallback));
   return data as T;
 }

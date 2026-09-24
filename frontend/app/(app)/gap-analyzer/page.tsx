@@ -11,6 +11,7 @@ import {
   type GapModeAStatusFilter,
   type GapModeBStatusFilter,
 } from "@/lib/api";
+import { useClientMe } from "@/hooks/useApi";
 
 function formatDateTime(value: string | null): string {
   if (!value) return "—";
@@ -363,14 +364,8 @@ export default function GapAnalyzerPage() {
   const [recalculating, setRecalculating] = useState(false);
   const [modeAStatus, setModeAStatus] = useState<GapModeAStatusFilter>("active");
   const [modeBStatus, setModeBStatus] = useState<GapModeBStatusFilter>("active");
-  const [hasOpenAiKey, setHasOpenAiKey] = useState(true);
-
-  useEffect(() => {
-    api.clients
-      .getMe()
-      .then((client) => setHasOpenAiKey(Boolean(client.has_openai_key)))
-      .catch(() => setHasOpenAiKey(false));
-  }, []);
+  const { data: client, error: clientError } = useClientMe();
+  const hasOpenAiKey = clientError ? false : client ? Boolean(client.has_openai_key) : true;
 
   const load = useCallback(async () => {
     setLoading(true);

@@ -2,9 +2,9 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { mutate as mutateGlobal } from "swr";
 import { api, type HandoffState, type InboxRow, type Thread, type ThreadMessage } from "@/lib/api";
 import { useClientMe, useInbox, useThread } from "@/hooks/useApi";
-import { INBOX_CHANGED_EVENT } from "@/components/Sidebar";
 
 type Scope = "attention" | "all";
 
@@ -442,7 +442,7 @@ function InboxPageContent() {
   const rows = useMemo(() => inbox?.items ?? [], [inbox]);
   const refresh = useCallback(async () => {
     await mutate();
-    window.dispatchEvent(new Event(INBOX_CHANGED_EVENT));
+    mutateGlobal("operator/inbox/summary");
   }, [mutate]);
 
   return (

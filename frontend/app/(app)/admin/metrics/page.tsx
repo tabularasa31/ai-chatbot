@@ -3,29 +3,25 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type AdminTenantMetricsItem, type AdminMetricsSummary } from "@/lib/api";
+import { useClientMe } from "@/hooks/useApi";
 
 export default function AdminMetricsPage() {
   const router = useRouter();
+  const { data: client, isLoading: clientLoading } = useClientMe();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<AdminMetricsSummary | null>(null);
   const [clients, setClients] = useState<AdminTenantMetricsItem[]>([]);
-  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+  const isAdmin = clientLoading ? null : client?.is_admin ?? false;
 
   useEffect(() => {
+    if (clientLoading) return;
+    if (!isAdmin) {
+      setLoading(false);
+      return;
+    }
     async function load() {
       try {
-        const client = await api.clients.getMe().catch(() => null);
-        if (!client) {
-          setIsAdmin(false);
-          return;
-        }
-        if (!client.is_admin) {
-          setIsAdmin(false);
-          return;
-        }
-        setIsAdmin(true);
-
         const [summaryData, clientsData] = await Promise.all([
           api.admin.getSummary(),
           api.admin.getTenants(),
@@ -35,7 +31,6 @@ export default function AdminMetricsPage() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : "";
         if (msg.includes("403") || msg.includes("Admin only")) {
-          setIsAdmin(false);
           return;
         }
         setError(msg || "Failed to load metrics, please try again.");
@@ -44,7 +39,7 @@ export default function AdminMetricsPage() {
       }
     }
     load();
-  }, []);
+  }, [clientLoading, isAdmin]);
 
   useEffect(() => {
     if (loading) return;

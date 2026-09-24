@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { Suspense, useState } from "react";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
+import { useActiveBot } from "@/hooks/useApi";
 
 const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ||
@@ -13,24 +13,13 @@ const WIDGET_LOADER_URL =
 type Mode = "bubble" | "inline";
 
 function EmbedContent() {
-  const [publicId, setPublicId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const { activeBot, isLoading: loading, error: loadError } = useActiveBot({ fallbackToFirst: true });
+  const publicId = activeBot?.public_id ?? null;
+  const error = loadError ? (loadError instanceof Error ? loadError.message : "Failed to load") : "";
   const [mode, setMode] = useState<Mode>("bubble");
   const [color, setColor] = useState("#a855f7");
   const [position, setPosition] = useState<"right" | "left">("right");
   const [targetId, setTargetId] = useState("chat9-widget");
-
-  useEffect(() => {
-    api.bots
-      .list()
-      .then((bots) => {
-        const firstActive = bots.find((b) => b.is_active) ?? bots[0];
-        setPublicId(firstActive?.public_id ?? null);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
-      .finally(() => setLoading(false));
-  }, []);
 
   // The dashboard origin where /widget/* and /api/widget-* live; only emitted
   // when it differs from the production default the loader bakes in.

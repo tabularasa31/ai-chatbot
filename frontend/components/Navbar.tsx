@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
 import { api, clearSession } from "@/lib/api";
 import { Logo } from "@/components/Logo";
+import { useClientMe, useAuthUser } from "@/hooks/useApi";
 
 export function Navbar({
   initialEmail = null,
@@ -13,21 +13,10 @@ export function Navbar({
   initialEmail?: string | null;
 }) {
   const router = useRouter();
-  const [isVerified, setIsVerified] = useState<boolean | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(initialEmail);
-
-  useEffect(() => {
-    api.clients
-      .getMe()
-      .catch(() => null)
-      .then((client) => setIsVerified(client ? client.is_verified : null));
-    if (!initialEmail) {
-      api.auth
-        .getMe()
-        .catch(() => null)
-        .then((user) => setUserEmail(user?.email ?? null));
-    }
-  }, [initialEmail]);
+  const { data: client } = useClientMe();
+  const isVerified = client ? client.is_verified : null;
+  const { data: authUser } = useAuthUser();
+  const userEmail = initialEmail ?? authUser?.email ?? null;
 
   function handleLogout() {
     clearSession();

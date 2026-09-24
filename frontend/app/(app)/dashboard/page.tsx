@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { clearSession, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
-import { useClientMe, useBots } from "@/hooks/useApi";
+import { useClientMe, useActiveBot } from "@/hooks/useApi";
 
 const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ||
@@ -19,9 +19,8 @@ function DashboardContent() {
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
 
   const { data: client, error: clientError, isLoading: clientLoading } = useClientMe();
-  const { data: bots, isLoading: botsLoading } = useBots();
+  const { activeBot: firstActiveBot, isLoading: botsLoading } = useActiveBot({ fallbackToFirst: true });
 
-  const firstActiveBot = bots?.find((b) => b.is_active) ?? bots?.[0];
   const botPublicId = firstActiveBot?.public_id ?? null;
 
   useEffect(() => {

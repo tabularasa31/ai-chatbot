@@ -928,6 +928,23 @@ handoff even over a stood-down clarifying reply (`rag.py:623-634`), and when
 they do, the stand-down is not counted
 (`_clarifying_stood_down = _clarifying_stood_down and not escalate`, `rag.py:636-638`).
 
+### Checklist before the handoff
+
+When the reply gives the user steps they can run themselves (a setting to
+change, something to verify on their side) and they have not said they ran
+them, the model ends it with a numbered checklist, asks for the result and
+tags it `<checklist/>`. Such a reply never gets the dead-end offer appended
+and stands down a retrieval-score escalation exactly like `<clarifying/>`.
+It sets `chats.last_reply_was_checklist`, which any later reply resets.
+
+On the next turn an outright human request that reports no result
+(`message_has_request_content` is false — "just have support write to me")
+does not create a ticket: the bot asks once whether the steps were run and
+what happened (`_CHECKLIST_REASK_CANONICAL_TEXT` in
+`backend/chat/handlers/escalation.py`, localized). That re-ask resets the
+flag, so repeating the request creates the ticket. A request that carries the
+result ("did both, still 502, forward it") escalates at once.
+
 ### Overlap rules — which path wins
 
 When more than one trigger could fire on the same turn:

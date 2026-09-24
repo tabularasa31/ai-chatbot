@@ -696,6 +696,62 @@ def test_explicit_human_request_after_prior_substantive_content_escalates_immedi
 
 
 @pytest.mark.escalation
+@pytest.mark.parametrize(
+    ("follow_ups", "reports_result", "tickets_per_turn"),
+    [
+        pytest.param(("just have support write to me",) * 2, False, (0, 1), id="bare_forward"),
+        pytest.param(("did both, still 502, please forward it",), True, (1,), id="with_result"),
+    ],
+)
+def test_checklist_reply_holds_handoff_until_user_reports_result(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    follow_ups: tuple[str, ...],
+    reports_result: bool,
+    tickets_per_turn: tuple[int, ...],
+) -> None:
+    """After a checklist reply, a bare request to forward the conversation gets
+    one re-ask for the result and only a second request creates the ticket; a
+    request that reports what the checks showed escalates at once."""
+    from backend.chat.handlers.escalation import _CHECKLIST_REASK_CANONICAL_TEXT
+    from backend.models import EscalationTicket
+
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email=f"checklist-{reports_result}@example.com", name="Checklist"
+    )
+    chat = _make_chat(db_session, tenant_id)
+    checklist = "1. Set the origin port to 80.\n2. Turn off HTTPS to origin.\nWhat happened?"
+    _seed_rag_answer(mock_openai_client, db_session, tenant_id, answer=f"{checklist} <checklist/>")
+    forward_request = HumanRequestResult(
+        human_request=True,
+        message_has_request_content=reports_result,
+        human_request_explicit=True,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.detect_human_request",
+        _human_request_sequence(
+            HumanRequestResult(human_request=False, message_has_request_content=True),
+            *(forward_request,) * len(follow_ups),
+        ),
+    )
+
+    [r1] = drive(tenant, api_key, chat.session_id, "https gives 502")
+    assert r1["text"] == checklist
+    for follow_up, expected_tickets in zip(follow_ups, tickets_per_turn):
+        [reply] = drive(tenant, api_key, chat.session_id, follow_up)
+        tickets = (
+            db_session.query(EscalationTicket)
+            .filter(EscalationTicket.tenant_id == tenant_id)
+            .count()
+        )
+        assert tickets == expected_tickets
+        if expected_tickets == 0:
+            assert reply["text"] == _CHECKLIST_REASK_CANONICAL_TEXT
+
+
+@pytest.mark.escalation
 def test_implied_human_request_without_content_on_fresh_chat_falls_through_to_rag(
     mock_openai_client: Mock,
     tenant: TestClient,

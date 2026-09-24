@@ -910,7 +910,7 @@ def test_classified_intent_reaches_generation_as_quick_answers(
 
     async def _fake_generate(*_args, **kwargs):
         seen.append(kwargs.get("quick_answer_items"))
-        return ("Answer.", 50, 20, 30, False, False, False)
+        return ("Answer.", 50, 20, 30, False, False, False, False)
 
     monkeypatch.setattr(
         "backend.chat.steps.generate.async_generate_answer", _fake_generate
@@ -1749,7 +1749,7 @@ def test_successful_turn_resets_rephrase_flag(
     )
     monkeypatch.setattr(
         "backend.chat.steps.generate.async_generate_answer",
-        _as_async(lambda *_a, **_kw: ("OK answer", 5, 10, 5, False, False, False)),
+        _as_async(lambda *_a, **_kw: ("OK answer", 5, 10, 5, False, False, False, False)),
     )
 
     session_id = uuid.uuid4()

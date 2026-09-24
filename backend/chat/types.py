@@ -155,6 +155,7 @@ class ChatPipelineResult:
     # actually spent, and whether a handoff offer may be appended underneath
     # (it may not: that asks twice in one reply).
     llm_clarifying: bool = False
+    llm_checklist: bool = False
     # Clarify reason the decision engine derived BEFORE generation, when the
     # prompt required this turn to end in a clarifying question. None when no
     # clarification was required. Read by the handler to charge the

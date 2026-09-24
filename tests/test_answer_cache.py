@@ -531,7 +531,7 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
 
     async def _generate(*_args, **_kwargs):
         counters["generate"] += 1
-        return (answer, 40, 30, 10, False, False, False)
+        return (answer, 40, 30, 10, False, False, False, False)
 
     async def _retrieve(*_args, **_kwargs):
         counters["retrieve"] += 1

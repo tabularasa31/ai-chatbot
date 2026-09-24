@@ -410,25 +410,14 @@ def _find_existing_faq(
     question_embedding: list[float],
 ) -> TenantFaq | None:
     """Return existing FAQ with cosine similarity >= threshold, or None."""
-    from backend.tenant_knowledge.faq_service import DEDUP_SIMILARITY_THRESHOLD
-    try:
-        distance_expr = TenantFaq.question_embedding.cosine_distance(question_embedding)
-        row = (
-            db.query(TenantFaq, distance_expr.label("distance"))
-            .filter(TenantFaq.tenant_id == tenant_id)
-            .filter(TenantFaq.question_embedding.isnot(None))
-            .order_by(distance_expr)
-            .limit(1)
-            .first()
-        )
-        if not row:
-            return None
-        faq, distance = row
-        similarity = max(0.0, 1.0 - float(distance))
-        if similarity >= DEDUP_SIMILARITY_THRESHOLD:
-            return faq
-    except Exception:
-        pass
+    from backend.tenant_knowledge.faq_service import (
+        DEDUP_SIMILARITY_THRESHOLD,
+        find_nearest_faq,
+    )
+
+    nearest = find_nearest_faq(db, tenant_id, question_embedding)
+    if nearest is not None and nearest[1] >= DEDUP_SIMILARITY_THRESHOLD:
+        return nearest[0]
     return None
 
 

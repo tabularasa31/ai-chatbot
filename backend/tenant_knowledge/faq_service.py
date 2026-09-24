@@ -18,13 +18,19 @@ DEDUP_SIMILARITY_THRESHOLD = 0.92
 FAQ_MIN_CONFIDENCE_THRESHOLD = 0.5
 
 
-def _dedupe_existing_faq_by_similarity(
-    *,
+def find_nearest_faq(
     db: Session,
     tenant_id: uuid.UUID,
     question_embedding: list[float],
-) -> bool:
-    """Return True if candidate is duplicate and should be skipped."""
+    *,
+    sqlite_fallback: bool = False,
+) -> tuple[TenantFaqModel, float] | None:
+    """Return the tenant's nearest existing FAQ by cosine similarity, or None.
+
+    ``sqlite_fallback`` runs a linear in-Python scan (vector stored as TEXT)
+    when the pgvector query raises — used by callers that need dedup to also
+    work against the SQLite test DB.
+    """
     try:
         distance_expr = TenantFaqModel.question_embedding.cosine_distance(
             question_embedding
@@ -38,11 +44,12 @@ def _dedupe_existing_faq_by_similarity(
             .first()
         )
         if not row:
-            return False
-        distance = row[1]
-        similarity = max(0.0, 1.0 - float(distance))
-        return similarity >= DEDUP_SIMILARITY_THRESHOLD
+            return None
+        faq, distance = row
+        return faq, max(0.0, 1.0 - float(distance))
     except Exception:
+        if not sqlite_fallback:
+            return None
         # SQLite fallback (vector stored as TEXT for tests).
         existing = (
             db.query(TenantFaqModel)
@@ -50,13 +57,27 @@ def _dedupe_existing_faq_by_similarity(
             .filter(TenantFaqModel.question_embedding.isnot(None))
             .all()
         )
-        best = 0.0
+        best_faq: TenantFaqModel | None = None
+        best_score = 0.0
         for item in existing:
             v = _vector_from_unknown(item.question_embedding)
             if v is None:
                 continue
-            best = max(best, _cosine_similarity(question_embedding, v))
-        return best >= DEDUP_SIMILARITY_THRESHOLD
+            score = _cosine_similarity(question_embedding, v)
+            if best_faq is None or score > best_score:
+                best_faq, best_score = item, score
+        return (best_faq, best_score) if best_faq is not None else None
+
+
+def _dedupe_existing_faq_by_similarity(
+    *,
+    db: Session,
+    tenant_id: uuid.UUID,
+    question_embedding: list[float],
+) -> bool:
+    """Return True if candidate is duplicate and should be skipped."""
+    nearest = find_nearest_faq(db, tenant_id, question_embedding, sqlite_fallback=True)
+    return nearest is not None and nearest[1] >= DEDUP_SIMILARITY_THRESHOLD
 
 
 def insert_new_faq_candidates(

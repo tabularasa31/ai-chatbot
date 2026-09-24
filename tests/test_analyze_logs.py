@@ -529,7 +529,8 @@ def test_run_embedding_retention_deletes_only_rows_past_cutoff(
     db_session, client_row
 ):
     """Retention deletes embeddings whose last_used_at is older than the
-    configured window, and leaves fresher rows untouched."""
+    configured window, and leaves fresher rows untouched. batch_size=1
+    forces two loop iterations, exercising the multi-batch exit."""
     from backend.jobs.analyze_chat_logs import run_embedding_retention
 
     now = datetime.now(timezone.utc)
@@ -541,18 +542,24 @@ def test_run_embedding_retention_deletes_only_rows_past_cutoff(
         embedding=[0.0] * 1536,
         last_used_at=now - timedelta(days=retention_days + 1),
     )
+    stale_too = MessageEmbedding(
+        message_id=uuid.uuid4(),
+        tenant_id=client_row.id,
+        embedding=[0.0] * 1536,
+        last_used_at=now - timedelta(days=retention_days + 2),
+    )
     fresh = MessageEmbedding(
         message_id=uuid.uuid4(),
         tenant_id=client_row.id,
         embedding=[0.0] * 1536,
         last_used_at=now - timedelta(days=retention_days - 1),
     )
-    db_session.add_all([stale, fresh])
+    db_session.add_all([stale, stale_too, fresh])
     db_session.commit()
 
-    deleted = run_embedding_retention(db_session)
+    deleted = run_embedding_retention(db_session, batch_size=1)
 
-    assert deleted == 1
+    assert deleted == 2
     remaining_ids = {
         row.message_id for row in db_session.query(MessageEmbedding).all()
     }

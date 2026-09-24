@@ -299,6 +299,7 @@ def create_embeddings_for_document(
         db.add(emb)
         embeddings.append(emb)
     db.commit()
+    invalidate_tenant_search_caches(doc.tenant_id)
     for emb in embeddings:
         db.refresh(emb)
 

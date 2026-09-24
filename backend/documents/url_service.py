@@ -1036,6 +1036,7 @@ def _finalize_crawl(
     run.failed_urls = result.failures
     run.duration_seconds = max(0, int(time.monotonic() - started))
     db.commit()
+    invalidate_tenant_search_caches(source.tenant_id)
 
 
 def _summarize_crawl_failure(failures: list[dict[str, str]]) -> str:

@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from arq.cron import cron
-from sqlalchemy import func
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.chat.pii import redact_for_egress
@@ -810,11 +811,6 @@ def run_embedding_retention(
     time so rows written during the run are never eligible and the loop
     always terminates. Returns the number of rows deleted.
     """
-    from datetime import timedelta
-
-    from sqlalchemy import delete as sa_delete
-    from sqlalchemy import select
-
     cutoff = datetime.now(UTC) - timedelta(
         days=settings.log_embeddings_retention_days
     )
@@ -847,8 +843,14 @@ async def _tick_message_embedding_retention(ctx: dict) -> None:
     """Daily ARQ cron: purge message embeddings past the retention window.
 
     No Sentry Crons monitor here — the one monitor slot is held by
-    ``scheduled_crawl_tick``.
+    ``scheduled_crawl_tick``. Runs the sync batched deletes off the ARQ
+    event loop thread; ``asyncio.to_thread`` opens its own DB session so
+    the sync ``Session`` is never touched across a thread boundary.
     """
+    await asyncio.to_thread(_run_embedding_retention_once)
+
+
+def _run_embedding_retention_once() -> None:
     from backend.core.db import SessionLocal
 
     db = SessionLocal()

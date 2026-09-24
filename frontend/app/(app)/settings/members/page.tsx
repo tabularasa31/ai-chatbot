@@ -3,8 +3,6 @@
 import { useEffect, useState } from "react";
 import { api, type TenantMember, type TenantRole, type TenantRoleValue } from "@/lib/api";
 import { useClientMe, useMembers } from "@/hooks/useApi";
-import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 
 const ROLE_LABEL: Record<TenantRole, string> = {
   owner: "Owner",
@@ -20,9 +18,9 @@ function RoleBadge({ role }: { role: TenantRoleValue }) {
   // itself rather than rendering as an empty badge.
   const style = styles[role as TenantRole] ?? "bg-slate-100 text-slate-600";
   return (
-    <Badge className={`rounded ${style}`}>
+    <span className={`px-2 py-0.5 text-xs font-medium rounded ${style}`}>
       {ROLE_LABEL[role as TenantRole] ?? role}
-    </Badge>
+    </span>
   );
 }
 
@@ -158,9 +156,9 @@ export default function MembersPage() {
 
         {inviteError && <p className="text-red-600 text-sm">{inviteError}</p>}
         {notice && (
-          <Alert tone="success" variant="soft">
+          <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             {notice}
-          </Alert>
+          </div>
         )}
       </div>
 
@@ -168,14 +166,14 @@ export default function MembersPage() {
         <h2 className="text-base font-semibold text-slate-800 mb-4">Members</h2>
 
         {loadError && (
-          <Alert tone="error" variant="compact">
+          <div className="bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm mb-3">
             {loadError instanceof Error ? loadError.message : "Failed to load members"}
-          </Alert>
+          </div>
         )}
         {actionError && (
-          <Alert tone="error" variant="compact">
+          <div className="bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm mb-3">
             {actionError}
-          </Alert>
+          </div>
         )}
 
         {isLoading ? (

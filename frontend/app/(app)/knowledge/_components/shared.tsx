@@ -1,7 +1,6 @@
 "use client";
 
 import type { DocumentListItem, UrlSource } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
 
 export type MixedRow =
   | { kind: "file"; item: DocumentListItem }
@@ -15,9 +14,9 @@ export function TypeBadge({ type }: { type: string }) {
     url: "bg-amber-400/15 text-amber-600",
   };
   return (
-    <Badge className={`rounded text-[10px] font-mono ${styles[type] ?? "bg-slate-100 text-slate-600"}`}>
+    <span className={`rounded px-2 py-0.5 text-[10px] font-mono font-medium ${styles[type] ?? "bg-slate-100 text-slate-600"}`}>
       {type}
-    </Badge>
+    </span>
   );
 }
 
@@ -33,9 +32,9 @@ export function StatusBadge({ status }: { status: string }) {
     stale: "bg-yellow-100 text-yellow-800",
   };
   return (
-    <Badge className={styles[status] ?? "bg-slate-100 text-slate-800"}>
+    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? "bg-slate-100 text-slate-800"}`}>
       {status}
-    </Badge>
+    </span>
   );
 }
 

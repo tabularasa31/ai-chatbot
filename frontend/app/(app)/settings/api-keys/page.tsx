@@ -6,8 +6,6 @@ import {
   type RotateTenantApiKeyResponse,
   type TenantApiKeyResponse,
 } from "@/lib/api";
-import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 
 type Reason = "leaked" | "scheduled" | "compromise" | "other";
 
@@ -41,9 +39,9 @@ function StatusBadge({ status }: { status: TenantApiKeyResponse["status"] }) {
     revoked: "bg-slate-200 text-slate-600",
   };
   return (
-    <Badge className={`rounded ${styles[status]}`}>
+    <span className={`px-2 py-0.5 text-xs font-medium rounded ${styles[status]}`}>
       {status}
-    </Badge>
+    </span>
   );
 }
 
@@ -163,9 +161,9 @@ export default function ApiKeysPage() {
         </div>
 
         {loadError && (
-          <Alert tone="error" variant="compact">
+          <div className="bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm mb-3">
             {loadError}
-          </Alert>
+          </div>
         )}
 
         {!keys ? (
@@ -289,9 +287,9 @@ export default function ApiKeysPage() {
             </label>
 
             {rotateError && (
-              <Alert tone="error" variant="compact">
+              <div className="bg-red-50 text-red-700 px-3 py-2 rounded-lg text-sm mb-3">
                 {rotateError}
-              </Alert>
+              </div>
             )}
 
             <div className="flex justify-end gap-2">

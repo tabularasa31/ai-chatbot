@@ -4,7 +4,6 @@ import { Suspense, useCallback, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { AnalyticsPeriod } from "@/lib/api";
 import { useAnalyticsSummary } from "@/hooks/useApi";
-import { Alert } from "@/components/ui/alert";
 import { StatCard } from "@/components/ui/stat-card";
 
 const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
@@ -106,9 +105,9 @@ function AnalyticsPageContent() {
       </div>
 
       {error && (
-        <Alert tone="error" variant="soft">
+        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
           {error instanceof Error ? error.message : "Failed to load analytics"}
-        </Alert>
+        </div>
       )}
 
       {isLoading && !data ? (

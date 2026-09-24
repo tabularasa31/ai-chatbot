@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, type HandoffState, type InboxRow, type Thread, type ThreadMessage } from "@/lib/api";
 import { useClientMe, useInbox, useThread } from "@/hooks/useApi";
 import { INBOX_CHANGED_EVENT } from "@/components/Sidebar";
-import { Alert } from "@/components/ui/alert";
 
 type Scope = "attention" | "all";
 
@@ -223,7 +222,7 @@ function Composer({
   return (
     <div className="border-t border-slate-100 px-4 py-3 space-y-2">
       {error && (
-        <Alert tone="error" variant="soft">{error}</Alert>
+        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">{error}</div>
       )}
       <textarea
         value={text}
@@ -366,9 +365,9 @@ function ThreadView({
     <div className="flex flex-col h-[calc(100vh-200px)] min-h-[420px]">
       <ThreadHeader thread={thread} />
       {error && (
-        <Alert tone="error" variant="soft" className="mx-4 mt-3">
+        <div className="mx-4 mt-3 text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
           {error instanceof Error ? error.message : "Failed to refresh the conversation"}
-        </Alert>
+        </div>
       )}
       <div
         ref={scrollRef}
@@ -472,9 +471,9 @@ function InboxPageContent() {
       </div>
 
       {error && (
-        <Alert tone="error" variant="soft">
+        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
           {error instanceof Error ? error.message : "Failed to load the inbox"}
-        </Alert>
+        </div>
       )}
 
       <div className="flex flex-col md:flex-row gap-4">

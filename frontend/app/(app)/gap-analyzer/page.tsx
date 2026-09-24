@@ -11,8 +11,6 @@ import {
   type GapModeAStatusFilter,
   type GapModeBStatusFilter,
 } from "@/lib/api";
-import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -32,9 +30,9 @@ function CoverageBadge({ item }: { item: GapItem }) {
     unknown: "bg-slate-100 text-slate-600",
   };
   return (
-    <Badge className={styles[item.classification] ?? styles.unknown}>
+    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[item.classification] ?? styles.unknown}`}>
       {item.classification}
-    </Badge>
+    </span>
   );
 }
 
@@ -49,9 +47,9 @@ function StatusBadge({ status }: { status: GapItem["status"] }) {
     resolved: "bg-emerald-100 text-emerald-700",
   };
   return (
-    <Badge className={styles[status] ?? styles.dismissed}>
+    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? styles.dismissed}`}>
       {status.replace("_", " ")}
-    </Badge>
+    </span>
   );
 }
 
@@ -506,8 +504,8 @@ export default function GapAnalyzerPage() {
         </button>
       </div>
 
-      {error && <Alert tone="error" variant="rose">{error}</Alert>}
-      {notice && <Alert tone="success" variant="rose">{notice}</Alert>}
+      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
+      {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
 
       <div className="flex flex-wrap items-center gap-2">
         <button

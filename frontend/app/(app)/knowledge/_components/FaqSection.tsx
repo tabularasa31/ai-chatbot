@@ -3,7 +3,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import { api, type KnowledgeFaqItem } from "@/lib/api";
 import { KnowledgeTabs, confidenceBadge } from "./shared";
-import { Alert } from "@/components/ui/alert";
 
 export interface FaqSectionProps {
   activeTab: "documents" | "profile" | "faq";
@@ -103,8 +102,8 @@ export function FaqSection({
           <option value="logs">From logs</option>
         </select>
       </div>
-      {faqSaved && <Alert tone="success" variant="cardLg">{faqSaved}</Alert>}
-      {faqError && <Alert tone="error" variant="cardLg">{faqError}</Alert>}
+      {faqSaved && <div className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">{faqSaved}</div>}
+      {faqError && <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{faqError}</div>}
       {faqLoading ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Loading FAQ…</div>
       ) : faqItems.length === 0 ? (

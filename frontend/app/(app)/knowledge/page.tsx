@@ -11,7 +11,6 @@ import {
   type UrlSourceDetail,
 } from "@/lib/api";
 import { KnowledgeTabs, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_components/shared";
-import { Alert } from "@/components/ui/alert";
 import { PageLoader } from "@/components/ui/page-loader";
 import { FaqSection } from "./_components/FaqSection";
 import { DocumentsSection } from "./_components/DocumentsSection";
@@ -422,8 +421,8 @@ export default function KnowledgePage() {
           <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
         </div>
         <KnowledgeTabs activeTab="profile" onChange={setTab} />
-        {profileError && <Alert tone="error" variant="cardLg">{profileError}</Alert>}
-        {profileSaved && <Alert tone="success" variant="cardLg">Profile updated</Alert>}
+        {profileError && <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{profileError}</div>}
+        {profileSaved && <div className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">Profile updated</div>}
         {profileLoading || !profileDraft ? (
           <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Loading profile…</div>
         ) : (

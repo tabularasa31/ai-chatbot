@@ -2,7 +2,6 @@
 
 import type { UrlSource, UrlSourceDetail } from "@/lib/api";
 import { StatusBadge, quickAnswerLabel } from "./shared";
-import { Alert } from "@/components/ui/alert";
 
 function formatFailedUrlPreview(failedUrls: Array<{ url: string; reason: string }>): string {
   const preview = failedUrls
@@ -121,9 +120,9 @@ export function UrlSourcesSection({
                     </div>
                   )}
                   {detail.error_message && (
-                    <Alert tone="error" variant="card">
+                    <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
                       {detail.error_message}
-                    </Alert>
+                    </div>
                   )}
                 </div>
               )}

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type BotResponse } from "@/lib/api";
-import { Alert } from "@/components/ui/alert";
 
 export default function WidgetSettingsPage() {
   const [defaultBot, setDefaultBot] = useState<BotResponse | null>(null);
@@ -82,9 +81,9 @@ export default function WidgetSettingsPage() {
       </div>
 
       {error && (
-        <Alert tone="error" variant="widget">
+        <div className="rounded-lg border border-red-200 bg-red-50 text-red-800 px-4 py-3 text-sm">
           {error}
-        </Alert>
+        </div>
       )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">

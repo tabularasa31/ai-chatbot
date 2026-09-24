@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type AdminTenantMetricsItem, type AdminMetricsSummary } from "@/lib/api";
-import { Alert } from "@/components/ui/alert";
 import { PageLoader } from "@/components/ui/page-loader";
 
 export default function AdminMetricsPage() {
@@ -67,9 +66,9 @@ export default function AdminMetricsPage() {
 
   if (error) {
     return (
-      <Alert tone="error" variant="plain">
+      <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
         {error}
-      </Alert>
+      </div>
     );
   }
 

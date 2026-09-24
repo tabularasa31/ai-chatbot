@@ -24,7 +24,7 @@ function AcceptInviteContent() {
       passwordLabel="Password"
       submitLabel="Accept invite"
       loadingLabel="Setting up..."
-      successTitle="You&apos;re in!"
+      successTitle="You're in!"
       fallbackError="This invite link is invalid or has expired."
       footer={
         <p className="mt-4 text-sm text-[#FAF5FF]/60">

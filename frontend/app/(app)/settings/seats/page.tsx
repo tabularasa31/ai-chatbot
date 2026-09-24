@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { api, type TenantMember } from "@/lib/api";
 import { useClientMe, useMembers } from "@/hooks/useApi";
-import { Alert } from "@/components/ui/alert";
 
 /** Monthly price of one seat, in US dollars. Nothing is charged during the beta. */
 const SEAT_PRICE_USD = 10;
@@ -105,18 +104,18 @@ export default function SeatsPage() {
       </div>
 
       {(error || loadError) && (
-        <Alert tone="error" variant="soft">
+        <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
           {error ||
             (loadError instanceof Error
               ? loadError.message
               : "Failed to load your seats")}
-        </Alert>
+        </div>
       )}
 
       {notice && (
-        <Alert tone="success" variant="soft">
+        <div className="rounded-lg bg-emerald-50 text-emerald-700 text-sm px-3 py-2 border border-emerald-100">
           {notice}
-        </Alert>
+        </div>
       )}
 
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-3">

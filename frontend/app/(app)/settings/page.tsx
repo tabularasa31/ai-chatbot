@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { api, type DisclosureLevel } from "@/lib/api";
 import { useClientMe, useBots, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
 import DeleteWorkspaceCard from "./DeleteWorkspaceCard";
-import { Alert } from "@/components/ui/alert";
 import { PageLoader } from "@/components/ui/page-loader";
 
 const DISCLOSURE_OPTIONS: {
@@ -209,9 +208,9 @@ export default function SettingsPage() {
       </div>
 
       {(error || clientError) && (
-        <Alert tone="error" variant="soft">
+        <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
           {error || (clientError instanceof Error ? clientError.message : "Failed to load settings")}
-        </Alert>
+        </div>
       )}
 
       {/* Support inbox */}
@@ -224,9 +223,9 @@ export default function SettingsPage() {
         </div>
 
         {supportSavedOk && (
-          <Alert tone="success" variant="soft">
+          <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             Support inbox saved.
-          </Alert>
+          </div>
         )}
 
         <div className="space-y-2">
@@ -285,9 +284,9 @@ export default function SettingsPage() {
         </div>
 
         {instructionsSavedOk && (
-          <Alert tone="success" variant="soft">
+          <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             Saved.
-          </Alert>
+          </div>
         )}
 
         <>
@@ -384,9 +383,9 @@ export default function SettingsPage() {
         </div>
 
         {disclosureSavedOk && (
-          <Alert tone="success" variant="soft">
+          <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             Response controls saved.
-          </Alert>
+          </div>
         )}
 
         <fieldset className="space-y-3">
@@ -445,10 +444,10 @@ export default function SettingsPage() {
         </div>
 
         {client?.has_openai_key && (
-          <Alert tone="success" variant="dot">
+          <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
             API key configured
-          </Alert>
+          </div>
         )}
 
         {!client?.has_openai_key && (
@@ -459,9 +458,9 @@ export default function SettingsPage() {
         )}
 
         {keySavedOk && (
-          <Alert tone="success" variant="soft">
+          <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             Saved.
-          </Alert>
+          </div>
         )}
 
         <div className="space-y-2">

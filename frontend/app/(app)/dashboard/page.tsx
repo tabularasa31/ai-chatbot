@@ -30,7 +30,7 @@ function DashboardContent() {
   }, [clientError, router]);
 
   function getEmbedSnippet() {
-    return buildEmbedSnippet({ botId: botPublicId ?? "" });
+    return buildEmbedSnippet({ botId: botPublicId ?? "", configFormat: "inline" });
   }
 
   if (clientLoading || botsLoading) {

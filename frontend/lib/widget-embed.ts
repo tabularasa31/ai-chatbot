@@ -19,15 +19,21 @@ export function buildEmbedSnippet(options: {
   botId: string;
   extraConfig?: Record<string, string>;
   extraHtml?: string;
+  // "inline" is the dashboard's pre-existing one-line `{ apiBase: "…" }`
+  // form; "multiline" (default) is the embed page's multi-key form.
+  configFormat?: "inline" | "multiline";
 }): string {
   const apiBaseOverride = getApiBaseOverride();
   const entries = Object.entries(options.extraConfig ?? {}).filter(([, v]) => v !== "");
   if (apiBaseOverride) entries.push(["apiBase", apiBaseOverride]);
 
-  const configLiteral =
-    entries.length === 0
-      ? ""
-      : `{\n${entries.map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`).join(",\n")}\n  }`;
+  let configLiteral = "";
+  if (entries.length > 0) {
+    configLiteral =
+      options.configFormat === "inline"
+        ? `{ ${entries.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(", ")} }`
+        : `{\n${entries.map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`).join(",\n")}\n  }`;
+  }
 
   const scriptTag = `<script\n  src="${WIDGET_LOADER_URL}"\n  data-bot-id="${options.botId}">\n</script>`;
   const startScript = `<script>\n  Chat9Widget.start(${configLiteral});\n</script>`;

@@ -32,10 +32,7 @@ function DemoWidget() {
       .then(() => {
         if (!cancelled) startInline();
       })
-      .catch(() => {
-        // Loader failed to load — demo block silently stays empty (unchanged
-        // behaviour: this component never surfaced an error state).
-      });
+      .catch(() => {});
 
     return () => {
       cancelled = true;

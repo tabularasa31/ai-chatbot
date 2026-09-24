@@ -547,7 +547,9 @@ def test_mode_b_skips_embedding_blank_questions(
 
     monkeypatch.setattr(
         "backend.gap_analyzer.orchestrator.embed_texts",
-        lambda *, encrypted_api_key, texts: [[0.9] * 1536] if texts == [valid_question.question_text] else [],
+        lambda texts, *_a, **_k: (
+            [[0.9] * 1536] if texts == [valid_question.question_text] else []
+        ),
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))

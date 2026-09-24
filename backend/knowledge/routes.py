@@ -13,6 +13,7 @@ from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.embeddings import embed_texts
+from backend.core.openai_client import get_openai_client
 from backend.knowledge.events import (
     ACTION_APPROVE,
     ACTION_APPROVE_ALL,
@@ -77,7 +78,7 @@ def _generate_faq_embedding_background(
         if faq is None:
             return
         faq.question_embedding = embed_texts(
-            [question], encrypted_api_key, model=settings.embedding_model
+            [question], get_openai_client(encrypted_api_key), model=settings.embedding_model
         )[0]
         db.add(faq)
         db.commit()

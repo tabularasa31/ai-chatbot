@@ -191,15 +191,7 @@ def completion_kwargs(
     max_tokens: int | None = None,
     json: bool = False,
 ) -> dict:
-    """Build the model-dependent sampling kwargs for a chat.completions.create call.
-
-    Reasoning models (see :func:`is_reasoning_model`) reject ``temperature``
-    and a ``response_format`` override, so both are omitted for them; only
-    ``max_completion_tokens`` (when ``max_tokens`` is given) is passed.
-    Non-reasoning models get ``temperature`` (when given), ``max_completion_tokens``
-    (when ``max_tokens`` is given), and ``response_format={"type": "json_object"}``
-    when ``json=True``.
-    """
+    """Model-dependent sampling kwargs: reasoning models drop temperature/response_format."""
     if is_reasoning_model(model):
         return {"max_completion_tokens": max_tokens} if max_tokens is not None else {}
     kwargs: dict = {}

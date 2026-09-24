@@ -198,10 +198,9 @@ async def _generate_context_pre_confirm(
     the canonical-template path. Never raises.
     """
     model_name = model or settings.escalation_model
-    _reasoning = is_reasoning_model(model_name)
     _max_tokens = (
         settings.chat_response_max_tokens_reasoning
-        if _reasoning
+        if is_reasoning_model(model_name)
         else settings.escalation_max_completion_tokens
     )
     user_block = (

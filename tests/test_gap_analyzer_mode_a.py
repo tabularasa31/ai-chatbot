@@ -125,7 +125,7 @@ def test_mode_a_excludes_swagger_docs_from_coverage_corpus(
     )
     monkeypatch.setattr(
         "backend.gap_analyzer.orchestrator.embed_texts",
-        lambda **kwargs: [_vector(1.0, 0.0, 0.0) for _ in kwargs["texts"]],
+        lambda texts, *_a, **_k: [_vector(1.0, 0.0, 0.0) for _ in texts],
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
@@ -172,7 +172,7 @@ def test_mode_a_skips_llm_when_content_hash_unchanged(
     )
     monkeypatch.setattr(
         "backend.gap_analyzer.orchestrator.embed_texts",
-        lambda **kwargs: [_vector(1.0, 0.0, 0.0) for _ in kwargs["texts"]],
+        lambda texts, *_a, **_k: [_vector(1.0, 0.0, 0.0) for _ in texts],
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
@@ -234,7 +234,7 @@ def test_mode_a_filters_topics_at_or_above_coverage_gate(
     )
     monkeypatch.setattr(
         "backend.gap_analyzer.orchestrator.embed_texts",
-        lambda **kwargs: [_vector(1.0, 0.0, 0.0) for _ in kwargs["texts"]],
+        lambda texts, *_a, **_k: [_vector(1.0, 0.0, 0.0) for _ in texts],
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
@@ -303,7 +303,7 @@ def test_mode_a_suppresses_dismissed_topics_across_reindex(
     )
     monkeypatch.setattr(
         "backend.gap_analyzer.orchestrator.embed_texts",
-        lambda **kwargs: [_vector(1.0, 0.0, 0.0) for _ in kwargs["texts"]],
+        lambda texts, *_a, **_k: [_vector(1.0, 0.0, 0.0) for _ in texts],
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))

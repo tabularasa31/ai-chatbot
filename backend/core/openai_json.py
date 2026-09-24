@@ -1,11 +1,4 @@
-"""Shared helper for "ask the LLM for a JSON object" call sites.
-
-Wraps a chat completion in the retry helper, extracts
-``choices[0].message.content`` (defaulting to ``"{}"``), and parses it as a
-JSON object. ``strict=True`` raises ``ValueError`` on malformed output (no
-JSON / not an object) instead of returning ``None`` — for call sites that
-have no fallback path and want the failure to propagate.
-"""
+"""Retry-wrapped chat completion helper that parses the reply as a JSON object."""
 
 from __future__ import annotations
 
@@ -24,12 +17,9 @@ def _parse_json_object(operation: str, raw: str, *, strict: bool) -> dict | None
     try:
         parsed = json.loads(raw or "{}")
     except json.JSONDecodeError:
-        logger.warning("%s_invalid_json preview=%r", operation, (raw or "")[:200])
-        if strict:
-            raise ValueError(f"{operation}: LLM response was not valid JSON") from None
-        return None
+        parsed = None
     if not isinstance(parsed, dict):
-        logger.warning("%s_non_object_json preview=%r", operation, (raw or "")[:200])
+        logger.warning("%s_malformed_json preview=%r", operation, (raw or "")[:200])
         if strict:
             raise ValueError(f"{operation}: LLM response was not a JSON object")
         return None
@@ -45,11 +35,6 @@ def chat_json(
     strict: bool = False,
     **kw: Any,
 ) -> dict | None:
-    """Retry-wrapped chat completion that parses the reply as a JSON object.
-
-    Returns ``None`` on malformed output unless ``strict=True``, in which
-    case a ``ValueError`` is raised instead.
-    """
     response = call_openai_with_retry(
         operation,
         lambda: client.chat.completions.create(model=model, messages=messages, **kw),
@@ -67,8 +52,6 @@ async def async_chat_json(
     strict: bool = False,
     **kw: Any,
 ) -> dict | None:
-    """Async counterpart of :func:`chat_json`."""
-
     async def _call() -> Any:
         return await client.chat.completions.create(model=model, messages=messages, **kw)
 

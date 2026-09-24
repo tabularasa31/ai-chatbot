@@ -9,6 +9,9 @@ from uuid import UUID
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
+from backend.core.config import settings
+from backend.core.embeddings import embed_texts
+from backend.core.openai_client import get_openai_client
 from backend.gap_analyzer._classification import (
     _mode_b_status_from_coverage,
 )
@@ -56,7 +59,7 @@ from backend.gap_analyzer.pipelines.mode_b import (
     _apply_mode_b_questions_to_clusters,
     _prepare_mode_b_clusters,
 )
-from backend.gap_analyzer.prompts import ModeATopicCandidate, embed_texts, extract_mode_a_candidates
+from backend.gap_analyzer.prompts import ModeATopicCandidate, extract_mode_a_candidates
 from backend.gap_analyzer.read_models import (
     _build_gap_summary,
     _build_mode_a_items,
@@ -1033,10 +1036,11 @@ class GapAnalyzerOrchestrator:
         if not candidates:
             return {}, {}
 
-        labels = [candidate.topic_label for candidate in candidates]
-        coverage_queries = [_build_coverage_query(candidate) for candidate in candidates]
-        label_vectors = embed_texts(encrypted_api_key=encrypted_api_key, texts=labels)
-        coverage_vectors = embed_texts(encrypted_api_key=encrypted_api_key, texts=coverage_queries)
+        labels = [candidate.topic_label.strip() for candidate in candidates]
+        coverage_queries = [_build_coverage_query(candidate).strip() for candidate in candidates]
+        openai_client = get_openai_client(encrypted_api_key)
+        label_vectors = embed_texts(labels, openai_client, model=settings.embedding_model)
+        coverage_vectors = embed_texts(coverage_queries, openai_client, model=settings.embedding_model)
         return (
             {
                 candidate.topic_label: label_vectors[index]
@@ -1068,8 +1072,9 @@ class GapAnalyzerOrchestrator:
         if not valid_missing_questions:
             return
         vectors = embed_texts(
-            encrypted_api_key=encrypted_api_key,
-            texts=[question.question_text for question in valid_missing_questions],
+            [question.question_text.strip() for question in valid_missing_questions],
+            get_openai_client(encrypted_api_key),
+            model=settings.embedding_model,
         )
         repository.bulk_update_mode_b_question_embeddings(
             embeddings_by_question_id={

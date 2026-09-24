@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from backend.core.config import settings
-from backend.core.embeddings import embed_texts as _embed_texts_batch
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_json import chat_json
 
@@ -51,8 +50,9 @@ def extract_mode_a_candidates(
         ],
         response_format={"type": "json_object"},
         temperature=0.2,
+        strict=True,
     )
-    raw_topics = parsed.get("topics") if isinstance(parsed, dict) else []
+    raw_topics = parsed.get("topics")
     if not isinstance(raw_topics, list):
         return []
 
@@ -76,15 +76,3 @@ def extract_mode_a_candidates(
             )
         )
     return candidates[:8]
-
-
-def embed_texts(
-    *,
-    encrypted_api_key: str,
-    texts: list[str],
-) -> list[list[float]]:
-    normalized = [text.strip() for text in texts if text.strip()]
-    if not normalized:
-        return []
-
-    return _embed_texts_batch(normalized, encrypted_api_key, model=settings.embedding_model)

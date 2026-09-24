@@ -336,12 +336,7 @@ async def _generate_embeddings(
 
     for i in range(0, len(missing), batch_size):
         batch = missing[i: i + batch_size]
-        vectors = embed_texts(
-            [m.content for m in batch],
-            oai,
-            model=settings.embedding_model,
-            batch_size=batch_size,
-        )
+        vectors = embed_texts([m.content for m in batch], oai, model=settings.embedding_model)
         for msg, vec in zip(batch, vectors, strict=True):
             msg.embedding = vec
         _save_embeddings(db, tenant_id, batch, vectors)

@@ -45,7 +45,6 @@ import logging
 import random
 import time
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from backend.core.config import settings
@@ -114,7 +113,7 @@ def call_openai_with_retry(
         try:
             result = fn()
         except Exception as exc:
-            outcome = _handle_attempt_exception(
+            delay, last_classified = _handle_attempt_exception(
                 operation=operation,
                 attempt=attempt,
                 elapsed=time.monotonic() - started,
@@ -128,9 +127,8 @@ def call_openai_with_retry(
                 emit_chat_failed=emit_chat_failed,
                 langfuse_observation=langfuse_observation,
             )
-            time.sleep(outcome.delay)
+            time.sleep(delay)
             last_exc = exc
-            last_classified = outcome.classified
         else:
             _stamp_observation(
                 langfuse_observation,
@@ -188,7 +186,7 @@ async def async_call_openai_with_retry(
         try:
             result = await fn()
         except Exception as exc:
-            outcome = _handle_attempt_exception(
+            delay, last_classified = _handle_attempt_exception(
                 operation=operation,
                 attempt=attempt,
                 elapsed=time.monotonic() - started,
@@ -202,9 +200,8 @@ async def async_call_openai_with_retry(
                 emit_chat_failed=emit_chat_failed,
                 langfuse_observation=langfuse_observation,
             )
-            await asyncio.sleep(outcome.delay)
+            await asyncio.sleep(delay)
             last_exc = exc
-            last_classified = outcome.classified
         else:
             _stamp_observation(
                 langfuse_observation,
@@ -217,14 +214,6 @@ async def async_call_openai_with_retry(
     if last_exc is not None:  # pragma: no cover
         raise last_exc
     raise RuntimeError("async_openai_retry_unreachable")
-
-
-@dataclass
-class _RetryAttemptOutcome:
-    """Result of a failed attempt that is viable for retry: sleep ``delay`` seconds."""
-
-    delay: float
-    classified: ClassifiedError
 
 
 def _handle_attempt_exception(
@@ -241,14 +230,9 @@ def _handle_attempt_exception(
     call_type: str,
     emit_chat_failed: bool,
     langfuse_observation: Any | None,
-) -> _RetryAttemptOutcome:
-    """Classify a failed attempt and decide whether to retry.
-
-    Re-raises ``exc`` (preserving its traceback, since this runs synchronously
-    within the caller's ``except`` block) for permanent errors or exhausted
-    retry budgets. Otherwise logs/emits the scheduled retry and returns the
-    delay to sleep before the next attempt, shared by the sync and async loops.
-    """
+) -> tuple[float, ClassifiedError]:
+    """Classify a failed attempt; the bare ``raise`` re-raises ``exc`` only because
+    this runs synchronously inside the caller's ``except`` block."""
     classified = classify_openai_error(exc)
     if classified.kind == OpenAIFailureKind.PERMANENT:
         _stamp_failure_observation(
@@ -315,7 +299,7 @@ def _handle_attempt_exception(
         bot_id=bot_id,
         call_type=call_type,
     )
-    return _RetryAttemptOutcome(delay=delay, classified=classified)
+    return delay, classified
 
 
 def _classify_exhaustion(

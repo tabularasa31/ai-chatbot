@@ -86,7 +86,7 @@ def test_chunk_text_oversized_single_sentence_stays_one_chunk() -> None:
     assert chunks[0]["text"] == text
 
 
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.get_openai_client")
 def test_create_and_rerun_embeddings_journey(
     mock_get_openai: Mock,
     tenant: TestClient,
@@ -189,7 +189,7 @@ def test_create_embeddings_document_not_found(
     assert response.status_code == 404
 
 
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.get_openai_client")
 def test_create_embeddings_swagger_uses_endpoint_metadata(
     mock_get_openai: Mock,
     tenant: TestClient,
@@ -493,7 +493,7 @@ components:
     assert "Endpoint: POST /items" in parsed_text
 
 
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.get_openai_client")
 def test_create_embeddings_document_not_ready(
     mock_get_openai: Mock,
     tenant: TestClient,
@@ -531,7 +531,7 @@ def test_create_embeddings_document_not_ready(
     mock_get_openai.assert_not_called()
 
 
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.get_openai_client")
 def test_create_embeddings_openai_error(
     mock_get_openai: Mock,
     tenant: TestClient,

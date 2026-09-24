@@ -10,7 +10,9 @@ import {
   type UrlSource,
   type UrlSourceDetail,
 } from "@/lib/api";
+import { formatDateTimeLocale } from "@/lib/format";
 import { KnowledgeTabs, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_components/shared";
+import { PageLoader } from "@/components/ui/page-loader";
 import { FaqSection } from "./_components/FaqSection";
 import { DocumentsSection } from "./_components/DocumentsSection";
 
@@ -408,9 +410,7 @@ export default function KnowledgePage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-sm text-slate-500">Loading…</div>
-      </div>
+      <PageLoader />
     );
   }
 
@@ -596,7 +596,7 @@ export default function KnowledgePage() {
               <div className="text-sm font-medium text-slate-700">Extraction status</div>
               <div className="mt-2 text-sm text-slate-600">
                 {profile?.extraction_status === "pending" && "Extracting knowledge from your docs..."}
-                {profile?.extraction_status === "done" && `Last updated: ${new Date(profile.updated_at).toLocaleString()}`}
+                {profile?.extraction_status === "done" && `Last updated: ${formatDateTimeLocale(profile.updated_at)}`}
                 {profile?.extraction_status === "failed" && "Extraction failed. Try re-indexing your documents."}
               </div>
             </div>

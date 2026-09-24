@@ -582,71 +582,84 @@ export type AuthUser = { id: string; email: string; created_at: string };
 export type AuthSession = { token: string; expires_in: number; user: AuthUser };
 
 async function parseJsonSafe(res: Response): Promise<unknown> {
-  return res.json().catch(() => ({}));
+  if (res.status === 204 || res.headers.get("content-length") === "0") return undefined;
+  return res.json();
 }
+
+type RequestOptions = {
+  method?: string;
+  json?: unknown;
+  body?: BodyInit;
+  headers?: Record<string, string>;
+  skipAuthRedirect?: boolean;
+};
+
+/**
+ * Fetch → parse JSON → throw with the server's message on failure.
+ * Parsing is strict on success (an unparsable 200 body is a real bug worth
+ * surfacing), but tolerant on failure — an error response can be non-JSON
+ * (a 502 HTML page, say), and losing the status-derived fallback message to
+ * a JSON.parse error would be worse than losing the body.
+ */
+async function request<T>(url: string, fallback: string, init: RequestOptions = {}): Promise<T> {
+  const { json, headers, body, ...rest } = init;
+  const res = await apiFetch(url, {
+    ...rest,
+    headers: json !== undefined ? { "Content-Type": "application/json", ...headers } : headers,
+    body: json !== undefined ? JSON.stringify(json) : body,
+  });
+  const data = res.ok ? await parseJsonSafe(res) : await parseJsonSafe(res).catch(() => undefined);
+  if (!res.ok) throw new Error(getErrorMessage(data, fallback));
+  return data as T;
+}
+
+/** Same as `request`, but always resolves to `undefined` — for endpoints callers treat as void. */
+const requestVoid = (url: string, fallback: string, init: RequestOptions = {}): Promise<void> =>
+  request<unknown>(url, fallback, init).then(() => undefined);
+
+const getJson = <T>(url: string, fallback: string): Promise<T> => request<T>(url, fallback);
+const sendJson = <T>(url: string, method: string, json: unknown, fallback: string): Promise<T> =>
+  request<T>(url, fallback, { method, json });
 
 export const api = {
   auth: {
-    async register(email: string, password: string): Promise<{ user: AuthUser }> {
-      const res = await apiFetch(`${BASE_URL}/auth/register`, {
+    register(email: string, password: string): Promise<{ user: AuthUser }> {
+      return request(`${BASE_URL}/auth/register`, "Registration failed", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        json: { email, password },
         skipAuthRedirect: true,
       });
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Registration failed"));
-      return data as { user: AuthUser };
     },
-    async login(email: string, password: string): Promise<AuthSession> {
-      const res = await apiFetch(`${BASE_URL}/auth/login`, {
+    login(email: string, password: string): Promise<AuthSession> {
+      return request(`${BASE_URL}/auth/login`, "Login failed", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        json: { email, password },
         skipAuthRedirect: true,
       });
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Login failed"));
-      return data as AuthSession;
     },
-    async getMe(): Promise<AuthUser> {
-      const res = await apiFetch(`${BASE_URL}/auth/me`);
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get user"));
-      return data as AuthUser;
+    getMe(): Promise<AuthUser> {
+      return getJson(`${BASE_URL}/auth/me`, "Failed to get user");
     },
-    async verifyEmail(token: string): Promise<AuthSession> {
-      const res = await apiFetch(`${BASE_URL}/auth/verify-email`, {
+    verifyEmail(token: string): Promise<AuthSession> {
+      return request(`${BASE_URL}/auth/verify-email`, "Failed to verify email", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+        json: { token },
         skipAuthRedirect: true,
       });
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to verify email"));
-      return data as AuthSession;
     },
-    async forgotPassword(email: string): Promise<{ message: string }> {
-      const res = await apiFetch(`${BASE_URL}/auth/forgot-password`, {
+    forgotPassword(email: string): Promise<{ message: string }> {
+      return request(`${BASE_URL}/auth/forgot-password`, "Failed to send reset link", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        json: { email },
         skipAuthRedirect: true,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send reset link"));
-      return data as { message: string };
     },
-    async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
-      const res = await apiFetch(`${BASE_URL}/auth/reset-password`, {
+    resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+      return request(`${BASE_URL}/auth/reset-password`, "Invalid or expired reset link", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, new_password: newPassword }),
+        json: { token, new_password: newPassword },
         skipAuthRedirect: true,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Invalid or expired reset link"));
-      return data as { message: string };
     },
     async logout(): Promise<void> {
       await apiFetch(`${BASE_URL}/auth/logout`, {
@@ -656,70 +669,28 @@ export const api = {
   },
   bots: {
     async list(): Promise<BotResponse[]> {
-      const res = await apiFetch(`${BASE_URL}/bots`);
-      if (!res.ok) throw new Error("Failed to load bots");
-      const data = await res.json();
-      return (data.items ?? []) as BotResponse[];
+      const data = await getJson<{ items?: BotResponse[] }>(`${BASE_URL}/bots`, "Failed to load bots");
+      return data.items ?? [];
     },
-    async getDisclosure(botId: string): Promise<DisclosureConfigResponse> {
-      const res = await apiFetch(`${BASE_URL}/bots/${botId}/disclosure`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load disclosure settings"));
-      return data as DisclosureConfigResponse;
+    getDisclosure(botId: string): Promise<DisclosureConfigResponse> {
+      return getJson(`${BASE_URL}/bots/${botId}/disclosure`, "Failed to load disclosure settings");
     },
-    async updateDisclosure(botId: string, config: DisclosureConfigResponse): Promise<DisclosureConfigResponse> {
-      const res = await apiFetch(`${BASE_URL}/bots/${botId}/disclosure`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save disclosure settings"));
-      return data as DisclosureConfigResponse;
+    updateDisclosure(botId: string, config: DisclosureConfigResponse): Promise<DisclosureConfigResponse> {
+      return sendJson(`${BASE_URL}/bots/${botId}/disclosure`, "PUT", config, "Failed to save disclosure settings");
     },
-    async update(botId: string, payload: { custom_instructions?: string | null; preset?: string | null; name?: string; is_active?: boolean; link_safety_enabled?: boolean; allowed_domains?: string[] }): Promise<BotResponse> {
-      const res = await apiFetch(`${BASE_URL}/bots/${botId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save bot settings"));
-      return data as BotResponse;
+    update(botId: string, payload: { custom_instructions?: string | null; preset?: string | null; name?: string; is_active?: boolean; link_safety_enabled?: boolean; allowed_domains?: string[] }): Promise<BotResponse> {
+      return sendJson(`${BASE_URL}/bots/${botId}`, "PATCH", payload, "Failed to save bot settings");
     },
   },
   clients: {
-    async create(name: string) {
-      const res = await apiFetch(`${BASE_URL}/tenants`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create client"));
-      return data as CreateTenantResponse;
+    getMe(): Promise<TenantMeResponse> {
+      return getJson(`${BASE_URL}/tenants/me`, "Failed to get client");
     },
-    async getMe() {
-      const res = await apiFetch(`${BASE_URL}/tenants/me`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get client"));
-      return data as TenantMeResponse;
+    update(data: { name?: string; openai_api_key?: string | null }): Promise<TenantResponse> {
+      return sendJson(`${BASE_URL}/tenants/me`, "PATCH", data, "Failed to update client");
     },
-    async update(data: { name?: string; openai_api_key?: string | null }) {
-      const res = await apiFetch(`${BASE_URL}/tenants/me`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      const responseData = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update client"));
-      return responseData as TenantResponse;
-    },
-    async getLlmAlert(): Promise<TenantLlmAlertResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/llm-alert`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load LLM alert"));
-      return data as TenantLlmAlertResponse;
+    getLlmAlert(): Promise<TenantLlmAlertResponse> {
+      return getJson(`${BASE_URL}/tenants/me/llm-alert`, "Failed to load LLM alert");
     },
     /**
      * Delete the workspace. Owner only, irreversible, and it takes the
@@ -731,264 +702,115 @@ export const api = {
      * bounces to `/login?error=session_expired`, which would tell an owner who
      * just deleted their workspace on purpose that their session expired.
      */
-    async delete(tenantId: string): Promise<void> {
-      const res = await apiFetch(`${BASE_URL}/tenants/${tenantId}`, {
+    delete(tenantId: string): Promise<void> {
+      return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the workspace", {
         method: "DELETE",
         skipAuthRedirect: true,
       });
-      if (!res.ok) {
-        throw new Error(
-          getErrorMessage(await parseJsonSafe(res), "Failed to delete the workspace")
-        );
-      }
     },
   },
   apiKeys: {
-    async list(): Promise<{ items: TenantApiKeyResponse[] }> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/api-keys`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list API keys"));
-      return data as { items: TenantApiKeyResponse[] };
+    list(): Promise<{ items: TenantApiKeyResponse[] }> {
+      return getJson(`${BASE_URL}/tenants/me/api-keys`, "Failed to list API keys");
     },
-    async rotate(args: {
+    rotate(args: {
       reason: "leaked" | "scheduled" | "compromise" | "other";
       revoke_old_immediately: boolean;
     }): Promise<RotateTenantApiKeyResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/api-keys/rotate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(args),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to rotate API key"));
-      return data as RotateTenantApiKeyResponse;
+      return sendJson(`${BASE_URL}/tenants/me/api-keys/rotate`, "POST", args, "Failed to rotate API key");
     },
-    async revoke(keyId: string): Promise<TenantApiKeyResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/api-keys/${keyId}`, {
-        method: "DELETE",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to revoke API key"));
-      return data as TenantApiKeyResponse;
+    revoke(keyId: string): Promise<TenantApiKeyResponse> {
+      return request(`${BASE_URL}/tenants/me/api-keys/${keyId}`, "Failed to revoke API key", { method: "DELETE" });
     },
   },
   members: {
     async list(): Promise<TenantMemberList> {
-      const res = await apiFetch(`${BASE_URL}/tenants/members`);
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load team members"));
-      const body = data as Partial<TenantMemberList>;
-      return { items: body.items ?? [], seats: body.seats ?? 0 };
+      const data = await getJson<Partial<TenantMemberList>>(`${BASE_URL}/tenants/members`, "Failed to load team members");
+      return { items: data.items ?? [], seats: data.seats ?? 0 };
     },
     /** Always invites an operator: the workspace's one owner created it. */
-    async invite(email: string): Promise<InviteMemberResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/members/invite`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send the invite"));
-      return data as InviteMemberResponse;
+    invite(email: string): Promise<InviteMemberResponse> {
+      return sendJson(`${BASE_URL}/tenants/members/invite`, "POST", { email }, "Failed to send the invite");
     },
-    async remove(memberId: string): Promise<void> {
-      const res = await apiFetch(`${BASE_URL}/tenants/members/${memberId}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        throw new Error(getErrorMessage(await parseJsonSafe(res), "Failed to remove the member"));
-      }
+    remove(memberId: string): Promise<void> {
+      return requestVoid(`${BASE_URL}/tenants/members/${memberId}`, "Failed to remove the member", { method: "DELETE" });
     },
     /**
      * Take a seat for yourself. Owner-only, and about the caller alone —
      * everybody else is seated by their invitation.
      */
-    async takeOwnSeat(): Promise<TenantMember> {
-      const res = await apiFetch(`${BASE_URL}/tenants/members/me/seat`, {
-        method: "PUT",
-      });
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to take a seat"));
-      return data as TenantMember;
+    takeOwnSeat(): Promise<TenantMember> {
+      return request(`${BASE_URL}/tenants/members/me/seat`, "Failed to take a seat", { method: "PUT" });
     },
     /** Give your own seat back. */
-    async giveUpOwnSeat(): Promise<TenantMember> {
-      const res = await apiFetch(`${BASE_URL}/tenants/members/me/seat`, {
-        method: "DELETE",
-      });
-      const data = await parseJsonSafe(res);
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to give up your seat"));
-      return data as TenantMember;
+    giveUpOwnSeat(): Promise<TenantMember> {
+      return request(`${BASE_URL}/tenants/members/me/seat`, "Failed to give up your seat", { method: "DELETE" });
     },
   },
   support: {
-    async get(): Promise<SupportSettingsResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/support-settings`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load support inbox settings"));
-      return data as SupportSettingsResponse;
+    get(): Promise<SupportSettingsResponse> {
+      return getJson(`${BASE_URL}/tenants/me/support-settings`, "Failed to load support inbox settings");
     },
-    async update(config: { l2_email: string | null; escalation_language?: string | null }): Promise<SupportSettingsResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/support-settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save support inbox settings"));
-      return data as SupportSettingsResponse;
+    update(config: { l2_email: string | null; escalation_language?: string | null }): Promise<SupportSettingsResponse> {
+      return sendJson(`${BASE_URL}/tenants/me/support-settings`, "PUT", config, "Failed to save support inbox settings");
     },
   },
   documents: {
-    async list() {
-      const res = await apiFetch(`${BASE_URL}/documents`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list documents"));
-      const list = data as {
-        documents: Array<{
-          id: string;
-          filename: string;
-          file_type: string;
-          status: string;
-          created_at: string;
-          updated_at: string;
-          health_status?: DocumentHealthStatus | null;
-        }>;
-      };
-      return list.documents;
+    listSources(): Promise<{ documents: DocumentListItem[]; url_sources: UrlSource[] }> {
+      return getJson(`${BASE_URL}/documents/sources`, "Failed to load sources");
     },
-    async listSources(): Promise<{ documents: DocumentListItem[]; url_sources: UrlSource[] }> {
-      const res = await apiFetch(`${BASE_URL}/documents/sources`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load sources"));
-      return data as { documents: DocumentListItem[]; url_sources: UrlSource[] };
-    },
-    async upload(file: File) {
+    upload(file: File): Promise<{ id: string; filename: string; file_type: string; status: string; created_at: string }> {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await apiFetch(`${BASE_URL}/documents`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to upload document"));
-      return data as {
-        id: string;
-        filename: string;
-        file_type: string;
-        status: string;
-        created_at: string;
-      };
+      return request(`${BASE_URL}/documents`, "Failed to upload document", { method: "POST", body: formData });
     },
-    async createUrlSource(input: {
+    createUrlSource(input: {
       url: string;
       name?: string;
       schedule?: string;
       exclusions?: string[];
     }): Promise<UrlSource> {
-      const res = await apiFetch(`${BASE_URL}/documents/sources/url`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create URL source"));
-      return data as UrlSource;
+      return sendJson(`${BASE_URL}/documents/sources/url`, "POST", input, "Failed to create URL source");
     },
-    async getSourceById(id: string): Promise<UrlSourceDetail> {
-      const res = await apiFetch(`${BASE_URL}/documents/sources/${id}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load source details"));
-      return data as UrlSourceDetail;
+    getSourceById(id: string): Promise<UrlSourceDetail> {
+      return getJson(`${BASE_URL}/documents/sources/${id}`, "Failed to load source details");
     },
-    async updateSource(
+    updateSource(
       id: string,
       input: { name?: string; schedule?: string; exclusions?: string[] }
     ): Promise<UrlSource> {
-      const res = await apiFetch(`${BASE_URL}/documents/sources/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to update source"));
-      return data as UrlSource;
+      return sendJson(`${BASE_URL}/documents/sources/${id}`, "PATCH", input, "Failed to update source");
     },
-    async refreshSource(id: string): Promise<UrlSource> {
-      const res = await apiFetch(`${BASE_URL}/documents/sources/${id}/refresh`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to refresh source"));
-      return data as UrlSource;
+    refreshSource(id: string): Promise<UrlSource> {
+      return request(`${BASE_URL}/documents/sources/${id}/refresh`, "Failed to refresh source", { method: "POST" });
     },
-    async deleteSource(id: string): Promise<void> {
-      const res = await apiFetch(`${BASE_URL}/documents/sources/${id}`, { method: "DELETE" });
-      if (res.status !== 204 && !res.ok) {
-        const data = await res.json();
-        throw new Error(getErrorMessage(data, "Failed to delete source"));
-      }
+    deleteSource(id: string): Promise<void> {
+      return requestVoid(`${BASE_URL}/documents/sources/${id}`, "Failed to delete source", { method: "DELETE" });
     },
-    async deleteSourcePage(sourceId: string, documentId: string): Promise<void> {
-      const res = await apiFetch(`${BASE_URL}/documents/sources/${sourceId}/pages/${documentId}`, {
-        method: "DELETE",
-      });
-      if (res.status !== 204 && !res.ok) {
-        const data = await res.json();
-        throw new Error(getErrorMessage(data, "Failed to delete source page"));
-      }
+    deleteSourcePage(sourceId: string, documentId: string): Promise<void> {
+      return requestVoid(`${BASE_URL}/documents/sources/${sourceId}/pages/${documentId}`, "Failed to delete source page", { method: "DELETE" });
     },
-    async getById(id: string): Promise<DocumentDetail> {
-      const res = await apiFetch(`${BASE_URL}/documents/${id}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get document"));
-      return data as DocumentDetail;
+    getById(id: string): Promise<DocumentDetail> {
+      return getJson(`${BASE_URL}/documents/${id}`, "Failed to get document");
     },
-    async delete(id: string) {
-      const res = await apiFetch(`${BASE_URL}/documents/${id}`, { method: "DELETE" });
-      if (res.status !== 204 && !res.ok) {
-        const data = await res.json();
-        throw new Error(getErrorMessage(data, "Failed to delete document"));
-      }
+    delete(id: string): Promise<void> {
+      return requestVoid(`${BASE_URL}/documents/${id}`, "Failed to delete document", { method: "DELETE" });
     },
-    async getHealth(docId: string): Promise<DocumentHealthStatus> {
-      const res = await apiFetch(`${BASE_URL}/documents/${docId}/health`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Health check not available"));
-      return data as DocumentHealthStatus;
-    },
-    async runHealth(docId: string): Promise<DocumentHealthStatus> {
-      const res = await apiFetch(`${BASE_URL}/documents/${docId}/health/run`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Health check failed"));
-      return data as DocumentHealthStatus;
+    runHealth(docId: string): Promise<DocumentHealthStatus> {
+      return request(`${BASE_URL}/documents/${docId}/health/run`, "Health check failed", { method: "POST" });
     },
   },
   knowledge: {
     async getProfile(): Promise<KnowledgeProfile> {
-      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/profile`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load knowledge profile"));
-      return {
-        ...data,
-        topics: Array.isArray(data.topics) ? data.topics : [],
-      } as KnowledgeProfile;
+      const data = await getJson<KnowledgeProfile>(`${BASE_URL}/api/v1/knowledge/profile`, "Failed to load knowledge profile");
+      return { ...data, topics: Array.isArray(data.topics) ? data.topics : [] };
     },
-    async patchProfile(
+    patchProfile(
       payload: Partial<Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">>
     ): Promise<KnowledgeProfile> {
-      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/profile`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to update profile"));
-      return data as KnowledgeProfile;
+      return sendJson(`${BASE_URL}/api/v1/knowledge/profile`, "PATCH", payload, "Failed to update profile");
     },
-    async listFaq(params?: {
+    listFaq(params?: {
       approved?: "true" | "false" | "all";
       source?: "docs" | "logs" | "swagger" | "all";
       limit?: number;
@@ -1000,69 +822,31 @@ export const api = {
       if (typeof params?.limit === "number") search.set("limit", String(params.limit));
       if (typeof params?.offset === "number") search.set("offset", String(params.offset));
       const suffix = search.toString() ? `?${search.toString()}` : "";
-      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq${suffix}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load FAQ"));
-      return data as KnowledgeFaqListResponse;
+      return getJson(`${BASE_URL}/api/v1/knowledge/faq${suffix}`, "Failed to load FAQ");
     },
-    async approveFaq(id: string): Promise<{ id: string; approved: boolean }> {
-      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/${id}/approve`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to approve FAQ"));
-      return data as { id: string; approved: boolean };
+    approveFaq(id: string): Promise<{ id: string; approved: boolean }> {
+      return request(`${BASE_URL}/api/v1/knowledge/faq/${id}/approve`, "Failed to approve FAQ", { method: "POST" });
     },
-    async rejectFaq(id: string): Promise<{ id: string; deleted: boolean }> {
-      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/${id}/reject`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to reject FAQ"));
-      return data as { id: string; deleted: boolean };
+    rejectFaq(id: string): Promise<{ id: string; deleted: boolean }> {
+      return request(`${BASE_URL}/api/v1/knowledge/faq/${id}/reject`, "Failed to reject FAQ", { method: "POST" });
     },
-    async approveAll(): Promise<{ approved_count: number }> {
-      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/approve-all`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to approve all FAQ"));
-      return data as { approved_count: number };
+    approveAll(): Promise<{ approved_count: number }> {
+      return request(`${BASE_URL}/api/v1/knowledge/faq/approve-all`, "Failed to approve all FAQ", { method: "POST" });
     },
-    async updateFaq(
+    updateFaq(
       id: string,
       payload: { question: string; answer: string }
     ): Promise<KnowledgeFaqItem> {
-      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to update FAQ"));
-      return data as KnowledgeFaqItem;
-    },
-    async deleteFaq(id: string): Promise<{ id: string; deleted: boolean }> {
-      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/${id}`, {
-        method: "DELETE",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to delete FAQ"));
-      return data as { id: string; deleted: boolean };
+      return sendJson(`${BASE_URL}/api/v1/knowledge/faq/${id}`, "PUT", payload, "Failed to update FAQ");
     },
   },
   embeddings: {
-    async create(documentId: string) {
-      const res = await apiFetch(`${BASE_URL}/embeddings/documents/${documentId}`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create embeddings"));
-      return data as { document_id: string; status: string };
+    create(documentId: string): Promise<{ document_id: string; status: string }> {
+      return request(`${BASE_URL}/embeddings/documents/${documentId}`, "Failed to create embeddings", { method: "POST" });
     },
   },
   gapAnalyzer: {
-    async get(params?: {
+    get(params?: {
       modeAStatus?: GapModeAStatusFilter;
       modeBStatus?: GapModeBStatusFilter;
       modeASort?: GapModeASort;
@@ -1074,255 +858,87 @@ export const api = {
       if (params?.modeASort) search.set("mode_a_sort", params.modeASort);
       if (params?.modeBSort) search.set("mode_b_sort", params.modeBSort);
       const suffix = search.toString() ? `?${search.toString()}` : "";
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer${suffix}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer"));
-      return data as GapAnalyzerResponse;
+      return getJson(`${BASE_URL}/gap-analyzer${suffix}`, "Failed to load Gap Analyzer");
     },
-    async getSummary(): Promise<GapSummaryEnvelope> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/summary`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer summary"));
-      return data as GapSummaryEnvelope;
+    getSummary(): Promise<GapSummaryEnvelope> {
+      return getJson(`${BASE_URL}/gap-analyzer/summary`, "Failed to load Gap Analyzer summary");
     },
-    async recalculate(mode: GapRunMode): Promise<GapRecalculateResponse> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/recalculate?mode=${encodeURIComponent(mode)}`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to start recalculation"));
-      return data as GapRecalculateResponse;
+    recalculate(mode: GapRunMode): Promise<GapRecalculateResponse> {
+      return request(`${BASE_URL}/gap-analyzer/recalculate?mode=${encodeURIComponent(mode)}`, "Failed to start recalculation", { method: "POST" });
     },
-    async dismiss(
+    dismiss(
       source: GapSource,
       gapId: string,
       reason: GapDismissReason = "other",
     ): Promise<GapActionResponse> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/dismiss`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to dismiss gap"));
-      return data as GapActionResponse;
+      return sendJson(`${BASE_URL}/gap-analyzer/${source}/${gapId}/dismiss`, "POST", { reason }, "Failed to dismiss gap");
     },
-    async reactivate(source: GapSource, gapId: string): Promise<GapActionResponse> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/reactivate`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to reactivate gap"));
-      return data as GapActionResponse;
+    reactivate(source: GapSource, gapId: string): Promise<GapActionResponse> {
+      return request(`${BASE_URL}/gap-analyzer/${source}/${gapId}/reactivate`, "Failed to reactivate gap", { method: "POST" });
     },
-    async draft(source: GapSource, gapId: string): Promise<GapDraftResponse> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/draft`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to generate draft"));
-      return data as GapDraftResponse;
+    draft(source: GapSource, gapId: string): Promise<GapDraftResponse> {
+      return request(`${BASE_URL}/gap-analyzer/${source}/${gapId}/draft`, "Failed to generate draft", { method: "POST" });
     },
-    async generateModeBDraft(gapId: string): Promise<GapDraftPayload> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to generate FAQ draft"));
-      return data as GapDraftPayload;
+    generateModeBDraft(gapId: string): Promise<GapDraftPayload> {
+      return request(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, "Failed to generate FAQ draft", { method: "POST" });
     },
-    async getModeBDraft(gapId: string): Promise<GapDraftPayload> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load draft"));
-      return data as GapDraftPayload;
+    getModeBDraft(gapId: string): Promise<GapDraftPayload> {
+      return getJson(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, "Failed to load draft");
     },
-    async refineModeBDraft(gapId: string, guidance: string): Promise<GapDraftPayload> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft/refine`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ guidance }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to refine draft"));
-      return data as GapDraftPayload;
+    refineModeBDraft(gapId: string, guidance: string): Promise<GapDraftPayload> {
+      return sendJson(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft/refine`, "POST", { guidance }, "Failed to refine draft");
     },
-    async updateModeBDraft(
+    updateModeBDraft(
       gapId: string,
       payload: { title: string; question: string; markdown: string; if_match: string },
     ): Promise<GapDraftPayload> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save draft"));
-      return data as GapDraftPayload;
+      return sendJson(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, "PATCH", payload, "Failed to save draft");
     },
-    async discardModeBDraft(gapId: string): Promise<GapDiscardDraftResponse> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, {
-        method: "DELETE",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to discard draft"));
-      return data as GapDiscardDraftResponse;
+    discardModeBDraft(gapId: string): Promise<GapDiscardDraftResponse> {
+      return request(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, "Failed to discard draft", { method: "DELETE" });
     },
-    async publishModeBDraft(gapId: string): Promise<GapPublishResult> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/publish`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to publish FAQ"));
-      return data as GapPublishResult;
+    publishModeBDraft(gapId: string): Promise<GapPublishResult> {
+      return request(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/publish`, "Failed to publish FAQ", { method: "POST" });
     },
-    async resolveModeBGap(gapId: string): Promise<GapActionResponse> {
-      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/resolve`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to resolve gap"));
-      return data as GapActionResponse;
-    },
-  },
-  chat: {
-    async send(
-      question: string,
-      apiKey: string,
-      sessionId?: string,
-      options?: { browserLocale?: string | null }
-    ) {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey,
-      };
-      if (options?.browserLocale) {
-        headers["X-Browser-Locale"] = options.browserLocale;
-      }
-      const body: { question: string; session_id?: string } = { question };
-      if (sessionId) body.session_id = sessionId;
-      const res = await fetch(`${BASE_URL}/chat`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Chat failed"));
-      return data as {
-        text: string;
-        session_id: string;
-        chat_ended?: boolean;
-        ticket_number?: string | null;
-        source_documents?: string[] | null;
-        tokens_used?: number | null;
-      };
-    },
-    async manualEscalate(
-      apiKey: string,
-      sessionId: string,
-      body?: { user_note?: string | null; trigger?: "user_request" | "answer_rejected" }
-    ) {
-      const res = await fetch(`${BASE_URL}/chat/${sessionId}/escalate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-        },
-        body: JSON.stringify({
-          user_note: body?.user_note ?? null,
-          trigger: body?.trigger ?? "user_request",
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Escalation failed"));
-      return data as { message: string; ticket_number: string };
-    },
-    async getHistory(sessionId: string) {
-      const res = await apiFetch(`${BASE_URL}/chat/history/${sessionId}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get history"));
-      return data as {
-        session_id: string;
-        messages: Array<{
-          id: number;
-          role: string;
-          content: string;
-          created_at: string;
-        }>;
-      };
+    resolveModeBGap(gapId: string): Promise<GapActionResponse> {
+      return request(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/resolve`, "Failed to resolve gap", { method: "POST" });
     },
   },
   operator: {
-    async inbox(scope: "attention" | "all"): Promise<InboxList> {
-      const res = await apiFetch(`${BASE_URL}/operator/inbox?scope=${scope}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load inbox"));
-      return data as InboxList;
+    inbox(scope: "attention" | "all"): Promise<InboxList> {
+      return getJson(`${BASE_URL}/operator/inbox?scope=${scope}`, "Failed to load inbox");
     },
-    async summary(): Promise<InboxSummary> {
-      const res = await apiFetch(`${BASE_URL}/operator/inbox/summary`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load inbox summary"));
-      return data as InboxSummary;
+    summary(): Promise<InboxSummary> {
+      return getJson(`${BASE_URL}/operator/inbox/summary`, "Failed to load inbox summary");
     },
-    async thread(sessionId: string): Promise<Thread> {
-      const res = await apiFetch(`${BASE_URL}/operator/sessions/${sessionId}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load conversation"));
-      return data as Thread;
+    thread(sessionId: string): Promise<Thread> {
+      return getJson(`${BASE_URL}/operator/sessions/${sessionId}`, "Failed to load conversation");
     },
-    async take(chatId: string): Promise<OperatorChatState> {
-      const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/take`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to take the chat"));
-      return data as OperatorChatState;
+    take(chatId: string): Promise<OperatorChatState> {
+      return request(`${BASE_URL}/operator/chats/${chatId}/take`, "Failed to take the chat", { method: "POST" });
     },
-    async reply(chatId: string, text: string) {
-      const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send the reply"));
-      return data as { message_id: string; created_at: string; chat: OperatorChatState };
+    reply(chatId: string, text: string): Promise<{ message_id: string; created_at: string; chat: OperatorChatState }> {
+      return sendJson(`${BASE_URL}/operator/chats/${chatId}/messages`, "POST", { text }, "Failed to send the reply");
     },
-    async release(chatId: string): Promise<OperatorChatState> {
-      const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/release`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to return the chat to the bot"));
-      return data as OperatorChatState;
+    release(chatId: string): Promise<OperatorChatState> {
+      return request(`${BASE_URL}/operator/chats/${chatId}/release`, "Failed to return the chat to the bot", { method: "POST" });
     },
-    async resolve(chatId: string, resolutionText?: string | null) {
-      const res = await apiFetch(`${BASE_URL}/operator/chats/${chatId}/resolve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resolution_text: resolutionText || null }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to mark the chat resolved"));
-      return data as { chat: OperatorChatState; resolved_ticket_numbers: string[] };
+    resolve(chatId: string, resolutionText?: string | null): Promise<{ chat: OperatorChatState; resolved_ticket_numbers: string[] }> {
+      return sendJson(`${BASE_URL}/operator/chats/${chatId}/resolve`, "POST", { resolution_text: resolutionText || null }, "Failed to mark the chat resolved");
     },
   },
   analytics: {
-    async summary(period: AnalyticsPeriod): Promise<AnalyticsSummaryResponse> {
-      const res = await apiFetch(`${BASE_URL}/analytics/summary?period=${encodeURIComponent(period)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load analytics summary"));
-      return data as AnalyticsSummaryResponse;
+    summary(period: AnalyticsPeriod): Promise<AnalyticsSummaryResponse> {
+      return getJson(`${BASE_URL}/analytics/summary?period=${encodeURIComponent(period)}`, "Failed to load analytics summary");
     },
   },
   admin: {
-    async getSummary(): Promise<AdminMetricsSummary> {
-      const res = await apiFetch(`${BASE_URL}/admin/metrics/summary`);
-      if (!res.ok) throw new Error("Failed to load admin metrics summary");
-      return res.json();
+    getSummary(): Promise<AdminMetricsSummary> {
+      return getJson(`${BASE_URL}/admin/metrics/summary`, "Failed to load admin metrics summary");
     },
     async getTenants(): Promise<AdminTenantMetricsItem[]> {
-      const res = await apiFetch(`${BASE_URL}/admin/metrics/tenants`);
-      if (!res.ok) throw new Error("Failed to load admin client metrics");
-      const data = await res.json();
-      return data.items;
+      const data = await getJson<{ items?: AdminTenantMetricsItem[] }>(`${BASE_URL}/admin/metrics/tenants`, "Failed to load admin client metrics");
+      return data.items ?? [];
     },
   },
 };

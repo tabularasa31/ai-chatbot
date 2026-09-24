@@ -11,14 +11,10 @@ import {
   type GapModeAStatusFilter,
   type GapModeBStatusFilter,
 } from "@/lib/api";
-
-function formatDateTime(value: string | null): string {
-  if (!value) return "—";
-  return new Date(value).toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
+import { StatCard } from "@/components/ui/stat-card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { useClientMe } from "@/hooks/useApi";
+import { formatDateTime } from "@/lib/format";
 
 function CoverageBadge({ item }: { item: GapItem }) {
   const styles: Record<string, string> = {
@@ -70,32 +66,6 @@ function LinkedContextPanel({ item }: { item: GapItem }) {
           ))}
         </ul>
       )}
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  note,
-}: {
-  label: string;
-  value: string | number;
-  note?: string;
-}) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
-      {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
-    </div>
-  );
-}
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
-      {message}
     </div>
   );
 }
@@ -363,14 +333,8 @@ export default function GapAnalyzerPage() {
   const [recalculating, setRecalculating] = useState(false);
   const [modeAStatus, setModeAStatus] = useState<GapModeAStatusFilter>("active");
   const [modeBStatus, setModeBStatus] = useState<GapModeBStatusFilter>("active");
-  const [hasOpenAiKey, setHasOpenAiKey] = useState(true);
-
-  useEffect(() => {
-    api.clients
-      .getMe()
-      .then((client) => setHasOpenAiKey(Boolean(client.has_openai_key)))
-      .catch(() => setHasOpenAiKey(false));
-  }, []);
+  const { data: client, error: clientError } = useClientMe();
+  const hasOpenAiKey = clientError ? false : client ? Boolean(client.has_openai_key) : true;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -572,7 +536,7 @@ export default function GapAnalyzerPage() {
             <StatCard label="Active gaps" value={summary?.total_active ?? "—"} note={summary?.impact_statement} />
             <StatCard label="Uncovered" value={summary?.uncovered_count ?? "—"} />
             <StatCard label="Partial" value={summary?.partial_count ?? "—"} />
-            <StatCard label="Last updated" value={summary?.last_updated ? formatDateTime(summary.last_updated) : "—"} />
+            <StatCard label="Last updated" value={formatDateTime(summary?.last_updated)} />
           </>
         )}
       </div>

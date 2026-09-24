@@ -18,9 +18,9 @@ from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
 from backend.documents.parsers import OpenAPIChunk
-from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.knowledge.entity_extractor import extract_entities_from_passage
 from backend.models import Document, DocumentType, Embedding
+from backend.search.service import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +256,7 @@ def persist_document_embeddings(
     db: Session,
     *,
     extra_meta: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> list[Embedding]:
     """Delete a document's embeddings and persist freshly-chunked ones.
 
@@ -266,10 +267,17 @@ def persist_document_embeddings(
     caller wants merged into every chunk (e.g. ``source_url``,
     ``page_content_hash``) — per-chunk fields already on each chunk dict
     (anything but ``text``/``chunk_text``) pass through as-is.
+
+    ``commit=False`` flushes (assigning IDs) but leaves the commit to the
+    caller — for callers that still have more document-row changes (e.g.
+    ``doc.status``) to fold into the same transaction/commit.
     """
     db.query(Embedding).filter(Embedding.document_id == doc.id).delete()
     if not chunks:
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return []
 
     vectors = _embed_chunks(chunks, api_key)
@@ -294,9 +302,12 @@ def persist_document_embeddings(
         )
         db.add(emb)
         embeddings.append(emb)
-    db.commit()
-    for emb in embeddings:
-        db.refresh(emb)
+    if commit:
+        db.commit()
+        for emb in embeddings:
+            db.refresh(emb)
+    else:
+        db.flush()
     return embeddings
 
 
@@ -384,12 +395,17 @@ def after_document_indexed(
 ) -> None:
     """Post-index steps shared by the upload and URL-crawl ingestion flows.
 
-    Populates per-chunk entities (Step 4 of the entity-aware retrieval
-    epic), invalidates the tenant's BM25 cache, and enqueues tenant-knowledge
-    extraction as a durable job. Best-effort throughout: embeddings are
-    already committed by ``persist_document_embeddings`` by the time this
-    runs, so nothing here blocks or reverts the ingest.
+    Invalidates the tenant's search caches (BM25 + KB-script), populates
+    per-chunk entities (Step 4 of the entity-aware retrieval epic), and
+    enqueues tenant-knowledge extraction as a durable job. Best-effort
+    throughout: embeddings are already committed by
+    ``persist_document_embeddings`` by the time this runs, so nothing here
+    blocks or reverts the ingest.
+
+    Cache invalidation runs first, before the (much slower) NER pass, so the
+    stale-cache window doesn't include per-chunk entity-extraction latency.
     """
+    invalidate_tenant_search_caches(doc.tenant_id)
     if embeddings and api_key:
         _populate_entities_for_embeddings(
             embeddings=embeddings,
@@ -397,7 +413,6 @@ def after_document_indexed(
             tenant_id=str(doc.tenant_id) if doc.tenant_id else None,
             db=db,
         )
-    invalidate_bm25_cache_for_tenant(doc.tenant_id)
     _run_tenant_knowledge_extraction_best_effort(
         document_id=doc.id,
         tenant_id=doc.tenant_id,

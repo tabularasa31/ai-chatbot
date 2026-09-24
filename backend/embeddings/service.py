@@ -6,6 +6,7 @@ import logging
 import uuid
 
 from fastapi import HTTPException
+from openai import APIError
 from sqlalchemy.orm import Session
 
 # ChunkInfo / chunk_text / CHUNKING_CONFIG re-exported for backward
@@ -26,9 +27,9 @@ from backend.documents.parsers import (
     extract_openapi_chunks_from_rendered_text,
 )
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
-from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 from backend.models.base import _utcnow
+from backend.search.service import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 
@@ -165,11 +166,12 @@ def create_embeddings_for_document(
     # touched so its updated_at moves: retrieval changes here without any
     # other column changing, and the answer cache fingerprints that timestamp.
     # Committed up front (not left to persist_document_embeddings' own delete)
-    # so old embeddings are gone even if the re-embed below fails.
+    # so old embeddings are gone even if the re-embed below fails. Cache
+    # invalidation for this deletion is covered by after_document_indexed's
+    # post-commit invalidation below — no separate call needed here.
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     doc.updated_at = _utcnow()
     db.commit()
-    invalidate_bm25_cache_for_tenant(doc.tenant_id)
 
     if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)
@@ -177,17 +179,25 @@ def create_embeddings_for_document(
         chunker = get_chunker(doc.file_type.value)
         chunks = chunker(doc.parsed_text)
     if not chunks:
+        # No chunks still means "re-index attempted" — run the same
+        # post-index hook (cache invalidation + knowledge-extraction
+        # enqueue) the old inline code ran unconditionally once ingest
+        # succeeded, regardless of chunk count.
+        after_document_indexed(doc, [], api_key=api_key, db=db)
         return []
 
     try:
         embeddings = persist_document_embeddings(doc, chunks, api_key, db)
-    except Exception as e:
+    except (APIError, ValueError) as e:
+        # Only OpenAI-call failures become a 503 "OpenAI API unavailable" —
+        # a DB commit error inside persist_document_embeddings is a genuine
+        # server error and must propagate as such, not be mislabeled.
         raise HTTPException(
             status_code=503,
             detail=f"OpenAI API unavailable: {e!s}",
         ) from e
 
-    # Step 4 of entity-aware retrieval epic + BM25 cache invalidation +
+    # Step 4 of entity-aware retrieval epic + search-cache invalidation +
     # knowledge-extraction enqueue — shared post-index hook (also used by
     # the URL-crawl ingestion path). Best-effort: embeddings above are
     # already durable, so a failure here cannot break ingest.
@@ -281,5 +291,6 @@ def delete_embeddings_for_document(
     if doc is not None:
         doc.updated_at = _utcnow()
     db.commit()
-    invalidate_bm25_cache_for_tenant(tenant_id)
+    if tenant_id is not None:
+        invalidate_tenant_search_caches(tenant_id)
     return result

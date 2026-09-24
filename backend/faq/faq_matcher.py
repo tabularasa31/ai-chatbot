@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.models import TenantFaq
 from backend.search.service import cosine_similarity
+from backend.utils.text import token_set
 
 logger = logging.getLogger(__name__)
 
@@ -150,12 +151,8 @@ def direct_applicability_guard(
     if not q or not f:
         return False
 
-    def _tokens(s: str) -> set[str]:
-        # Keep alnum words only.
-        return {t for t in "".join(ch if ch.isalnum() else " " for ch in s).split() if t}
-
-    q_tokens = _tokens(q)
-    f_tokens = _tokens(f)
+    q_tokens = token_set(q)
+    f_tokens = token_set(f)
     if not q_tokens or not f_tokens:
         return False
 

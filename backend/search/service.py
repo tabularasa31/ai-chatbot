@@ -49,6 +49,7 @@ from backend.search.reranking import (
 )
 from backend.tenants.cache import get_cached_tenant
 from backend.utils.math import cosine_similarity
+from backend.utils.text import token_set, word_tokens
 
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all tenant chunks.
@@ -1062,7 +1063,7 @@ def expand_query(query: str) -> list[str]:
     cleaned = re.sub(r"[^\w\s]", " ", query, flags=re.UNICODE)
     _push(cleaned)
 
-    tokens = re.findall(r"\w+", query.casefold(), flags=re.UNICODE)
+    tokens = word_tokens(query)
     if tokens:
         unique_tokens = list(dict.fromkeys(tokens))
         _push(" ".join(unique_tokens))
@@ -1186,14 +1187,12 @@ def _bm25_score_candidates(
 
 
 def _bm25_prefilter_tokens(query: str) -> list[str]:
-    """Unique, lowercase word tokens used for the BM25 search prefilter.
+    """Unique word tokens used for the BM25 search prefilter.
 
-    .lower() (not .casefold()) matches the SQL func.lower() applied to the
-    column and the BM25 scorer's tokenization, keeping prefilter and scoring
-    in lockstep.
+    Uses the same tokenizer as the BM25 scorer, so every token that can
+    score a match is also a token the prefilter searches for.
     """
-    raw_tokens = re.findall(r"\w+", query.lower(), flags=re.UNICODE)
-    unique_tokens = list(dict.fromkeys(raw_tokens))
+    unique_tokens = list(dict.fromkeys(word_tokens(query)))
     return unique_tokens[:BM25_PREFILTER_MAX_QUERY_TOKENS]
 
 
@@ -1210,7 +1209,7 @@ def _prepare_bm25_corpus(candidates: list[Embedding]) -> PreparedBM25Corpus:
     """Build the shared in-memory BM25 scorer once for a candidate pool."""
     if not candidates:
         return PreparedBM25Corpus(candidates=[], scorer=None)
-    corpus = [(emb.chunk_text or "").lower().split() for emb in candidates]
+    corpus = [word_tokens(emb.chunk_text or "") for emb in candidates]
     return PreparedBM25Corpus(candidates=candidates, scorer=BM25Okapi(corpus))
 
 
@@ -1260,7 +1259,7 @@ def _score_prepared_bm25_corpus(
     One corpus is built per request-stage candidate pool; repeated variant
     evaluation is only repeated lexical scoring over that already-built corpus.
     """
-    query_tokens = query.lower().split()
+    query_tokens = word_tokens(query)
     if not query_tokens or not prepared_corpus.candidates or prepared_corpus.scorer is None:
         return []
 
@@ -1514,14 +1513,10 @@ def apply_script_boost(
     return boosted[:top_k]
 
 
-def _token_set(text: str) -> set[str]:
-    return set(re.findall(r"\w+", text.casefold(), flags=re.UNICODE))
-
-
 def _candidate_similarity(first: Embedding, second: Embedding) -> float:
     """Approximate chunk similarity using Jaccard overlap."""
-    first_tokens = _token_set(first.chunk_text or "")
-    second_tokens = _token_set(second.chunk_text or "")
+    first_tokens = token_set(first.chunk_text or "")
+    second_tokens = token_set(second.chunk_text or "")
     if not first_tokens or not second_tokens:
         return 0.0
     union = first_tokens | second_tokens

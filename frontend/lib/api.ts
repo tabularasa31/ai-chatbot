@@ -1,3 +1,5 @@
+import type { LlmFailureType } from "@chat9/widget-shared";
+
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
 let authRedirectInProgress = false;
 
@@ -11,13 +13,7 @@ export type TenantResponse = {
   updated_at: string;
 };
 
-export type LlmAlertType =
-  | "quota_exhausted"
-  | "invalid_api_key"
-  | "provider_unavailable"
-  | "provider_timeout"
-  | "rate_limited"
-  | "unknown_llm_error";
+export type LlmAlertType = LlmFailureType;
 
 export type TenantLlmAlertResponse = {
   type: LlmAlertType | null;

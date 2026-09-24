@@ -1,5 +1,35 @@
 export type WidgetSource = { title: string; url: string };
 
+// Public Chat9Widget API surface (window.Chat9Widget). Mirrors the loader's
+// implementation in apps/widget-loader/src/index.ts.
+export type UserHints = {
+  user_id?: string;
+  email?: string;
+  name?: string;
+  locale?: string;
+  plan_tier?: string;
+  audience_tag?: string;
+};
+
+export type Chat9StartConfig = {
+  userHints?: UserHints;
+  mode?: "bubble" | "inline";
+  color?: string;
+  position?: "right" | "left";
+  target?: string;
+  topClearance?: number;
+  apiBase?: string;
+  widgetBase?: string;
+};
+
+export type Chat9WidgetApi = {
+  start: (config?: Chat9StartConfig) => void;
+  stop: () => void;
+  setHints: (hints: UserHints | null) => void;
+  isStarted: () => boolean;
+  destroy: () => void;
+};
+
 export type LlmFailureType =
   | "provider_unavailable"
   | "provider_timeout"

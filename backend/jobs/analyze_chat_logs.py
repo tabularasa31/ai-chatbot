@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from backend.chat.pii import redact_for_egress
 from backend.core.config import settings
+from backend.core.embeddings import embed_texts
 from backend.core.openai_client import get_openai_client
 from backend.models import (
     LogAnalysisState,
@@ -335,11 +336,12 @@ async def _generate_embeddings(
 
     for i in range(0, len(missing), batch_size):
         batch = missing[i: i + batch_size]
-        resp = oai.embeddings.create(
+        vectors = embed_texts(
+            [m.content for m in batch],
+            oai,
             model=settings.embedding_model,
-            input=[m.content for m in batch],
+            batch_size=batch_size,
         )
-        vectors = [item.embedding for item in resp.data]
         for msg, vec in zip(batch, vectors, strict=True):
             msg.embedding = vec
         _save_embeddings(db, tenant_id, batch, vectors)
@@ -447,8 +449,7 @@ def _create_faq_candidate(
     if not question or not answer:
         return False
 
-    resp = oai.embeddings.create(model=settings.embedding_model, input=question)
-    q_emb = resp.data[0].embedding
+    q_emb = embed_texts([question], oai, model=settings.embedding_model)[0]
 
     existing = _find_existing_faq(db, tenant_id, q_emb)
 

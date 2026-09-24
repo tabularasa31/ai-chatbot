@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from backend.core.config import settings
+from backend.core.embeddings import embed_texts as _embed_texts_batch
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_json import chat_json
 
@@ -86,14 +87,4 @@ def embed_texts(
     if not normalized:
         return []
 
-    openai_client = get_openai_client(encrypted_api_key)
-    response = openai_client.embeddings.create(
-        model=settings.embedding_model,
-        input=normalized,
-    )
-    vectors: list[list[float]] = []
-    for item in response.data:
-        embedding = getattr(item, "embedding", None)
-        if isinstance(embedding, list):
-            vectors.append([float(value) for value in embedding])
-    return vectors
+    return _embed_texts_batch(normalized, encrypted_api_key, model=settings.embedding_model)

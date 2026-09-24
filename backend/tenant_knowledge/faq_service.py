@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
+from backend.core.embeddings import embed_texts
 from backend.core.openai_client import get_openai_client
 from backend.models import TenantFaq as TenantFaqModel
 from backend.tenant_knowledge.schemas import FaqCandidate
@@ -131,11 +132,9 @@ def insert_new_faq_candidates(
                 )
                 continue
 
-            embedding_resp = openai_client.embeddings.create(
-                model=settings.embedding_model,
-                input=question,
-            )
-            question_embedding = embedding_resp.data[0].embedding  # 1536 floats
+            question_embedding = embed_texts(
+                [question], openai_client, model=settings.embedding_model
+            )[0]  # 1536 floats
             approved = candidate.confidence >= 0.85
             inserted_candidate = False
             skipped_as_duplicate = False

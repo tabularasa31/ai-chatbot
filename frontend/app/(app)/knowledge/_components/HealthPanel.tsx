@@ -3,7 +3,7 @@
 import type { DocumentHealthStatus } from "@/lib/api";
 import { Tooltip } from "@/components/ui/tooltip";
 
-export function healthLabel(health: DocumentHealthStatus | null | undefined): string {
+function healthLabel(health: DocumentHealthStatus | null | undefined): string {
   if (health == null) return "Checking…";
   if (health.error || health.score === null) return "Unavailable";
   if (health.score >= 80) return "Good";

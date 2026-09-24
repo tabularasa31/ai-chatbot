@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session, selectinload
 import backend.documents.embedder as _embedder_mod
 import backend.documents.http_client as _http_client_mod
 import backend.documents.sitemap as _sitemap_mod
-from backend.core.config import settings
 from backend.core.db import SessionLocal
 from backend.core.scripts import detect_script_bucket
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
@@ -50,7 +49,6 @@ from backend.models import (
     Document,
     DocumentStatus,
     DocumentType,
-    Embedding,
     QuickAnswer,
     SourceSchedule,
     SourceStatus,
@@ -373,7 +371,6 @@ def _upsert_page_document(
         return existing, len(existing.embeddings)
 
     if existing:
-        db.query(Embedding).filter(Embedding.document_id == existing.id).delete()
         doc = existing
     else:
         doc = Document(
@@ -396,38 +393,20 @@ def _upsert_page_document(
     doc.status = DocumentStatus.embedding
     db.flush()
 
-    vectors = _embedder_mod._embed_chunks(page.chunks, api_key)
-    for chunk, vector in zip(page.chunks, vectors, strict=True):
-        db.add(
-            Embedding(
-                document_id=doc.id,
-                chunk_text=chunk["chunk_text"],
-                vector=vector,
-                metadata_json={
-                    "chunk_index": chunk["chunk_index"],
-                    "filename": doc.filename,
-                    "file_type": doc.file_type.value,
-                    "source_url": page.url,
-                    "page_title": page.title,
-                    "section_title": chunk["section_title"],
-                    "token_count": chunk["token_count"],
-                    "content_hash": chunk["content_hash"],
-                    "page_content_hash": content_hash,
-                    "raw_text": chunk["raw_text"],
-                    "embedding_model": settings.embedding_model,
-                    **({"language": doc.language} if doc.language else {}),
-                },
-            )
-        )
-    doc.status = DocumentStatus.ready
-    db.flush()
-    db.commit()
-    invalidate_bm25_cache_for_tenant(source.tenant_id)
-    _embedder_mod._run_tenant_knowledge_extraction_best_effort(
-        document_id=doc.id,
-        tenant_id=source.tenant_id,
-        api_key=api_key,
+    embeddings = _embedder_mod.persist_document_embeddings(
+        doc,
+        page.chunks,
+        api_key,
+        db,
+        extra_meta={
+            "source_url": page.url,
+            "page_title": page.title,
+            "page_content_hash": content_hash,
+        },
     )
+    doc.status = DocumentStatus.ready
+    db.commit()
+    _embedder_mod.after_document_indexed(doc, embeddings, api_key=api_key, db=db)
     try:
         capture_event(
             "document_indexed",
@@ -479,7 +458,6 @@ def _upsert_structured_document(
         return existing, len(existing.embeddings)
 
     if existing:
-        db.query(Embedding).filter(Embedding.document_id == existing.id).delete()
         doc = existing
     else:
         doc = Document(
@@ -509,47 +487,17 @@ def _upsert_structured_document(
         source_format=chunks[0].source_format if chunks else "yaml",
     )
     try:
-        vectors = _embedder_mod._embed_chunks(rendered_chunks, api_key)
-        for chunk, vector in zip(rendered_chunks, vectors, strict=True):
-            db.add(
-                Embedding(
-                    document_id=doc.id,
-                    chunk_text=chunk["chunk_text"],
-                    vector=vector,
-                    metadata_json={
-                        "chunk_index": chunk["chunk_index"],
-                        "filename": doc.filename,
-                        "file_type": doc.file_type.value,
-                        "source_url": url,
-                        "source_kind": "url",
-                        "source_format": chunk.get("source_format"),
-                        "type": chunk.get("type"),
-                        "subtype": chunk.get("subtype"),
-                        "path": chunk.get("path"),
-                        "method": chunk.get("method"),
-                        "operation_id": chunk.get("operation_id"),
-                        "tags": chunk.get("tags"),
-                        "deprecated": chunk.get("deprecated"),
-                        "content_types": chunk.get("content_types"),
-                        "response_codes": chunk.get("response_codes"),
-                        "auth_schemes": chunk.get("auth_schemes"),
-                        "has_examples": chunk.get("has_examples"),
-                        "spec_version": chunk.get("spec_version"),
-                        "page_content_hash": content_hash,
-                        "embedding_model": settings.embedding_model,
-                        **({"language": doc.language} if doc.language else {}),
-                    },
-                )
-            )
+        embeddings = _embedder_mod.persist_document_embeddings(
+            doc,
+            rendered_chunks,
+            api_key,
+            db,
+            extra_meta={"page_content_hash": content_hash},
+        )
         doc.status = DocumentStatus.ready
         db.flush()
         db.commit()
-        invalidate_bm25_cache_for_tenant(source.tenant_id)
-        _embedder_mod._run_tenant_knowledge_extraction_best_effort(
-            document_id=doc.id,
-            tenant_id=source.tenant_id,
-            api_key=api_key,
-        )
+        _embedder_mod.after_document_indexed(doc, embeddings, api_key=api_key, db=db)
         try:
             capture_event(
                 "document_indexed",

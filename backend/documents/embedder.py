@@ -11,11 +11,16 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from sqlalchemy.orm import Session
+
 from backend.chunkers.html import clean_html_root
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_retry import call_openai_with_retry
 from backend.documents.parsers import OpenAPIChunk
-from backend.models import DocumentType
+from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
+from backend.knowledge.entity_extractor import extract_entities_from_passage
+from backend.models import Document, DocumentType, Embedding
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +219,16 @@ def _render_structured_openapi_chunks(
     )
 
 
+def _chunk_text_value(chunk: dict[str, Any]) -> str:
+    """Return a chunk's embedding/storage text.
+
+    Upload chunkers key it ``text``; the crawl-side chunk builders here key
+    it ``chunk_text`` — support both so ``persist_document_embeddings`` can
+    take chunks from either source.
+    """
+    return str(chunk.get("chunk_text") or chunk.get("text") or "")
+
+
 def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[list[float]]:
     if not chunks:
         return []
@@ -221,12 +236,173 @@ def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[lis
     vectors: list[list[float]] = []
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[start : start + EMBED_BATCH_SIZE]
-        response = oai.embeddings.create(
-            model=settings.embedding_model,
-            input=[chunk["chunk_text"] for chunk in batch],
+        inputs = [_chunk_text_value(chunk) for chunk in batch]
+        response = call_openai_with_retry(
+            "document_embed_chunks",
+            lambda inputs=inputs: oai.embeddings.create(
+                model=settings.embedding_model,
+                input=inputs,
+            ),
+            call_type="embedding",
         )
         vectors.extend(item.embedding for item in response.data)
     return vectors
+
+
+def persist_document_embeddings(
+    doc: Document,
+    chunks: list[dict[str, Any]],
+    api_key: str | None,
+    db: Session,
+    *,
+    extra_meta: dict[str, Any] | None = None,
+) -> list[Embedding]:
+    """Delete a document's embeddings and persist freshly-chunked ones.
+
+    Single persistence path for both the upload and URL-crawl ingestion
+    flows: batches the OpenAI embeddings call (``EMBED_BATCH_SIZE``) through
+    ``call_openai_with_retry`` and writes one ``Embedding`` row per chunk.
+    ``extra_meta`` carries document/page-level metadata_json fields the
+    caller wants merged into every chunk (e.g. ``source_url``,
+    ``page_content_hash``) — per-chunk fields already on each chunk dict
+    (anything but ``text``/``chunk_text``) pass through as-is.
+    """
+    db.query(Embedding).filter(Embedding.document_id == doc.id).delete()
+    if not chunks:
+        db.commit()
+        return []
+
+    vectors = _embed_chunks(chunks, api_key)
+    embeddings: list[Embedding] = []
+    for i, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
+        meta: dict[str, Any] = {
+            "chunk_index": chunk.get("chunk_index", i),
+            "filename": doc.filename,
+            "file_type": doc.file_type.value,
+            **{k: v for k, v in chunk.items() if k not in ("text", "chunk_text")},
+        }
+        if doc.language:
+            meta.setdefault("language", doc.language)
+        if extra_meta:
+            meta.update(extra_meta)
+        meta["embedding_model"] = settings.embedding_model
+        emb = Embedding(
+            document_id=doc.id,
+            chunk_text=_chunk_text_value(chunk),
+            vector=vector,
+            metadata_json=meta,
+        )
+        db.add(emb)
+        embeddings.append(emb)
+    db.commit()
+    for emb in embeddings:
+        db.refresh(emb)
+    return embeddings
+
+
+def _populate_entities_for_embeddings(
+    *,
+    embeddings: list[Embedding],
+    api_key: str,
+    tenant_id: str | None,
+    db: Session,
+) -> None:
+    """Populate ``Embedding.entities`` via per-chunk NER (best-effort).
+
+    Iterates over the just-saved embeddings, calls
+    ``extract_entities_from_passage`` for each chunk, and writes the
+    returned list into ``entities``. Per-chunk failures degrade to ``[]``
+    inside ``extract_entities_from_passage`` itself, so this loop never
+    raises — at worst we get a row with ``entities=[]`` (the same as a
+    legacy row) and the entity-overlap channel gets no signal for that
+    chunk. Embeddings are already committed before this runs, so an
+    abort here is non-destructive.
+
+    **Commit policy:** one commit per chunk. NER is the slow part
+    (~1-2s/chunk via gpt-4.1-mini), and holding a single transaction
+    open across all chunks would lock the connection for ~150s on a
+    100-chunk megadoc — connection pool hogging + dirty-row liveness
+    issues. Per-chunk commits trade N round-trips for short-lived
+    transactions; the round-trip cost (~milliseconds each) is dwarfed
+    by NER latency, so the trade is free. As a side benefit, partial
+    progress survives a crash mid-loop: chunks already processed keep
+    their entities, the rest stay at the server-default empty list and
+    can be backfilled by a re-index.
+    """
+    updated = 0
+    failed_commits = 0
+    for emb in embeddings:
+        try:
+            ents = extract_entities_from_passage(
+                emb.chunk_text or "",
+                api_key,
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            # Defense in depth: extract_entities_from_passage is documented
+            # to swallow its own exceptions, but a broken caller / monkeypatch
+            # in tests could still leak. Never let one bad chunk corrupt the
+            # whole document's ingest.
+            logger.warning(
+                "entity_extraction_unexpected_error",
+                extra={"embedding_id": str(emb.id)},
+            )
+            ents = []
+        emb.entities = ents
+        try:
+            db.commit()
+        except Exception:
+            # One failed commit shouldn't kill the rest of the document.
+            # Roll back this chunk's update and keep going — the row stays
+            # at the server-default empty list, which is the same as legacy
+            # rows and safe for the Step 5 ``?|`` predicate.
+            logger.warning(
+                "entity_extraction_commit_failed",
+                extra={"embedding_id": str(emb.id)},
+            )
+            db.rollback()
+            failed_commits += 1
+            continue
+        if ents:
+            updated += 1
+    logger.info(
+        "entity_extraction_populated",
+        extra={
+            "chunks": len(embeddings),
+            "non_empty": updated,
+            "failed_commits": failed_commits,
+        },
+    )
+
+
+def after_document_indexed(
+    doc: Document,
+    embeddings: list[Embedding],
+    *,
+    api_key: str | None,
+    db: Session,
+) -> None:
+    """Post-index steps shared by the upload and URL-crawl ingestion flows.
+
+    Populates per-chunk entities (Step 4 of the entity-aware retrieval
+    epic), invalidates the tenant's BM25 cache, and enqueues tenant-knowledge
+    extraction as a durable job. Best-effort throughout: embeddings are
+    already committed by ``persist_document_embeddings`` by the time this
+    runs, so nothing here blocks or reverts the ingest.
+    """
+    if embeddings and api_key:
+        _populate_entities_for_embeddings(
+            embeddings=embeddings,
+            api_key=api_key,
+            tenant_id=str(doc.tenant_id) if doc.tenant_id else None,
+            db=db,
+        )
+    invalidate_bm25_cache_for_tenant(doc.tenant_id)
+    _run_tenant_knowledge_extraction_best_effort(
+        document_id=doc.id,
+        tenant_id=doc.tenant_id,
+        api_key=api_key,
+    )
 
 
 def _url_knowledge_extract_when_unchanged() -> bool:

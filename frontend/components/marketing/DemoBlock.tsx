@@ -3,11 +3,9 @@
 import { useEffect } from "react";
 import { motion } from "framer-motion";
 import type { WindowWithChat9Widget } from "@/types/chat9-widget";
+import { ensureLoaderScript } from "@/lib/widget-embed";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID?.trim();
-
-const WIDGET_LOADER_URL =
-  process.env.NEXT_PUBLIC_WIDGET_LOADER_URL || "https://widget.getchat9.live/widget.js";
 
 const TARGET_ID = "chat9-landing-demo";
 
@@ -30,17 +28,14 @@ function DemoWidget() {
       });
     }
 
-    const w = window as WindowWithChat9Widget;
-    if (w.Chat9Widget) {
-      startInline();
-    } else {
-      const script = document.createElement("script");
-      script.src = WIDGET_LOADER_URL;
-      script.async = true;
-      script.setAttribute("data-bot-id", BOT_ID!);
-      script.onload = startInline;
-      document.body.appendChild(script);
-    }
+    ensureLoaderScript(BOT_ID!)
+      .then(() => {
+        if (!cancelled) startInline();
+      })
+      .catch(() => {
+        // Loader failed to load — demo block silently stays empty (unchanged
+        // behaviour: this component never surfaced an error state).
+      });
 
     return () => {
       cancelled = true;

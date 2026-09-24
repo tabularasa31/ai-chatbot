@@ -3,12 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
-
-const APP_URL =
-  process.env.NEXT_PUBLIC_APP_URL ||
-  (typeof window !== "undefined" ? window.location.origin : "");
-const WIDGET_LOADER_URL =
-  process.env.NEXT_PUBLIC_WIDGET_LOADER_URL || "https://widget.getchat9.live/widget.js";
+import { buildEmbedSnippet } from "@/lib/widget-embed";
 
 type Mode = "bubble" | "inline";
 
@@ -32,39 +27,22 @@ function EmbedContent() {
       .finally(() => setLoading(false));
   }, []);
 
-  // The dashboard origin where /widget/* and /api/widget-* live; only emitted
-  // when it differs from the production default the loader bakes in.
-  const apiBaseOverride =
-    APP_URL && APP_URL !== "https://getchat9.live" ? APP_URL : null;
-
-  function buildStartConfig(extras: Record<string, string>): string {
-    const entries = Object.entries(extras).filter(([, v]) => v !== "");
-    if (apiBaseOverride) entries.push(["apiBase", apiBaseOverride]);
-    if (entries.length === 0) return "";
-    const lines = entries.map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`);
-    return `{\n${lines.join(",\n")}\n  }`;
-  }
-
-  function buildScriptTag(botIdValue: string): string {
-    return `<script\n  src="${WIDGET_LOADER_URL}"\n  data-bot-id="${botIdValue}">\n</script>`;
-  }
-
-  function buildStartScript(configLiteral: string): string {
-    return `<script>\n  Chat9Widget.start(${configLiteral});\n</script>`;
-  }
-
   function getBubbleSnippet() {
-    const config = buildStartConfig({
-      ...(color !== "#a855f7" ? { color } : {}),
-      ...(position !== "right" ? { position } : {}),
+    return buildEmbedSnippet({
+      botId: publicId ?? "YOUR_BOT_ID",
+      extraConfig: {
+        ...(color !== "#a855f7" ? { color } : {}),
+        ...(position !== "right" ? { position } : {}),
+      },
     });
-    return `${buildScriptTag(publicId ?? "YOUR_BOT_ID")}\n${buildStartScript(config)}`;
   }
 
   function getInlineSnippet() {
-    const divPart = `<div id="${targetId}"></div>`;
-    const config = buildStartConfig({ mode: "inline", target: targetId });
-    return `${divPart}\n${buildScriptTag(publicId ?? "YOUR_BOT_ID")}\n${buildStartScript(config)}`;
+    return buildEmbedSnippet({
+      botId: publicId ?? "YOUR_BOT_ID",
+      extraConfig: { mode: "inline", target: targetId },
+      extraHtml: `<div id="${targetId}"></div>`,
+    });
   }
 
   if (loading) {

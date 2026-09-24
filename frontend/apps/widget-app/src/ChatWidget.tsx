@@ -1,25 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { type Components } from "react-markdown";
 import "highlight.js/styles/github-dark.css";
-import { rehypeHighlightSubset } from "./highlight";
 import { MessageCircle, Send, Ticket } from "lucide-react";
 import { cn, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
-import { LoadingIndicator } from "./LoadingIndicator";
 import {
-  appendSystemMarker,
   createLlmUnavailableMessage,
-  createSystemMessage,
   createTextMessage,
   type ChatWidgetMessage,
-  type LlmFailureState,
+  type HandoffState,
+  type UserHints,
   type WidgetSource,
 } from "@chat9/widget-shared";
 import { t as tString } from "./strings";
-import type { UserHints } from "./main";
+import { clearStoredSession, deriveStorageUserId, persistSession, readStoredSession } from "./session-storage";
+import { apiErrorCode, formatApiDetail, requestWidgetTurn } from "./api/stream";
+import { useWidgetHistory } from "./useWidgetHistory";
+import { useOperatorPolling } from "./useOperatorPolling";
+import { MessageList } from "./MessageList";
 
 export type ChatWidgetBelowAssistantContext = {
   messageIndex: number;
@@ -136,114 +136,11 @@ const MD_COMPONENTS: Components = {
 };
 
 const DEFAULT_SITE_URL = "https://getchat9.live";
-const SESSION_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const RETRYABLE_SESSION_ERROR_CODES = new Set([
   "session_invalid",
   "session_not_found",
   "session_forbidden",
 ]);
-
-function sessionStorageKey(botId: string, userId?: string | null): string {
-  return userId ? `chat9:${botId}:${userId}:session` : `chat9:${botId}:session`;
-}
-
-function sessionUpdatedAtStorageKey(botId: string, userId?: string | null): string {
-  return userId ? `chat9:${botId}:${userId}:session_updated_at` : `chat9:${botId}:session_updated_at`;
-}
-
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-// Storage-key discriminator derived from hints. Lets us namespace localStorage
-// per visitor so one browser shared between accounts doesn't bleed history
-// across them. Falls back to email-based synthetic id matching the backend.
-function deriveStorageUserId(hints: UserHints | null | undefined): string | null {
-  if (!hints) return null;
-  if (hints.user_id && hints.user_id.trim()) return hints.user_id.trim();
-  if (hints.email && hints.email.trim()) return `hint:${hints.email.trim()}`;
-  return null;
-}
-
-function clearStoredSession(botId: string, userId?: string | null): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(sessionStorageKey(botId, userId));
-    window.localStorage.removeItem(sessionUpdatedAtStorageKey(botId, userId));
-  } catch {
-    // localStorage can be blocked in embedded/privacy-restricted contexts.
-  }
-}
-
-function readStoredSession(botId: string, userId?: string | null): string | null {
-  if (typeof window === "undefined") return null;
-  let storedSessionId: string | null = null;
-  let storedUpdatedAt: string | null = null;
-  try {
-    storedSessionId = window.localStorage.getItem(sessionStorageKey(botId, userId));
-    storedUpdatedAt = window.localStorage.getItem(sessionUpdatedAtStorageKey(botId, userId));
-  } catch {
-    return null;
-  }
-  if (!storedSessionId || !storedUpdatedAt) {
-    clearStoredSession(botId, userId);
-    return null;
-  }
-  if (!isUuid(storedSessionId)) {
-    clearStoredSession(botId, userId);
-    return null;
-  }
-  const updatedAtMs = Number(storedUpdatedAt);
-  if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > SESSION_STORAGE_TTL_MS) {
-    clearStoredSession(botId, userId);
-    return null;
-  }
-  return storedSessionId;
-}
-
-// The sliding 24h TTL is the lifetime of the visitor identity, not of a
-// conversation: the server rotates conversations on its own idle timeout and
-// keeps them linked to this session_id.
-function persistSession(botId: string, sessionId: string, userId?: string | null): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(sessionStorageKey(botId, userId), sessionId);
-    window.localStorage.setItem(sessionUpdatedAtStorageKey(botId, userId), String(Date.now()));
-  } catch {
-    // Persistence is best-effort; widget can continue without browser storage.
-  }
-}
-
-function formatApiDetail(detail: unknown, fallback: string): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (typeof detail === "object" && detail !== null && "message" in detail) {
-    const message = (detail as { message?: unknown }).message;
-    if (typeof message === "string" && message.trim()) return message;
-  }
-  if (Array.isArray(detail) && detail.length > 0) {
-    const first = detail[0];
-    if (typeof first === "object" && first !== null && "msg" in first) {
-      return String((first as { msg: unknown }).msg);
-    }
-  }
-  return fallback;
-}
-
-function apiErrorCode(detail: unknown): string | null {
-  if (typeof detail === "object" && detail !== null && "code" in detail) {
-    const code = (detail as { code?: unknown }).code;
-    if (typeof code === "string" && code.trim()) return code;
-  }
-  return null;
-}
-
-function precedingUserQuestion(messages: ChatWidgetMessage[], assistantIndex: number): string {
-  for (let i = assistantIndex - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message?.type === "user") return message.text;
-  }
-  return "";
-}
 
 function normalizeAllowedDomain(domain: string): string | null {
   const value = domain
@@ -286,7 +183,7 @@ export function ChatWidget({
   // "waiting" (an open request nobody has picked up) or "live" (a human is in
   // the conversation). Drives the poll cadence and nothing else — the third
   // state is derived server-side, never stored.
-  const [handoffState, setHandoffState] = useState<"bot" | "waiting" | "live">("bot");
+  const [handoffState, setHandoffState] = useState<HandoffState>("bot");
   // Byline above a human's reply, localized server-side into the language the
   // conversation is being held in. English until the server says otherwise.
   const [operatorLabel, setOperatorLabel] = useState("Operator");
@@ -443,7 +340,7 @@ export function ChatWidget({
     payload: {
       text: string;
       ticket_number?: string | null;
-      sources?: { title: string; url: string }[];
+      sources?: WidgetSource[];
     },
   ) => {
     if (payload.ticket_number) setActiveTicket(payload.ticket_number);
@@ -453,139 +350,14 @@ export function ChatWidget({
     ]);
   }, []);
 
-  const requestWidgetTurn = useCallback(async ({
-    message,
-    attemptSessionId,
-    onChunk,
-    onStatus,
-  }: {
-    message: string;
-    attemptSessionId: string | null;
-    onChunk?: (partialText: string) => void;
-    onStatus?: (stage: string) => void;
-  }) => {
-    const params = new URLSearchParams({
-      bot_id: botId,
-    });
-    if (attemptSessionId) params.set("session_id", attemptSessionId);
-
-    const res = await fetch(`${apiBase}/widget/chat?${params}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message,
-        locale: localeParam,
-      }),
-    });
-
-    if (!res.ok || !res.body) {
-      const payload = (await res.json().catch(() => ({}))) as {
-        detail?: unknown;
-        text?: string;
-        session_id?: string;
-        ticket_number?: string | null;
-        sources?: { title: string; url: string }[];
-        outcome?: string | null;
-        failure_state?: LlmFailureState | null;
-      };
-      return { res, payload };
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let fullText = "";
-    const payload: {
-      detail?: unknown;
-      text?: string;
-      session_id?: string;
-      ticket_number?: string | null;
-      sources?: { title: string; url: string }[];
-      outcome?: string | null;
-      failure_state?: LlmFailureState | null;
-    } = {};
-
-    const handleEvent = (eventData: string) => {
-      const raw = eventData.trim();
-      if (!raw) return;
-      let parsed: {
-        type?: string;
-        text?: string;
-        stage?: string;
-        session_id?: string;
-        ticket_number?: string;
-        message?: string;
-        code?: number;
-        sources?: WidgetSource[];
-        outcome?: string | null;
-        failure_state?: LlmFailureState | null;
-      };
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        return;
-      }
-      if (parsed.type === "chunk" && typeof parsed.text === "string") {
-        fullText += parsed.text;
-        onChunk?.(fullText);
-      } else if (parsed.type === "status" && typeof parsed.stage === "string") {
-        onStatus?.(parsed.stage);
-      } else if (parsed.type === "done") {
-        payload.text = typeof parsed.text === "string" ? parsed.text : fullText;
-        payload.session_id = parsed.session_id;
-        payload.ticket_number = parsed.ticket_number ?? null;
-        payload.sources = parsed.sources ?? [];
-        payload.outcome = parsed.outcome ?? null;
-        payload.failure_state = parsed.failure_state ?? null;
-        // Don't replay the final text into onChunk for the degraded path:
-        // the LLM-unavailable message is rendered as its own UI block, not
-        // as an assistant bubble streamed token-by-token.
-        if (
-          parsed.outcome !== "llm_unavailable" &&
-          typeof parsed.text === "string" &&
-          parsed.text !== fullText
-        ) {
-          onChunk?.(parsed.text);
-        }
-      } else if (parsed.type === "error") {
-        payload.detail = {
-          code: parsed.code,
-          message: parsed.message ?? "stream_error",
-        };
-      }
-    };
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (value) {
-        buffer += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buffer.indexOf("\n\n")) !== -1) {
-          const frame = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          const dataLines = frame
-            .split("\n")
-            .filter((l) => l.startsWith("data:"))
-            .map((l) => l.slice(5).trimStart())
-            .join("\n");
-          if (dataLines) handleEvent(dataLines);
-        }
-      }
-      if (done) break;
-    }
-
-    if (payload.detail !== undefined) {
-      throw new Error(formatApiDetail(payload.detail, "Stream error"));
-    }
-
-    return { res, payload };
-  }, [botId, localeParam, apiBase]);
-
   // attemptSessionId is null for a brand-new session; after conversation
   // rotation it carries the existing session so the greeting opens the new
   // conversation server-side instead of minting another session.
   const fetchGreeting = useCallback(async (attemptSessionId: string | null = null) => {
     const { res, payload } = await requestWidgetTurn({
+      apiBase,
+      botId,
+      locale: localeParam,
       message: "",
       attemptSessionId,
     });
@@ -596,92 +368,32 @@ export function ChatWidget({
       text: string;
       session_id: string;
       ticket_number?: string | null;
-      sources?: { title: string; url: string }[];
+      sources?: WidgetSource[];
     };
     applyAssistantMessage(data);
     setSessionId(data.session_id);
     persistSession(botId, data.session_id, userIdRef.current);
-  }, [applyAssistantMessage, botId, requestWidgetTurn]);
+  }, [applyAssistantMessage, apiBase, botId, localeParam]);
 
-  useEffect(() => {
-    if (!sessionHydrated || !sessionId || historyLoaded) return;
-    let cancelled = false;
-    setLoading(true);
-    const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
-    fetch(`${apiBase}/widget/history?${params}`)
-      .then(async (r) => {
-        if (r.status === 404) {
-          // Session no longer exists on the backend — start fresh
-          if (!cancelled) {
-            clearStoredSession(botId, userIdRef.current);
-            setSessionId(null);
-          }
-          return null;
-        }
-        if (!r.ok) {
-          // Transient error (5xx, network) — keep session, silently skip history
-          return null;
-        }
-        return r.json() as Promise<{
-          messages: { id: string; role: string; content: string }[];
-          ticket_number?: string | null;
-          boundary_indices?: number[];
-          conversation_rotated?: boolean;
-          handoff_state?: "bot" | "waiting" | "live";
-          operator_label?: string;
-        }>;
-      })
-      .then((data) => {
-        if (cancelled || !data) return;
-        if (data.handoff_state) setHandoffState(data.handoff_state);
-        if (data.operator_label) setOperatorLabel(data.operator_label);
-        if (data.messages.length > 0) {
-          const boundaries = new Set(data.boundary_indices ?? []);
-          const hydrated: ChatWidgetMessage[] = [];
-          data.messages.forEach((m, index) => {
-            // Operator rows belong here as much as assistant ones do: a human
-            // answering by e-mail or from the console writes into the same
-            // transcript, and dropping them here is what used to make the
-            // whole handoff invisible.
-            if (m.role !== "user" && m.role !== "assistant" && m.role !== "operator") return;
-            if (boundaries.has(index)) {
-              hydrated.push(createSystemMessage("new_conversation"));
-            }
-            hydrated.push(createTextMessage(m.role, m.content));
-          });
-          // Where the cursor poll picks up. Taken from the raw list rather
-          // than the hydrated one so a role the widget skips still advances it.
-          const lastServerMessage = data.messages[data.messages.length - 1];
-          cursorRef.current = lastServerMessage?.id ?? null;
-          const lastOperatorMessage = [...data.messages].reverse().find((m) => m.role === "operator");
-          if (lastOperatorMessage) setPendingReadId(lastOperatorMessage.id);
-          setMessages(hydrated);
-          if (data.ticket_number) setActiveTicket(data.ticket_number);
-        }
-        if (data.conversation_rotated) {
-          // Returning visitor past the idle threshold: keep the old messages
-          // as read-only context, mark the boundary, and greet afresh — the
-          // greeting POST opens the new conversation server-side.
-          if (data.messages.length > 0) {
-            setMessages((prev) => appendSystemMarker(prev, "new_conversation"));
-          }
-          void fetchGreeting(sessionId).catch(() => {
-            // Best-effort: without a greeting the visitor still gets a fresh
-            // conversation on their first real message.
-          });
-        }
-      })
-      .catch(() => {
-        // Network-level failure — keep session for next page load
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setHistoryLoaded(true);
-          setLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
-  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, fetchGreeting]);
+  useWidgetHistory({
+    sessionHydrated,
+    sessionId,
+    historyLoaded,
+    botId,
+    apiBase,
+    refs: { userIdRef, cursorRef },
+    fetchGreeting,
+    setters: {
+      setSessionId,
+      setHandoffState,
+      setOperatorLabel,
+      setMessages,
+      setActiveTicket,
+      setPendingReadId,
+      setHistoryLoaded,
+      setLoading,
+    },
+  });
 
   useEffect(() => {
     // Wait for history fetch to complete (or determine there's no stored session)
@@ -713,169 +425,19 @@ export function ChatWidget({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
 
-  // How often to ask whether a human has written. The ladder is the whole
-  // point: a conversation the bot is handling is not polled at all, one
-  // waiting in a queue is polled lazily, and one a human is actively typing
-  // into is polled briskly enough that their reply lands while the visitor is
-  // still looking at the window.
-  const POLL_INTERVAL_LIVE_MS = 2500;
-  const POLL_INTERVAL_WAITING_MS = 20000;
-
-  const pollForOperatorMessages = useCallback(async () => {
-    if (!sessionId || pollInFlightRef.current) return;
-    pollInFlightRef.current = true;
-    const ticketAtDispatch = activeTicketRef.current;
-    try {
-      const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
-      if (cursorRef.current) params.set("after_message_id", cursorRef.current);
-      const res = await fetch(`${apiBase}/widget/messages?${params}`);
-      if (!res.ok) return;
-      const data = (await res.json()) as {
-        messages?: { id: string; role: string; content: string }[];
-        handoff_state?: "bot" | "waiting" | "live";
-        operator_label?: string;
-        cursor_stale?: boolean;
-      };
-      if (data.cursor_stale) {
-        // The conversation rotated underneath us. Splicing this tail onto what
-        // is on screen would duplicate it, so re-run the bootstrap instead.
-        cursorRef.current = null;
-        setHistoryLoaded(false);
-        return;
-      }
-      if (data.handoff_state) {
-        setHandoffState(data.handoff_state);
-        // `bot` is the server saying there is no open request and nobody
-        // holding the chat. Clearing the ticket here is what lets the poll
-        // stop: `activeTicket` is otherwise set once and never unset, so
-        // without this the widget would keep asking every twenty seconds for
-        // as long as the tab stayed open.
-        //
-        // Only when the ticket has not changed under us. A poll dispatched
-        // before a fresh escalation can land after it, and clearing then
-        // would silence the widget on a request that had only just been
-        // raised.
-        if (data.handoff_state === "bot" && activeTicketRef.current === ticketAtDispatch) {
-          setActiveTicket(null);
-        }
-      }
-      if (data.operator_label) setOperatorLabel(data.operator_label);
-      const incoming = data.messages ?? [];
-      if (incoming.length > 0) {
-        cursorRef.current = incoming[incoming.length - 1].id;
-        // Only human replies are appended. The visitor's own turns and the
-        // bot's are already on screen from the send that produced them, and
-        // adding the server's copy would show each of them twice.
-        const operatorMessages = incoming.filter((m) => m.role === "operator");
-        if (operatorMessages.length > 0) {
-          setMessages((prev) => [
-            ...prev,
-            ...operatorMessages.map((m) => createTextMessage("operator", m.content)),
-          ]);
-          setPendingReadId(operatorMessages[operatorMessages.length - 1].id);
-        }
-      }
-    } catch {
-      // Transient: the next tick tries again, and the cursor has not moved.
-    } finally {
-      pollInFlightRef.current = false;
-    }
-  }, [apiBase, botId, sessionId]);
-
-  useEffect(() => {
-    // An open request is enough to start polling even before the server has
-    // reported a state: the escalation that just happened is exactly when a
-    // human might appear. What bounds the polling is the handoff itself: once
-    // the ticket is resolved the server reports `bot` and this goes quiet on
-    // its own.
-    const shouldPoll =
-      sessionHydrated &&
-      Boolean(sessionId) &&
-      historyLoaded &&
-      (handoffState !== "bot" || activeTicket !== null);
-    if (!shouldPoll) return;
-
-    const period =
-      handoffState === "live" ? POLL_INTERVAL_LIVE_MS : POLL_INTERVAL_WAITING_MS;
-    let timer: ReturnType<typeof setInterval> | undefined;
-
-    const stop = () => {
-      if (timer !== undefined) {
-        clearInterval(timer);
-        timer = undefined;
-      }
-    };
-    const start = () => {
-      stop();
-      timer = setInterval(() => {
-        void pollForOperatorMessages();
-      }, period);
-    };
-    // A hidden tab polls nothing: the visitor is not reading, and a widget
-    // left open in a background tab for a day would otherwise poll all day.
-    // Coming back into view polls immediately rather than waiting out a tick.
-    const resync = () => {
-      if (document.hidden) {
-        stop();
-        return;
-      }
-      void pollForOperatorMessages();
-      start();
-    };
-
-    if (!document.hidden) start();
-    document.addEventListener("visibilitychange", resync);
-    window.addEventListener("focus", resync);
-    return () => {
-      stop();
-      document.removeEventListener("visibilitychange", resync);
-      window.removeEventListener("focus", resync);
-    };
-  }, [
-    activeTicket,
-    handoffState,
-    historyLoaded,
-    pollForOperatorMessages,
-    sessionHydrated,
+  useOperatorPolling({
+    apiBase,
+    botId,
     sessionId,
-  ]);
-
-  useEffect(() => {
-    if (!pendingReadId || !sessionId) return;
-    const messageId = pendingReadId;
-    let cancelled = false;
-    let inFlight = false;
-    const report = () => {
-      if (inFlight || !isOpen || document.hidden) return;
-      inFlight = true;
-      const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
-      fetch(`${apiBase}/widget/messages/read?${params}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message_id: messageId }),
-      })
-        .then((res) => {
-          // 404 is a message this conversation no longer contains (rotation);
-          // nothing to report, and nothing to keep retrying on every focus.
-          if (cancelled || !(res.ok || res.status === 404)) return;
-          setPendingReadId((current) => (current === messageId ? null : current));
-        })
-        .catch(() => {
-          // Transient: the next open, focus or reply reports again.
-        })
-        .finally(() => {
-          inFlight = false;
-        });
-    };
-    report();
-    document.addEventListener("visibilitychange", report);
-    window.addEventListener("focus", report);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", report);
-      window.removeEventListener("focus", report);
-    };
-  }, [apiBase, botId, isOpen, pendingReadId, sessionId]);
+    sessionHydrated,
+    historyLoaded,
+    handoffState,
+    activeTicket,
+    isOpen,
+    pendingReadId,
+    refs: { cursorRef, activeTicketRef, pollInFlightRef },
+    setters: { setHandoffState, setOperatorLabel, setActiveTicket, setMessages, setPendingReadId, setHistoryLoaded },
+  });
 
   /** Send a user message through /widget/chat and apply the response.
    *  Used both by the input-area send button and by the Try again retry path
@@ -899,6 +461,9 @@ export function ChatWidget({
 
     try {
       let { res, payload } = await requestWidgetTurn({
+        apiBase,
+        botId,
+        locale: localeParam,
         message: userMessage,
         attemptSessionId: sessionId,
         onChunk: handleChunk,
@@ -912,6 +477,9 @@ export function ChatWidget({
         setStreamingText("");
         setStatusStage(null);
         ({ res, payload } = await requestWidgetTurn({
+          apiBase,
+          botId,
+          locale: localeParam,
           message: userMessage,
           attemptSessionId: null,
           onChunk: handleChunk,
@@ -947,7 +515,7 @@ export function ChatWidget({
       const data = payload as {
         text: string;
         session_id: string;
-        sources?: { title: string; url: string }[];
+        sources?: WidgetSource[];
       };
 
       applyAssistantMessage(data);
@@ -966,7 +534,7 @@ export function ChatWidget({
       setStatusStage(null);
       setLoading(false);
     }
-  }, [applyAssistantMessage, botId, requestWidgetTurn, sessionId]);
+  }, [applyAssistantMessage, apiBase, botId, localeParam, sessionId]);
 
   const handleSend = async () => {
     const userMessage = trimmedInput;
@@ -1115,189 +683,20 @@ export function ChatWidget({
             <p className={cn("text-gray-400", compact ? "text-[13px]" : "text-sm")}>Ask anything about Chat9…</p>
           </div>
         ) : (
-          <div className={cn("space-y-5", compact ? "text-[13px]" : "text-sm")}>
-            {messages.map((msg, i) => {
-                if (msg.type === "system") {
-                  return (
-                    <div key={msg.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
-                      <p className="font-medium text-slate-800">New conversation</p>
-                    </div>
-                  );
-                }
-
-                if (msg.type === "user") {
-                  return (
-                    <div key={msg.id} className="flex justify-end">
-                      <div className="max-w-[85%] rounded-2xl px-4 py-2 bg-[#f3e8ff] text-gray-800">
-                        <p className="whitespace-pre-wrap">{msg.text}</p>
-                      </div>
-                    </div>
-                  );
-                }
-
-                if (msg.type === "operator") {
-                  // Visually distinct from the bot on purpose: the visitor
-                  // has to be able to tell that a person is answering them.
-                  // The byline is the server's, already in the language the
-                  // conversation is being held in.
-                  return (
-                    <div key={msg.id} className="flex items-end gap-3">
-                      <div className="max-w-[85%] rounded-2xl border border-violet-200 bg-violet-50 px-4 py-2 text-gray-800">
-                        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-violet-600">
-                          {operatorLabel}
-                        </p>
-                        <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            rehypePlugins={[rehypeHighlightSubset]}
-                            components={markdownComponents}
-                          >
-                            {msg.text}
-                          </ReactMarkdown>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }
-
-                if (msg.type === "llm_unavailable") {
-                  const showRetry =
-                    msg.failureState.retryable && msg.escalationStatus !== "done";
-                  const showEscalate =
-                    msg.failureState.can_escalate && msg.escalationStatus !== "done";
-                  const busy =
-                    msg.retryInProgress || msg.escalationStatus === "in_progress";
-                  return (
-                    <div key={msg.id} className="flex items-end gap-3">
-                      <div className="max-w-[85%] rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-                        <p className="whitespace-pre-wrap">{msg.text}</p>
-                        {(showRetry || showEscalate) ? (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {showRetry ? (
-                              <button
-                                type="button"
-                                onClick={() => void handleLlmUnavailableRetry(msg.id)}
-                                disabled={busy}
-                                className="inline-flex items-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {tString(localeParam, "try_again_button")}
-                              </button>
-                            ) : null}
-                            {showEscalate ? (
-                              <button
-                                type="button"
-                                onClick={() => void handleLlmUnavailableEscalate(msg.id)}
-                                disabled={busy}
-                                className="inline-flex items-center rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {tString(localeParam, "contact_support_button")}
-                              </button>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                }
-
-                const isError = msg.type === "error";
-                const userQuestion = msg.type === "assistant" ? precedingUserQuestion(messages, i) : "";
-                return (
-                  <div key={msg.id}>
-                    <div className="flex items-end gap-3">
-                      <div
-                        className={cn(
-                          "max-w-[85%] rounded-2xl px-4 py-2",
-                          isError
-                            ? "border border-[#FECACA] bg-[#FFF1F2] text-[#991B1B]"
-                            : "bg-gray-100 text-gray-800",
-                        )}
-                      >
-                        {isError ? (
-                          <p className="whitespace-pre-wrap">{msg.text}</p>
-                        ) : (
-                          <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              rehypePlugins={[rehypeHighlightSubset]}
-                              components={markdownComponents}
-                            >
-                              {msg.text}
-                            </ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {msg.type === "assistant" && msg.sources && msg.sources.length > 0 && (
-                      <div className="ml-1 mt-1.5 flex flex-wrap gap-1.5">
-                        {msg.sources.map((src: WidgetSource) => {
-                          let hostname: string | null = null;
-                          try { hostname = new URL(src.url).hostname; } catch { /* skip favicon */ }
-                          return (
-                            <a
-                              key={src.url}
-                              href={src.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(event) => {
-                                if (maybeOpenLinkSafety(src.url)) {
-                                  event.preventDefault();
-                                }
-                              }}
-                              className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors"
-                            >
-                              {hostname && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={`https://www.google.com/s2/favicons?domain=${hostname}&sz=16`}
-                                  alt=""
-                                  className="h-3 w-3"
-                                />
-                              )}
-                              <span className="max-w-[140px] truncate">{src.title}</span>
-                              <svg className="h-2.5 w-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                              </svg>
-                            </a>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {msg.type === "assistant" && renderBelowAssistant && userQuestion.trim() ? (
-                      <div className="ml-12 mt-3 max-w-[85%]">
-                        {renderBelowAssistant({
-                          messageIndex: i,
-                          userQuestion,
-                          assistantContent: msg.text,
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-            })}
-
-            {loading && streamingText ? (
-              <div className="flex items-end gap-3">
-                <div className="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2 text-gray-800">
-                  <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      rehypePlugins={[rehypeHighlightSubset]}
-                      components={markdownComponents}
-                    >
-                      {streamingText}
-                    </ReactMarkdown>
-                  </div>
-                </div>
-              </div>
-            ) : loading ? (
-              <div className="flex items-end gap-3">
-                <LoadingIndicator stage={statusStage} />
-              </div>
-            ) : null}
-          </div>
+          <MessageList
+            messages={messages}
+            compact={compact}
+            operatorLabel={operatorLabel}
+            localeParam={localeParam}
+            markdownComponents={markdownComponents}
+            maybeOpenLinkSafety={maybeOpenLinkSafety}
+            renderBelowAssistant={renderBelowAssistant}
+            handleLlmUnavailableRetry={handleLlmUnavailableRetry}
+            handleLlmUnavailableEscalate={handleLlmUnavailableEscalate}
+            loading={loading}
+            streamingText={streamingText}
+            statusStage={statusStage}
+          />
         )}
       </div>
 

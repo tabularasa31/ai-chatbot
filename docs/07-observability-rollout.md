@@ -48,7 +48,6 @@ Implemented in code:
 
 - optional Langfuse initialization with no-op fallback
 - root `rag-query` traces
-- root `search-request` traces for direct `/search` calls
 - `quick-answers-check` placeholder stage
 - `faq_match` decision span for FAQ hybrid routing (`faq_direct` / `faq_context` / `rag_only`)
 - `guard_capability_check` — LLM classifier span (capability question detection)
@@ -159,10 +158,9 @@ This split matters because multi-variant retrieval can be meaningfully slower ev
 
 ## Query Variant Comparison Workflow
 
-Use Langfuse filters/grouping with the trace name kept separate by flow:
+Use Langfuse filters/grouping with the trace name for the flow:
 
 - `rag-query` for chat requests
-- `search-request` for direct `/search`
 
 Primary segmentation:
 
@@ -171,7 +169,7 @@ Primary segmentation:
 Recommended review steps:
 
 1. Filter a stable time window with representative traffic.
-2. For each trace family (`rag-query`, `search-request`), compare p50/p95 total latency for `single` vs `multi`.
+2. For the `rag-query` trace family, compare p50/p95 total latency for `single` vs `multi`.
 3. Compare p50/p95 of `retrieval_duration_ms` for the same split.
 4. Check work amplification:
    - avg/p95 `query_variant_count`
@@ -186,7 +184,7 @@ Decision rule:
 - needs guardrails: `multi` traces show material p95 inflation or repeated noisy expansions with low retrieval value
 
 Current MMR note:
-the `mmr-pass` stage uses token-set Jaccard similarity over the post-rerank pool and recomputes pairwise comparisons as chunks are selected. Normal current usage is small (`/search` defaults to `top_k=3`, chat retrieval uses `top_k=5`, so MMR usually sees about 6-10 candidates after script boost). That remains acceptable for roughly up to 50 MMR candidates; around 100 candidates it becomes a noticeable hot-path cost, and the schema-allowed worst case (`top_k=100` => up to 200 MMR candidates before selection) is outside the intended operating range until we add a cap or replace the heuristic.
+the `mmr-pass` stage uses token-set Jaccard similarity over the post-rerank pool and recomputes pairwise comparisons as chunks are selected. Normal current usage is small (chat retrieval uses `top_k=5`, so MMR usually sees about 6-10 candidates after script boost). That remains acceptable for roughly up to 50 MMR candidates; around 100 candidates it becomes a noticeable hot-path cost, and the schema-allowed worst case (`top_k=100` => up to 200 MMR candidates before selection) is outside the intended operating range until we add a cap or replace the heuristic.
 
 ## Clarification observability
 

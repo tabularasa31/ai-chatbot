@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session, selectinload
 
-from backend.auth.middleware import require_owner, require_verified_user
+from backend.auth.middleware import get_current_tenant, get_owner_tenant, require_verified_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.documents.schemas import (
@@ -40,7 +40,7 @@ from backend.documents.url_service import (
     update_url_source,
 )
 from backend.jobs.crawl_url import enqueue_crawl_for_source_sync
-from backend.models import Document, QuickAnswer, UrlSource, UrlSourceRun, User
+from backend.models import Document, QuickAnswer, Tenant, UrlSource, UrlSourceRun, User
 from backend.observability.metrics import emit_tenant_event
 from backend.tenants.service import get_tenant_by_user
 
@@ -126,7 +126,7 @@ def _quick_answer_response(answer: QuickAnswer) -> QuickAnswerResponse:
 def upload_document_route(
     request: Request,
     file: UploadFile,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentResponse:
     """
@@ -134,10 +134,6 @@ def upload_document_route(
 
     Returns 201 Created. Errors: 400 unsupported type/size, 404 no tenant, 422 parse error.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     file_type = _detect_file_type(file.filename or "")
     if not file_type:
         raise HTTPException(
@@ -187,14 +183,10 @@ def list_documents_route(
 
 @documents_router.get("/sources", response_model=KnowledgeSourcesResponse)
 def list_knowledge_sources_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeSourcesResponse:
     """List file documents and URL sources for the Knowledge page."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     payload = list_knowledge_sources(tenant.id, db)
     return KnowledgeSourcesResponse(
         documents=[_document_response(doc) for doc in payload["documents"]],
@@ -205,14 +197,10 @@ def list_knowledge_sources_route(
 @documents_router.post("/sources/url", response_model=UrlSourceResponse, status_code=201)
 def create_url_source_route(
     payload: UrlSourceCreateRequest,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Create a new URL source and start indexing in the background."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     source, _ = create_url_source(
         tenant=tenant,
         url=str(payload.url),
@@ -239,14 +227,10 @@ def create_url_source_route(
 @documents_router.get("/sources/{source_id}", response_model=UrlSourceDetailResponse)
 def get_url_source_route(
     source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceDetailResponse:
     """Return detail, recent crawl history, and indexed pages for one URL source."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     source = get_url_source(source_id, tenant.id, db)
     docs = (
         db.query(Document)
@@ -285,13 +269,10 @@ def get_url_source_route(
 def update_url_source_route(
     source_id: uuid.UUID,
     payload: UrlSourceUpdateRequest,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Update editable URL source settings."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     source = update_url_source(
         source_id=source_id,
         tenant_id=tenant.id,
@@ -306,13 +287,10 @@ def update_url_source_route(
 @documents_router.post("/sources/{source_id}/refresh", response_model=UrlSourceResponse)
 def refresh_url_source_route(
     source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Trigger an immediate re-crawl for a URL source."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     source = trigger_refresh(source_id=source_id, tenant=tenant, db=db)
     if tenant.openai_api_key:
         enqueue_crawl_for_source_sync(
@@ -326,13 +304,10 @@ def refresh_url_source_route(
 @documents_router.delete("/sources/{source_id}", status_code=204, response_model=None)
 def delete_url_source_route(
     source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Delete a URL source and all indexed pages/chunks associated with it."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     delete_url_source(source_id, tenant.id, db)
 
 
@@ -340,13 +315,10 @@ def delete_url_source_route(
 def delete_source_page_route(
     source_id: uuid.UUID,
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Delete one indexed page from a URL source and exclude it from future refreshes."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     delete_source_document(
         source_id=source_id,
         document_id=document_id,
@@ -358,17 +330,13 @@ def delete_source_page_route(
 @documents_router.get("/{document_id}/health", response_model=DocumentHealthStatusResponse)
 def get_document_health_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentHealthStatusResponse:
     """
     Return stored health_status for a document (does not re-run the check).
     404 if health_status is null.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     doc = get_document(document_id, tenant.id, db)
     if doc.health_status is None or not isinstance(doc.health_status, dict):
         raise HTTPException(status_code=404, detail="Health check not yet available")
@@ -384,13 +352,10 @@ def get_document_health_route(
 @documents_router.post("/{document_id}/health/run", response_model=DocumentHealthStatusResponse)
 def run_document_health_check_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentHealthStatusResponse:
     """Run health check synchronously and return updated health_status."""
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     get_document(document_id, tenant.id, db)
     result = run_document_health_check(document_id, db)
     return DocumentHealthStatusResponse(
@@ -404,17 +369,13 @@ def run_document_health_check_route(
 @documents_router.get("/{document_id}", response_model=DocumentDetailResponse)
 def get_document_detail_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentDetailResponse:
     """
     Get single document with full parsed_text for preview (protected JWT).
     404 if not found or not owner.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
     doc = get_document(document_id, tenant.id, db)
 
     return DocumentDetailResponse(
@@ -434,14 +395,11 @@ def get_document_detail_route(
 @documents_router.delete("/{document_id}", status_code=204, response_model=None)
 def delete_document_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_owner)],
+    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """
     Delete document (protected JWT).
     204 No Content. 404 if not found or not owner.
     """
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
     delete_document(document_id, tenant.id, db)

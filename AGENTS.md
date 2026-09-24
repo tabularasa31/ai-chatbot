@@ -368,7 +368,7 @@ Run the API from the repo root with `PYTHONPATH` pointing at the root so `backen
 - Modules and functions: `snake_case`.
 - SQLAlchemy model classes: `PascalCase` (`User`, `Tenant`, `EscalationTicket`).
 - DB tables: **plural, snake_case** (`users`, `tenants`, `escalation_tickets`, `contact_sessions`).
-- Pydantic API schemas: suffixes like `Request` / `Response` or descriptive names (`ChatMessageLogItem`), in the domain’s `schemas.py`.
+- Pydantic API schemas: suffixes like `Request` / `Response` or descriptive names, in the domain’s `schemas.py`.
 - Routers: `*_router`; path prefixes wired in `main.py` (e.g. `/auth`, `/chat`, `/tenants`).
 - Public string IDs for tenants/bots, etc.: follow existing patterns (`generate_public_id`, prefixes like `ch_` — do not invent new ones without a reason).
 - Terminology: the legacy product term "client" has been renamed **"tenant"** at the schema/API level; keep new code and docs on `tenant` / `tenant_id`. "Client" may still appear in marketing copy meaning "customer".

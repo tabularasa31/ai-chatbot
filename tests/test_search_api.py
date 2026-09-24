@@ -1,6 +1,8 @@
-"""Through-the-app tests for the /search API: auth, contract, error handling,
-and the SQLite retrieval pipeline (including its trace/observability contract
-and NER-concurrency behaviour).
+"""Tests for the hybrid retrieval pipeline (``search_similar_chunks_detailed_async``):
+trace/observability contract, SQLite hybrid ranking behaviour, and NER-concurrency.
+
+The POST /search endpoint was removed (dashboard/widget never called it); these
+tests exercise the search service directly instead of going through the app.
 """
 
 from __future__ import annotations
@@ -9,10 +11,8 @@ import uuid
 from unittest.mock import Mock
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.search.service import (
     _async_rewrite_query_for_retrieval,
     async_embed_queries,
@@ -185,13 +185,13 @@ async def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatc
     assert bundle.retrieval_duration_ms >= bundle.vector_search_duration_ms
 
 
-def test_search_trace_sqlite_runs_full_stage_contract(
+@pytest.mark.asyncio
+async def test_search_trace_sqlite_runs_full_stage_contract(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
+    async_search_session,
 ) -> None:
-    """POST /search on SQLite runs every retrieval stage span, in order, with the
+    """The SQLite retrieval pipeline runs every retrieval stage span, in order, with the
     expected input/output contract (query-expansion through source-overlap-check).
 
     Covers the same observability counters as the former
@@ -223,14 +223,10 @@ def test_search_trace_sqlite_runs_full_stage_contract(
         def update(self, **kwargs: object) -> None:
             return None
 
-    token = register_and_verify_user(tenant, db_session, email="sqlite_trace@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "SQLite Trace Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    from tests.test_models import _create_client, _create_user
+
+    user = _create_user(db_session, email="sqlite_trace@example.com")
+    tenant_id = _create_client(db_session, user, name="SQLite Trace Tenant").id
 
     doc = Document(
         tenant_id=tenant_id,
@@ -270,14 +266,16 @@ def test_search_trace_sqlite_runs_full_stage_contract(
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[1.0, 0.0, 0.0])]
 
     fake_trace = FakeTrace()
-    monkeypatch.setattr("backend.search.routes.begin_trace", lambda **kwargs: fake_trace)
+    from backend.search.service import search_similar_chunks_detailed_async
 
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "Reset-password!!   reset password", "top_k": 2},
+    await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="Reset-password!!   reset password",
+        top_k=2,
+        db=async_search_session,
+        api_key="sk-test",
+        trace=fake_trace,
     )
-    assert response.status_code == 200
 
     assert [span.name for span in fake_trace.spans] == [
         "query-expansion",
@@ -319,10 +317,11 @@ def test_search_trace_sqlite_runs_full_stage_contract(
     assert overlap_span.output["contradiction_basis_types"] == []
 
 
-def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(
+@pytest.mark.asyncio
+async def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     """A chunk matched by more than one query variant keeps its best (max) vector
     similarity, and appears only once in the final results — not once per variant.
@@ -333,15 +332,10 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(
     ``tertiary`` would incorrectly outrank ``shared`` in the final response.
     """
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from tests.test_models import _create_client, _create_user
 
-    token = register_and_verify_user(tenant, db_session, email="variant_dedup@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Variant Dedup Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    user = _create_user(db_session, email="variant_dedup@example.com")
+    tenant_id = _create_client(db_session, user, name="Variant Dedup Tenant").id
 
     doc = Document(
         tenant_id=tenant_id,
@@ -383,15 +377,18 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(
         Mock(embedding=[0.0, 0.0, 1.0]),  # variant 3: match on "tertiary" (index 1)
     ]
 
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "Widget-setup!!   widget setup", "top_k": 2},
-    )
-    assert response.status_code == 200
-    data = response.json()["results"]
+    from backend.search.service import search_similar_chunks_detailed_async
 
-    result_texts = [item["chunk_text"] for item in data]
+    bundle = await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="Widget-setup!!   widget setup",
+        top_k=2,
+        db=async_search_session,
+        api_key="sk-test",
+    )
+    data = [emb for emb, _similarity in bundle.results]
+
+    result_texts = [item.chunk_text for item in data]
     assert len(result_texts) == len(set(result_texts))
     assert result_texts.index("alpha bravo charlie") < result_texts.index("delta echo foxtrot")
 
@@ -569,195 +566,73 @@ async def test_embed_queries_with_stats_reports_actual_request_count(
     mock_openai_client.embeddings.create.assert_called_once()
 
 
-def test_search_route_traces_variant_summary(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from backend.search.service import SearchResultBundle
-
-    class FakeTrace:
-        def __init__(self) -> None:
-            self.update_calls: list[dict[str, object]] = []
-
-        def span(self, **kwargs: object):
-            class FakeSpan:
-                def end(self, **kwargs: object) -> None:
-                    return None
-
-            return FakeSpan()
-
-        def update(self, **kwargs: object) -> None:
-            self.update_calls.append(kwargs)
-
-    token = register_and_verify_user(tenant, db_session, email="trace-search@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Trace Search Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-
-    fake_trace = FakeTrace()
-    monkeypatch.setattr("backend.search.routes.begin_trace", lambda **kwargs: fake_trace)
-    from unittest.mock import AsyncMock
-
-    _bundle = SearchResultBundle(
-        results=[],
-        query_variant_count=3,
-        variant_mode="multi",
-        extra_variant_count=2,
-        embedded_query_count=3,
-        extra_embedded_queries=2,
-        embedding_api_request_count=1,
-        extra_embedding_api_requests=0,
-        vector_search_call_count=3,
-        extra_vector_search_calls=2,
-        bm25_expansion_mode="symmetric_variants",
-        bm25_query_variant_count=2,
-        bm25_variant_eval_count=2,
-        extra_bm25_variant_evals=1,
-        bm25_merged_hit_count_before_cap=4,
-        bm25_merged_hit_count_after_cap=3,
-        retrieval_duration_ms=12.5,
-        query_embedding_duration_ms=2.5,
-        vector_search_duration_ms=7.5,
-    )
-    monkeypatch.setattr(
-        "backend.search.routes.search_similar_chunks_detailed_async",
-        AsyncMock(return_value=_bundle),
-    )
-
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "Reset-password!!   reset password", "top_k": 3},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"results": []}
-    metadata = fake_trace.update_calls[-1]["metadata"]
-    assert metadata["reliability"] == {
-        "base_score": "low",
-        "score": "low",
-        "cap": None,
-        "cap_reason": None,
-        "signals": [{"kind": "weak_recall"}],
-        "evidence": {},
-    }
-    assert metadata["source_overlap_detected"] is False
-    assert metadata["source_overlap_pairs"] == []
-    assert metadata["contradiction_detected"] is False
-    assert metadata["contradiction_count"] == 0
-    assert metadata["contradiction_pair_count"] == 0
-    assert metadata["contradiction_basis_types"] == []
-    assert fake_trace.update_calls == [
-        {
-            "output": {"result_count": 0},
-            "metadata": {
-                "route": "/search",
-                "search_result_count": 0,
-                "reliability": {
-                    "base_score": "low",
-                    "score": "low",
-                    "cap": None,
-                    "cap_reason": None,
-                    "signals": [{"kind": "weak_recall"}],
-                    "evidence": {},
-                },
-                "source_overlap_detected": False,
-                "source_overlap_pairs": [],
-                "contradiction_detected": False,
-                "contradiction_count": 0,
-                "contradiction_pair_count": 0,
-                "contradiction_basis_types": [],
-                "contradiction_adjudication_applied_to_any_fact": False,
-                "contradiction_adjudication_status": "disabled",
-                "contradiction_adjudication_candidate_count": 0,
-                "contradiction_adjudication_sent_count": 0,
-                "contradiction_adjudication_completed_count": 0,
-                "contradiction_adjudication_confirmed_count": 0,
-                "contradiction_adjudication_rejected_count": 0,
-                "contradiction_adjudication_inconclusive_count": 0,
-                "contradiction_adjudication_error_count": 0,
-                "variant_mode": "multi",
-                "query_variant_count": 3,
-                "extra_embedded_queries": 2,
-                "extra_embedding_api_requests": 0,
-                "extra_vector_search_calls": 2,
-                "bm25_expansion_mode": "symmetric_variants",
-                "bm25_query_variant_count": 2,
-                "bm25_variant_eval_count": 2,
-                "extra_bm25_variant_evals": 1,
-                "bm25_merged_hit_count_before_cap": 4,
-                "bm25_merged_hit_count_after_cap": 3,
-                "retrieval_duration_ms": 12.5,
-            },
-            "tags": ["variants:multi"],
-        }
-    ]
-
-
-def test_search_single_embedding_match(
+@pytest.mark.asyncio
+async def test_search_single_embedding_match(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
-    """Create user, tenant, document, embedding; mock the embedding call to return a similar vector."""
+    """Create tenant, document, embedding; mock the embedding call to return a similar vector."""
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from backend.search.service import search_similar_chunks_detailed_async
+    from tests.test_models import _create_client, _create_user
+
     vec = [0.1] * 1536
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
-    token = register_and_verify_user(tenant, db_session, email="single@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Single Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    md_content = b"# Doc\n\nRelevant content here."
-    upload_resp = tenant.post(
-        "/documents",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("doc.md", md_content, "text/markdown")},
-    )
-    doc_id = upload_resp.json()["id"]
-    tenant.post(
-        f"/embeddings/documents/{doc_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    user = _create_user(db_session, email="single@example.com")
+    tenant_id = _create_client(db_session, user, name="Single Tenant").id
 
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "relevant content", "top_k": 3},
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="doc.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="Relevant content here.",
     )
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["results"]) == 1
-    assert data["results"][0]["document_id"] == doc_id
-    assert data["results"][0]["similarity"] > 0.0
-    assert "Relevant content" in data["results"][0]["chunk_text"]
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="Relevant content here.",
+            vector=None,
+            metadata_json={"chunk_index": 0, "vector": vec},
+        )
+    )
+    db_session.commit()
+
+    bundle = await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="relevant content",
+        top_k=3,
+        db=async_search_session,
+        api_key="sk-test",
+    )
+    results = bundle.results
+    assert len(results) == 1
+    assert results[0][0].document_id == doc.id
+    assert results[0][1] > 0.0
+    assert "Relevant content" in results[0][0].chunk_text
 
 
-def test_search_sorts_by_similarity_desc_and_respects_top_k(
+@pytest.mark.asyncio
+async def test_search_sorts_by_similarity_desc_and_respects_top_k(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     """Journey over one embedding set, guarding two failure modes:
     - results are sorted DESC by similarity
     - top_k truncates the result count even when more embeddings exist
     """
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from backend.search.service import search_similar_chunks_detailed_async
+    from tests.test_models import _create_client, _create_user
 
-    token = register_and_verify_user(tenant, db_session, email="multi@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Multi Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    user = _create_user(db_session, email="multi@example.com")
+    tenant_id = _create_client(db_session, user, name="Multi Tenant").id
 
     doc = Document(
         tenant_id=tenant_id,
@@ -792,54 +667,48 @@ def test_search_sorts_by_similarity_desc_and_respects_top_k(
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    all_response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "search", "top_k": 5},
+    all_bundle = await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="search",
+        top_k=5,
+        db=async_search_session,
+        api_key="sk-test",
     )
-    assert all_response.status_code == 200
-    all_results = all_response.json()["results"]
+    all_results = all_bundle.results
     assert len(all_results) == 5
-    sims = [r["similarity"] for r in all_results]
+    sims = [similarity for _emb, similarity in all_results]
     assert sims == sorted(sims, reverse=True)
 
-    truncated_response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "search", "top_k": 2},
+    truncated_bundle = await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="search",
+        top_k=2,
+        db=async_search_session,
+        api_key="sk-test",
     )
-    assert truncated_response.status_code == 200
-    truncated_results = truncated_response.json()["results"]
+    truncated_results = truncated_bundle.results
     assert len(truncated_results) == 2
-    assert [r["chunk_text"] for r in truncated_results] == [
-        r["chunk_text"] for r in all_results[:2]
+    assert [emb.chunk_text for emb, _similarity in truncated_results] == [
+        emb.chunk_text for emb, _similarity in all_results[:2]
     ]
 
 
-def test_search_other_client_isolated(
+@pytest.mark.asyncio
+async def test_search_other_client_isolated(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     """Create embeddings for tenant A and B; search as user A → only A's results."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from backend.search.service import search_similar_chunks_detailed_async
+    from tests.test_models import _create_client, _create_user
 
-    token_a = register_and_verify_user(tenant, db_session, email="isol_a@example.com")
-    cl_a_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Tenant A"},
-    )
-    set_client_openai_key(tenant, token_a)
-    client_a_id = uuid.UUID(cl_a_resp.json()["id"])
+    user_a = _create_user(db_session, email="isol_a@example.com")
+    client_a_id = _create_client(db_session, user_a, name="Tenant A").id
 
-    token_b = register_and_verify_user(tenant, db_session, email="isol_b@example.com")
-    cl_b_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Tenant B"},
-    )
-    client_b_id = uuid.UUID(cl_b_resp.json()["id"])
+    user_b = _create_user(db_session, email="isol_b@example.com")
+    client_b_id = _create_client(db_session, user_b, name="Tenant B").id
 
     doc_a = Document(
         tenant_id=client_a_id,
@@ -878,115 +747,58 @@ def test_search_other_client_isolated(
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token_a}"},
-        json={"query": "secret", "top_k": 5},
+    bundle = await search_similar_chunks_detailed_async(
+        tenant_id=client_a_id,
+        query="secret",
+        top_k=5,
+        db=async_search_session,
+        api_key="sk-test",
     )
-    assert response.status_code == 200
-    results = response.json()["results"]
+    results = bundle.results
     assert len(results) == 1
-    assert results[0]["document_id"] == str(doc_a.id)
-    assert "Tenant A" in results[0]["chunk_text"]
+    assert results[0][0].document_id == doc_a.id
+    assert "Tenant A" in results[0][0].chunk_text
 
 
-def test_search_requires_auth(tenant: TestClient) -> None:
-    """No JWT → 401."""
-    response = tenant.post(
-        "/search",
-        json={"query": "test", "top_k": 3},
-    )
-    assert response.status_code == 401
-
-
-def test_search_requires_client(tenant: TestClient, db_session: Session) -> None:
-    """Auth user without a tenant → 404."""
-    token = register_and_verify_user(tenant, db_session, email="noclient@example.com")
-    # Do NOT create a tenant
-
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "test", "top_k": 3},
-    )
-    assert response.status_code == 404
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        pytest.param({"query": "test", "top_k": 0}, id="top_k_zero_rejected"),
-        pytest.param({"query": "", "top_k": 3}, id="empty_query_rejected"),
-    ],
-)
-def test_search_input_validation_rejected(
-    tenant: TestClient, db_session: Session, payload: dict
+@pytest.mark.asyncio
+async def test_search_no_embeddings_returns_empty_results(
+    mock_openai_client: Mock, db_session: Session, async_search_session
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="invalid@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Invalid Tenant"},
-    )
-    set_client_openai_key(tenant, token)
+    """No embeddings in DB → empty results."""
+    from backend.search.service import search_similar_chunks_detailed_async
+    from tests.test_models import _create_client, _create_user
 
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json=payload,
-    )
-    assert response.status_code == 422
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        pytest.param({"query": "test"}, id="omitted_top_k_defaults"),
-        pytest.param({"query": "anything", "top_k": 3}, id="explicit_top_k_no_embeddings"),
-    ],
-)
-def test_search_no_embeddings_returns_empty_results(
-    mock_openai_client: Mock, tenant: TestClient, db_session: Session, payload: dict
-) -> None:
-    """No embeddings in DB, regardless of top_k being omitted or explicit → empty results, 200."""
-    token = register_and_verify_user(tenant, db_session, email="default@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Default Tenant"},
-    )
-    set_client_openai_key(tenant, token)
+    user = _create_user(db_session, email="default@example.com")
+    tenant_id = _create_client(db_session, user, name="Default Tenant").id
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json=payload,
+    bundle = await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="anything",
+        top_k=3,
+        db=async_search_session,
+        api_key="sk-test",
     )
-    assert response.status_code == 200
-    assert response.json()["results"] == []
+    assert bundle.results == []
 
 
 # --- BM25 search unit tests ---
 
 
 @pytest.mark.rag_edge
-def test_search_low_vector_similarity_still_returns_chunk(
+@pytest.mark.asyncio
+async def test_search_low_vector_similarity_still_returns_chunk(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     """SQLite shared pipeline still returns lexical matches even with zero vector confidence."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from backend.search.service import search_similar_chunks_detailed_async
+    from tests.test_models import _create_client, _create_user
 
-    token = register_and_verify_user(tenant, db_session, email="fallback@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Fallback Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    user = _create_user(db_session, email="fallback@example.com")
+    tenant_id = _create_client(db_session, user, name="Fallback Tenant").id
 
     doc = Document(
         tenant_id=tenant_id,
@@ -1014,34 +826,32 @@ def test_search_low_vector_similarity_still_returns_chunk(
     query_vec = [1.0] + [0.0] * 1535
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "cors", "top_k": 3},
+    bundle = await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="cors",
+        top_k=3,
+        db=async_search_session,
+        api_key="sk-test",
     )
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["results"]) == 1
-    assert "CORS" in data["results"][0]["chunk_text"]
-    assert data["results"][0]["document_id"] == str(doc.id)
-    assert data["results"][0]["similarity"] > 0.0
+    results = bundle.results
+    assert len(results) == 1
+    assert "CORS" in results[0][0].chunk_text
+    assert results[0][0].document_id == doc.id
+    assert results[0][1] > 0.0
 
 
-def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_purer_cosine(
+@pytest.mark.asyncio
+async def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_purer_cosine(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from backend.search.service import search_similar_chunks_detailed_async
+    from tests.test_models import _create_client, _create_user
 
-    token = register_and_verify_user(tenant, db_session, email="sqlitehybrid@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "SQLite Hybrid Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    user = _create_user(db_session, email="sqlitehybrid@example.com")
+    tenant_id = _create_client(db_session, user, name="SQLite Hybrid Tenant").id
 
     doc = Document(
         tenant_id=tenant_id,
@@ -1075,54 +885,18 @@ def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_purer_co
     query_vec = [1.0] + [0.0] * 1535
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "cors configuration", "top_k": 2},
+    bundle = await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="cors configuration",
+        top_k=2,
+        db=async_search_session,
+        api_key="sk-test",
     )
 
-    assert response.status_code == 200
-    results = response.json()["results"]
+    results = bundle.results
     assert len(results) == 2
-    assert "cors configuration settings" in [item["chunk_text"] for item in results]
-    assert results[0]["chunk_text"] == "cors configuration settings"
-
-
-@pytest.mark.rag_edge
-@pytest.mark.parametrize(
-    "make_error",
-    [
-        pytest.param(
-            lambda: __import__("openai").APIError("Service unavailable", request=Mock(), body=None),
-            id="openai_api_error",
-        ),
-        pytest.param(
-            lambda: __import__("openai").APITimeoutError(request=Mock()),
-            id="openai_timeout_error",
-        ),
-    ],
-)
-def test_search_openai_failure_returns_503(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    make_error,
-) -> None:
-    token = register_and_verify_user(tenant, db_session, email="search503@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Search 503 Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    mock_openai_client.embeddings.create.side_effect = make_error()
-
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "hello", "top_k": 3},
-    )
-    assert response.status_code == 503
+    assert "cors configuration settings" in [emb.chunk_text for emb, _sim in results]
+    assert results[0][0].chunk_text == "cors configuration settings"
 
 
 @pytest.mark.rag_edge
@@ -1133,23 +907,20 @@ def test_search_openai_failure_returns_503(
         pytest.param([[0.1] * 10], id="vector_with_wrong_dimension"),
     ],
 )
-def test_search_skips_unusable_vectors(
+@pytest.mark.asyncio
+async def test_search_skips_unusable_vectors(
     mock_openai_client: Mock,
-    tenant: TestClient,
     db_session: Session,
+    async_search_session,
     bad_vectors: list,
 ) -> None:
     """A malformed or wrong-dimension vector in metadata_json must be skipped, not crash the search."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from backend.search.service import search_similar_chunks_detailed_async
+    from tests.test_models import _create_client, _create_user
 
-    token = register_and_verify_user(tenant, db_session, email="badvec@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Bad Vec Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    user = _create_user(db_session, email="badvec@example.com")
+    tenant_id = _create_client(db_session, user, name="Bad Vec Tenant").id
 
     doc = Document(
         tenant_id=tenant_id,
@@ -1176,13 +947,14 @@ def test_search_skips_unusable_vectors(
     db_session.commit()
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    response = tenant.post(
-        "/search",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"query": "content", "top_k": 5},
+    bundle = await search_similar_chunks_detailed_async(
+        tenant_id=tenant_id,
+        query="content",
+        top_k=5,
+        db=async_search_session,
+        api_key="sk-test",
     )
-    assert response.status_code == 200
-    assert response.json()["results"] == []
+    assert bundle.results == []
 
 
 # --- Unit tests for cross-lingual query expansion ---

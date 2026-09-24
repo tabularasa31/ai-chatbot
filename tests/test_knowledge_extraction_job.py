@@ -11,8 +11,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -149,49 +148,3 @@ def test_embedder_noop_when_no_api_key():
             api_key=None,
         )
         mock_enqueue.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Test: embeddings/service.py enqueues extraction after successful embed
-# ---------------------------------------------------------------------------
-
-
-def test_run_embeddings_background_enqueues_extraction(monkeypatch):
-    """run_embeddings_background must call enqueue_knowledge_extraction_sync, not inline extract."""
-    doc_id = uuid.uuid4()
-    tenant_id = uuid.uuid4()
-
-    # Minimal fake doc
-    fake_doc = MagicMock()
-    fake_doc.tenant_id = tenant_id
-
-    # Minimal fake db session
-    fake_db = MagicMock()
-    fake_db.query.return_value.filter.return_value.first.return_value = fake_doc
-
-    enqueue_calls: list[dict[str, Any]] = []
-
-    def _fake_enqueue_sync(*, document_id, tenant_id):
-        enqueue_calls.append({"document_id": document_id, "tenant_id": tenant_id})
-        return "fake-job-id"
-
-    with (
-        patch("backend.core.db.SessionLocal", return_value=fake_db),
-        patch(
-            "backend.embeddings.service.create_embeddings_for_document"
-        ),
-        patch(
-            "backend.embeddings.service.run_mode_a_for_tenant_when_queue_empty_best_effort"
-        ),
-        patch(
-            "backend.jobs.knowledge_extraction.enqueue_knowledge_extraction_sync",
-            side_effect=_fake_enqueue_sync,
-        ),
-    ):
-        from backend.embeddings.service import run_embeddings_background
-
-        run_embeddings_background(doc_id, "sk-test")
-
-    assert len(enqueue_calls) == 1
-    assert enqueue_calls[0]["document_id"] == doc_id
-    assert enqueue_calls[0]["tenant_id"] == tenant_id

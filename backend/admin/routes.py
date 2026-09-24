@@ -20,6 +20,7 @@ from backend.admin.schemas import (
     AdminTenantMetricsList,
 )
 from backend.auth.middleware import get_platform_admin_user
+from backend.auth.roles import ROLE_OWNER
 from backend.core.db import get_db
 from backend.models import (
     Chat,
@@ -38,21 +39,9 @@ from backend.privacy_schemas import DeletedCountResponse
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-def get_admin_user(
-    current_user: Annotated[User, Depends(get_platform_admin_user)],
-) -> User:
-    """Require admin role for platform-wide endpoints. Raises 403 if not admin.
-
-    Every endpoint in this router reads or mutates data across ALL tenants
-    (global metrics, PII retention), so the dependency also clears the RLS
-    tenant context set at login — see get_platform_admin_user.
-    """
-    return current_user
-
-
 @admin_router.get("/metrics/summary", response_model=AdminMetricsSummary)
 def get_metrics_summary(
-    _: Annotated[User, Depends(get_admin_user)],
+    _: Annotated[User, Depends(get_platform_admin_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AdminMetricsSummary:
     """Platform-wide metrics summary."""
@@ -86,7 +75,7 @@ def get_metrics_summary(
 
 @admin_router.get("/metrics/cache-stats", response_model=AdminCacheStats)
 def get_cache_stats(
-    _: Annotated[User, Depends(get_admin_user)],
+    _: Annotated[User, Depends(get_platform_admin_user)],
 ) -> AdminCacheStats:
     """In-process hit/miss counters for the per-process caches.
 
@@ -104,7 +93,7 @@ def get_cache_stats(
 
 @admin_router.get("/metrics/tenants", response_model=AdminTenantMetricsList)
 def get_tenant_metrics(
-    _: Annotated[User, Depends(get_admin_user)],
+    _: Annotated[User, Depends(get_platform_admin_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AdminTenantMetricsList:
     """Per-tenant metrics table."""
@@ -115,7 +104,7 @@ def get_tenant_metrics(
     # Pre-fetch one owner email per tenant in a single query to avoid N+1.
     owner_rows = (
         db.query(User.tenant_id, func.min(User.email))
-        .filter(User.role == "owner", User.tenant_id.isnot(None))
+        .filter(User.role == ROLE_OWNER, User.tenant_id.isnot(None))
         .group_by(User.tenant_id)
         .all()
     )
@@ -175,7 +164,7 @@ def get_tenant_metrics(
 def list_pii_events(
     _: Annotated[User, Depends(get_platform_admin_user)],
     db: Annotated[Session, Depends(get_db)],
-    limit: Annotated[int, Query(ge=0, le=200)] = 100,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
     direction: str | None = None,
     tenant_id: str | None = None,

@@ -13,14 +13,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.history_service import (
-    get_session_logs,
-    list_chat_sessions,
-)
 from backend.chat.rotation import should_rotate
 from backend.chat.service import (
     _ensure_chat_async,
@@ -35,6 +33,7 @@ from backend.models import (
 )
 from backend.models.base import _utcnow
 from backend.models.enums import MessageRole
+from tests.conftest import register_and_verify_user
 
 
 @pytest.fixture(autouse=True)
@@ -368,41 +367,57 @@ async def test_ensure_chat_picks_latest_of_many(async_db_session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seed_rotated_session(db_session: Session) -> tuple[Tenant, Chat, Chat]:
-    tenant = _make_tenant(db_session)
+def _seed_rotated_session(
+    tenant: TestClient, db_session: Session
+) -> tuple[str, dict, Chat, Chat]:
+    """A tenant reachable via the operator API, with a session spanning two
+    rotated conversations (a stale one and a fresh one)."""
+    token = register_and_verify_user(tenant, db_session, email="rotation@example.com")
+    resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Rotation Tenant"},
+    )
+    assert resp.status_code == 201, resp.text
+    tenant_id = uuid.UUID(resp.json()["id"])
+    fake_tenant = SimpleNamespace(id=tenant_id)
+
     session_id = uuid.uuid4()
     old = _make_chat(
-        db_session, tenant, idle_minutes=120, session_id=session_id
+        db_session, fake_tenant, idle_minutes=120, session_id=session_id
     )
     new = _make_chat(
-        db_session, tenant, idle_minutes=1, session_id=session_id
+        db_session, fake_tenant, idle_minutes=1, session_id=session_id
     )
-    return tenant, old, new
+    return token, {"Authorization": f"Bearer {token}"}, old, new
 
 
 def test_session_logs_cover_all_conversations_with_chat_id(
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    tenant, old, new = _seed_rotated_session(db_session)
+    _token, headers, old, new = _seed_rotated_session(tenant, db_session)
 
-    logs = get_session_logs(old.session_id, tenant.id, db_session)
+    resp = tenant.get(f"/operator/sessions/{old.session_id}", headers=headers)
 
-    assert logs is not None
-    assert len(logs) == 2
-    # Chronological across conversations; last tuple element is chat_id.
-    assert [row[-1] for row in logs] == [old.id, new.id]
+    assert resp.status_code == 200, resp.text
+    messages = resp.json()["messages"]
+    assert len(messages) == 2
+    # Chronological across conversations.
+    assert [m["chat_id"] for m in messages] == [str(old.id), str(new.id)]
 
 
-def test_list_chat_sessions_groups_rotated_conversations(
+def test_inbox_groups_rotated_conversations_into_one_session_row(
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    tenant, old, new = _seed_rotated_session(db_session)
+    _token, headers, old, new = _seed_rotated_session(tenant, db_session)
 
-    summaries = list_chat_sessions(tenant.id, db_session)
+    resp = tenant.get("/operator/inbox?scope=all", headers=headers)
 
-    assert len(summaries) == 1
-    summary = summaries[0]
-    assert summary.session_id == old.session_id
-    assert summary.message_count == 2
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["session_id"] == str(old.session_id)
 
 

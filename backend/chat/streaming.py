@@ -241,6 +241,17 @@ def _scrub_offer_marker_literal(text: str) -> str:
     return text.replace(OFFER_MARKER, "")
 
 
+def _split_boundary_suffix_len(buf: str, candidates: tuple[str, ...]) -> int:
+    """Longest tail of ``buf`` that could still grow into one of ``candidates``."""
+    longest = 0
+    for candidate in candidates:
+        for prefix_len in range(min(len(candidate) - 1, len(buf)), 0, -1):
+            if buf[-prefix_len:] == candidate[:prefix_len]:
+                longest = max(longest, prefix_len)
+                break
+    return longest
+
+
 class MarkerStreamFilter:
     """Strip control sentinels from a streamed SSE token sequence (defensive UX).
 
@@ -274,16 +285,6 @@ class MarkerStreamFilter:
                 best_idx, best_marker = idx, marker
         return best_idx, best_marker
 
-    def _boundary_suffix_len(self) -> int:
-        """Longest tail of the buffer that could still grow into a marker."""
-        longest = 0
-        for marker in self._markers:
-            for prefix_len in range(min(len(marker) - 1, len(self._buf)), 0, -1):
-                if self._buf[-prefix_len:] == marker[:prefix_len]:
-                    longest = max(longest, prefix_len)
-                    break
-        return longest
-
     def feed(self, text: str) -> None:
         self._buf += text
         while True:
@@ -295,7 +296,7 @@ class MarkerStreamFilter:
                 continue
             # Preserve a possible split-boundary suffix so no marker is
             # partially leaked when it straddles two chunks.
-            safe_end = len(self._buf) - self._boundary_suffix_len()
+            safe_end = len(self._buf) - _split_boundary_suffix_len(self._buf, self._markers)
             if safe_end > 0:
                 self._emit(self._buf[:safe_end])
             self._buf = self._buf[safe_end:]
@@ -385,11 +386,7 @@ class ThoughtStreamFilter:
             else:
                 # No complete tag found; keep a potential split-boundary prefix in the
                 # buffer so a tag arriving across two chunks is handled correctly.
-                safe_end = len(self._buf)
-                for prefix_len in range(min(len(tag) - 1, len(self._buf)), 0, -1):
-                    if self._buf[-prefix_len:] == tag[:prefix_len]:
-                        safe_end = len(self._buf) - prefix_len
-                        break
+                safe_end = len(self._buf) - _split_boundary_suffix_len(self._buf, (tag,))
                 if not self._inside and safe_end > 0:
                     self._emit(self._buf[:safe_end])
                 self._buf = self._buf[safe_end:]

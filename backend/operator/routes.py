@@ -23,8 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth.middleware import (
-    get_member_tenant_async,
-    get_seated_tenant_async,
+    get_member_tenant,
+    get_seated_tenant,
     require_seated_member,
 )
 from backend.core.db import get_async_db, run_sync
@@ -148,7 +148,7 @@ def _require_chat(db, *, chat_id: uuid.UUID, tenant_id: uuid.UUID) -> Chat:
 
 @operator_router.get("/inbox", response_model=InboxListResponse)
 async def inbox(
-    tenant: Annotated[Tenant, Depends(get_member_tenant_async)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
     scope: Annotated[InboxScope, Query()] = "attention",
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
@@ -172,7 +172,7 @@ async def inbox(
 
 @operator_router.get("/inbox/summary", response_model=InboxSummaryResponse)
 async def inbox_summary(
-    tenant: Annotated[Tenant, Depends(get_member_tenant_async)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> InboxSummaryResponse:
     """Just the counts, for the sidebar badge."""
@@ -189,7 +189,7 @@ async def inbox_summary(
 @operator_router.get("/sessions/{session_id}", response_model=ThreadResponse)
 async def session_thread(
     session_id: uuid.UUID,
-    tenant: Annotated[Tenant, Depends(get_member_tenant_async)],
+    tenant: Annotated[Tenant, Depends(get_member_tenant)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> ThreadResponse:
     """One visitor's whole session, as stored.
@@ -213,7 +213,7 @@ async def session_thread(
 )
 async def take_chat(
     chat_id: uuid.UUID,
-    tenant: Annotated[Tenant, Depends(get_seated_tenant_async)],
+    tenant: Annotated[Tenant, Depends(get_seated_tenant)],
     current_user: Annotated[User, Depends(require_seated_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorChatStateResponse:
@@ -247,7 +247,7 @@ async def take_chat(
 async def send_operator_message(
     chat_id: uuid.UUID,
     body: OperatorMessageRequest,
-    tenant: Annotated[Tenant, Depends(get_seated_tenant_async)],
+    tenant: Annotated[Tenant, Depends(get_seated_tenant)],
     current_user: Annotated[User, Depends(require_seated_member)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorMessageResponse:
@@ -285,7 +285,7 @@ async def send_operator_message(
 )
 async def release_chat_route(
     chat_id: uuid.UUID,
-    tenant: Annotated[Tenant, Depends(get_seated_tenant_async)],
+    tenant: Annotated[Tenant, Depends(get_seated_tenant)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorChatStateResponse:
     """Hand the conversation back to the bot.
@@ -309,7 +309,7 @@ async def release_chat_route(
 async def resolve_chat_route(
     chat_id: uuid.UUID,
     body: OperatorResolveRequest,
-    tenant: Annotated[Tenant, Depends(get_seated_tenant_async)],
+    tenant: Annotated[Tenant, Depends(get_seated_tenant)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> OperatorResolveResponse:
     """Mark the conversation dealt with: close its tickets, hand it back.

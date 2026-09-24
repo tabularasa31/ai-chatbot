@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from openai import APIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.auth.middleware import get_current_tenant_async, require_verified_user
+from backend.auth.middleware import get_current_tenant, require_verified_user
 from backend.core.db import get_async_db
 from backend.core.limiter import limiter
 from backend.models import Tenant, User
@@ -33,7 +33,7 @@ async def search_route(
     request: Request,
     body: SearchRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
-    tenant: Annotated[Tenant, Depends(get_current_tenant_async)],
+    tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> SearchResponse:
     """

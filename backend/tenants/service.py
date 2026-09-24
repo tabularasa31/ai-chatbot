@@ -144,14 +144,7 @@ def get_tenant_by_user(user_id: uuid.UUID, db: Session) -> Tenant | None:
 
 
 def get_tenant_owner(tenant_id: uuid.UUID, db: Session) -> User | None:
-    """The one member holding ``owner`` for this tenant, or ``None``.
-
-    A workspace always has exactly one, but callers reachable before a
-    tenant finishes provisioning (or reading a row mid-delete) may find none.
-    """
-    # Imported here rather than at module scope: see the note in
-    # ``create_tenant`` — a top-level import of the roles constant closes an
-    # import cycle through ``backend.auth``.
+    """The one member holding ``owner`` for this tenant, or ``None``."""
     from backend.auth.roles import ROLE_OWNER
 
     return db.query(User).filter(User.tenant_id == tenant_id, User.role == ROLE_OWNER).first()

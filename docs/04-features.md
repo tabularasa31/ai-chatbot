@@ -1273,7 +1273,6 @@ The backend uses `slowapi` limits from route decorators (see `backend/*/routes.p
 | `POST /documents` | `20/hour` | IP (default slowapi key) |
 | `POST /chat` | `30/minute` | IP (default slowapi key) |
 | `POST /chat/{session_id}/escalate` | `30/minute` | IP (default slowapi key) |
-| `POST /search` | `30/minute` | IP (default slowapi key) |
 | `GET /widget/config` | `30/minute` | `bot_id + IP` |
 | `POST /widget/session/init` | `10/minute` | IP (widget-specific key func) |
 | `POST /widget/chat` | `WIDGET_CHAT_PER_CLIENT_RATE` (or `120/minute` by default, `1000/minute` in development when unset) | per `bot_id` |

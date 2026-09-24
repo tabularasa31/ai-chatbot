@@ -383,28 +383,6 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
         db.close()
 
 
-def get_embeddings_for_document(
-    document_id: uuid.UUID,
-    tenant_id: uuid.UUID,
-    db: Session,
-) -> list[Embedding]:
-    """
-    Get all embeddings for a document. Verifies document ownership.
-
-    Raises:
-        HTTPException 404: Document not found or not owned by tenant.
-    """
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc or doc.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Document not found")
-    return (
-        db.query(Embedding)
-        .filter(Embedding.document_id == document_id)
-        .order_by(Embedding.created_at.asc())
-        .all()
-    )
-
-
 def delete_embeddings_for_document(
     document_id: uuid.UUID,
     db: Session,

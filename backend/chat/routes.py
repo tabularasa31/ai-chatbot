@@ -11,15 +11,9 @@ from openai import APIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_tenant
 from backend.bots.service import (
     get_bot_for_tenant_by_public_id,
     get_default_bot_for_tenant,
-)
-from backend.chat.history_service import (
-    get_chat_history,
-    get_session_logs,
-    list_chat_sessions,
 )
 from backend.chat.language import detect_language
 from backend.chat.llm_unavailable import (
@@ -29,19 +23,13 @@ from backend.chat.llm_unavailable import (
     quota_exceeded_detail,
 )
 from backend.chat.schemas import (
-    ChatHistoryResponse,
-    ChatMessageLogItem,
-    ChatMessageLogResponse,
     ChatRequest,
-    ChatSessionListResponse,
-    ChatSessionSummaryResponse,
     ChatTurnResponse,
-    MessageResponse,
 )
 from backend.chat.service import (
     async_process_chat_message,
 )
-from backend.core.db import get_async_db, get_db, run_sync
+from backend.core.db import get_async_db, run_sync
 from backend.core.idempotency import idempotent_section
 from backend.core.limiter import limiter
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
@@ -50,7 +38,6 @@ from backend.models import (
     Bot,
     Chat,
     EscalationTrigger,
-    Tenant,
 )
 from backend.tenants.llm_alerts import (
     apply_clear_alert,
@@ -240,89 +227,3 @@ async def chat_escalate(
             raise HTTPException(status_code=402, detail=detail) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     return ManualEscalateResponse(message=msg, ticket_number=tnum)
-
-
-@chat_router.get("/sessions", response_model=ChatSessionListResponse)
-def get_sessions(
-    tenant: Annotated[Tenant, Depends(get_current_tenant)],
-    db: Annotated[Session, Depends(get_db)],
-) -> ChatSessionListResponse:
-    """
-    List all chat sessions for the authenticated tenant (inbox-style).
-    JWT auth required. Returns sessions sorted by last_activity DESC.
-    """
-    summaries = list_chat_sessions(tenant.id, db)
-    return ChatSessionListResponse(
-        sessions=[
-            ChatSessionSummaryResponse(
-                session_id=s.session_id,
-                message_count=s.message_count,
-                last_question=s.last_question,
-                last_answer_preview=s.last_answer_preview,
-                last_activity=s.last_activity,
-            )
-            for s in summaries
-        ],
-    )
-
-
-@chat_router.get("/logs/session/{session_id}", response_model=ChatMessageLogResponse)
-def get_session_logs_route(
-    session_id: uuid.UUID,
-    tenant: Annotated[Tenant, Depends(get_current_tenant)],
-    db: Annotated[Session, Depends(get_db)],
-) -> ChatMessageLogResponse:
-    """
-    Get full message log for a session (read-only).
-    JWT auth required. Returns 404 if session not found or not owner.
-
-    Messages are returned as stored — the original wording. Redaction is an
-    egress concern applied when text is sent to OpenAI or to a support inbox,
-    not to the tenant reading back their own conversations.
-    """
-    logs = get_session_logs(session_id, tenant.id, db)
-    if logs is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    return ChatMessageLogResponse(
-        messages=[
-            ChatMessageLogItem(
-                id=msg_id,
-                session_id=sid,
-                role=role,
-                content=content,
-                created_at=created_at,
-                chat_id=chat_id,
-            )
-            for msg_id, sid, role, content, created_at, chat_id in logs
-        ],
-    )
-
-
-@chat_router.get("/history/{session_id}", response_model=ChatHistoryResponse)
-def get_history(
-    session_id: uuid.UUID,
-    tenant: Annotated[Tenant, Depends(get_current_tenant)],
-    db: Annotated[Session, Depends(get_db)],
-) -> ChatHistoryResponse:
-    """
-    Get chat history for a session (protected JWT).
-
-    Returns 404 if session not found or not owner.
-    """
-    messages = get_chat_history(session_id, tenant.id, db)
-    if not messages:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    return ChatHistoryResponse(
-        session_id=session_id,
-        messages=[
-            MessageResponse(
-                id=m.id,
-                role=m.role.value,
-                content=m.content,
-                created_at=m.created_at,
-            )
-            for m in messages
-        ],
-    )

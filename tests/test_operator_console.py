@@ -330,18 +330,6 @@ def test_a_reply_by_email_and_a_reply_from_the_console_look_the_same(
     assert by_mail["author_label"] == by_console["author_label"] == "same@example.com"
 
 
-def test_session_logs_carry_operator_turns(tenant: TestClient, db_session: Session) -> None:
-    ws = _workspace(tenant, db_session, email="logs@example.com", name="Logs Co")
-    chat = _chat(db_session, ws.tenant_id)
-    _say(db_session, chat, MessageRole.user, "help")
-    _say(db_session, chat, MessageRole.operator, "here", operator_user_id=ws.user_id)
-
-    resp = tenant.get(f"/chat/logs/session/{chat.session_id}", headers=ws.auth)
-
-    assert resp.status_code == 200, resp.text
-    assert [m["role"] for m in resp.json()["messages"]] == ["user", "operator"]
-
-
 # --------------------------------------------------------------------------
 # The seat gate
 # --------------------------------------------------------------------------

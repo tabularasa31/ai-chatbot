@@ -42,7 +42,6 @@ from backend.tenants.service import (
     delete_tenant,
     get_primary_api_key_hint,
     get_support_settings_for_user,
-    get_tenant_by_id,
     update_support_settings_for_user,
     update_tenant,
 )
@@ -274,21 +273,6 @@ def update_my_client(
                 detail="Server misconfiguration: encryption is not configured. Contact support.",
             ) from e
         raise
-    return _tenant_to_response(tenant, db)
-
-
-@tenants_router.get("/{tenant_id}", response_model=TenantResponse, include_in_schema=False)
-def get_tenant_by_id_route(
-    tenant_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantResponse:
-    """
-    Get tenant by UUID (protected JWT).
-
-    Returns 404 if not found or not owner.
-    """
-    tenant = get_tenant_by_id(tenant_id, current_user.id, db)
     return _tenant_to_response(tenant, db)
 
 

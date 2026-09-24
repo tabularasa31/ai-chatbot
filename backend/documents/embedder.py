@@ -220,12 +220,6 @@ def _render_structured_openapi_chunks(
 
 
 def _chunk_text_value(chunk: dict[str, Any]) -> str:
-    """Return a chunk's embedding/storage text.
-
-    Upload chunkers key it ``text``; the crawl-side chunk builders here key
-    it ``chunk_text`` — support both so ``persist_document_embeddings`` can
-    take chunks from either source.
-    """
     return str(chunk.get("chunk_text") or chunk.get("text") or "")
 
 
@@ -256,28 +250,14 @@ def persist_document_embeddings(
     db: Session,
     *,
     extra_meta: dict[str, Any] | None = None,
-    commit: bool = True,
 ) -> list[Embedding]:
-    """Delete a document's embeddings and persist freshly-chunked ones.
+    """Delete a document's embeddings and add freshly-chunked ones (flush, no commit).
 
-    Single persistence path for both the upload and URL-crawl ingestion
-    flows: batches the OpenAI embeddings call (``EMBED_BATCH_SIZE``) through
-    ``call_openai_with_retry`` and writes one ``Embedding`` row per chunk.
-    ``extra_meta`` carries document/page-level metadata_json fields the
-    caller wants merged into every chunk (e.g. ``source_url``,
-    ``page_content_hash``) — per-chunk fields already on each chunk dict
-    (anything but ``text``/``chunk_text``) pass through as-is.
-
-    ``commit=False`` flushes (assigning IDs) but leaves the commit to the
-    caller — for callers that still have more document-row changes (e.g.
-    ``doc.status``) to fold into the same transaction/commit.
+    Single persistence path for the upload and URL-crawl ingestion flows.
     """
     db.query(Embedding).filter(Embedding.document_id == doc.id).delete()
     if not chunks:
-        if commit:
-            db.commit()
-        else:
-            db.flush()
+        db.flush()
         return []
 
     vectors = _embed_chunks(chunks, api_key)
@@ -302,12 +282,7 @@ def persist_document_embeddings(
         )
         db.add(emb)
         embeddings.append(emb)
-    if commit:
-        db.commit()
-        for emb in embeddings:
-            db.refresh(emb)
-    else:
-        db.flush()
+    db.flush()
     return embeddings
 
 
@@ -320,25 +295,9 @@ def _populate_entities_for_embeddings(
 ) -> None:
     """Populate ``Embedding.entities`` via per-chunk NER (best-effort).
 
-    Iterates over the just-saved embeddings, calls
-    ``extract_entities_from_passage`` for each chunk, and writes the
-    returned list into ``entities``. Per-chunk failures degrade to ``[]``
-    inside ``extract_entities_from_passage`` itself, so this loop never
-    raises — at worst we get a row with ``entities=[]`` (the same as a
-    legacy row) and the entity-overlap channel gets no signal for that
-    chunk. Embeddings are already committed before this runs, so an
-    abort here is non-destructive.
-
-    **Commit policy:** one commit per chunk. NER is the slow part
-    (~1-2s/chunk via gpt-4.1-mini), and holding a single transaction
-    open across all chunks would lock the connection for ~150s on a
-    100-chunk megadoc — connection pool hogging + dirty-row liveness
-    issues. Per-chunk commits trade N round-trips for short-lived
-    transactions; the round-trip cost (~milliseconds each) is dwarfed
-    by NER latency, so the trade is free. As a side benefit, partial
-    progress survives a crash mid-loop: chunks already processed keep
-    their entities, the rest stay at the server-default empty list and
-    can be backfilled by a re-index.
+    One commit per chunk — NER is slow (~1-2s/chunk), so this avoids
+    holding a single long transaction and lets partial progress survive
+    a crash mid-loop. Failures degrade to ``entities=[]``, never raise.
     """
     updated = 0
     failed_commits = 0
@@ -350,10 +309,7 @@ def _populate_entities_for_embeddings(
                 tenant_id=tenant_id,
             )
         except Exception:
-            # Defense in depth: extract_entities_from_passage is documented
-            # to swallow its own exceptions, but a broken caller / monkeypatch
-            # in tests could still leak. Never let one bad chunk corrupt the
-            # whole document's ingest.
+            # Defense in depth: never let one bad chunk corrupt the whole ingest.
             logger.warning(
                 "entity_extraction_unexpected_error",
                 extra={"embedding_id": str(emb.id)},
@@ -363,10 +319,7 @@ def _populate_entities_for_embeddings(
         try:
             db.commit()
         except Exception:
-            # One failed commit shouldn't kill the rest of the document.
-            # Roll back this chunk's update and keep going — the row stays
-            # at the server-default empty list, which is the same as legacy
-            # rows and safe for the Step 5 ``?|`` predicate.
+            # Roll back this chunk only; siblings keep their NER output.
             logger.warning(
                 "entity_extraction_commit_failed",
                 extra={"embedding_id": str(emb.id)},
@@ -393,18 +346,7 @@ def after_document_indexed(
     api_key: str | None,
     db: Session,
 ) -> None:
-    """Post-index steps shared by the upload and URL-crawl ingestion flows.
-
-    Invalidates the tenant's search caches (BM25 + KB-script), populates
-    per-chunk entities (Step 4 of the entity-aware retrieval epic), and
-    enqueues tenant-knowledge extraction as a durable job. Best-effort
-    throughout: embeddings are already committed by
-    ``persist_document_embeddings`` by the time this runs, so nothing here
-    blocks or reverts the ingest.
-
-    Cache invalidation runs first, before the (much slower) NER pass, so the
-    stale-cache window doesn't include per-chunk entity-extraction latency.
-    """
+    """Invalidate search caches, populate entities, and enqueue knowledge extraction (in that order)."""
     invalidate_tenant_search_caches(doc.tenant_id)
     if embeddings and api_key:
         _populate_entities_for_embeddings(

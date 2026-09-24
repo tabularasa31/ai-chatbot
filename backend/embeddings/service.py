@@ -165,13 +165,10 @@ def create_embeddings_for_document(
     # Delete existing embeddings (re-embed on demand). The document row is
     # touched so its updated_at moves: retrieval changes here without any
     # other column changing, and the answer cache fingerprints that timestamp.
-    # Committed up front (not left to persist_document_embeddings' own delete)
-    # so old embeddings are gone even if the re-embed below fails. Cache
-    # invalidation for this deletion is covered by after_document_indexed's
-    # post-commit invalidation below — no separate call needed here.
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     doc.updated_at = _utcnow()
     db.commit()
+    invalidate_tenant_search_caches(doc.tenant_id)
 
     if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)
@@ -179,28 +176,20 @@ def create_embeddings_for_document(
         chunker = get_chunker(doc.file_type.value)
         chunks = chunker(doc.parsed_text)
     if not chunks:
-        # No chunks still means "re-index attempted" — run the same
-        # post-index hook (cache invalidation + knowledge-extraction
-        # enqueue) the old inline code ran unconditionally once ingest
-        # succeeded, regardless of chunk count.
         after_document_indexed(doc, [], api_key=api_key, db=db)
         return []
 
     try:
         embeddings = persist_document_embeddings(doc, chunks, api_key, db)
     except (APIError, ValueError) as e:
-        # Only OpenAI-call failures become a 503 "OpenAI API unavailable" —
-        # a DB commit error inside persist_document_embeddings is a genuine
-        # server error and must propagate as such, not be mislabeled.
         raise HTTPException(
             status_code=503,
             detail=f"OpenAI API unavailable: {e!s}",
         ) from e
 
-    # Step 4 of entity-aware retrieval epic + search-cache invalidation +
-    # knowledge-extraction enqueue — shared post-index hook (also used by
-    # the URL-crawl ingestion path). Best-effort: embeddings above are
-    # already durable, so a failure here cannot break ingest.
+    db.commit()
+    for emb in embeddings:
+        db.refresh(emb)
     after_document_indexed(doc, embeddings, api_key=api_key, db=db)
     try:
         from backend.documents.service import run_document_health_check
@@ -232,8 +221,6 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
             doc.status = DocumentStatus.ready
             db.commit()
         if tenant_id is not None:
-            # Knowledge extraction is already enqueued by after_document_indexed
-            # inside create_embeddings_for_document (shared post-index hook).
             try:
                 run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id)
             except Exception:

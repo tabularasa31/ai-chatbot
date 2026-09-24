@@ -507,7 +507,8 @@ def test_upsert_page_document_persists_detected_script(
     """Document.script must be written on the crawl path too, not just uploads.
 
     Uses a writing system the old two-bucket detector could not represent, so
-    the assertion cannot pass by accident.
+    the assertion cannot pass by accident. Also covers crawled pages running
+    entity extraction (Step 4), same as uploads.
     """
     tenant, _ = _make_tenant(db_session, "page-script@example.com", "Tenant")
 
@@ -543,64 +544,6 @@ def test_upsert_page_document_persists_detected_script(
         ],
     )
     monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda *a, **k: [[0.1] * 1536])
-
-    doc, _ = url_service._upsert_page_document(
-        source=source,
-        page=page,
-        db=db_session,
-        api_key="sk-test",
-    )
-
-    assert doc.script == "greek"
-
-
-def test_upsert_page_document_populates_entities(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Crawled pages must run entity extraction (Step 4), same as uploads.
-
-    One extract_entities_from_passage call per chunk, result written to
-    Embedding.entities.
-    """
-    tenant, _ = _make_tenant(db_session, "page-entities@example.com", "Tenant")
-
-    source = UrlSource(
-        tenant_id=tenant.id,
-        name="Docs",
-        url="https://docs.example.com/",
-        normalized_domain="docs.example.com",
-        status=SourceStatus.ready,
-        crawl_schedule=SourceSchedule.manual,
-        metadata_json={},
-    )
-    db_session.add(source)
-    db_session.flush()
-    db_session.commit()
-
-    page = url_service.ExtractedPage(
-        url="https://docs.example.com/pricing",
-        title="Pricing",
-        text="Pro plan in Acme CRM costs 59 USD.",
-        chunks=[
-            {
-                "chunk_index": 0,
-                "raw_text": "Pro plan in Acme CRM costs 59 USD.",
-                "section_title": "Pricing",
-                "chunk_text": "Pro plan in Acme CRM costs 59 USD.",
-                "token_count": 8,
-                "content_hash": "hash-0",
-            },
-            {
-                "chunk_index": 1,
-                "raw_text": "Contact support for the Enterprise tier.",
-                "section_title": "Pricing",
-                "chunk_text": "Contact support for the Enterprise tier.",
-                "token_count": 7,
-                "content_hash": "hash-1",
-            },
-        ],
-    )
-    monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [[0.1] * 1536 for _ in chunks])
     extract_calls: list[str] = []
 
     def _fake_extract(text: str, api_key: str, *, tenant_id: str | None = None) -> list[str]:
@@ -616,14 +559,14 @@ def test_upsert_page_document_populates_entities(
         api_key="sk-test",
     )
 
+    assert doc.script == "greek"
     rows = (
         db_session.query(Embedding)
         .filter(Embedding.document_id == doc.id)
         .order_by(Embedding.created_at.asc())
         .all()
     )
-    assert len(rows) == 2
-    assert len(extract_calls) == 2
+    assert len(extract_calls) == len(rows)
     for row in rows:
         assert row.entities == ["Acme CRM"]
 

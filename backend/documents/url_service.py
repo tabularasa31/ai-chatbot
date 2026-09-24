@@ -403,7 +403,6 @@ def _upsert_page_document(
             "page_title": page.title,
             "page_content_hash": content_hash,
         },
-        commit=False,
     )
     doc.status = DocumentStatus.ready
     db.commit()
@@ -494,10 +493,8 @@ def _upsert_structured_document(
             api_key,
             db,
             extra_meta={"page_content_hash": content_hash},
-            commit=False,
         )
         doc.status = DocumentStatus.ready
-        db.flush()
         db.commit()
         _embedder_mod.after_document_indexed(doc, embeddings, api_key=api_key, db=db)
         try:

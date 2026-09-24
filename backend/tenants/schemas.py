@@ -8,6 +8,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
+from backend.models.tenant import (
+    TENANT_API_KEY_STATUS_ACTIVE,
+    TENANT_API_KEY_STATUS_REVOKED,
+    TENANT_API_KEY_STATUS_REVOKING,
+)
+
 RerankerStrategyName = Literal["heuristic", "llm", "cross_encoder"]
 
 #: What the API REPORTS. Deliberately open where the request type is closed.
@@ -112,7 +118,11 @@ class TenantApiKeyResponse(BaseModel):
 
     id: uuid.UUID
     key_hint: str
-    status: Literal["active", "revoking", "revoked"]
+    status: Literal[
+        TENANT_API_KEY_STATUS_ACTIVE,
+        TENANT_API_KEY_STATUS_REVOKING,
+        TENANT_API_KEY_STATUS_REVOKED,
+    ]
     created_at: datetime
     expires_at: datetime | None = None
     revoked_at: datetime | None = None
@@ -162,12 +172,6 @@ class UpdateTenantRequest(BaseModel):
     name: str | None = None
     openai_api_key: str | None = None  # None = remove key
     reranker_strategy: RerankerStrategyName | None = None
-
-
-class TenantListResponse(BaseModel):
-    """List of clients in API responses."""
-
-    clients: list[TenantResponse]
 
 
 class SupportSettingsResponse(BaseModel):

@@ -1,29 +1,15 @@
 from __future__ import annotations
 
-import uuid
+from sqlalchemy import Column, DateTime, Index, Integer, String
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-
-from backend.models.base import Base, _utcnow
+from backend.models.base import Base, TenantScopedMixin, UUIDPKMixin, _utcnow
 
 
-class ContactSession(Base):
+class ContactSession(UUIDPKMixin, TenantScopedMixin, Base):
     """Cross-session history for identified users (v2+); v1 only persists schema."""
 
     __tablename__ = "contact_sessions"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     contact_id = Column(String(255), nullable=False, index=True)
     email = Column(String(255), nullable=True)
     name = Column(String(255), nullable=True)

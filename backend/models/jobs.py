@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import enum
-import uuid
 
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-from backend.models.base import Base, _utcnow
+from backend.models.base import Base, UUIDPKMixin, _utcnow
 
 
 class BackgroundJobStatus(str, enum.Enum):
@@ -17,7 +16,7 @@ class BackgroundJobStatus(str, enum.Enum):
     dead_letter = "dead_letter"
 
 
-class BackgroundJob(Base):
+class BackgroundJob(UUIDPKMixin, Base):
     """Status row mirroring an ARQ job, written by queue hooks.
 
     ARQ already persists job state in Redis, but Redis state is volatile and
@@ -27,7 +26,6 @@ class BackgroundJob(Base):
 
     __tablename__ = "background_jobs"
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     arq_job_id = Column(String(64), nullable=False, unique=True, index=True)
     kind = Column(String(64), nullable=False)
     tenant_id = Column(

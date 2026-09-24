@@ -7,8 +7,12 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from backend.chat.presets import PRESETS, effective_agent_instructions
+from backend.disclosure_config import ALLOWED_LEVELS
 
 DisclosureLevelLiteral = Literal["detailed", "standard", "corporate"]
+assert set(DisclosureLevelLiteral.__args__) == ALLOWED_LEVELS, (
+    "DisclosureLevelLiteral must match backend.disclosure_config.ALLOWED_LEVELS"
+)
 
 _MAX_CUSTOM_INSTRUCTIONS_LENGTH = 3000
 
@@ -68,11 +72,11 @@ def _normalize_custom_instructions(value: str | None) -> str | None:
     return value
 
 
-class BotCreate(BaseModel):
-    name: str
+class _BotPresetFields(BaseModel):
+    """Shared preset/custom-instructions fields and validation for BotCreate/BotUpdate."""
+
     custom_instructions: str | None = Field(default=None, max_length=_MAX_CUSTOM_INSTRUCTIONS_LENGTH)
     preset: str | None = None
-    website_url: str | None = None
     link_safety_enabled: bool | None = None
     allowed_domains: list[str] | None = None
 
@@ -87,23 +91,14 @@ class BotCreate(BaseModel):
         return _normalize_custom_instructions(value)
 
 
-class BotUpdate(BaseModel):
+class BotCreate(_BotPresetFields):
+    name: str
+    website_url: str | None = None
+
+
+class BotUpdate(_BotPresetFields):
     name: str | None = None
     is_active: bool | None = None
-    custom_instructions: str | None = Field(default=None, max_length=_MAX_CUSTOM_INSTRUCTIONS_LENGTH)
-    preset: str | None = None
-    link_safety_enabled: bool | None = None
-    allowed_domains: list[str] | None = None
-
-    @field_validator("preset")
-    @classmethod
-    def _validate_preset_field(cls, value: str | None) -> str | None:
-        return _validate_preset(value)
-
-    @field_validator("custom_instructions")
-    @classmethod
-    def _normalize_custom_instructions_field(cls, value: str | None) -> str | None:
-        return _normalize_custom_instructions(value)
 
 
 class BotList(BaseModel):

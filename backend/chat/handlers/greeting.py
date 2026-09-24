@@ -147,15 +147,13 @@ class GreetingHandler(PipelineHandler):
             response_language=ctx.language_context.response_language,
             api_key=ctx.api_key,
         )
-        return await run_sync(
-            ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db, greeting)
+        return await self._in_sync(
+            ctx, lambda c, sync_db: self._handle_sync(c, sync_db, greeting)
         )
 
     def _handle_sync(
         self, ctx: HandlerContext, sync_db: Session, greeting: LocalizationResult
     ) -> ChatTurnOutcome:
-        ctx.db = sync_db
-
         is_bootstrap = not ctx.question_text
         if is_bootstrap:
             # Empty bootstrap turn: persist only the assistant greeting.

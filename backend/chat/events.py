@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from collections import deque
 from datetime import datetime
 from enum import Enum
 from time import monotonic
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from backend.chat.decision import Decision
 from backend.observability.metrics import capture_event
+
+if TYPE_CHECKING:
+    from backend.chat.types import PipelineRun
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +414,36 @@ def _emit_chat_escalated_event(
         logger.warning("Failed to emit chat_escalated event", exc_info=True)
 
 
+def _emit_escalation_ticket_event(
+    *,
+    reused: bool,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str,
+    escalation_reason: str,
+    escalation_trigger: str | None,
+    plan_tier: str | None,
+    priority: Any,
+) -> None:
+    """Runaway-loop / analytics bookkeeping for one ticket creation-or-reuse.
+
+    Only a genuinely new ticket is an escalation — reuse still feeds the
+    runaway-loop detector but must not double-count in the escalation metric.
+    """
+    if reused:
+        _check_escalation_rate(tenant_public_id, bot_public_id)
+        return
+    _emit_chat_escalated_event(
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        chat_id=chat_id,
+        escalation_reason=escalation_reason,
+        escalation_trigger=escalation_trigger,
+        plan_tier=plan_tier,
+        priority=priority,
+    )
+
+
 def _emit_ai_generation_event(
     *,
     tenant_public_id: str | None,
@@ -574,6 +608,28 @@ def _emit_ai_span_event(
         )
     except Exception:
         logger.warning("Failed to emit $ai_span event", exc_info=True)
+
+
+def emit_pipeline_span(
+    run: PipelineRun,
+    name: str,
+    latency_s: float,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """One ``$ai_span`` PostHog event for a pipeline stage (retrieval, guards, ...)."""
+    if run.tenant_public_id is None and run.bot_public_id is None:
+        return
+    trace_id = getattr(run.trace, "posthog_trace_id", None) if run.trace is not None else None
+    _emit_ai_span_event(
+        tenant_public_id=run.tenant_public_id,
+        bot_public_id=run.bot_public_id,
+        span_name=name,
+        latency_s=latency_s,
+        trace_id=trace_id,
+        span_id=uuid.uuid4().hex if trace_id else None,
+        parent_id=trace_id,
+        extra_properties=extra,
+    )
 
 
 def _session_duration_ms(created_at: datetime | None, ended_at: datetime | None) -> int | None:

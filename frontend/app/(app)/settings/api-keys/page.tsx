@@ -6,6 +6,7 @@ import {
   type RotateTenantApiKeyResponse,
   type TenantApiKeyResponse,
 } from "@/lib/api";
+import { formatDateTimeLocale, parseApiDate } from "@/lib/format";
 
 type Reason = "leaked" | "scheduled" | "compromise" | "other";
 
@@ -45,18 +46,9 @@ function StatusBadge({ status }: { status: TenantApiKeyResponse["status"] }) {
   );
 }
 
-function formatDate(iso: string | null): string {
-  if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
-}
-
 function relativeRemaining(expires_at: string | null): string | null {
   if (!expires_at) return null;
-  const ms = new Date(expires_at).getTime() - Date.now();
+  const ms = parseApiDate(expires_at).getTime() - Date.now();
   if (ms <= 0) return "expired";
   const hours = Math.floor(ms / 3600_000);
   const minutes = Math.floor((ms % 3600_000) / 60_000);
@@ -184,10 +176,10 @@ export default function ApiKeysPage() {
                     <span className="text-xs text-amber-700">{remaining}</span>
                   )}
                   <span className="text-xs text-slate-500">
-                    Created {formatDate(k.created_at)}
+                    Created {formatDateTimeLocale(k.created_at)}
                   </span>
                   <span className="text-xs text-slate-500">
-                    Last used {formatDate(k.last_used_at)}
+                    Last used {formatDateTimeLocale(k.last_used_at)}
                   </span>
                   {k.revoked_reason && (
                     <span className="text-xs text-slate-500">

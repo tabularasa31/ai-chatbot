@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, type HandoffState, type InboxRow, type Thread, type ThreadMessage } from "@/lib/api";
 import { useClientMe, useInbox, useThread } from "@/hooks/useApi";
 import { INBOX_CHANGED_EVENT } from "@/components/Sidebar";
+import { parseApiDate, formatDateTime, formatTime } from "@/lib/format";
 
 type Scope = "attention" | "all";
 
@@ -15,22 +16,8 @@ const THREAD_REFRESH_MS: Record<HandoffState, number> = {
   bot: 15_000,
 };
 
-// The API stamps naive UTC without a zone designator; read it as UTC rather
-// than as the browser's local time.
-function parseUtc(iso: string): Date {
-  return new Date(/[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`);
-}
-
-function formatDateTime(iso: string): string {
-  return parseUtc(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
-}
-
-function formatTime(iso: string): string {
-  return parseUtc(iso).toLocaleTimeString(undefined, { timeStyle: "short" });
-}
-
 function waitingFor(since: string, now: number): string {
-  const minutes = Math.max(0, Math.floor((now - parseUtc(since).getTime()) / 60_000));
+  const minutes = Math.max(0, Math.floor((now - parseApiDate(since).getTime()) / 60_000));
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);

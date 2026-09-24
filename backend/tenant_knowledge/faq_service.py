@@ -10,7 +10,7 @@ from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.models import TenantFaq as TenantFaqModel
 from backend.tenant_knowledge.schemas import FaqCandidate
-from backend.utils.math import coerce_vector as _vector_from_unknown
+from backend.utils.math import coerce_vector
 from backend.utils.math import cosine_similarity as _cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def find_nearest_faq(
         best_faq: TenantFaqModel | None = None
         best_score = 0.0
         for item in existing:
-            v = _vector_from_unknown(item.question_embedding)
+            v = coerce_vector(item.question_embedding)
             if v is None:
                 continue
             score = _cosine_similarity(question_embedding, v)

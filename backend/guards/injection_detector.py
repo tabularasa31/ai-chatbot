@@ -175,10 +175,8 @@ CIRCUIT_HALF_OPEN_AFTER_SECONDS = 60.0
 _CB_MAX_KEYS = 4096
 
 _circuit_breaker = CircuitBreaker(
-    # Callables (not the constant values) so tests monkeypatching the module
-    # constants directly still take effect on the shared breaker.
-    threshold=lambda: CIRCUIT_BREAKER_THRESHOLD,
-    half_open_after_seconds=lambda: CIRCUIT_HALF_OPEN_AFTER_SECONDS,
+    threshold=CIRCUIT_BREAKER_THRESHOLD,
+    half_open_after_seconds=CIRCUIT_HALF_OPEN_AFTER_SECONDS,
     max_keys=_CB_MAX_KEYS,
 )
 

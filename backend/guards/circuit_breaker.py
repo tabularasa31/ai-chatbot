@@ -4,33 +4,21 @@ After ``threshold`` consecutive failures for a key the circuit opens and
 callers should fail open (skip the call) until ``half_open_after_seconds``
 elapses; then one probe request is allowed through — on success the circuit
 closes, on failure the timer resets.
-
-Callers that only ever use a single, process-global circuit (no per-tenant
-scoping) can omit ``key`` and rely on the default.
 """
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import TypeVar
 
 _GLOBAL_KEY = "_global"
-
-_T = TypeVar("_T", int, float)
-
-
-def _resolve(value: _T | Callable[[], _T]) -> _T:
-    return value() if callable(value) else value
 
 
 @dataclass
 class _BreakerState:
     consecutive_failures: int = 0
     circuit_opened_at: float | None = None
-    # Wall-clock-ish ordering token for eviction (monotonic seconds of last touch).
     last_touch: float = field(default=0.0)
 
 
@@ -38,13 +26,10 @@ class CircuitBreaker:
     def __init__(
         self,
         *,
-        threshold: int | Callable[[], int],
-        half_open_after_seconds: float | Callable[[], float],
+        threshold: int,
+        half_open_after_seconds: float,
         max_keys: int | None = None,
     ) -> None:
-        # Threshold/cooldown may be given as callables so callers whose module
-        # constants are monkeypatched in tests keep observing the live value
-        # rather than one captured at construction time.
         self._threshold = threshold
         self._half_open_after = half_open_after_seconds
         self._max_keys = max_keys
@@ -54,12 +39,12 @@ class CircuitBreaker:
     def is_open(self, key: str = _GLOBAL_KEY) -> bool:
         with self._lock:
             st = self._states.get(key)
-            if st is None or st.consecutive_failures < _resolve(self._threshold):
+            if st is None or st.consecutive_failures < self._threshold:
                 return False
             now = monotonic()
             if st.circuit_opened_at is None:
                 st.circuit_opened_at = now
-            if now - st.circuit_opened_at < _resolve(self._half_open_after):
+            if now - st.circuit_opened_at < self._half_open_after:
                 return True
             # Half-open: reset timer so only one probe gets through at a time.
             st.circuit_opened_at = None

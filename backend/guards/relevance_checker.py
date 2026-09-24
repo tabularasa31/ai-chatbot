@@ -47,8 +47,8 @@ CIRCUIT_BREAKER_THRESHOLD = 5
 CIRCUIT_HALF_OPEN_AFTER_SECONDS = 60.0
 
 _circuit_breaker = CircuitBreaker(
-    threshold=lambda: CIRCUIT_BREAKER_THRESHOLD,
-    half_open_after_seconds=lambda: CIRCUIT_HALF_OPEN_AFTER_SECONDS,
+    threshold=CIRCUIT_BREAKER_THRESHOLD,
+    half_open_after_seconds=CIRCUIT_HALF_OPEN_AFTER_SECONDS,
 )
 
 # Short queries (≤ SHORT_QUERY_WORD_LIMIT words) bypass the LLM relevance check

@@ -2015,7 +2015,7 @@ def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
     asyncio.run(_run())
 
     # No failures recorded, breaker still closed.
-    assert not relevance_checker._circuit_breaker.is_open()
+    assert "_global" not in relevance_checker._circuit_breaker._states
 
 
 def test_relevance_checker_comment_hygiene() -> None:

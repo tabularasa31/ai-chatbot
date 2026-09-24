@@ -341,13 +341,13 @@ def enqueue_workspace_purge_sync(
     rather than shrug: an unscheduled cleanup is data left behind with nothing
     left to find it by.
     """
-    job_id = run_coro_sync(
+    return run_coro_sync(
         lambda: enqueue_workspace_purge(tenant_id=tenant_id, emails=emails),
         timeout=_ENQUEUE_SYNC_TIMEOUT_SECONDS,
         default=None,
         # No address in the log line: tenant id only.
         label=f"workspace_purge_enqueue_sync tenant_id={tenant_id}",
+        cancel_on_timeout=False,
+        warn_on_failure=True,
+        exc_info_on_error=False,
     )
-    if job_id is None:
-        logger.warning("workspace_purge_enqueue_failed tenant_id=%s", tenant_id)
-    return job_id

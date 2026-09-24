@@ -313,7 +313,7 @@ async def test_semantic_circuit_recovers_after_cooldown() -> None:
     # With the cooldown elapsed, the next call is the half-open probe: it embeds
     # successfully → breaker closes. Patch the cooldown to 0 for the duration of
     # the probe so we don't consume the single probe slot with a direct check.
-    with patch("backend.guards.injection_detector.CIRCUIT_HALF_OPEN_AFTER_SECONDS", 0.0), \
+    with patch.object(det._circuit_breaker, "_half_open_after", 0.0), \
          patch("backend.guards.injection_detector.async_embed_query", _fake_embed_query), \
          patch("backend.guards.injection_detector.async_embed_queries", _fake_embed_queries), \
          patch("backend.guards.injection_detector.settings") as mock_settings:

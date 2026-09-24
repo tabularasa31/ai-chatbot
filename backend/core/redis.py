@@ -173,6 +173,9 @@ def run_coro_sync(
     timeout: float,
     default: _T,
     label: str,
+    cancel_on_timeout: bool = True,
+    warn_on_failure: bool = False,
+    exc_info_on_error: bool = True,
 ) -> _T:
     """Run a Redis coroutine to completion from a non-loop (daemon) thread.
 
@@ -183,24 +186,34 @@ def run_coro_sync(
 
     ``make_coro`` is a factory (not a coroutine) so nothing is scheduled when
     the loop is unavailable, avoiding an un-awaited-coroutine warning. On
-    timeout the pending future is cancelled best-effort: if the underlying
-    ``SET``/``GET`` already ran on the loop the effect is harmless (a lock
-    self-heals at its TTL; a marker set is idempotent), but cancelling stops us
-    from leaking a holder whose token we've already discarded.
+    timeout the pending future is cancelled best-effort when
+    ``cancel_on_timeout`` is true: if the underlying ``SET``/``GET`` already
+    ran on the loop the effect is harmless (a lock self-heals at its TTL; a
+    marker set is idempotent), but cancelling stops us from leaking a holder
+    whose token we've already discarded. Callers whose coroutine should be
+    left to complete in the background even after the caller gives up on
+    waiting (e.g. an enqueue that must still land) pass
+    ``cancel_on_timeout=False``.
+
+    ``warn_on_failure`` upgrades the fail-open logging from DEBUG (the
+    default, for the best-effort lock/cache helpers below) to WARNING —
+    callers on paths where a lost enqueue is user-visible should set it.
     """
     from backend.core.queue import get_main_loop
 
+    log = logger.warning if warn_on_failure else logger.debug
     loop = get_main_loop()
     if loop is None or not loop.is_running():
+        log("%s skipped: no running loop", label)
         return default
     future = None
     try:
         future = asyncio.run_coroutine_threadsafe(make_coro(), loop)
         return future.result(timeout=timeout)
     except Exception as exc:
-        if future is not None:
+        if future is not None and cancel_on_timeout:
             future.cancel()
-        logger.debug("%s failed: %s", label, exc)
+        log("%s failed: %s", label, exc, exc_info=exc_info_on_error and warn_on_failure)
         return default
 
 

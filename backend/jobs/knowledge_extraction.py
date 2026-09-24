@@ -88,12 +88,11 @@ def enqueue_knowledge_extraction_sync(
     if the loop is unavailable or on timeout — callers must treat None as
     graceful degradation (log WARNING, never raise).
     """
-    job_id = run_coro_sync(
+    return run_coro_sync(
         lambda: enqueue_knowledge_extraction(document_id=document_id, tenant_id=tenant_id),
         timeout=5,
         default=None,
         label=f"knowledge_enqueue_sync document_id={document_id}",
+        cancel_on_timeout=False,
+        warn_on_failure=True,
     )
-    if job_id is None:
-        logger.warning("knowledge_enqueue_sync_failed document_id=%s", document_id)
-    return job_id

@@ -291,15 +291,14 @@ def _bridge_to_loop(make: Callable[[], Awaitable[str | None]]) -> str | None:
         return await_only(make())
     except MissingGreenlet:
         pass
-    job_id = run_coro_sync(
+    return run_coro_sync(
         make,
         timeout=_ENQUEUE_WAIT_SECONDS,
         default=None,
         label="unread_reply_enqueue_sync",
+        cancel_on_timeout=False,
+        warn_on_failure=True,
     )
-    if job_id is None:
-        logger.warning("unread_reply_enqueue_failed")
-    return job_id
 
 
 def schedule_unread_reply_email(*, chat: Chat, message: Message) -> str | None:

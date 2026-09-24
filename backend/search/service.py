@@ -16,9 +16,10 @@ from sqlalchemy import Text as SAText
 from sqlalchemy import cast, func, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import selectinload
 
 from backend.core.config import settings
+from backend.core.db import is_sqlite as _session_is_sqlite
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
 from backend.core.scripts import NO_SCRIPT_BUCKET, detect_script_bucket
@@ -1894,22 +1895,6 @@ def _build_empty_result_bundle(
 # (``_async_*`` prefix). The former sync twins were removed once the last
 # runtime callers (chat handlers, search routes) moved to this path.
 # ---------------------------------------------------------------------------
-
-
-def _session_is_sqlite(db: Session | AsyncSession) -> bool:
-    """Detect SQLite from a sync or async session (for test/pg branching).
-
-    Uses ``isinstance`` to pick the right bind accessor, then reads the
-    backing engine's URL.
-    """
-    try:
-        if isinstance(db, AsyncSession):
-            bind = db.sync_session.bind
-        else:
-            bind = db.bind
-        return "sqlite" in str(getattr(bind, "url", ""))
-    except Exception:
-        return False
 
 
 # ── Async OpenAI helpers ─────────────────────────────────────────────────────

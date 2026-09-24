@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from collections.abc import Iterable
@@ -11,28 +10,12 @@ from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.models import TenantFaq as TenantFaqModel
 from backend.tenant_knowledge.schemas import FaqCandidate
+from backend.utils.math import coerce_vector as _vector_from_unknown
 from backend.utils.math import cosine_similarity as _cosine_similarity
 
 logger = logging.getLogger(__name__)
 DEDUP_SIMILARITY_THRESHOLD = 0.92
 FAQ_MIN_CONFIDENCE_THRESHOLD = 0.5
-
-
-def _vector_from_unknown(raw: object) -> list[float] | None:
-    if raw is None:
-        return None
-    if isinstance(raw, list) and all(isinstance(x, (int, float)) for x in raw):
-        return [float(x) for x in raw]
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, list) and all(
-                isinstance(x, (int, float)) for x in parsed
-            ):
-                return [float(x) for x in parsed]
-        except Exception:
-            pass
-    return None
 
 
 def _dedupe_existing_faq_by_similarity(

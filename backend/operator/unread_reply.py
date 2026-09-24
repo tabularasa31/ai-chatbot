@@ -35,7 +35,8 @@ from sqlalchemy.exc import DBAPIError, MissingGreenlet
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
-from backend.core.queue import enqueue, get_main_loop, register_job
+from backend.core.queue import enqueue, register_job
+from backend.core.redis import run_coro_sync
 from backend.email.service import send_email
 from backend.models import Chat, EscalationTicket, Message, MessageRole
 
@@ -290,16 +291,12 @@ def _bridge_to_loop(make: Callable[[], Awaitable[str | None]]) -> str | None:
         return await_only(make())
     except MissingGreenlet:
         pass
-    loop = get_main_loop()
-    if loop is None or not loop.is_running():
-        logger.warning("unread_reply_enqueue_skipped reason=no_loop")
-        return None
-    future = asyncio.run_coroutine_threadsafe(make(), loop)
-    try:
-        return future.result(timeout=_ENQUEUE_WAIT_SECONDS)
-    except Exception:
-        logger.warning("unread_reply_enqueue_failed", exc_info=True)
-        return None
+    return run_coro_sync(
+        make,
+        timeout=_ENQUEUE_WAIT_SECONDS,
+        default=None,
+        label="unread_reply_enqueue_sync",
+    )
 
 
 def schedule_unread_reply_email(*, chat: Chat, message: Message) -> str | None:

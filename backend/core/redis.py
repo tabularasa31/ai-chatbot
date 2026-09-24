@@ -167,7 +167,7 @@ async def release_lock(key: str, token: str) -> bool:
 _T = TypeVar("_T")
 
 
-def _run_coro_sync(
+def run_coro_sync(
     make_coro: Callable[[], Coroutine[object, object, _T]],
     *,
     timeout: float,
@@ -205,12 +205,12 @@ def _run_coro_sync(
 
 
 def acquire_lock_sync(key: str, ttl_seconds: int, *, timeout: float = 3.0) -> str | None:
-    """Blocking :func:`acquire_lock` for daemon threads. See :func:`_run_coro_sync`.
+    """Blocking :func:`acquire_lock` for daemon threads. See :func:`run_coro_sync`.
 
     Returns the lock token, or ``None`` when the lock is held elsewhere, the
     main loop is unavailable, or Redis is unreachable.
     """
-    return _run_coro_sync(
+    return run_coro_sync(
         lambda: acquire_lock(key, ttl_seconds),
         timeout=timeout,
         default=None,
@@ -222,7 +222,7 @@ def release_lock_sync(key: str, token: str, *, timeout: float = 3.0) -> bool:
     """Blocking :func:`release_lock` for daemon threads. Best-effort: an
     unreleased lock simply expires at its TTL."""
     return bool(
-        _run_coro_sync(
+        run_coro_sync(
             lambda: release_lock(key, token),
             timeout=timeout,
             default=False,
@@ -234,7 +234,7 @@ def release_lock_sync(key: str, token: str, *, timeout: float = 3.0) -> bool:
 def cache_get_sync(key: str, *, timeout: float = 3.0) -> str | None:
     """Blocking :func:`cache_get` for daemon threads. Returns ``None`` on miss
     or any error (caller treats it as 'not present')."""
-    return _run_coro_sync(
+    return run_coro_sync(
         lambda: cache_get(key),
         timeout=timeout,
         default=None,
@@ -245,7 +245,7 @@ def cache_get_sync(key: str, *, timeout: float = 3.0) -> str | None:
 def cache_set_sync(key: str, value: str, ttl_seconds: int, *, timeout: float = 3.0) -> bool:
     """Blocking :func:`cache_set_with_ttl` for daemon threads."""
     return bool(
-        _run_coro_sync(
+        run_coro_sync(
             lambda: cache_set_with_ttl(key, value, ttl_seconds),
             timeout=timeout,
             default=False,

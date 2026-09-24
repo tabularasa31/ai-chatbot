@@ -84,7 +84,6 @@ remain" would be a promise nobody can keep.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from typing import Any
@@ -93,7 +92,8 @@ from arq import Retry
 from sqlalchemy import func, or_, select
 
 from backend.core import db as core_db
-from backend.core.queue import enqueue, get_main_loop, register_job
+from backend.core.queue import enqueue, register_job
+from backend.core.redis import run_coro_sync
 from backend.email.purge import brevo_purge_configured, delete_contacts
 from backend.models import BackgroundJob, EscalationTicket, Tenant, User
 from backend.observability.langfuse_purge import (
@@ -341,20 +341,10 @@ def enqueue_workspace_purge_sync(
     rather than shrug: an unscheduled cleanup is data left behind with nothing
     left to find it by.
     """
-    loop = get_main_loop()
-    if loop is None or not loop.is_running():
-        logger.warning(
-            "workspace_purge_enqueue_skipped reason=no_loop tenant_id=%s", tenant_id
-        )
-        return None
-    future = asyncio.run_coroutine_threadsafe(
-        enqueue_workspace_purge(tenant_id=tenant_id, emails=emails), loop
-    )
-    try:
-        return future.result(timeout=_ENQUEUE_SYNC_TIMEOUT_SECONDS)
-    except Exception:
+    return run_coro_sync(
+        lambda: enqueue_workspace_purge(tenant_id=tenant_id, emails=emails),
+        timeout=_ENQUEUE_SYNC_TIMEOUT_SECONDS,
+        default=None,
         # No address in the log line: tenant id only.
-        logger.warning(
-            "workspace_purge_enqueue_failed tenant_id=%s", tenant_id, exc_info=False
-        )
-        return None
+        label=f"workspace_purge_enqueue_sync tenant_id={tenant_id}",
+    )

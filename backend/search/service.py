@@ -55,11 +55,11 @@ from backend.utils.text import token_set, word_tokens
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all tenant chunks.
 BM25_CANDIDATE_POOL = 200
-# Cap for async_entity_overlap_search() PG candidate pull. Mirrors BM25's prefilter
-# cap — a popular entity (e.g. "Pro plan" on a tenant with 10k chunks) could
-# otherwise pull every row into memory before the Python intersection scoring
-# step. The downstream RRF only consumes top RRF_CANDIDATE_POOL_MULTIPLIER *
-# top_k anyway, so any cap >> that pool is safe.
+# Cap for async_entity_overlap_search() PG candidate pull. A popular entity
+# (e.g. "Pro plan" on a tenant with 10k chunks) could otherwise pull every row
+# into memory before the Python intersection scoring step. The downstream RRF
+# only consumes top RRF_CANDIDATE_POOL_MULTIPLIER * top_k anyway, so any cap
+# >> that pool is safe.
 ENTITY_SEARCH_CANDIDATE_LIMIT = 1000
 RRF_CANDIDATE_POOL_MULTIPLIER = 4
 SCRIPT_BOOST_FACTOR = 0.1

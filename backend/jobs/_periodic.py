@@ -22,6 +22,8 @@ unguarded, so we never trade a rare skipped run for a duplicate run.
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 import os
 import threading
@@ -30,11 +32,28 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from sqlalchemy import ColumnElement, select
+from sqlalchemy import delete as sa_delete
+
+from backend.core.db import SessionLocal
+
 if TYPE_CHECKING:
-    from sqlalchemy import ColumnElement
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+_LLM_SEMAPHORE_LIMIT = 3
+
+
+@functools.cache
+def llm_semaphore(module: str) -> asyncio.Semaphore:
+    """Return one shared asyncio.Semaphore(3) per caller module, created lazily.
+
+    ``@functools.cache`` keys on ``module``, so each job module gets its own
+    singleton (max 3 concurrent LLM calls) that binds to whichever event loop
+    is running the first time it's requested, rather than at import time.
+    """
+    return asyncio.Semaphore(_LLM_SEMAPHORE_LIMIT)
 
 
 def daily_lock_spec(
@@ -74,9 +93,6 @@ def purge_in_batches(
     Each batch is selected then deleted by id and committed separately, so the
     purge never holds a long lock on the target table.
     """
-    from sqlalchemy import delete as sa_delete
-    from sqlalchemy import select
-
     total = 0
     while True:
         ids = (
@@ -102,8 +118,6 @@ def run_purge_once(purge: Callable[[Session], int]) -> None:
     committed before the failure persist) and re-raising means ``PeriodicJob``
     does not write its "done" marker, so the next tick retries.
     """
-    from backend.core.db import SessionLocal
-
     db = SessionLocal()
     try:
         purge(db)

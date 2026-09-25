@@ -32,7 +32,7 @@ from backend.core.config import settings
 from backend.core.embeddings import embed_texts
 from backend.core.openai_client import get_openai_client
 from backend.core.queue import _CRON_JOBS
-from backend.jobs._concurrency import make_semaphore_factory
+from backend.jobs._periodic import llm_semaphore
 from backend.models import (
     LogAnalysisState,
     Message,
@@ -97,7 +97,8 @@ def _force_release_job_lock(tenant_id: uuid.UUID) -> None:
 
 
 # ── LLM concurrency guard ────────────────────────────────────────────────────
-_get_semaphore = make_semaphore_factory()
+def _get_semaphore() -> asyncio.Semaphore:
+    return llm_semaphore(__name__)
 
 
 # ── Data classes ─────────────────────────────────────────────────────────────

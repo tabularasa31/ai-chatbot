@@ -332,8 +332,19 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
         set_widget_public_rate_limit_key_override(None)
 
 
-def test_widget_chat_unknown_bot_id_404(tenant: TestClient) -> None:
-    r = tenant.post("/widget/chat?bot_id=doesnotexist00000000", json={"message": "hi"})
+@pytest.mark.smoke
+@pytest.mark.parametrize("scenario", ["unknown", "inactive"])
+def test_widget_chat_unknown_bot_id_404(
+    tenant: TestClient, db_session: Session, scenario: str
+) -> None:
+    if scenario == "unknown":
+        bot_public_id = "doesnotexist00000000"
+    else:
+        _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-inactive-bot@example.com")
+        db_session.query(Bot).filter(Bot.public_id == bot_public_id).update({"is_active": False})
+        db_session.commit()
+
+    r = tenant.post(f"/widget/chat?bot_id={bot_public_id}", json={"message": "hi"})
     assert r.status_code == 404
 
 
@@ -915,30 +926,45 @@ def test_widget_chat_success_persists_messages(
     assert user_message.content == "What is the answer?"
 
 
-def test_widget_chat_empty_question_uses_browser_locale_for_greeting(
+@pytest.mark.escalation
+def test_widget_chat_empty_question_greets_in_locale_then_422s_on_repeat(
+    mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Bootstrap turn (empty first message, real pipeline):
+
+    * skips the human-request / support-contact classifier LLM calls (task
+      86ey7x2p6 measured ~2s of pure greeting latency from them).
+    * returns the tenant's default greeting localized to the browser locale.
+    * a second empty message on the same (already-started) session is
+      rejected — it is not a valid follow-up question.
+    """
     _, bot_public_id = _setup_widget_tenant(
         tenant, db_session, "widget-empty-locale@example.com", "Greeting Locale Tenant"
     )
 
-    async def _fake_greeting(**kwargs: object) -> LocalizationResult:
-        return LocalizationResult(
-            text="Je suis l'assistant Greeting Locale Tenant. Posez votre question.",
-            tokens_used=9,
-        )
+    def _fail_classifier(*args, **kwargs):
+        raise AssertionError("classifier LLM call must be skipped on bootstrap turns")
 
-    monkeypatch.setattr(
-        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
-        _fake_greeting,
+    monkeypatch.setattr("backend.chat.service.detect_human_request", _fail_classifier)
+    monkeypatch.setattr("backend.chat.service.classify_question_intent", _fail_classifier)
+
+    mock_openai_client.chat.completions.create.return_value = _chat_completion_response(
+        "Je suis l'assistant Greeting Locale Tenant. Posez votre question.", total_tokens=9
     )
 
     r = _post_widget_chat(tenant, bot_public_id, message="", locale="fr-FR")
     assert r.status_code == 200
     data = r.json()
     assert data["text"] == "Je suis l'assistant Greeting Locale Tenant. Posez votre question."
+    session_id = data["session_id"]
+
+    second = _post_widget_chat(
+        tenant, bot_public_id, message="", session_id=session_id, locale="fr-FR"
+    )
+    assert second.status_code == 422
 
 
 def test_widget_chat_uses_context(
@@ -1092,6 +1118,10 @@ def test_widget_chat_openai_unavailable_degrades_gracefully(
     assert done_events, f"expected a done event, got {parsed}"
     assert done_events[0]["outcome"] == "llm_unavailable"
     assert done_events[0]["failure_state"]["retryable"] is True
+
+    from backend.chat.llm_unavailable_copy import fallback_text
+
+    assert done_events[0]["text"] == fallback_text(language=None, retryable=True)
 
 
 def test_widget_chat_injection_detected_journey(

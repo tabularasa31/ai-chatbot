@@ -5,11 +5,9 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
-import jwt
 from sqlalchemy.orm import Session
 
-from backend.core.config import settings
-from backend.core.security import ALGORITHM, create_access_token, hash_password, verify_password
+from backend.core.security import create_access_token, hash_password, verify_password
 from backend.models import User
 from backend.models.base import _utcnow
 from backend.seats.events import capture_seat_granted, emit_seat_change
@@ -55,35 +53,6 @@ def authenticate_user(email: str, password: str, db: Session) -> User | None:
         return None
     if not verify_password(password, user.password_hash):
         return None
-    return user
-
-
-def get_current_user_from_token(token: str, db: Session) -> User:
-    """
-    Decode JWT token, extract user_id, query DB for user.
-
-    Raises HTTPException 401 if token invalid or expired.
-    """
-    from fastapi import HTTPException
-
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret,
-            algorithms=[ALGORITHM],
-        )
-        user_id_str = payload.get("sub")
-        if not user_id_str:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-        user_id = uuid.UUID(user_id_str)
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired") from None
-    except (jwt.InvalidTokenError, ValueError):
-        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
     return user
 
 

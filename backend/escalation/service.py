@@ -43,13 +43,13 @@ from backend.models import (
     Tenant,
     TenantProfile,
     TurnOutcome,
-    User,
 )
 from backend.models.base import _utcnow
 from backend.observability.cache_metrics import record_hit, record_miss
 from backend.observability.metrics import capture_event
 from backend.seats.service import tenant_has_any_seat
 from backend.support_config import public_support_config_dict
+from backend.tenants.service import get_tenant_owner
 
 logger = logging.getLogger(__name__)
 
@@ -826,7 +826,7 @@ def _support_inbox_recipient(tenant: Tenant, db: Session) -> str | None:
 
     The configured L2 address if there is one, else the workspace owner.
     """
-    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
+    user = get_tenant_owner(tenant.id, db)
     support_config = public_support_config_dict(
         tenant.settings if isinstance(tenant.settings, dict) else None
     )
@@ -969,7 +969,7 @@ def _notify_tenant_new_ticket(
             )
         return False
 
-    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
+    user = get_tenant_owner(tenant.id, db)
     support_config = public_support_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
     recipient = support_config["l2_email"] or (user.email if user and user.email else None)
     if not recipient:

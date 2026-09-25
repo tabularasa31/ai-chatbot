@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import selectinload
 
 from backend.chat.decision import (
     MAX_CLARIFICATIONS_PER_SESSION,
@@ -44,7 +44,6 @@ from backend.chat.types import (
     QuestionIntentResult,
 )
 from backend.contact_sessions.service import touch_user_session
-from backend.core import db as core_db
 from backend.core.db import async_commit_or_rollback, run_sync
 from backend.documents.service import async_knowledge_base_updated_at
 from backend.escalation.service import (
@@ -77,115 +76,6 @@ def _discard_task_result(task: asyncio.Future) -> None:
     """Retrieve an abandoned future's outcome so asyncio does not log it."""
     if not task.cancelled():
         task.exception()
-
-
-def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any]) -> None:
-    if trace is None:
-        return
-    trace.span(name=name, metadata=metadata).end(output=metadata)
-
-
-def process_chat_message(
-    tenant_id: uuid.UUID,
-    question: str,
-    session_id: uuid.UUID,
-    db: Session,
-    *,
-    api_key: str,
-    user_context: dict | None = None,
-    browser_locale: str | None = None,
-    disclosure_config: dict | None = _DISCLOSURE_UNSET,  # type: ignore[assignment]
-    bot_id: uuid.UUID | None = None,
-    bot_public_id: str | None = None,
-    stream_callback: Callable[[str], None] | None = None,
-    status_callback: Callable[[str], None] | None = None,
-) -> ChatTurnOutcome:
-    """Sync entry point retained **only** for legacy tests that drive the
-    chat pipeline synchronously.
-
-    Production callers (the chat HTTP route, widget streaming) use
-    :func:`async_process_chat_message` directly. New tests should do the same
-    via the ``async_db_session`` fixture. This wrapper is a thin compat shim
-    around the async orchestrator with two non-obvious requirements:
-
-    1. ``db`` (the caller's sync ``Session``) must be bound to the same engine
-       as ``core_db.engine`` — i.e. the test conftest must have rebound
-       ``core_db.SessionLocal`` and ``core_db.AsyncSessionLocal`` to share the
-       same underlying database (the ``tenant`` fixture does this). The wrapper
-       deliberately does **not** derive an ``AsyncSession`` from ``db``: SQLite
-       prevents multiplexing one connection across sync and asyncio drivers, so
-       it opens its own ``AsyncSession`` from ``AsyncSessionLocal``. If those
-       two engines point at different databases the call will silently write
-       to one and the caller will read from the other; the assertion below
-       catches the most common form of that mismatch.
-    2. There must be no running event loop. ``asyncio.run`` raises
-       ``RuntimeError`` if called from inside one — but pytest sync tests have
-       no loop, and async tests should not call this wrapper at all (they can
-       ``await async_process_chat_message`` directly).
-
-    Caller's session is mutated:
-
-    - Committed on entry so SQLite releases locks before the async pipeline
-      opens its own connection (otherwise concurrent writes deadlock). **Any
-      uncommitted state staged on ``db`` before the call is therefore
-      persisted** — tests that staged data without committing must be aware.
-    - ``expire_all()``-ed on exit so subsequent reads reflect the writes the
-      pipeline made on its own connection (any in-memory ORM objects the
-      caller held are also invalidated and re-loaded on next access).
-    """
-    if db is not None:
-        # Defensive check: the wrapper relies on the conftest rebinding both
-        # SessionLocal and AsyncSessionLocal to the same engine. If callers
-        # pass a session bound elsewhere, surface it loudly instead of silently
-        # writing to the wrong DB.
-        if db.get_bind() is not core_db.engine:
-            raise RuntimeError(
-                "process_chat_message: caller's Session is bound to an engine "
-                "that differs from core_db.engine. The sync wrapper opens its "
-                "own AsyncSession against core_db.AsyncSessionLocal, so writes "
-                "would go to a different database than the caller's reads. "
-                "Use async_process_chat_message directly, or rebind "
-                "core_db.AsyncSessionLocal in your fixture (the tenant fixture "
-                "in tests/conftest.py shows the pattern)."
-            )
-
-        # Flush + release any locks held by the caller's session before the
-        # async pipeline opens its own connection. Without this, concurrent
-        # SQLite writes raise "database is locked".
-        db.commit()
-
-    async def _run() -> ChatTurnOutcome:
-        async with core_db.AsyncSessionLocal() as async_db:
-            return await async_process_chat_message(
-                tenant_id,
-                question,
-                session_id,
-                async_db,
-                api_key=api_key,
-                user_context=user_context,
-                browser_locale=browser_locale,
-                disclosure_config=disclosure_config,
-                bot_id=bot_id,
-                bot_public_id=bot_public_id,
-                stream_callback=stream_callback,
-                status_callback=status_callback,
-            )
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass  # no running loop — the expected case
-    else:
-        raise RuntimeError(
-            "process_chat_message must not be called from a running event "
-            "loop; call async_process_chat_message directly instead."
-        )
-
-    try:
-        return asyncio.run(_run())
-    finally:
-        if db is not None:
-            db.expire_all()
 
 
 async def _ensure_chat_async(
@@ -343,7 +233,7 @@ async def _build_handler_context_async(
     message_has_request_content: bool = False,
     turn_started_at: float,
 ) -> HandlerContext:
-    """Async counterpart of :func:`_build_handler_context`.
+    """Assemble the per-turn ``HandlerContext`` for handler dispatch.
 
     Queries the Bot table via AsyncSession. ``HandlerContext.async_db`` is
     populated by ``_async_dispatch`` right before handlers run; ``ctx.db``

@@ -215,14 +215,6 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | DELETE | `/documents/{id}` | Delete document (JWT) |
 | POST | `/embeddings/documents/{id}` | Re-trigger embeddings generation (force re-index, JWT) |
 
-### Chat
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/chat` | RAG chat (X-API-Key header); returns `text`, `session_id`, `chat_ended`, optional `ticket_number`, and trace fields `source_documents` / `tokens_used`; optional header `X-Browser-Locale` |
-| POST | `/chat/{session_id}/escalate` | Manual escalation / “not helpful” path (X-API-Key); JSON body: `user_note`, `trigger` (`user_request` or `answer_rejected`) |
-| GET | `/chat/sessions` | List chat sessions (JWT; not used by the dashboard, which reads `/operator/inbox`) |
-| GET | `/chat/logs/session/{id}` | Full session log (JWT; not used by the dashboard, which reads `/operator/sessions/{id}`) |
-
 ### Gap Analyzer
 | Method | Path | Description |
 |--------|------|-------------|
@@ -266,7 +258,6 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 ### Other
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/search` | Vector search (JWT); returns `503` when OpenAI is unavailable |
 | GET | `/health` | Health check |
 | POST | `/widget/session/init` | Public widget session bootstrap; optional identified mode via signed `identity_token` |
 | POST | `/widget/chat` | Public widget chat by bot `public_id` (query param `bot_id`); streams SSE `chunk` events and finishes with a `done` event containing `text`, `session_id`, `chat_ended`, optional `ticket_number`, and optional `sources` |

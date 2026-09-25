@@ -12,6 +12,7 @@ from backend.auth.middleware import get_current_tenant, get_owner_tenant
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
+from backend.core.embeddings import embed_texts
 from backend.core.openai_client import get_openai_client
 from backend.knowledge.events import (
     ACTION_APPROVE,
@@ -68,12 +69,9 @@ def _generate_faq_embedding_background(
         faq = db.get(TenantFaq, faq_id)
         if faq is None:
             return
-        openai_client = get_openai_client(encrypted_api_key)
-        response = openai_client.embeddings.create(
-            model=settings.embedding_model,
-            input=question,
-        )
-        faq.question_embedding = response.data[0].embedding
+        faq.question_embedding = embed_texts(
+            [question], get_openai_client(encrypted_api_key), model=settings.embedding_model
+        )[0]
         db.add(faq)
         db.commit()
     except Exception:

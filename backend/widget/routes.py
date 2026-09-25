@@ -60,7 +60,7 @@ from backend.models import (
     OperatorState,
     Tenant,
 )
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 from backend.operator.unread_reply import mark_visitor_read
 from backend.tenants.llm_alerts import (
     apply_clear_alert,
@@ -544,24 +544,18 @@ def _emit_first_token_metric(
     is_greeting: bool,
     chat_id: str | None = None,
 ) -> None:
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    try:
-        capture_event(
-            "chat_first_token_ms",
-            distinct_id=str(sid),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "ttft_ms": ttft_ms,
-                "session_id": str(sid),
-                "chat_id": chat_id,
-                "is_greeting": is_greeting,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
-        logger.warning("first_token_metric_emit_failed", exc_info=True)
+    emit_tenant_event(
+        "chat_first_token_ms",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        distinct_id=str(sid),
+        properties={
+            "ttft_ms": ttft_ms,
+            "session_id": str(sid),
+            "chat_id": chat_id,
+            "is_greeting": is_greeting,
+        },
+    )
 
 
 def _widget_chat_stream(

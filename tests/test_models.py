@@ -29,12 +29,9 @@ def _create_user(db_session, email: str = "user@example.com") -> User:
 
 
 def _create_client(db_session, user: User, name: str = "Test Tenant") -> Tenant:
-    from backend.tenants.api_keys_service import create_initial_api_key
-
     tenant = Tenant(name=name, settings={"language": "en"})
     db_session.add(tenant)
     db_session.flush()
-    create_initial_api_key(tenant.id, db_session, created_by_user_id=user.id)
     user.tenant_id = tenant.id
     db_session.commit()
     db_session.refresh(tenant)

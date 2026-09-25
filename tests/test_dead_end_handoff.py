@@ -41,7 +41,12 @@ from backend.chat.streaming import (
     _strip_trailing_partial_marker,
 )
 from tests._async_utils import as_async as _as_async
-from tests.conftest import register_and_verify_user, set_client_openai_key
+from tests.conftest import (
+    get_default_bot_public_id,
+    post_chat_message,
+    register_and_verify_user,
+    set_client_openai_key,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +273,7 @@ DEAD_END_ANSWER = (
 OFFER_TEXT = "Связаться с командой поддержки можно прямо здесь. Передать им ваш вопрос?"
 
 
-def _tenant_api_key(tenant: TestClient, db_session: Session, email: str, name: str) -> str:
+def _tenant_bot_public_id(tenant: TestClient, db_session: Session, email: str, name: str) -> str:
     token = register_and_verify_user(tenant, db_session, email=email)
     created = tenant.post(
         "/tenants",
@@ -277,7 +282,7 @@ def _tenant_api_key(tenant: TestClient, db_session: Session, email: str, name: s
     )
     assert created.status_code == 201
     set_client_openai_key(tenant, token)
-    return created.json()["api_key"]
+    return get_default_bot_public_id(tenant, token)
 
 
 def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
@@ -355,15 +360,13 @@ def test_needs_human_reply_gets_the_offer_appended_and_arms_pre_confirm(
     _patch_generation(monkeypatch, answer=DEAD_END_ANSWER, needs_human=True)
     seen = _capture_offer_variant(monkeypatch)
 
-    api_key = _tenant_api_key(
+    bot_public_id = _tenant_bot_public_id(
         tenant, db_session, "deadend-offer@example.com", "Dead End Offer Tenant"
     )
-    session_id = uuid.uuid4()
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(session_id), "question": "Почему не приходит код ?"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="Почему не приходит код ?"
     )
+    session_id = uuid.UUID(response.json()["session_id"])
 
     assert response.status_code == 200
     text = response.json()["text"]
@@ -402,15 +405,13 @@ def test_plain_answer_is_left_alone(
         _as_async(lambda **_kw: Mock(message_to_user=OFFER_TEXT, tokens_used=0)),
     )
 
-    api_key = _tenant_api_key(
+    bot_public_id = _tenant_bot_public_id(
         tenant, db_session, "deadend-plain@example.com", "Plain Answer Tenant"
     )
-    session_id = uuid.uuid4()
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(session_id), "question": "Через сколько приходит код?"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="Через сколько приходит код?"
     )
+    session_id = uuid.UUID(response.json()["session_id"])
 
     assert response.status_code == 200
     assert OFFER_TEXT not in response.json()["text"]
@@ -455,18 +456,16 @@ def test_clarification_budget_follows_the_reply_not_the_verdict(
         monkeypatch, answer=answer, needs_human=False, clarifying=clarifying
     )
 
-    api_key = _tenant_api_key(
+    bot_public_id = _tenant_bot_public_id(
         tenant,
         db_session,
         f"deadend-budget-{tenant_slug}@example.com",
         f"Budget Tenant {tenant_slug}",
     )
-    session_id = uuid.uuid4()
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(session_id), "question": "Почему не приходит код ?"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="Почему не приходит код ?"
     )
+    session_id = uuid.UUID(response.json()["session_id"])
 
     assert response.status_code == 200
     db_session.expire_all()
@@ -514,15 +513,13 @@ def test_question_to_the_user_does_not_get_a_second_question_appended(
         _as_async(lambda **_kw: Mock(message_to_user=OFFER_TEXT, tokens_used=0)),
     )
 
-    api_key = _tenant_api_key(
+    bot_public_id = _tenant_bot_public_id(
         tenant, db_session, f"deadend-{question_kind}@example.com", "Clarify Not Offered Tenant"
     )
-    session_id = uuid.uuid4()
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(session_id), "question": "Почему не приходит код ?"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="Почему не приходит код ?"
     )
+    session_id = uuid.UUID(response.json()["session_id"])
 
     assert response.status_code == 200
     assert OFFER_TEXT not in response.json()["text"]
@@ -549,13 +546,13 @@ def test_rescue_keeps_the_support_contact_variant_when_asked_how_to_reach_suppor
     )
     seen = _capture_offer_variant(monkeypatch)
 
-    api_key = _tenant_api_key(
+    bot_public_id = _tenant_bot_public_id(
         tenant, db_session, "deadend-contact@example.com", "Contact Question Tenant"
     )
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(uuid.uuid4()), "question": "Как связаться с поддержкой ?"},
+    response = post_chat_message(
+        tenant,
+        bot_public_id=bot_public_id,
+        question="Как связаться с поддержкой ?",
     )
 
     assert response.status_code == 200
@@ -582,15 +579,13 @@ def test_offer_render_failure_still_arms_the_gate(
     monkeypatch.setattr("backend.chat.handlers.rag.render_pre_confirm_text", _boom)
     monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _boom)
 
-    api_key = _tenant_api_key(
+    bot_public_id = _tenant_bot_public_id(
         tenant, db_session, "deadend-render-fail@example.com", "Render Failure Tenant"
     )
-    session_id = uuid.uuid4()
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(session_id), "question": "Почему не приходит код ?"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="Почему не приходит код ?"
     )
+    session_id = uuid.UUID(response.json()["session_id"])
 
     assert response.status_code == 200
     text = response.json()["text"]

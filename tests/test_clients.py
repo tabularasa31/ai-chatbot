@@ -14,8 +14,8 @@ from tests.conftest import register_and_verify_user
 def test_create_client_journey_success_then_duplicate_rejected(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """201 with a ck_-prefixed 35-char api_key on first create; a second
-    tenant for the same user is rejected with 409."""
+    """201 on first create; a second tenant for the same user is rejected
+    with 409."""
     token = register_and_verify_user(tenant, db_session, email="user@example.com")
     response = tenant.post(
         "/tenants",
@@ -26,8 +26,6 @@ def test_create_client_journey_success_then_duplicate_rejected(
     data = response.json()
     assert "id" in data
     assert data["name"] == "My Tenant"
-    assert data["api_key"].startswith("ck_")
-    assert len(data["api_key"]) == 35
     assert "created_at" in data
     assert "updated_at" in data
 
@@ -58,7 +56,7 @@ def test_ensure_client_for_user_returns_existing_on_conflict(
     db_session.commit()
     db_session.refresh(user)
 
-    existing_client, _ = clients_service.create_tenant(user.id, "Existing Tenant", db_session)
+    existing_client = clients_service.create_tenant(user.id, "Existing Tenant", db_session)
     lookup_calls = 0
 
     def fake_create_client(user_id, name, db):
@@ -88,8 +86,8 @@ def test_create_client_unauthenticated(tenant: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_get_client_success_via_me_and_by_id(tenant: TestClient, db_session: Session) -> None:
-    """Own tenant is fetchable both via /tenants/me and /tenants/{id}."""
+def test_get_client_success_via_me(tenant: TestClient, db_session: Session) -> None:
+    """Own tenant is fetchable via /tenants/me."""
     token = register_and_verify_user(tenant, db_session, email="me@example.com")
     create_resp = tenant.post(
         "/tenants",
@@ -103,15 +101,7 @@ def test_get_client_success_via_me_and_by_id(tenant: TestClient, db_session: Ses
     me_data = me_resp.json()
     assert me_data["id"] == tenant_id
     assert me_data["name"] == "My Tenant"
-    assert me_data.get("api_key_hint") and len(me_data["api_key_hint"]) == 4
     assert "api_key" not in me_data
-
-    by_id_resp = tenant.get(
-        f"/tenants/{tenant_id}", headers={"Authorization": f"Bearer {token}"}
-    )
-    assert by_id_resp.status_code == 200
-    assert by_id_resp.json()["id"] == tenant_id
-    assert by_id_resp.json()["name"] == "My Tenant"
 
 
 def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> None:
@@ -120,25 +110,6 @@ def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> Non
     response = tenant.get(
         "/tenants/me",
         headers={"Authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 404
-
-
-def test_get_client_by_id_wrong_user(tenant: TestClient, db_session: Session) -> None:
-    """User B tries to get user A's tenant → 404."""
-    token_a = register_and_verify_user(tenant, db_session, email="userA@example.com")
-    create_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "User A Tenant"},
-    )
-    tenant_id = create_resp.json()["id"]
-
-    token_b = register_and_verify_user(tenant, db_session, email="userB@example.com")
-
-    response = tenant.get(
-        f"/tenants/{tenant_id}",
-        headers={"Authorization": f"Bearer {token_b}"},
     )
     assert response.status_code == 404
 

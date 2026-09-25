@@ -59,7 +59,12 @@ from backend.models import (
 )
 from backend.search.service import build_reliability_assessment
 from tests._async_utils import as_async, as_async as _as_async, as_async_generate
-from tests.conftest import register_and_verify_user, set_client_openai_key
+from tests.conftest import (
+    get_default_bot_public_id,
+    post_chat_message,
+    register_and_verify_user,
+    set_client_openai_key,
+)
 
 
 def test_build_rag_prompt() -> None:
@@ -348,7 +353,7 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
     def fake_capture(event: str, **kwargs: object) -> None:
         captured_events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", fake_capture)
     mock_openai_client.chat.completions.create.return_value.choices = [
         Mock(message=Mock(content="The answer is 42"))
     ]
@@ -854,7 +859,7 @@ def test_classified_intent_reaches_generation_as_quick_answers(
     )
     assert created.status_code == 201
     set_client_openai_key(tenant, token)
-    api_key = created.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
     tenant_id = uuid.UUID(created.json()["id"])
 
     source = UrlSource(
@@ -916,11 +921,7 @@ def test_classified_intent_reaches_generation_as_quick_answers(
         "backend.chat.steps.generate.async_generate_answer", _fake_generate
     )
 
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(uuid.uuid4()), "question": "?"},
-    )
+    response = post_chat_message(tenant, bot_public_id=bot_public_id, question="?")
 
     assert response.status_code == 200
     assert seen == [["Pricing: https://example.com/pricing"]]
@@ -1024,7 +1025,7 @@ def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
 
 
 # ---------------------------------------------------------------------------
-# OpenAPI schema contract for /chat vs /widget/chat -- absorbed from the
+# OpenAPI schema contract for /widget/chat -- absorbed from the
 # deleted test_chat_schema_unified.py
 # ---------------------------------------------------------------------------
 
@@ -1041,24 +1042,19 @@ def _component_ref_for(spec: dict, path: str, method: str, media_type: str) -> s
     return None
 
 
-def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestClient) -> None:
-    """Private /chat and widget /chat must expose schemas that match their wire payloads.
+def test_widget_chat_advertises_its_sse_turn_schema(tenant: TestClient) -> None:
+    """Widget /chat must expose a schema that matches its wire payload.
 
-    Each endpoint advertises the schema under the media type it actually serves —
-    `application/json` for the private API, `text/event-stream` for the widget —
-    so OpenAPI client generators see the right wire protocol on each side.
+    It advertises the schema under `text/event-stream` (SSE), the media type
+    it actually serves, so OpenAPI client generators see the right wire
+    protocol.
     """
     spec = tenant.get("/openapi.json").json()
 
-    private_ref = _component_ref_for(spec, "/chat", "post", "application/json")
     widget_ref = _component_ref_for(spec, "/widget/chat", "post", "text/event-stream")
 
-    assert private_ref is not None, "private /chat should advertise an application/json schema"
     assert widget_ref is not None, (
         "widget /chat should advertise a text/event-stream schema for the SSE done payload"
-    )
-    assert private_ref.endswith("/ChatTurnResponse"), (
-        f"private /chat must reference ChatTurnResponse, got {private_ref}"
     )
     assert widget_ref.endswith("/WidgetChatTurnResponse"), (
         f"widget /chat must reference WidgetChatTurnResponse, got {widget_ref}"
@@ -1070,24 +1066,6 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
         "widget /chat must not advertise application/json — it streams SSE; "
         f"got {widget_json_ref}"
     )
-
-    private_schema = spec["components"]["schemas"]["ChatTurnResponse"]
-    private_properties = private_schema["properties"]
-    # delivered_to_operator is on BOTH contours, unlike source_documents /
-    # tokens_used. It is not a trace field: without it this contour cannot
-    # tell "a human is handling this" (empty text by design) from "the turn
-    # broke", and custom server-side integrations need that as much as the
-    # widget does.
-    assert set(private_properties.keys()) == {
-        "text",
-        "session_id",
-        "ticket_number",
-        "delivered_to_operator",
-        "source_documents",
-        "tokens_used",
-    }
-    # `validation` was removed — guard against accidental reintroduction.
-    assert "validation" not in private_properties
 
     widget_schema = spec["components"]["schemas"]["WidgetChatTurnResponse"]
     widget_properties = widget_schema["properties"]
@@ -1376,7 +1354,7 @@ def _zh_create_client(http: TestClient, db: Session, *, email: str) -> tuple[Ten
     )
     assert cl_resp.status_code in (200, 201), cl_resp.text
     set_client_openai_key(http, token)
-    api_key = cl_resp.json()["api_key"]
+    api_key = "sk-test"
     client_row = db.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
     return client_row, api_key
@@ -1982,8 +1960,7 @@ def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
     _cache.clear()
 
     # Reset shared CB state.
-    monkeypatch.setattr(relevance_checker, "_consecutive_failures", 0)
-    monkeypatch.setattr(relevance_checker, "_circuit_opened_at", None)
+    relevance_checker._circuit_breaker.record_success()
 
     async def _always_timeout(*_a, **_kw):  # type: ignore[no-untyped-def]
         raise asyncio.TimeoutError()
@@ -2016,8 +1993,7 @@ def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
     asyncio.run(_run())
 
     # No failures recorded, breaker still closed.
-    assert relevance_checker._consecutive_failures == 0
-    assert relevance_checker._circuit_opened_at is None
+    assert "_global" not in relevance_checker._circuit_breaker._states
 
 
 def test_relevance_checker_comment_hygiene() -> None:
@@ -2101,7 +2077,7 @@ def _nodocs_setup(tenant: TestClient, db_session: Session, email: str) -> tuple[
         json={"name": "No Documents Tenant"},
     ).json()
     set_client_openai_key(tenant, token)
-    return uuid.UUID(created["id"]), created["api_key"]
+    return uuid.UUID(created["id"]), "sk-test"
 
 
 def _nodocs_patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
@@ -2121,7 +2097,7 @@ def _nodocs_patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     def _record(event: str, **kwargs: Any) -> None:
         events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", _record)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _record)
 
     async def _fake_render_pre_confirm(**kwargs):
         return type(
@@ -2401,7 +2377,7 @@ def _lowconf_setup(tenant: TestClient, db_session: Session, email: str) -> tuple
         json={"name": "Second Attempt Tenant"},
     ).json()
     set_client_openai_key(tenant, token)
-    return uuid.UUID(created["id"]), created["api_key"]
+    return uuid.UUID(created["id"]), "sk-test"
 
 
 _LOWCONF_WEAK_ANSWER = "The docs only mention the limitations list."
@@ -2577,7 +2553,7 @@ def test_process_chat_message_ends_followup_span_on_exception(
             "no thanks",
             chat.session_id,
             db_session,
-            api_key=cl_resp.json()["api_key"],
+            api_key="sk-test",
         )
 
     assert fake_trace.followup_span.end_calls == [
@@ -2684,7 +2660,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
         "How do I reset my password?",
         uuid.uuid4(),
         db_session,
-        api_key=cl_resp.json()["api_key"],
+        api_key="sk-test",
     )
 
     assert outcome.text == "Use the reset link in settings."
@@ -2846,7 +2822,7 @@ def test_trace_metadata_language_confidence_and_response_language_across_turns(
             question,
             session_id,
             db_session,
-            api_key=cl_resp.json()["api_key"],
+            api_key="sk-test",
         )
 
     assert len(traces) == 3
@@ -2921,7 +2897,7 @@ def test_trace_metadata_stamps_knowledge_base_updated_at(
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    api_key = "sk-test"
 
     traces: list[FakeTrace] = []
 
@@ -2973,7 +2949,7 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    api_key = "sk-test"
     session_id = uuid.uuid4()
 
     async def _fake_async_pipeline(*args, **kwargs):
@@ -3031,7 +3007,7 @@ def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
         "",
         uuid.uuid4(),
         db_session,
-        api_key=cl_resp.json()["api_key"],
+        api_key="sk-test",
         user_context={"locale": "fr-FR"},
         browser_locale="de-DE",
     )

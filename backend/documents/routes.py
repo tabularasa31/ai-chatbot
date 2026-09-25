@@ -41,7 +41,7 @@ from backend.documents.url_service import (
 )
 from backend.jobs.crawl_url import enqueue_crawl_for_source_sync
 from backend.models import Document, QuickAnswer, Tenant, UrlSource, UrlSourceRun, User
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 from backend.tenants.service import get_tenant_by_user
 
 documents_router = APIRouter(tags=["documents"])
@@ -150,21 +150,19 @@ def upload_document_route(
             content=content,
             file_type=file_type,
             db=db,
+            tenant_public_id=str(tenant.public_id),
         )
     except HTTPException:
         raise
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
-    try:
-        capture_event(
-            "knowledge.uploaded",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={"source_type": "file", "file_type": file_type},
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "knowledge.uploaded",
+        tenant_public_id=str(tenant.public_id),
+        bot_public_id=None,
+        properties={"source_type": "file", "file_type": file_type},
+    )
     return _document_response(doc)
 
 
@@ -217,15 +215,12 @@ def create_url_source_route(
             api_key=tenant.openai_api_key,
             tenant_id=tenant.id,
         )
-    try:
-        capture_event(
-            "knowledge.uploaded",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={"source_type": "url"},
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "knowledge.uploaded",
+        tenant_public_id=str(tenant.public_id),
+        bot_public_id=None,
+        properties={"source_type": "url"},
+    )
     return _url_source_response(source)
 
 

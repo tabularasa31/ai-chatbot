@@ -57,6 +57,7 @@ from backend.operator.sessions import (
     get_open_operator_session,
     open_operator_session,
 )
+from tests.conftest import post_chat_message
 from tests.test_operator_handoff import (
     _arm_openai,
     _make_workspace,
@@ -682,13 +683,11 @@ def test_the_handler_itself_emits_on_the_visitors_turn(
     )
     db_session.commit()
 
-    resp = tenant.post(
-        "/chat",
-        headers={"X-API-Key": ws.api_key},
-        json={
-            "question": "When do I get my refund?",
-            "session_id": str(chat.session_id),
-        },
+    resp = post_chat_message(
+        tenant,
+        bot_public_id=ws.bot_public_id,
+        question="When do I get my refund?",
+        session_id=str(chat.session_id),
     )
     assert resp.status_code == 200, resp.text
 

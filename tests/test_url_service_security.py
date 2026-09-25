@@ -443,7 +443,7 @@ def test_summarize_crawl_failure_prioritizes_dominant_reason(
 def test_upsert_page_document_skips_reembedding_when_hash_matches(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    tenant, _ = _make_tenant(db_session, "hash-check@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "hash-check@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -511,7 +511,7 @@ def test_upsert_page_document_persists_detected_script(
     the assertion cannot pass by accident. Also covers crawled pages running
     entity extraction (Step 4), same as uploads.
     """
-    tenant, _ = _make_tenant(db_session, "page-script@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "page-script@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -577,7 +577,7 @@ def test_upsert_structured_document_persists_detected_script(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Document.script must be written on the structured-source path too."""
-    tenant, _ = _make_tenant(db_session, "structured-script@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "structured-script@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -639,7 +639,7 @@ def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
 
     monkeypatch.setattr(embedder_mod, "_run_tenant_knowledge_extraction_best_effort", capture_extraction)
 
-    tenant, _ = _make_tenant(db_session, "hash-extract-env@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "hash-extract-env@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -704,7 +704,7 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
     engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = Session(bind=engine)
-    tenant, _ = _make_tenant(session, "fail-check@example.com", "Tenant")
+    tenant = _make_tenant(session, "fail-check@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -754,7 +754,7 @@ def test_crawl_url_source_persists_quick_answers(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tenant, _ = _make_tenant(db_session, "quickanswers@example.com", "Quick Answers Tenant")
+    tenant = _make_tenant(db_session, "quickanswers@example.com", "Quick Answers Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -832,7 +832,7 @@ def test_crawl_url_source_persists_quick_answers(
 def test_upsert_structured_document_skips_reembedding_when_hash_matches(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    tenant, _ = _make_tenant(db_session, "structured-hash@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "structured-hash@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -938,7 +938,7 @@ def test_crawl_url_source_marks_error_for_invalid_structured_openapi_payload(
     engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = Session(bind=engine)
-    tenant, _ = _make_tenant(session, "invalid-structured@example.com", "Tenant")
+    tenant = _make_tenant(session, "invalid-structured@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,

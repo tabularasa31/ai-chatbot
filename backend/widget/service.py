@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -24,10 +23,6 @@ _BCP47_RE = re.compile(
 
 SESSION_INVALID_CODE = "session_invalid"
 SESSION_NOT_FOUND_CODE = "session_not_found"
-
-
-def _now_utc() -> datetime:
-    return datetime.now(UTC)
 
 
 def _clean_capped_text(value: Any, cap: int) -> str | None:

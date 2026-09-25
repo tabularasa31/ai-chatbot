@@ -137,7 +137,7 @@
 │                  (Railway deployment)                    │
 │                                                           │
 │  POST /widget/session/init (bot_id, optional identity)   │
-│  POST /widget/chat (public bot ID) or POST /chat (X-API-Key) │
+│  POST /widget/chat (public bot ID)                        │
 │    ↓                                                      │
 │    1. Resolve tenant → tenant_id + openai_api_key        │
 │    2. Redact PII in question (structural)                │
@@ -247,8 +247,7 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
       turn spends the budget on a question nobody was asked. The counter is
       committed in the same transaction as the assistant message
    ↓
-12. Return JSON `{text, session_id, ticket_number?}` (private
-    `/chat` also includes `source_documents` and `tokens_used`). The
+12. Return JSON `{text, session_id, ticket_number?}`. The
     clarifying question, when present, is embedded directly inside `text`
     as plain prose
    ↓
@@ -259,10 +258,8 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
 
 ### Chat output contract (v1)
 
-`POST /chat` returns a JSON object with a canonical `text` field,
-`session_id`, optional `ticket_number`, and (for trace use) `source_documents`
-and `tokens_used`. `POST /widget/chat`
-**streams** the same logical answer as Server-Sent Events
+`POST /widget/chat`
+**streams** the answer as Server-Sent Events
 (`Content-Type: text/event-stream`): `status` frames signalling
 progress (e.g. `"thinking"`), `chunk` frames with incremental `text`,
 and exactly one terminal `done` frame with the same `text` /
@@ -282,11 +279,10 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 
 ## Security Model
 
-### API Key Authentication
-- Client gets 32-character random API key
-- Dashboard / private API calls use the client API key (`X-API-Key`)
-- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `bot_id` query parameter; optional identified-mode bootstrap uses `POST /widget/session/init` with the private tenant API key plus signed identity token
-- Backend validates the private API key only on the authenticated/private paths or widget session bootstrap, then retrieves `tenant_id` and the tenant's OpenAI key
+### Authentication
+- Dashboard / private API calls use a JWT issued at login
+- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `bot_id` query parameter; optional identified-mode bootstrap uses `POST /widget/session/init` with `bot_id` plus a signed identity token
+- Backend resolves the bot's tenant from `public_id`, then retrieves `tenant_id` and the tenant's OpenAI key
 - All queries filter by `tenant_id` (no data leaks between tenants)
 
 ### OpenAI Key Isolation
@@ -306,7 +302,7 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 - No way to see another tenant's chat history
 
 ### Rate limiting (shipped baseline)
-- **slowapi** on public and sensitive routes: e.g. `GET /tenants/validate/{api_key}` (20/min), `POST /search` (30/min), `POST /chat` (30/min), `POST /widget/session/init` and `POST /widget/chat` (20/min) — see `backend/core/limiter.py` and route decorators.
+- **slowapi** on public and sensitive routes: e.g. `POST /widget/session/init` and `POST /widget/chat` (20/min) — see `backend/core/limiter.py` and route decorators.
 - **Future / Phase 2 embed:** per-client daily quotas, global per-tenant caps, subscription-tier limits — see `docs/BACKLOG_EMBED-PHASE2.md`.
 
 ### OpenAI errors (ongoing)

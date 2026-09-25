@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from backend.chat.pii import redact_for_egress
 from backend.core.config import settings
+from backend.core.embeddings import embed_texts
 from backend.core.openai_client import get_openai_client
 from backend.core.queue import _CRON_JOBS
 from backend.models import (
@@ -338,11 +339,7 @@ async def _generate_embeddings(
 
     for i in range(0, len(missing), batch_size):
         batch = missing[i: i + batch_size]
-        resp = oai.embeddings.create(
-            model=settings.embedding_model,
-            input=[m.content for m in batch],
-        )
-        vectors = [item.embedding for item in resp.data]
+        vectors = embed_texts([m.content for m in batch], oai, model=settings.embedding_model)
         for msg, vec in zip(batch, vectors, strict=True):
             msg.embedding = vec
         _save_embeddings(db, tenant_id, batch, vectors)
@@ -413,25 +410,14 @@ def _find_existing_faq(
     question_embedding: list[float],
 ) -> TenantFaq | None:
     """Return existing FAQ with cosine similarity >= threshold, or None."""
-    from backend.tenant_knowledge.faq_service import DEDUP_SIMILARITY_THRESHOLD
-    try:
-        distance_expr = TenantFaq.question_embedding.cosine_distance(question_embedding)
-        row = (
-            db.query(TenantFaq, distance_expr.label("distance"))
-            .filter(TenantFaq.tenant_id == tenant_id)
-            .filter(TenantFaq.question_embedding.isnot(None))
-            .order_by(distance_expr)
-            .limit(1)
-            .first()
-        )
-        if not row:
-            return None
-        faq, distance = row
-        similarity = max(0.0, 1.0 - float(distance))
-        if similarity >= DEDUP_SIMILARITY_THRESHOLD:
-            return faq
-    except Exception:
-        pass
+    from backend.tenant_knowledge.faq_service import (
+        DEDUP_SIMILARITY_THRESHOLD,
+        find_nearest_faq,
+    )
+
+    nearest = find_nearest_faq(db, tenant_id, question_embedding)
+    if nearest is not None and nearest[1] >= DEDUP_SIMILARITY_THRESHOLD:
+        return nearest[0]
     return None
 
 
@@ -450,8 +436,7 @@ def _create_faq_candidate(
     if not question or not answer:
         return False
 
-    resp = oai.embeddings.create(model=settings.embedding_model, input=question)
-    q_emb = resp.data[0].embedding
+    q_emb = embed_texts([question], oai, model=settings.embedding_model)[0]
 
     existing = _find_existing_faq(db, tenant_id, q_emb)
 

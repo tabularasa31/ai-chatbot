@@ -13,7 +13,12 @@ from sqlalchemy.orm import Session
 from backend.escalation.service import HumanRequestResult
 from backend.models import Chat, ContactSession
 from tests.chat_utils import _chat_completion_side_effect
-from tests.conftest import register_and_verify_user, set_client_openai_key
+from tests.conftest import (
+    get_default_bot_public_id,
+    post_chat_message,
+    register_and_verify_user,
+    set_client_openai_key,
+)
 
 
 def _async_esc_stub(result):
@@ -43,7 +48,7 @@ def _register_tenant_with_key(
     """Register a user, create their tenant, and set a client OpenAI key.
 
     Collapses the "register → create tenant → set_client_openai_key"
-    boilerplate repeated across this file. Returns ``(api_key, tenant_id)``.
+    boilerplate repeated across this file. Returns ``(bot_public_id, tenant_id)``.
     """
     token = register_and_verify_user(tenant, db_session, email=email)
     resp = tenant.post(
@@ -52,7 +57,7 @@ def _register_tenant_with_key(
         json={"name": name},
     )
     set_client_openai_key(tenant, token)
-    return resp.json()["api_key"], uuid.UUID(resp.json()["id"])
+    return get_default_bot_public_id(tenant, token), uuid.UUID(resp.json()["id"])
 
 
 def _make_chat(db_session: Session, tenant_id: uuid.UUID, **kwargs: object):
@@ -96,16 +101,14 @@ def _latest_chat_for_session(db_session: Session, session_id: uuid.UUID) -> Chat
 
 
 def drive(
-    tenant: TestClient, api_key: str, session_id: uuid.UUID, *questions: str
+    tenant: TestClient, bot_public_id: str, session_id: uuid.UUID, *questions: str
 ) -> list[dict]:
-    """POST each question through ``/chat`` in turn; return the parsed JSON
-    responses in order. Asserts every turn succeeds (200) as it goes."""
+    """POST each question through ``/widget/chat`` in turn; return the parsed
+    JSON responses in order. Asserts every turn succeeds (200) as it goes."""
     responses = []
     for question in questions:
-        resp = tenant.post(
-            "/chat",
-            headers={"X-API-Key": api_key},
-            json={"session_id": str(session_id), "question": question},
+        resp = post_chat_message(
+            tenant, bot_public_id=bot_public_id, question=question, session_id=str(session_id)
         )
         assert resp.status_code == 200, resp.text
         responses.append(resp.json())
@@ -220,7 +223,7 @@ def test_chat_followup_no_keeps_chat_open(
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
 
     chat = Chat(
         tenant_id=tenant_id,
@@ -255,10 +258,8 @@ def test_chat_followup_no_keeps_chat_open(
         ),
     )
 
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "no thanks"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="no thanks", session_id=str(chat.session_id)
     )
     assert response.status_code == 200
     db_session.refresh(chat)
@@ -295,10 +296,8 @@ def test_chat_followup_no_keeps_chat_open(
         "backend.chat.handlers.escalation.complete_escalation_openai_turn", _fail_escalation_turn
     )
 
-    followup = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "do you support wildcard domains?"},
+    followup = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="do you support wildcard domains?", session_id=str(chat.session_id)
     )
     assert followup.status_code == 200
     assert followup.json()["text"] == "Yes, wildcard domains are supported."
@@ -321,7 +320,7 @@ def test_chat_followup_no_keeps_active_user_session_open(
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
 
     chat = Chat(
         tenant_id=tenant_id,
@@ -364,10 +363,8 @@ def test_chat_followup_no_keeps_active_user_session_open(
         ),
     )
 
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "no thanks"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="no thanks", session_id=str(chat.session_id)
     )
     assert response.status_code == 200
 
@@ -393,7 +390,7 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
 
     chat = Chat(
         tenant_id=tenant_id,
@@ -436,10 +433,8 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
         ),
     )
 
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "yes please continue"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="yes please continue", session_id=str(chat.session_id)
     )
     assert response.status_code == 200
 
@@ -466,7 +461,7 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
 
     chat = Chat(
         tenant_id=tenant_id,
@@ -501,20 +496,16 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
         ),
     )
 
-    r1 = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "maybe"},
+    r1 = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="maybe", session_id=str(chat.session_id)
     )
     assert r1.status_code == 200
     db_session.refresh(chat)
     assert chat.escalation_followup_pending is True
     assert (chat.user_context or {}).get("escalation_followup_clarify") is True
 
-    r2 = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "still not sure"},
+    r2 = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="still not sure", session_id=str(chat.session_id)
     )
     assert r2.status_code == 200
     db_session.refresh(chat)
@@ -1020,13 +1011,61 @@ def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
 
     monkeypatch.setattr("backend.chat.handlers.escalation.complete_escalation_openai_turn", _fail_full_turn)
 
+    db_session.refresh(chat)
+    tokens_before = chat.tokens_used
+
     [r4] = drive(tenant, api_key, chat.session_id, "do you support wildcard domain names?")
     assert r4["text"] == "Yes, wildcard domains are supported."
-    # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
-    assert r4["tokens_used"] == 7
 
     db_session.refresh(chat)
     assert chat.escalation_followup_pending is False
+    # Gate-classifier tokens carried into the RAG turn (completion mocked at 0).
+    assert chat.tokens_used - tokens_before == 7
+
+
+@pytest.mark.smoke
+@pytest.mark.escalation
+def test_pre_confirm_non_yes_no_reply_does_not_escalate(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reply to the pre_confirm offer that is neither yes nor no (classifier
+    -> None) must not silently forward the request: no ticket is minted and
+    the gate clears instead of re-asking forever."""
+    from backend.models import EscalationTicket
+
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="preconf-noyes@example.com", name="PreConfirm NoYes Tenant"
+    )
+    chat = _make_chat(
+        db_session,
+        tenant_id,
+        escalation_pre_confirm_pending=True,
+        escalation_pre_confirm_context={
+            "trigger": "low_similarity",
+            "primary_question": "how does your product work?",
+            "best_similarity_score": 0.31,
+            "retrieved_chunks": None,
+        },
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.classify_pre_confirm_reply", _async_esc_stub((None, 0))
+    )
+
+    [reply] = drive(
+        tenant, api_key, chat.session_id, "I checked the data-bot-id, it matches the dashboard"
+    )
+
+    assert reply["ticket_number"] is None
+    ticket_count = (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
+    )
+    assert ticket_count == 0
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.escalation_pre_confirm_context is None
 
 
 @pytest.mark.smoke
@@ -1242,7 +1281,7 @@ def test_anonymous_chat_does_not_create_contact_sessions(
         json={"name": "Anonymous User Session Tenant"},
     )
     set_client_openai_key(tenant, token)
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
@@ -1271,10 +1310,8 @@ def test_anonymous_chat_does_not_create_contact_sessions(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=20)
 
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"question": "What is the answer?"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="What is the answer?"
     )
     assert response.status_code == 200
 
@@ -1298,7 +1335,7 @@ def test_chat_succeeds_when_user_session_tracking_fails(
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
 
     doc = Document(
         tenant_id=tenant_id,
@@ -1340,10 +1377,8 @@ def test_chat_succeeds_when_user_session_tracking_fails(
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("tracking failed")),
     )
 
-    response = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"session_id": str(chat.session_id), "question": "What is the answer?"},
+    response = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="What is the answer?", session_id=str(chat.session_id)
     )
     assert response.status_code == 200
     assert response.json()["text"] == "Tracked answer"
@@ -1353,24 +1388,16 @@ def test_chat_succeeds_when_user_session_tracking_fails(
 
 
 @pytest.mark.escalation
-@pytest.mark.parametrize(
-    "headers",
-    [{}, {"X-API-Key": "bad-key"}],
-    ids=["missing_api_key", "invalid_api_key"],
-)
-def test_manual_escalate_requires_valid_api_key(
-    tenant: TestClient, headers: dict[str, str]
-) -> None:
+def test_widget_manual_escalate_unknown_bot_returns_404(tenant: TestClient) -> None:
     response = tenant.post(
-        f"/chat/{uuid.uuid4()}/escalate",
-        headers=headers,
+        f"/widget/escalate?bot_id=unknown-bot&session_id={uuid.uuid4()}",
         json={"trigger": "user_request"},
     )
-    assert response.status_code == 401
+    assert response.status_code == 404
 
 
 @pytest.mark.escalation
-def test_manual_escalate_without_openai_key_returns_400(
+def test_widget_manual_escalate_without_openai_key_returns_400(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -1383,39 +1410,37 @@ def test_manual_escalate_without_openai_key_returns_400(
         json={"name": "Manual NoKey"},
     )
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
 
     chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
     db_session.add(chat)
     db_session.commit()
 
     response = tenant.post(
-        f"/chat/{chat.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={chat.session_id}",
         json={"trigger": "user_request"},
     )
     assert response.status_code == 400
 
 
 @pytest.mark.escalation
-def test_manual_escalate_missing_session_returns_404(
+def test_widget_manual_escalate_missing_session_returns_404(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    api_key, _tenant_id = _register_tenant_with_key(
+    bot_public_id, _tenant_id = _register_tenant_with_key(
         tenant, db_session, email="manual-404@example.com", name="Manual 404"
     )
 
     response = tenant.post(
-        f"/chat/{uuid.uuid4()}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={uuid.uuid4()}",
         json={"trigger": "user_request"},
     )
     assert response.status_code == 404
 
 
 @pytest.mark.escalation
-def test_manual_escalate_openai_error_returns_503(
+def test_widget_manual_escalate_openai_error_returns_503(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -1430,7 +1455,7 @@ def test_manual_escalate_openai_error_returns_503(
     from backend.models import Chat
     from openai import APIError
 
-    api_key, tenant_id = _register_tenant_with_key(
+    bot_public_id, tenant_id = _register_tenant_with_key(
         tenant, db_session, email="manual-503@example.com", name="Manual 503"
     )
     chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
@@ -1440,25 +1465,24 @@ def test_manual_escalate_openai_error_returns_503(
     async def _raise_api_error(*args, **kwargs):
         raise APIError("Service unavailable", request=Mock(), body=None)
 
-    monkeypatch.setattr("backend.chat.routes.perform_manual_escalation", _raise_api_error)
+    monkeypatch.setattr("backend.widget.routes.perform_manual_escalation", _raise_api_error)
 
     response = tenant.post(
-        f"/chat/{chat.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={chat.session_id}",
         json={"trigger": "user_request"},
     )
     assert response.status_code == 503
 
 
 @pytest.mark.escalation
-def test_manual_escalate_success_for_both_triggers(
+def test_widget_manual_escalate_success_for_both_triggers(
     tenant: TestClient,
     db_session: Session,
     escalation_openai_override,
 ) -> None:
     from backend.models import Chat, EscalationTicket
 
-    api_key, tenant_id = _register_tenant_with_key(
+    bot_public_id, tenant_id = _register_tenant_with_key(
         tenant, db_session, email="manual-success@example.com", name="Manual Success"
     )
     chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
@@ -1468,8 +1492,7 @@ def test_manual_escalate_success_for_both_triggers(
     escalation_openai_override(message_to_user="Escalated.")
 
     r1 = tenant.post(
-        f"/chat/{chat.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={chat.session_id}",
         json={"trigger": "user_request"},
     )
     assert r1.status_code == 200
@@ -1478,8 +1501,7 @@ def test_manual_escalate_success_for_both_triggers(
     assert ticket_number
 
     r2 = tenant.post(
-        f"/chat/{chat.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={chat.session_id}",
         json={"trigger": "answer_rejected"},
     )
     assert r2.status_code == 200
@@ -1724,7 +1746,7 @@ def test_ticket_notify_journey_l2_recipient_then_threaded_update_then_failure_me
     )
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
     support_resp = tenant.put(
         "/tenants/me/support-settings",
         headers={"Authorization": f"Bearer {token}"},
@@ -1748,7 +1770,7 @@ def test_ticket_notify_journey_l2_recipient_then_threaded_update_then_failure_me
     )
     with patch("backend.escalation.service.send_email") as send_email_mock:
         send_email_mock.return_value = "<initial-abc@brevo>"
-        drive(tenant, api_key, chat.session_id, "billing is broken, connect me to a human")
+        drive(tenant, bot_public_id, chat.session_id, "billing is broken, connect me to a human")
     send_email_mock.assert_called_once()
     assert send_email_mock.call_args.args[0] == "l2@example.com"
 
@@ -1781,7 +1803,7 @@ def test_ticket_notify_journey_l2_recipient_then_threaded_update_then_failure_me
     )
     with patch("backend.escalation.service.send_email") as send_email_mock2:
         send_email_mock2.return_value = "<update-1@brevo>"
-        drive(tenant, api_key, chat.session_id, "BRAND NEW context about a billing error")
+        drive(tenant, bot_public_id, chat.session_id, "BRAND NEW context about a billing error")
 
     send_email_mock2.assert_called_once()
     subject = send_email_mock2.call_args.args[1]
@@ -1819,7 +1841,7 @@ def test_ticket_notify_journey_l2_recipient_then_threaded_update_then_failure_me
         patch("backend.escalation.service.send_email", return_value=None),
         patch("backend.escalation.service.capture_event") as capture_mock,
     ):
-        drive(tenant, api_key, chat.session_id, "context that fails to send")
+        drive(tenant, bot_public_id, chat.session_id, "context that fails to send")
 
     capture_mock.assert_called_once()
     assert capture_mock.call_args.args[0] == "escalation.email_send_failed"
@@ -1902,7 +1924,7 @@ def test_manual_escalate_sets_awaiting_ticket_when_email_missing_else_followup(
     and goes straight to ``followup_pending`` when the email is already known."""
     from backend.models import Chat, EscalationTicket
 
-    api_key, tenant_id = _register_tenant_with_key(
+    bot_public_id, tenant_id = _register_tenant_with_key(
         tenant, db_session, email="manual-state@example.com", name="Manual State Tenant"
     )
     escalation_openai_override(message_to_user="A support ticket was created for you.")
@@ -1911,8 +1933,7 @@ def test_manual_escalate_sets_awaiting_ticket_when_email_missing_else_followup(
     db_session.add(missing)
     db_session.commit()
     resp = tenant.post(
-        f"/chat/{missing.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={missing.session_id}",
         json={"trigger": "user_request", "user_note": "please escalate"},
     )
     assert resp.status_code == 200
@@ -1926,8 +1947,7 @@ def test_manual_escalate_sets_awaiting_ticket_when_email_missing_else_followup(
     db_session.add(known)
     db_session.commit()
     resp2 = tenant.post(
-        f"/chat/{known.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={known.session_id}",
         json={"trigger": "answer_rejected", "user_note": "answer rejected"},
     )
     assert resp2.status_code == 200
@@ -1953,7 +1973,7 @@ def test_manual_escalate_mints_new_ticket_once_previous_resolved(
     manual-escalate request on the same chat mints its own new ticket."""
     from backend.models import Chat, EscalationStatus, EscalationTicket
 
-    api_key, tenant_id = _register_tenant_with_key(
+    bot_public_id, tenant_id = _register_tenant_with_key(
         tenant, db_session, email="manual-resolved-app@example.com", name="Manual Resolved Tenant"
     )
     escalation_openai_override(message_to_user="Escalated.")
@@ -1964,8 +1984,7 @@ def test_manual_escalate_mints_new_ticket_once_previous_resolved(
     db_session.commit()
 
     r1 = tenant.post(
-        f"/chat/{chat.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={chat.session_id}",
         json={"trigger": "user_request", "user_note": "first problem"},
     )
     assert r1.status_code == 200
@@ -1979,8 +1998,7 @@ def test_manual_escalate_mints_new_ticket_once_previous_resolved(
     db_session.commit()
 
     r2 = tenant.post(
-        f"/chat/{chat.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={chat.session_id}",
         json={"trigger": "user_request", "user_note": "unrelated second problem"},
     )
     assert r2.status_code == 200
@@ -2007,9 +2025,9 @@ def test_manual_escalate_emits_chat_escalated_event(
     def fake_capture(event, **kwargs):
         captured.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", fake_capture)
 
-    api_key, tenant_id = _register_tenant_with_key(
+    bot_public_id, tenant_id = _register_tenant_with_key(
         tenant, db_session, email="manual-event@example.com", name="Manual Event Tenant"
     )
     escalation_openai_override(message_to_user="Escalated.")
@@ -2022,8 +2040,7 @@ def test_manual_escalate_emits_chat_escalated_event(
     db_session.commit()
 
     resp = tenant.post(
-        f"/chat/{chat.session_id}/escalate",
-        headers={"X-API-Key": api_key},
+        f"/widget/escalate?bot_id={bot_public_id}&session_id={chat.session_id}",
         json={"trigger": "user_request", "user_note": "I need help"},
     )
     assert resp.status_code == 200

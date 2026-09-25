@@ -179,3 +179,19 @@ async def get_async_readonly_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await db.rollback()
             raise
+
+
+def is_sqlite(db: Session | AsyncSession) -> bool:
+    """Detect SQLite from a sync or async session (for test/pg branching).
+
+    Uses ``isinstance`` to pick the right bind accessor, then reads the
+    backing engine's URL.
+    """
+    try:
+        if isinstance(db, AsyncSession):
+            bind = db.sync_session.bind
+        else:
+            bind = db.bind
+        return "sqlite" in str(getattr(bind, "url", ""))
+    except Exception:
+        return False

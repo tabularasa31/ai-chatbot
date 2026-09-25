@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
@@ -460,16 +459,16 @@ def test_generate_pipeline_parses_llm_json_payload() -> None:
     """Unit test for the LLM pipeline parsing layer (no orchestrator)."""
     from backend.gap_analyzer.pipelines.llm_drafts import _parse_draft_payload
 
-    raw = json.dumps({
+    payload = {
         "title": "Webhook retries",
         "question": "How do webhook retries work?",
         "markdown": "Use exponential backoff.",
-    })
-    content = _parse_draft_payload(raw)
+    }
+    content = _parse_draft_payload(payload)
     assert content.title == "Webhook retries"
     assert content.markdown == "Use exponential backoff."
 
     with pytest.raises(ValueError):
-        _parse_draft_payload("{}")
+        _parse_draft_payload({})
     with pytest.raises(ValueError):
-        _parse_draft_payload(json.dumps({"title": "x", "question": "y"}))
+        _parse_draft_payload({"title": "x", "question": "y"})

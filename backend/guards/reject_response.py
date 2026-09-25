@@ -6,7 +6,6 @@ from backend.chat.language import (
     LocalizationResult,
     async_localize_text_to_language_result,
     detect_language,
-    localize_text_result,
 )
 from backend.guards import reject_localization_cache
 from backend.models import TenantProfile as TenantProfileModel
@@ -152,21 +151,13 @@ async def build_reject_response_result(
             text, _cached_tokens = cached
             return LocalizationResult(text=text, tokens_used=0)
 
-    if response_language is None:
-        result = await async_localize_text_to_language_result(
-            canonical_text=canonical_text,
-            target_language=cache_language,
-            api_key=api_key,
-            fallback_locale=fallback_locale,
-            operation="reject_guard",
-        )
-    else:
-        result = await localize_text_result(
-            canonical_text=canonical_text,
-            response_language=response_language,
-            api_key=api_key,
-            operation="reject_guard",
-        )
+    result = await async_localize_text_to_language_result(
+        canonical_text=canonical_text,
+        target_language=response_language if response_language is not None else cache_language,
+        api_key=api_key,
+        fallback_locale=fallback_locale if response_language is None else None,
+        operation="reject_guard",
+    )
     # Skip caching when localize short-circuited or fell back: tokens_used == 0
     # covers (a) no api_key, (b) target language already matches, (c) text
     # already in target language — all idempotent fast paths where caching

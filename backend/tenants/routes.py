@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import (
     get_current_tenant,
-    get_owner_tenant,
     require_member,
     require_owner,
     require_verified_user,
@@ -16,21 +15,11 @@ from backend.auth.middleware import (
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import RerankerStrategy, Tenant, User
-from backend.observability.metrics import capture_event
 from backend.seats.service import holds_seat
-from backend.tenants.api_keys_service import (
-    list_api_keys,
-    revoke_api_key,
-    rotate_api_key,
-)
 from backend.tenants.schemas import (
     CreateTenantRequest,
     CreateTenantResponse,
-    RotateTenantApiKeyRequest,
-    RotateTenantApiKeyResponse,
     SupportSettingsResponse,
-    TenantApiKeyListResponse,
-    TenantApiKeyResponse,
     TenantLlmAlertResponse,
     TenantMeResponse,
     TenantResponse,
@@ -40,9 +29,7 @@ from backend.tenants.schemas import (
 from backend.tenants.service import (
     create_tenant,
     delete_tenant,
-    get_primary_api_key_hint,
     get_support_settings_for_user,
-    get_tenant_by_id,
     update_support_settings_for_user,
     update_tenant,
 )
@@ -51,11 +38,9 @@ tenants_router = APIRouter(tags=["tenants"])
 
 
 def _tenant_to_response(tenant, db: Session | None = None) -> TenantResponse:
-    hint = get_primary_api_key_hint(tenant.id, db) if db is not None else None
     return TenantResponse(
         id=tenant.id,
         name=tenant.name,
-        api_key_hint=hint,
         public_id=tenant.public_id,
         has_openai_key=bool(tenant.openai_api_key),
         reranker_strategy=_reranker_strategy_name(tenant.reranker_strategy),
@@ -77,12 +62,10 @@ def create_tenant_route(
     """
     Create a tenant (protected JWT).
 
-    Returns 201 Created with the plaintext widget API key — the only
-    time it is shown. Error 409 if tenant already exists for this user.
+    Error 409 if tenant already exists for this user.
     """
-    tenant, plaintext = create_tenant(current_user.id, body.name, db)
-    base = _tenant_to_response(tenant, db)
-    return CreateTenantResponse(**base.model_dump(), api_key=plaintext)
+    tenant = create_tenant(current_user.id, body.name, db)
+    return CreateTenantResponse(**_tenant_to_response(tenant, db).model_dump())
 
 
 @tenants_router.get("/me", response_model=TenantMeResponse)
@@ -104,87 +87,6 @@ def get_my_client(
         role=current_user.role,
         has_seat=holds_seat(current_user),
     )
-
-
-@tenants_router.get(
-    "/me/api-keys",
-    response_model=TenantApiKeyListResponse,
-)
-def list_api_keys_route(
-    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantApiKeyListResponse:
-    """List widget API keys for the current tenant (no plaintext)."""
-    rows = list_api_keys(tenant.id, db)
-    return TenantApiKeyListResponse(
-        items=[TenantApiKeyResponse.model_validate(r) for r in rows]
-    )
-
-
-@tenants_router.post(
-    "/me/api-keys/rotate",
-    response_model=RotateTenantApiKeyResponse,
-    status_code=201,
-)
-@limiter.limit("10/hour", key_func=owner_jwt_rate_limit_key)
-def rotate_api_key_route(
-    request: Request,
-    body: RotateTenantApiKeyRequest,
-    current_user: Annotated[User, Depends(require_owner)],
-    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
-    db: Annotated[Session, Depends(get_db)],
-) -> RotateTenantApiKeyResponse:
-    """Issue a new widget API key. Existing active key enters a 24h
-    grace window unless ``revoke_old_immediately`` is set."""
-    new_row, plaintext = rotate_api_key(
-        tenant.id,
-        db,
-        reason=body.reason,
-        revoke_old_immediately=body.revoke_old_immediately,
-        actor_user_id=current_user.id,
-    )
-    try:
-        capture_event(
-            "tenant.api_key.rotated",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={
-                "reason": body.reason,
-                "revoke_old_immediately": body.revoke_old_immediately,
-            },
-        )
-    except Exception:
-        pass
-    return RotateTenantApiKeyResponse(
-        api_key=plaintext,
-        key=TenantApiKeyResponse.model_validate(new_row),
-    )
-
-
-@tenants_router.delete(
-    "/me/api-keys/{key_id}",
-    response_model=TenantApiKeyResponse,
-)
-@limiter.limit("20/hour", key_func=owner_jwt_rate_limit_key)
-def revoke_api_key_route(
-    request: Request,
-    key_id: uuid.UUID,
-    tenant: Annotated[Tenant, Depends(get_owner_tenant)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantApiKeyResponse:
-    """Immediately revoke a single key (no grace). Refuses if it would
-    leave the tenant with no usable key."""
-    row = revoke_api_key(tenant.id, key_id, db, reason="manual")
-    try:
-        capture_event(
-            "tenant.api_key.revoked",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={"key_id": str(key_id)},
-        )
-    except Exception:
-        pass
-    return TenantApiKeyResponse.model_validate(row)
 
 
 @tenants_router.get("/me/llm-alert", response_model=TenantLlmAlertResponse)
@@ -274,21 +176,6 @@ def update_my_client(
                 detail="Server misconfiguration: encryption is not configured. Contact support.",
             ) from e
         raise
-    return _tenant_to_response(tenant, db)
-
-
-@tenants_router.get("/{tenant_id}", response_model=TenantResponse, include_in_schema=False)
-def get_tenant_by_id_route(
-    tenant_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantResponse:
-    """
-    Get tenant by UUID (protected JWT).
-
-    Returns 404 if not found or not owner.
-    """
-    tenant = get_tenant_by_id(tenant_id, current_user.id, db)
     return _tenant_to_response(tenant, db)
 
 

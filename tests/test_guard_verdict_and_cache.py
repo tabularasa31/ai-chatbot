@@ -78,7 +78,7 @@ async def _fake_embed_queries(
 @pytest.fixture(autouse=True)
 def _reset_detector_state(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(det, "_reference_embeddings", None)
-    monkeypatch.setattr(det, "_cb_states", {})
+    monkeypatch.setattr(det._circuit_breaker, "_states", {})
     yield
 
 

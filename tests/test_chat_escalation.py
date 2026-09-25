@@ -1025,6 +1025,51 @@ def test_pre_confirm_journey_unclear_twice_then_yes_then_followup_new_question(
 
 @pytest.mark.smoke
 @pytest.mark.escalation
+def test_pre_confirm_non_yes_no_reply_does_not_escalate(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reply to the pre_confirm offer that is neither yes nor no (classifier
+    -> None) must not silently forward the request: no ticket is minted and
+    the gate clears instead of re-asking forever."""
+    from backend.models import EscalationTicket
+
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email="preconf-noyes@example.com", name="PreConfirm NoYes Tenant"
+    )
+    chat = _make_chat(
+        db_session,
+        tenant_id,
+        escalation_pre_confirm_pending=True,
+        escalation_pre_confirm_context={
+            "trigger": "low_similarity",
+            "primary_question": "how does your product work?",
+            "best_similarity_score": 0.31,
+            "retrieved_chunks": None,
+        },
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.escalation.classify_pre_confirm_reply", _async_esc_stub((None, 0))
+    )
+
+    [reply] = drive(
+        tenant, api_key, chat.session_id, "I checked the data-bot-id, it matches the dashboard"
+    )
+
+    assert reply["ticket_number"] is None
+    ticket_count = (
+        db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id).count()
+    )
+    assert ticket_count == 0
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.escalation_pre_confirm_context is None
+
+
+@pytest.mark.smoke
+@pytest.mark.escalation
 @pytest.mark.parametrize(
     "status, seed_operator_reply, expect_requested_again",
     [

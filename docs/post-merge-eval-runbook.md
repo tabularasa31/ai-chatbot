@@ -27,7 +27,7 @@ Skip for: typo fixes, refactors with no behaviour delta, doc-only changes, front
 | Chat9 docs eval script | `~/Projects/ai-chatbot-eval-local/scripts/eval_chat9_docs_ru.py` — **primary eval script** for CHAT9-RU-20 (Chat9 internal test bot). |
 | Baseline runs | `~/Projects/ai-chatbot-eval-local/baselines/` — historical before-merge runs, also local-only. |
 | Anthropic key (judge) | `~/.zshrc` → `ANTHROPIC_API_KEY` |
-| Chat9 test bot API key | `CHAT9_TEST_API_KEY` — widget API key (`ck_…`) for the Chat9 internal test tenant. |
+| Chat9 test bot API key | `CHAT9_TEST_API_KEY` — widget API key for the Chat9 internal test tenant. |
 | Chat9 test bot ID | `CHAT9_TEST_BOT_ID` — `public_id` of the Chat9 internal test bot. |
 
 If no baseline exists for the dataset you want to use: run the eval against the pre-PR commit first (or use the most recent prod run from the eval-results archive).

@@ -155,3 +155,15 @@ class PipelineHandler(ABC):
 
     @abstractmethod
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None: ...
+
+    async def _in_sync(
+        self, ctx: HandlerContext, fn: Callable[[HandlerContext, Session], Any]
+    ) -> Any:
+        """Run ``fn`` inside a ``run_sync`` greenlet, with ``ctx.db`` pointed at it."""
+        from backend.core.db import run_sync
+
+        def _wrapped(sync_db: Session) -> Any:
+            ctx.db = sync_db
+            return fn(ctx, sync_db)
+
+        return await run_sync(ctx.async_db, _wrapped)

@@ -3,6 +3,7 @@
 import { Fragment, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DocumentListItem, UrlSource, UrlSourceDetail } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import {
   KnowledgeTabs,
   TypeBadge,
@@ -297,7 +298,7 @@ export function DocumentsSection({
                       <td className="px-4 py-3.5"><StatusBadge status={doc.status} /></td>
                       <td className="px-4 py-3.5 text-xs text-slate-500">
                         <div>—</div>
-                        <div className="mt-1">{isEmbedding ? "embedding…" : new Date(doc.updated_at || doc.created_at).toLocaleString()}</div>
+                        <div className="mt-1">{isEmbedding ? "embedding…" : formatDateTime(doc.updated_at || doc.created_at)}</div>
                       </td>
                       <td className="px-4 py-3.5 text-xs text-slate-400">—</td>
                       <td className="px-4 py-3.5"><HealthCell health={doc.health_status} isEmbedding={isEmbedding} /></td>
@@ -345,12 +346,12 @@ export function DocumentsSection({
                       <td className="px-4 py-3.5"><StatusBadge status={source.status} /></td>
                       <td className="px-4 py-3.5 text-xs text-slate-500">
                         <div>{pageMeta} pages</div>
-                        <div className="mt-1">{new Date(source.updated_at).toLocaleString()}</div>
+                        <div className="mt-1">{formatDateTime(source.updated_at)}</div>
                       </td>
                       <td className="px-4 py-3.5 text-xs text-slate-500">
                         <div>{formatSchedule(source.schedule)}</div>
                         <div className="mt-1 text-slate-400">
-                          {source.next_crawl_at ? new Date(source.next_crawl_at).toLocaleString() : "No next run"}
+                          {source.next_crawl_at ? formatDateTime(source.next_crawl_at) : "No next run"}
                         </div>
                       </td>
                       <td className="px-4 py-3.5">

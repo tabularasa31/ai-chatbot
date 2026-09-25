@@ -1,6 +1,7 @@
 "use client";
 
 import type { UrlSource, UrlSourceDetail } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { StatusBadge, quickAnswerLabel } from "./shared";
 
 function formatFailedUrlPreview(failedUrls: Array<{ url: string; reason: string }>): string {
@@ -138,7 +139,7 @@ export function UrlSourcesSection({
                         <div key={run.id} className="rounded-lg border border-slate-200 p-3 text-sm">
                           <div className="flex items-center justify-between gap-3">
                             <StatusBadge status={run.status} />
-                            <span className="text-xs text-slate-400">{new Date(run.created_at).toLocaleString()}</span>
+                            <span className="text-xs text-slate-400">{formatDateTime(run.created_at)}</span>
                           </div>
                           <div className="mt-2 text-slate-600">
                             {run.pages_indexed}

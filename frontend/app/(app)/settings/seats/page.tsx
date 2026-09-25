@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api, type TenantMember } from "@/lib/api";
 import { useClientMe, useMembers } from "@/hooks/useApi";
+import { formatDate } from "@/lib/format";
 
 /** Monthly price of one seat, in US dollars. Nothing is charged during the beta. */
 const SEAT_PRICE_USD = 10;
@@ -13,13 +14,7 @@ function money(amount: number): string {
 
 function seatDate(value: string): string {
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime())
-    ? ""
-    : parsed.toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
+  return Number.isNaN(parsed.getTime()) ? "" : formatDate(value);
 }
 
 export default function SeatsPage() {

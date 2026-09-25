@@ -6,6 +6,7 @@ import {
   type RotateTenantApiKeyResponse,
   type TenantApiKeyResponse,
 } from "@/lib/api";
+import { formatDateTime as formatDateTimeUtc, parseApiDate } from "@/lib/format";
 
 type Reason = "leaked" | "scheduled" | "compromise" | "other";
 
@@ -48,7 +49,7 @@ function StatusBadge({ status }: { status: TenantApiKeyResponse["status"] }) {
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString();
+    return formatDateTimeUtc(iso);
   } catch {
     return iso;
   }
@@ -56,7 +57,7 @@ function formatDate(iso: string | null): string {
 
 function relativeRemaining(expires_at: string | null): string | null {
   if (!expires_at) return null;
-  const ms = new Date(expires_at).getTime() - Date.now();
+  const ms = parseApiDate(expires_at).getTime() - Date.now();
   if (ms <= 0) return "expired";
   const hours = Math.floor(ms / 3600_000);
   const minutes = Math.floor((ms % 3600_000) / 60_000);

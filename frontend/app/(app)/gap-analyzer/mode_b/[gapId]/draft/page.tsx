@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { api, type GapDraftPayload } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 
 function StatusPill({ status }: { status: GapDraftPayload["status"] }) {
   const styles: Record<string, string> = {
@@ -221,7 +222,7 @@ export default function ModeBDraftReviewPage() {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Gap context</h2>
           <p className="text-xs text-slate-500">
             Draft language: {draft.language}<br />
-            Last updated: {new Date(draft.draft_updated_at).toLocaleString()}
+            Last updated: {formatDateTime(draft.draft_updated_at)}
           </p>
           <Link href={`/gap-analyzer`} className="block text-sm text-slate-600 hover:underline">
             See the full cluster on the Gap Analyzer list

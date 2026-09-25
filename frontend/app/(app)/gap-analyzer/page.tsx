@@ -11,13 +11,11 @@ import {
   type GapModeAStatusFilter,
   type GapModeBStatusFilter,
 } from "@/lib/api";
+import { formatDateTime as formatDateTimeUtc } from "@/lib/format";
 
 function formatDateTime(value: string | null): string {
   if (!value) return "—";
-  return new Date(value).toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+  return formatDateTimeUtc(value);
 }
 
 function CoverageBadge({ item }: { item: GapItem }) {

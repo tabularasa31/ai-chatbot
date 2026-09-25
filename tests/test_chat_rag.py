@@ -2487,7 +2487,7 @@ async def test_a_good_turn_between_two_weak_ones_resets_the_tracker(
 
 
 # ---------------------------------------------------------------------------
-# Chat pipeline orchestration (process_chat_message) -- absorbed from the
+# Chat pipeline orchestration (async_process_chat_message) -- absorbed from the
 # deleted test_chat_pipeline.py
 # ---------------------------------------------------------------------------
 

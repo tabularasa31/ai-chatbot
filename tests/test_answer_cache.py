@@ -518,7 +518,7 @@ async def test_handler_stores_only_when_the_reply_is_the_pipeline_answer(
 
 
 # ---------------------------------------------------------------------------
-# End-to-end through process_chat_message
+# End-to-end through async_process_chat_message
 # ---------------------------------------------------------------------------
 
 

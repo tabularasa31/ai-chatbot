@@ -38,7 +38,7 @@ def _resolve_product_name(
 ) -> str:
     """Resolve the user-facing product name.
 
-    If ``profile`` is provided, use it directly — process_chat_message already
+    If ``profile`` is provided, use it directly — async_process_chat_message already
     fetched it for language resolution, so re-querying is wasteful. The ``db``
     arg remains for callers that don't have the profile pre-loaded.
     """

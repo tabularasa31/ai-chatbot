@@ -368,7 +368,7 @@ async def async_process_chat_message(
     stream_callback: Callable[[str], None] | None = None,
     status_callback: Callable[[str], None] | None = None,
 ) -> ChatTurnOutcome:
-    """Async counterpart of :func:`process_chat_message`.
+    """Run one chat turn through the async pipeline.
 
     Replaces the ``_GUARD_POOL`` (ThreadPoolExecutor) in the RAG path with
     ``asyncio.create_task`` so guard checks, embedding, and retrieval run

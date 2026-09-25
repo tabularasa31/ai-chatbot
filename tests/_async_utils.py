@@ -6,7 +6,10 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from backend.core import db as core_db
+from backend.chat.handlers import ChatTurnOutcome
 from backend.chat.service import async_process_chat_message
 
 
@@ -14,9 +17,9 @@ async def run_chat_turn(
     tenant_id: uuid.UUID,
     question: str,
     session_id: uuid.UUID,
-    db_session: Any,
+    db_session: Session,
     **kwargs: Any,
-) -> Any:
+) -> ChatTurnOutcome:
     """Drive a chat turn through the real async pipeline from a sync test.
 
     Mirrors what the removed sync ``process_chat_message`` shim did: commit

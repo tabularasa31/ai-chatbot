@@ -252,7 +252,7 @@ class EscalationStateMachine(PipelineHandler):
 
     # ------------------------------------------------------------------
     # State handlers — order matches the legacy inline branches in
-    # ``process_chat_message`` so the byte-level behaviour is preserved.
+    # ``async_process_chat_message`` so the byte-level behaviour is preserved.
     # ------------------------------------------------------------------
 
     def _handle_awaiting_email(self, ctx: HandlerContext) -> ChatTurnOutcome | None:

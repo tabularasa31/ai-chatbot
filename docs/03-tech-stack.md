@@ -137,7 +137,7 @@
 │                  (Railway deployment)                    │
 │                                                           │
 │  POST /widget/session/init (bot_id, optional identity)   │
-│  POST /widget/chat (public bot ID) or POST /chat (X-API-Key) │
+│  POST /widget/chat (public bot ID)                        │
 │    ↓                                                      │
 │    1. Resolve tenant → tenant_id + openai_api_key        │
 │    2. Redact PII in question (structural)                │
@@ -282,11 +282,10 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 
 ## Security Model
 
-### API Key Authentication
-- Client gets 32-character random API key
-- Dashboard / private API calls use the client API key (`X-API-Key`)
-- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `bot_id` query parameter; optional identified-mode bootstrap uses `POST /widget/session/init` with the private tenant API key plus signed identity token
-- Backend validates the private API key only on the authenticated/private paths or widget session bootstrap, then retrieves `tenant_id` and the tenant's OpenAI key
+### Authentication
+- Dashboard / private API calls use a JWT issued at login
+- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `bot_id` query parameter; optional identified-mode bootstrap uses `POST /widget/session/init` with `bot_id` plus a signed identity token
+- Backend resolves the bot's tenant from `public_id`, then retrieves `tenant_id` and the tenant's OpenAI key
 - All queries filter by `tenant_id` (no data leaks between tenants)
 
 ### OpenAI Key Isolation

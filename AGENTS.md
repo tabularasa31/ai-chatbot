@@ -414,9 +414,8 @@ Tenant isolation has two contours:
 How the second contour works:
 
 - The resolved tenant id is stored in a `ContextVar` at the auth boundary — JWT
-  dependency (`backend/auth/middleware.py::get_current_user`), widget bot gate
-  (`backend/tenants/widget_chat_gate.py`), and X-API-Key resolve
-  (`backend/tenants/service.py::get_tenant_by_api_key`) all call `set_tenant_context`.
+  dependency (`backend/auth/middleware.py::get_current_user`) and widget bot gate
+  (`backend/tenants/widget_chat_gate.py`) both call `set_tenant_context`.
 - An engine-level `begin` listener emits `SET LOCAL app.tenant_id` on every new
   transaction (transaction-scoped, so pooled connections cannot leak context).
 - Policies are **fail-open when no context is set**: background jobs, cron sweeps and

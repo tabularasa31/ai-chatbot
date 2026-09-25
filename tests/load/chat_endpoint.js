@@ -1,4 +1,4 @@
-// k6 load test for the public /chat endpoint.
+// k6 load test for the public /widget/chat endpoint.
 //
 // Goal: validate the async/sync DB boundary in the chat pipeline under
 // concurrent load. Watch Railway logs for `MissingGreenlet` and
@@ -7,7 +7,7 @@
 //
 // Usage:
 //   BASE_URL=https://ai-chatbot-production-6531.up.railway.app \
-//   API_KEY=<tenant-api-key> \
+//   BOT_ID=<bot-public-id> \
 //   k6 run tests/load/chat_endpoint.js
 //
 // Optional env:
@@ -24,14 +24,14 @@ import { check } from 'k6';
 import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000';
-const API_KEY = __ENV.API_KEY;
+const BOT_ID = __ENV.BOT_ID;
 const RPS = parseInt(__ENV.RPS || '15', 10);
 const DURATION = __ENV.DURATION || '2m';
 const PREALLOC = parseInt(__ENV.PREALLOC || '50', 10);
 const MAX_VUS = parseInt(__ENV.MAX_VUS || '200', 10);
 
-if (!API_KEY) {
-  throw new Error('API_KEY env var is required');
+if (!BOT_ID) {
+  throw new Error('BOT_ID env var is required');
 }
 
 const QUESTIONS = [
@@ -65,7 +65,7 @@ export const options = {
 };
 
 export default function () {
-  const url = `${BASE_URL}/chat`;
+  const url = `${BASE_URL}/widget/chat?bot_id=${BOT_ID}`;
   const payload = JSON.stringify({
     question: QUESTIONS[Math.floor(Math.random() * QUESTIONS.length)],
     session_id: uuidv4(),
@@ -73,7 +73,6 @@ export default function () {
   const params = {
     headers: {
       'Content-Type': 'application/json',
-      'X-API-Key': API_KEY,
     },
     timeout: '30s',
   };
@@ -81,12 +80,7 @@ export default function () {
   const res = http.post(url, payload, params);
   check(res, {
     'status is 200': (r) => r.status === 200,
-    'has text': (r) => {
-      try {
-        return typeof r.json('text') === 'string';
-      } catch (_) {
-        return false;
-      }
-    },
+    // /widget/chat streams SSE; the final frame is a `done` event.
+    'has done event': (r) => typeof r.body === 'string' && r.body.includes('event: done'),
   });
 }

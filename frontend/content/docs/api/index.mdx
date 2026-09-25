@@ -17,7 +17,7 @@ use; the rest of this page explains them, then the sidebar takes over.
 
 ## Authentication
 
-Three surfaces, three credentials:
+Two surfaces, two credentials:
 
 - **Public widget endpoints** (under the `widget` tag in the sidebar:
   `POST /widget/session/init`, `POST /widget/chat`,
@@ -28,22 +28,14 @@ Three surfaces, three credentials:
   has its own per-IP rate limit. Optional [identified sessions](/docs/embedding-the-widget)
   attach an HMAC-SHA256 token signed by your backend.
 
-- **Server-to-server chat** (`POST /chat`,
-  `POST /chat/{session_id}/escalate`) — authenticated with your
-  `ck_...` API key issued in [Settings → API keys](/docs/api-keys).
-  Send it as an `X-API-Key` header. This is the credential for
-  custom backend integrations that drive a conversation from your
-  own server, not from the embedded widget.
-
 - **Dashboard / management endpoints** (Documents, Gap Analyzer,
   Knowledge, and the read side of Chat — sessions, logs, history) —
   authenticated with a JWT bearer token. `POST /auth/login` with your
   e-mail and password returns an `access_token`; send that as
-  `Authorization: Bearer <access_token>` on each request. A `ck_...`
-  key does **not** authenticate these routes. The account-level
-  endpoints themselves (sign-up, login, tenant settings, bot CRUD)
-  are not part of the documented surface — they live behind the
-  dashboard at [getchat9.live](https://getchat9.live).
+  `Authorization: Bearer <access_token>` on each request. The
+  account-level endpoints themselves (sign-up, login, tenant settings,
+  bot CRUD) are not part of the documented surface — they live behind
+  the dashboard at [getchat9.live](https://getchat9.live).
 
 ## Streaming responses
 
@@ -70,7 +62,7 @@ event bodies natively).
 
 ## Models used by the chat pipeline
 
-`POST /widget/chat` and `POST /chat` generate answers with
+`POST /widget/chat` generates answers with
 `gpt-5-mini` and run lightweight guard / validation checks with
 `gpt-4o-mini` by default. See [Pricing and limits](/docs/pricing-and-limits)
 for cost guidance.

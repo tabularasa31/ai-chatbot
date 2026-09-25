@@ -103,7 +103,7 @@ export default function MembersPage() {
         <p className="text-slate-500 text-sm mt-1">
           Invite colleagues to work the inbox with you. Everyone you invite is
           an operator: they answer conversations and read the knowledge base,
-          while settings, API keys and publishing stay with you as the owner.
+          while settings and publishing stay with you as the owner.
           Roles do not change — a workspace has one owner, the person who
           created it. Removing someone deletes their account; their past
           replies stay in the transcripts.

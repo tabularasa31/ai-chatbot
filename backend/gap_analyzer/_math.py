@@ -11,7 +11,7 @@ import math
 
 from backend.utils.math import coerce_vector as _vector_from_unknown  # noqa: F401
 from backend.utils.math import cosine_similarity_with_norms as _cosine_similarity  # noqa: F401
-from backend.utils.text import word_tokens as _tokenize  # noqa: F401
+from backend.utils.text import compound_tokens as _tokenize  # noqa: F401
 
 
 def _vector_norm(vector: list[float] | None) -> float:

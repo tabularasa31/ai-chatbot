@@ -59,7 +59,7 @@ follow from it:
 | Gap Analyzer: view, prepare a draft | yes | yes |
 | Publishing an FAQ | yes | no |
 | Support contacts (the ones the bot hands to visitors) | read + edit | read only |
-| Settings, API keys, privacy config, member management, tenant deletion | yes | no |
+| Settings, privacy config, member management, tenant deletion | yes | no |
 
 Publishing is owner-only because an FAQ publish changes the bot's answers for every visitor — a content decision, not an operational one.
 
@@ -77,7 +77,7 @@ Five owner-only routes manage the team: `POST /tenants/members/invite`, `GET /te
 
 **Removal deletes the account.** Membership and account have the same lifetime — there is no verified user without a workspace — which is what keeps the invite path honest: every invitee is a new account setting a first password from the link, so nobody joins a workspace without an act of their own. Being invited again later means a new account with a new id, and a live JWT stops working the moment the row is gone (`get_current_user` answers 401).
 
-Deleting would erase attribution, because five of the six FKs into `users` are `ON DELETE SET NULL` — every operator message and every `operator_sessions` row would lose its author silently. So the account goes and the signature stays: `messages.operator_label`, `operator_sessions.operator_label`, `gap_dismissals.dismissed_by_label` and `tenant_api_keys.created_by_label` are written with the departing member's e-mail in the same transaction as the delete. They are NULL while the account exists — read the author through the FK, fall back to the label once it is gone. `chats.assigned_operator_id` is live state rather than history and is not stamped; `pii_events.actor_user_id` is never written by anything, so it has nothing to preserve.
+Deleting would erase attribution, because the FKs into `users` are `ON DELETE SET NULL` — every operator message and every `operator_sessions` row would lose its author silently. So the account goes and the signature stays: `messages.operator_label`, `operator_sessions.operator_label` and `gap_dismissals.dismissed_by_label` are written with the departing member's e-mail in the same transaction as the delete. They are NULL while the account exists — read the author through the FK, fall back to the label once it is gone. `chats.assigned_operator_id` is live state rather than history and is not stamped; `pii_events.actor_user_id` is never written by anything, so it has nothing to preserve.
 
 **An unaccepted invitation expires and the row goes with it.** An invite creates a real (unverified, unusable) `users` row, so an expired token alone would leave the address occupied forever: the invited person cannot register on their own, and only the inviting owner could free it. `backend/jobs/expired_invitations_purge.py` deletes member rows that are unverified with an expired invite token, hourly. It can never strand a workspace, and now by construction rather than by a filter: every invitee is an operator, so the set it sweeps contains no owners at all. It also has no seat to release — a pending invitee holds none.
 
@@ -105,11 +105,7 @@ Users can have `is_admin = true`. Admins see an **Admin** section in the **sideb
 
 ## 2. Tenant (Client) Management
 
-Each registered user has exactly one **Client** record. The client is the unit of isolation — all documents, chats, API keys, and settings belong to a client. This one-to-one rule is enforced in both application logic and the database schema.
-
-### API key
-
-Every client gets a random 32-character `api_key` when the workspace client is provisioned during successful email verification. This key is used for **server-to-server** chat calls (`X-Api-Key` header) and widget authentication. It can be rotated if compromised (delete + recreate client).
+Each registered user has exactly one **Client** record. The client is the unit of isolation — all documents, chats, and settings belong to a client. This one-to-one rule is enforced in both application logic and the database schema.
 
 ### Public ID
 
@@ -125,7 +121,7 @@ A workspace has one owner, fixed at creation, and ownership cannot be handed ove
 
 **No grace period.** Confirmation, then immediate deletion. No soft delete, no restore window, no support-side recovery. This was decided deliberately rather than inherited: a soft delete is much cheaper to add now than to retrofit onto a schema full of cascades, and the decision to skip it should be revisited if it ever stops being true that an accidental deletion costs a customer nothing they can't rebuild.
 
-**What it destroys.** Every account belonging to the workspace, the owner's included — nobody survives as an account belonging to nothing. Cascades take conversations, messages, documents, embeddings, escalation tickets and API keys. The widget stops answering on the customer's site immediately.
+**What it destroys.** Every account belonging to the workspace, the owner's included — nobody survives as an account belonging to nothing. Cascades take conversations, messages, documents, embeddings and escalation tickets. The widget stops answering on the customer's site immediately.
 
 **Data outside Postgres**, decided per system rather than as one policy:
 
@@ -472,11 +468,10 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 | `inline` | no | bot gives a partial answer and appends a soft follow-up question |
 | `safety_confirm` | no | reserved for future safety-sensitive confirmations |
 
-Public response contracts:
+Public response contract:
 
-- `POST /chat` returns a JSON body with a canonical `text` field (plus `session_id`, optional `ticket_number` and trace fields)
-- `POST /widget/chat` streams Server-Sent Events: `status` → `chunk`* → exactly one terminal `done` frame whose payload carries the same `text` / `session_id` / optional `ticket_number` / optional `sources`
-- both channels may return the localized default greeting as a normal `text` reply when a brand-new empty conversation starts
+- `POST /widget/chat` streams Server-Sent Events: `status` → `chunk`* → exactly one terminal `done` frame whose payload carries `text` / `session_id` / optional `ticket_number` / optional `sources`
+- it may return the localized default greeting as a normal `text` reply when a brand-new empty conversation starts
 
 v1 note: structured `clarification` payload (`message_type`, `options`, `option_id`, quick-reply buttons) is **not implemented**. The bot may embed a clarifying question in plain text as part of the normal answer, but no structured clarification object is returned and the widget does not render quick-reply buttons.
 
@@ -819,11 +814,7 @@ Behavior details:
 
 | Channel | Auth | Endpoint |
 |---------|------|----------|
-| Dashboard / API | `X-Api-Key` | `POST /chat` |
 | Widget (public) | `bot_id` query param (bot `public_id`) | `POST /widget/chat?bot_id=…` |
-| Debug tool | JWT + `bot_id` query param (bot `public_id`) | `POST /chat/debug?bot_id=…` |
-
-The internal `/debug` UI page resolves the current bot automatically from the authenticated tenant; users are not expected to edit the URL manually.
 
 ### Sessions, conversations, and history
 
@@ -878,7 +869,7 @@ nine `EscalationTrigger` values.
 | 5 | `user_request`, elicited | Outright ask with nothing to forward yet; `escalation_awaiting_request` state — `backend/chat/handlers/escalation.py:740-771` | No — the detail supplied is itself the confirmation | Bot asks the user to describe their question, then confirms once answered | The detail supplied in the follow-up reply |
 | 6 | `user_complaint` | Relevance guard classifies the message as a complaint about support silence — `backend/chat/steps/pre_retrieval.py:747-752`, `backend/chat/steps/retrieval.py:478-497` | Yes — `support_complaint` pre-confirm variant, leads with an apology, `backend/chat/handlers/rag.py:716-719` | Apology + handoff question | Retrieved-chunk preview, trigger |
 | 7 | `llm_self_offer` | Model appends `OFFER_MARKER`/`HANDOFF_MARKER` on a turn `decide()` judged answerable — dead-end rescue `backend/chat/handlers/rag.py:861` (offer appended to the existing answer, no fresh confirm question) and safety net `rag.py:890` | Yes | Model's answer, with the offer appended | Retrieved-chunk preview, trigger |
-| 8 | `answer_rejected` | `POST /chat/{session_id}/escalate` — `backend/chat/routes.py:271-276` | No — immediate | Ticket confirmation | The rejected answer / conversation context |
+| 8 | `answer_rejected` | `POST /widget/escalate` — `backend/widget/routes.py:1097` | No — immediate | Ticket confirmation | The rejected answer / conversation context |
 | 9 | `llm_unavailable` | Same endpoint, OpenAI unreachable — `backend/escalation/service.py:1924` | No — immediate, OpenAI is skipped entirely | Static, non-LLM copy — `backend/chat/llm_unavailable_copy.py:15-30` | Conversation context |
 | 10 | `loop_detected` / `clarify_loop_limit` override | Forced by `backend/chat/decision.py:329-333` / `:358-362`, applied in `backend/chat/handlers/rag.py:623-634` only when `should_escalate` said no | Yes — reuses the same pre-confirm flow as `low_similarity`, down to the same variant selection (`rag.py:716-723`): `no_answer` unless the question intent is `support_contact` | Pre-confirm question | Retrieved-chunk preview, trigger — the ticket records `loop_detected` / `clarify_loop_limit`, so a count by trigger separates loop-caused handoffs from weak retrieval. Tickets written before `esc_trigger_width_v1` say `low_similarity`; the real reason was never stored, so there is nothing to backfill |
 
@@ -1268,11 +1259,7 @@ The backend uses `slowapi` limits from route decorators (see `backend/*/routes.p
 | `POST /auth/login` | `10/minute` | IP (default slowapi key) |
 | `POST /auth/forgot-password` | `3/hour` | IP (default slowapi key) |
 | `POST /auth/reset-password` | `5/hour` | IP (default slowapi key) |
-| `POST /tenants/me/api-keys/rotate` | `10/hour` | Owner JWT subject (`owner:<user_id>`) |
-| `DELETE /tenants/me/api-keys/{key_id}` | `20/hour` | Owner JWT subject (`owner:<user_id>`) |
 | `POST /documents` | `20/hour` | IP (default slowapi key) |
-| `POST /chat` | `30/minute` | IP (default slowapi key) |
-| `POST /chat/{session_id}/escalate` | `30/minute` | IP (default slowapi key) |
 | `GET /widget/config` | `30/minute` | `bot_id + IP` |
 | `POST /widget/session/init` | `10/minute` | IP (widget-specific key func) |
 | `POST /widget/chat` | `WIDGET_CHAT_PER_CLIENT_RATE` (or `120/minute` by default, `1000/minute` in development when unset) | per `bot_id` |
@@ -1288,7 +1275,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 
 | Page / route | What it shows |
 |--------------|---------------|
-| **Dashboard** (`/dashboard`) | **Your Bot ID** (bot's `public_id`, used as `data-bot-id`), **API key** (server-to-server `X-Api-Key`), **embed code** snippet; banner linking to Agents if OpenAI key is missing |
+| **Dashboard** (`/dashboard`) | **Your Bot ID** (bot's `public_id`, used as `data-bot-id`), **embed code** snippet; banner linking to Agents if OpenAI key is missing |
 | **Knowledge** (`/knowledge`) | Upload files, add URL sources, trigger embeddings/crawls, health indicators, delete; unified indexed sources table (replaces legacy `/documents`) |
 | **Agents** (`/settings`) | Per-client **OpenAI API key** (encrypted), save/update/remove |
 | **Inbox** (`/inbox`) | Every conversation; queue of visitors waiting for a person; reply, take, return to bot, mark resolved (seat holders) |

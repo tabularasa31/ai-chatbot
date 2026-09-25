@@ -14,8 +14,8 @@ from tests.conftest import register_and_verify_user
 def test_create_client_journey_success_then_duplicate_rejected(
     tenant: TestClient, db_session: Session
 ) -> None:
-    """201 with a ck_-prefixed 35-char api_key on first create; a second
-    tenant for the same user is rejected with 409."""
+    """201 on first create; a second tenant for the same user is rejected
+    with 409."""
     token = register_and_verify_user(tenant, db_session, email="user@example.com")
     response = tenant.post(
         "/tenants",
@@ -26,8 +26,6 @@ def test_create_client_journey_success_then_duplicate_rejected(
     data = response.json()
     assert "id" in data
     assert data["name"] == "My Tenant"
-    assert data["api_key"].startswith("ck_")
-    assert len(data["api_key"]) == 35
     assert "created_at" in data
     assert "updated_at" in data
 
@@ -58,7 +56,7 @@ def test_ensure_client_for_user_returns_existing_on_conflict(
     db_session.commit()
     db_session.refresh(user)
 
-    existing_client, _ = clients_service.create_tenant(user.id, "Existing Tenant", db_session)
+    existing_client = clients_service.create_tenant(user.id, "Existing Tenant", db_session)
     lookup_calls = 0
 
     def fake_create_client(user_id, name, db):
@@ -103,7 +101,6 @@ def test_get_client_success_via_me(tenant: TestClient, db_session: Session) -> N
     me_data = me_resp.json()
     assert me_data["id"] == tenant_id
     assert me_data["name"] == "My Tenant"
-    assert me_data.get("api_key_hint") and len(me_data["api_key_hint"]) == 4
     assert "api_key" not in me_data
 
 

@@ -30,7 +30,12 @@ from backend.models import (
     OperatorState,
 )
 from backend.models.base import _utcnow
-from tests.conftest import register_and_verify_user, set_client_openai_key
+from tests.conftest import (
+    get_default_bot_public_id,
+    post_chat_message,
+    register_and_verify_user,
+    set_client_openai_key,
+)
 
 
 def _bot_and_tenant(
@@ -228,7 +233,7 @@ def test_the_visitors_message_reaches_the_operator_by_email(
     assert resp.status_code == 201, resp.text
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(resp.json()["id"])
-    api_key = resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
 
     chat = _conversation(db_session, tenant_id)
     db_session.add(
@@ -247,13 +252,11 @@ def test_the_visitors_message_reaches_the_operator_by_email(
     db_session.commit()
 
     with patch("backend.escalation.service.send_email", return_value="<upd@brevo>") as send:
-        turn = tenant.post(
-            "/chat",
-            headers={"X-API-Key": api_key},
-            json={
-                "question": "Any news on that refund?",
-                "session_id": str(chat.session_id),
-            },
+        turn = post_chat_message(
+            tenant,
+            bot_public_id=bot_public_id,
+            question="Any news on that refund?",
+            session_id=str(chat.session_id),
         )
 
     assert turn.status_code == 200, turn.text
@@ -278,13 +281,15 @@ def test_a_live_chat_with_no_ticket_sends_nothing(
     )
     assert resp.status_code == 201, resp.text
     set_client_openai_key(tenant, token)
+    bot_public_id = get_default_bot_public_id(tenant, token)
     chat = _conversation(db_session, uuid.UUID(resp.json()["id"]))
 
     with patch("backend.escalation.service.send_email") as send:
-        turn = tenant.post(
-            "/chat",
-            headers={"X-API-Key": resp.json()["api_key"]},
-            json={"question": "hello?", "session_id": str(chat.session_id)},
+        turn = post_chat_message(
+            tenant,
+            bot_public_id=bot_public_id,
+            question="hello?",
+            session_id=str(chat.session_id),
         )
 
     assert turn.status_code == 200, turn.text

@@ -22,7 +22,6 @@ from backend.admin.routes import admin_router
 from backend.analytics.routes import analytics_router
 from backend.auth.routes import auth_router
 from backend.bots.routes import bots_router
-from backend.chat.routes import chat_router
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.core.config import settings
 from backend.core.limiter import hash_ip_for_logs, limiter
@@ -205,7 +204,6 @@ app.include_router(members_router)
 app.include_router(tenants_router, prefix="/tenants")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings", include_in_schema=False)
-app.include_router(chat_router, prefix="/chat")
 app.include_router(email_router)
 app.include_router(gap_analyzer_router, prefix="/gap-analyzer")
 app.include_router(knowledge_router)

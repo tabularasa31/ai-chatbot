@@ -11,7 +11,7 @@ import json
 import math
 
 from backend.utils.math import cosine_similarity_with_norms as _cosine_similarity  # noqa: F401
-from backend.utils.text import word_tokens as _tokenize  # noqa: F401
+from backend.utils.text import compound_tokens as _tokenize  # noqa: F401
 
 
 def _vector_from_unknown(raw: object) -> list[float] | None:

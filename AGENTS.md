@@ -234,7 +234,7 @@ Chat responses now support structured clarification outcomes in addition to plai
 - `clarification`
 - `partial_with_clarification`
 
-For `/chat` and `/widget/chat`, the response body uses the canonical `text` field only. Legacy aliases (`answer` on `/chat`, `response` on `/widget/chat`) have been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
+For `/widget/chat`, the response body uses the canonical `text` field only. The legacy `response` alias has been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
 ### Deployment safety
 
@@ -338,7 +338,7 @@ Run the API from the repo root with `PYTHONPATH` pointing at the root so `backen
 - SQLAlchemy model classes: `PascalCase` (`User`, `Tenant`, `EscalationTicket`).
 - DB tables: **plural, snake_case** (`users`, `tenants`, `escalation_tickets`, `contact_sessions`).
 - Pydantic API schemas: suffixes like `Request` / `Response` or descriptive names, in the domain’s `schemas.py`.
-- Routers: `*_router`; path prefixes wired in `main.py` (e.g. `/auth`, `/chat`, `/tenants`).
+- Routers: `*_router`; path prefixes wired in `main.py` (e.g. `/auth`, `/tenants`, `/documents`).
 - Public string IDs for tenants/bots, etc.: follow existing patterns (`generate_public_id`, prefixes like `ch_` — do not invent new ones without a reason).
 - Terminology: the legacy product term "client" has been renamed **"tenant"** at the schema/API level; keep new code and docs on `tenant` / `tenant_id`. "Client" may still appear in marketing copy meaning "customer".
 

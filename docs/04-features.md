@@ -468,11 +468,10 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 | `inline` | no | bot gives a partial answer and appends a soft follow-up question |
 | `safety_confirm` | no | reserved for future safety-sensitive confirmations |
 
-Public response contracts:
+Public response contract:
 
-- `POST /chat` returns a JSON body with a canonical `text` field (plus `session_id`, optional `ticket_number` and trace fields)
-- `POST /widget/chat` streams Server-Sent Events: `status` → `chunk`* → exactly one terminal `done` frame whose payload carries the same `text` / `session_id` / optional `ticket_number` / optional `sources`
-- both channels may return the localized default greeting as a normal `text` reply when a brand-new empty conversation starts
+- `POST /widget/chat` streams Server-Sent Events: `status` → `chunk`* → exactly one terminal `done` frame whose payload carries `text` / `session_id` / optional `ticket_number` / optional `sources`
+- it may return the localized default greeting as a normal `text` reply when a brand-new empty conversation starts
 
 v1 note: structured `clarification` payload (`message_type`, `options`, `option_id`, quick-reply buttons) is **not implemented**. The bot may embed a clarifying question in plain text as part of the normal answer, but no structured clarification object is returned and the widget does not render quick-reply buttons.
 

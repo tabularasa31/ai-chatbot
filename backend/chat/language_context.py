@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import replace
-from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -26,22 +25,6 @@ logger = logging.getLogger(__name__)
 def _is_bootstrap_question(text: str) -> bool:
     """Return True when text is empty/whitespace-only — the canonical bootstrap turn test."""
     return not text.strip()
-
-
-def _resolve_fallback_locale(
-    user_context: dict[str, Any] | None,
-    browser_locale: str | None = None,
-) -> str | None:
-    if user_context:
-        locale = str(user_context.get("locale") or "").strip()
-        if locale:
-            return locale
-        stored_browser_locale = str(user_context.get("browser_locale") or "").strip()
-        if stored_browser_locale:
-            return stored_browser_locale
-    if browser_locale and browser_locale.strip():
-        return browser_locale.strip()
-    return None
 
 
 def _load_recent_user_turn_texts(

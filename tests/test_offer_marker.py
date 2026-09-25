@@ -1,7 +1,7 @@
 """Unit tests for the language-agnostic ticket-offer marker.
 
 Covers ``_strip_and_detect_offer_marker`` (post-generation parse) and
-``OfferMarkerStreamFilter`` (streaming-SSE filter), which together replace
+``MarkerStreamFilter`` (streaming-SSE filter), which together replace
 the natural-language regex on the live request path.
 """
 
@@ -9,8 +9,7 @@ import pytest
 
 from backend.chat.streaming import (
     OFFER_MARKER,
-    OfferMarkerStreamFilter,
-    _scrub_offer_marker_literal,
+    MarkerStreamFilter,
     _strip_and_detect_offer_marker,
 )
 
@@ -44,7 +43,7 @@ from backend.chat.streaming import (
             # that appears mid-text (LLM echoes a user question, docs quote the
             # token, …) must NOT arm pre_confirm and must NOT be rewritten here —
             # defensive UX stripping for the streaming path is
-            # OfferMarkerStreamFilter's job, not this one.
+            # MarkerStreamFilter's job, not this one.
             id="marker_in_middle_is_not_detected",
         ),
         pytest.param("", False, "", id="empty_string"),
@@ -84,7 +83,7 @@ def test_strip_and_detect_offer_marker(text, expected_offered, expected_cleaned)
 
 def _collect(feeds: list[str]) -> str:
     out: list[str] = []
-    f = OfferMarkerStreamFilter(out.append)
+    f = MarkerStreamFilter(out.append)
     for chunk in feeds:
         f.feed(chunk)
     f.flush_end()
@@ -133,24 +132,3 @@ def test_offer_marker_stream_filter(feeds, expected):
     assert emitted == expected
     assert OFFER_MARKER not in emitted
     assert "<" not in emitted
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        pytest.param(
-            "Before " + OFFER_MARKER + " middle " + OFFER_MARKER + " end",
-            "Before  middle  end",
-            id="removes_mid_text_literal",
-        ),
-    ],
-)
-def test_scrub_offer_marker_literal_removes(text, expected):
-    scrubbed = _scrub_offer_marker_literal(text)
-    assert OFFER_MARKER not in scrubbed
-    assert scrubbed == expected
-
-
-def test_scrub_offer_marker_literal_noop_when_no_marker():
-    text = "Plain answer."
-    assert _scrub_offer_marker_literal(text) is text

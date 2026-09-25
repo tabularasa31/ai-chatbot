@@ -26,15 +26,12 @@ from backend.chat.language import LocalizationResult
 from backend.chat.types import (
     RetrievalContext,
 )
-from backend.chat.service import (
-    process_chat_message,
-)
 from backend.faq.faq_matcher import FAQMatchResult
 from backend.guards.types import Verdict, VerdictReason
 from backend.models import Chat, Message, MessageRole, Tenant
 from backend.search.service import build_reliability_assessment
 
-from tests._async_utils import as_async as _as_async, as_async_generate
+from tests._async_utils import as_async as _as_async, as_async_generate, run_chat_turn
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -147,7 +144,8 @@ def _identity_localize(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_followup_guard_receives_dialog_context(
+@pytest.mark.asyncio
+async def test_followup_guard_receives_dialog_context(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -181,7 +179,7 @@ def test_followup_guard_receives_dialog_context(
     )
     db_session.commit()
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id,
         "And what if I have a cloudflare certificate here?",
         session_id,
@@ -197,7 +195,8 @@ def test_followup_guard_receives_dialog_context(
     assert "Upload a certificate" in dialog_context
 
 
-def test_support_complaint_offers_escalation_not_refusal(
+@pytest.mark.asyncio
+async def test_support_complaint_offers_escalation_not_refusal(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -229,7 +228,7 @@ def test_support_complaint_offers_escalation_not_refusal(
     monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _render)
 
     session_id = uuid.uuid4()
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id,
         "They have not answered me for two weeks already",
         session_id,
@@ -250,7 +249,8 @@ def test_support_complaint_offers_escalation_not_refusal(
     assert chat.escalation_pre_confirm_context["trigger"] == "user_complaint"
 
 
-def test_social_turn_gets_polite_acknowledgement(
+@pytest.mark.asyncio
+async def test_social_turn_gets_polite_acknowledgement(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -270,7 +270,7 @@ def test_social_turn_gets_polite_acknowledgement(
     )
 
     session_id = uuid.uuid4()
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id,
         "Thanks a lot, I will wait for the reply, goodbye",
         session_id,
@@ -290,7 +290,8 @@ def test_social_turn_gets_polite_acknowledgement(
     assert chat.escalation_pre_confirm_pending is False
 
 
-def test_social_question_about_bot_gets_short_reply(
+@pytest.mark.asyncio
+async def test_social_question_about_bot_gets_short_reply(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -313,7 +314,7 @@ def test_social_question_about_bot_gets_short_reply(
     )
 
     session_id = uuid.uuid4()
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id,
         "Hi, can you speak Russian?",
         session_id,
@@ -333,7 +334,8 @@ def test_social_question_about_bot_gets_short_reply(
     assert chat.escalation_pre_confirm_pending is False
 
 
-def test_short_social_question_classified_on_first_zero_hits_turn(
+@pytest.mark.asyncio
+async def test_short_social_question_classified_on_first_zero_hits_turn(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -385,7 +387,7 @@ def test_short_social_question_classified_on_first_zero_hits_turn(
     )
 
     session_id = uuid.uuid4()
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id,
         "do you speak English?",
         session_id,
@@ -398,7 +400,8 @@ def test_short_social_question_classified_on_first_zero_hits_turn(
     assert "couldn't find" not in outcome.text.lower()
 
 
-def test_offtopic_is_still_rejected_with_support_offer(
+@pytest.mark.asyncio
+async def test_offtopic_is_still_rejected_with_support_offer(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -418,7 +421,7 @@ def test_offtopic_is_still_rejected_with_support_offer(
     )
 
     session_id = uuid.uuid4()
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id,
         "Please write me a long poem about flowers",
         session_id,

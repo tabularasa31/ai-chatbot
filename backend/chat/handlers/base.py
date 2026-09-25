@@ -52,7 +52,7 @@ class ChatTurnOutcome:
 
 @dataclass
 class HandlerContext:
-    """Inputs assembled at the top of process_chat_message before handler dispatch.
+    """Inputs assembled at the top of async_process_chat_message before handler dispatch.
 
     The Greeting handler only reads the core fields; Escalation / RagHandler
     also use the bot, disclosure, callback, and per-turn metadata fields
@@ -87,7 +87,7 @@ class HandlerContext:
 
     # Used by EscalationStateMachine + RagHandler
     session_id: uuid.UUID | None = None
-    # The raw per-request user_context arg from process_chat_message — used as
+    # The raw per-request user_context arg from async_process_chat_message — used as
     # the "identified on this turn" analytics signal. Distinct from
     # effective_user_ctx, which prefers the persisted chat.user_context (i.e.
     # carries identity from earlier turns and would inflate the metric).

@@ -23,10 +23,8 @@ from backend.chat.decision import MAX_CLARIFICATIONS_PER_SESSION
 from backend.chat.handlers.rag import (
     LoopSignal,
 )
-from backend.chat.service import (
-    process_chat_message,
-)
 from backend.models import EscalationTicket, EscalationTrigger
+from tests._async_utils import run_chat_turn
 from tests.test_clarifying_reply_survives_handoff import (
     CLARIFYING_ANSWER,
     PLAIN_ANSWER,
@@ -106,7 +104,8 @@ def _ticket(db_session: Session, tenant_id: uuid.UUID) -> EscalationTicket:
     )
 
 
-def test_loop_escalation_records_loop_detected(
+@pytest.mark.asyncio
+async def test_loop_escalation_records_loop_detected(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -131,7 +130,7 @@ def test_loop_escalation_records_loop_detected(
     )
 
     _patch_loop_signal(monkeypatch, detected=False)
-    first = process_chat_message(
+    first = await run_chat_turn(
         tenant_id, "the widget shows an error", session_id, db_session, api_key=api_key
     )
     assert first.text == PLAIN_ANSWER
@@ -140,7 +139,7 @@ def test_loop_escalation_records_loop_detected(
 
     events.clear()
     _patch_loop_signal(monkeypatch, detected=True)
-    second = process_chat_message(
+    second = await run_chat_turn(
         tenant_id, "the widget still shows an error", session_id, db_session, api_key=api_key
     )
 
@@ -158,12 +157,13 @@ def test_loop_escalation_records_loop_detected(
     assert "trigger" not in offers[0]
 
     _patch_confirmation_turn(monkeypatch)
-    process_chat_message(tenant_id, "yes", session_id, db_session, api_key=api_key)
+    await run_chat_turn(tenant_id, "yes", session_id, db_session, api_key=api_key)
 
     assert _ticket(db_session, tenant_id).trigger is EscalationTrigger.loop_detected
 
 
-def test_clarification_ceiling_records_clarify_loop_limit(
+@pytest.mark.asyncio
+async def test_clarification_ceiling_records_clarify_loop_limit(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -186,7 +186,7 @@ def test_clarification_ceiling_records_clarify_loop_limit(
         llm_clarifying=True,
     )
 
-    first = process_chat_message(
+    first = await run_chat_turn(
         tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
     )
     assert first.text == CLARIFYING_ANSWER
@@ -198,7 +198,7 @@ def test_clarification_ceiling_records_clarify_loop_limit(
     db_session.commit()
 
     events.clear()
-    second = process_chat_message(
+    second = await run_chat_turn(
         tenant_id, "and what about domains?", session_id, db_session, api_key=api_key
     )
 
@@ -218,7 +218,7 @@ def test_clarification_ceiling_records_clarify_loop_limit(
     assert "trigger" not in offers[0]
 
     _patch_confirmation_turn(monkeypatch)
-    process_chat_message(tenant_id, "yes", session_id, db_session, api_key=api_key)
+    await run_chat_turn(tenant_id, "yes", session_id, db_session, api_key=api_key)
 
     assert _ticket(db_session, tenant_id).trigger is EscalationTrigger.clarify_loop_limit
 
@@ -230,7 +230,8 @@ def test_clarification_ceiling_records_clarify_loop_limit(
         (_empty_retrieval, EscalationTrigger.no_documents, "reason-empty@example.com"),
     ],
 )
-def test_retrieval_escalations_keep_their_own_trigger(
+@pytest.mark.asyncio
+async def test_retrieval_escalations_keep_their_own_trigger(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -254,10 +255,10 @@ def test_retrieval_escalations_keep_their_own_trigger(
     )
 
     # First weak turn is deferred; the second one escalates.
-    process_chat_message(
+    await run_chat_turn(
         tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
     )
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "so how do I run one?", session_id, db_session, api_key=api_key
     )
 
@@ -267,6 +268,6 @@ def test_retrieval_escalations_keep_their_own_trigger(
     assert [c["variant"] for c in offers] == ["no_answer"]
 
     _patch_confirmation_turn(monkeypatch)
-    process_chat_message(tenant_id, "yes", session_id, db_session, api_key=api_key)
+    await run_chat_turn(tenant_id, "yes", session_id, db_session, api_key=api_key)
 
     assert _ticket(db_session, tenant_id).trigger is pipeline_trigger

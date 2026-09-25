@@ -28,7 +28,7 @@ from time import perf_counter
 
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import selectinload
 
 from backend.chat.events import _emit_quick_answer_lookup_event
 from backend.chat.followup import build_dialog_context
@@ -154,18 +154,6 @@ def _quick_answer_keys_for_question(intent: QuestionIntentResult | None) -> list
     return list(dict.fromkeys(selected))
 
 
-def _quick_answers_context(
-    tenant_id: uuid.UUID,
-    db: Session,
-    intent: QuestionIntentResult | None = None,
-) -> list[str]:
-    """Return only the structured quick answers relevant to this turn."""
-    selected_keys = _quick_answer_keys_for_question(intent)
-    if not selected_keys:
-        return []
-    return _lookup_quick_answers(tenant_id, selected_keys, db)
-
-
 _QUICK_ANSWER_LABELS = {
     "support_email": "Support email",
     "documentation_url": "Documentation",
@@ -177,7 +165,7 @@ _QUICK_ANSWER_LABELS = {
 
 
 def _format_quick_answer_lines(selected_keys: list[str], answers: list) -> list[str]:
-    """Pure formatting shared by sync and async ``_lookup_quick_answers``."""
+    """Rank and dedupe quick-answer rows into the prompt line for each key."""
     lines_by_key: dict[str, str] = {}
     for answer in sorted(
         answers,
@@ -190,24 +178,9 @@ def _format_quick_answer_lines(selected_keys: list[str], answers: list) -> list[
     return [lines_by_key[key] for key in selected_keys if key in lines_by_key]
 
 
-def _lookup_quick_answers(
-    tenant_id: uuid.UUID, selected_keys: list[str], db: Session
-) -> list[str]:
-    from backend.models import QuickAnswer
-
-    answers = (
-        db.query(QuickAnswer)
-        .filter(QuickAnswer.tenant_id == tenant_id, QuickAnswer.key.in_(selected_keys))
-        .options(selectinload(QuickAnswer.source))
-        .all()
-    )
-    return _format_quick_answer_lines(selected_keys, list(answers))
-
-
 async def _async_lookup_quick_answers(
     tenant_id: uuid.UUID, selected_keys: list[str], db: AsyncSession
 ) -> list[str]:
-    """Async counterpart of :func:`_lookup_quick_answers`."""
     from sqlalchemy import select as _select
 
     from backend.models import QuickAnswer

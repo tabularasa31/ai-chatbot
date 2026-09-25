@@ -24,15 +24,13 @@ from backend.chat.handlers.rag import (
     LoopSignal,
 )
 from backend.chat.language import LanguageDetectionResult
-from backend.chat.service import (
-    process_chat_message,
-)
 from backend.chat.types import (
     ChatPipelineResult,
     RetrievalContext,
 )
 from backend.models import Chat, EscalationTrigger
 from backend.search.service import build_reliability_assessment
+from tests._async_utils import run_chat_turn
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 CLARIFYING_ANSWER = "Which page do you see the error on?"
@@ -166,7 +164,8 @@ def _chat(db_session: Session, session_id: uuid.UUID) -> Chat:
     return chat
 
 
-def test_zero_retrieval_clarifying_question_reaches_user(
+@pytest.mark.asyncio
+async def test_zero_retrieval_clarifying_question_reaches_user(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -188,7 +187,7 @@ def test_zero_retrieval_clarifying_question_reaches_user(
         llm_clarifying=True,
     )
 
-    process_chat_message(
+    await run_chat_turn(
         tenant_id, "the widget shows an error", session_id, db_session, api_key=api_key
     )
     first_props = _turn_props(events)
@@ -197,7 +196,7 @@ def test_zero_retrieval_clarifying_question_reaches_user(
     assert _chat(db_session, session_id).last_reply_was_low_confidence is True
 
     events.clear()
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "it still fails", session_id, db_session, api_key=api_key
     )
 
@@ -222,7 +221,8 @@ def test_zero_retrieval_clarifying_question_reaches_user(
         pytest.param(False, id="second_weak_turn_without_clarifying_still_escalates"),
     ],
 )
-def test_second_weak_turn_disposition(
+@pytest.mark.asyncio
+async def test_second_weak_turn_disposition(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -240,7 +240,7 @@ def test_second_weak_turn_disposition(
         escalation_trigger=EscalationTrigger.low_similarity,
         llm_clarifying=False,
     )
-    process_chat_message(
+    await run_chat_turn(
         tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
     )
     assert _chat(db_session, session_id).last_reply_was_low_confidence is True
@@ -254,7 +254,7 @@ def test_second_weak_turn_disposition(
         escalation_trigger=EscalationTrigger.low_similarity,
         llm_clarifying=second_turn_clarifying,
     )
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "so how do I run one?", session_id, db_session, api_key=api_key
     )
 
@@ -280,7 +280,8 @@ def test_second_weak_turn_disposition(
         assert props["handoff_stood_down"] is False
 
 
-def test_plain_answer_turn_reports_answer_outcome(
+@pytest.mark.asyncio
+async def test_plain_answer_turn_reports_answer_outcome(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -298,7 +299,7 @@ def test_plain_answer_turn_reports_answer_outcome(
         llm_clarifying=False,
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
     )
 
@@ -326,7 +327,8 @@ def test_plain_answer_turn_reports_answer_outcome(
         ),
     ],
 )
-def test_budget_ceiling_still_escalates_and_charges_nothing_for_the_lost_reply(
+@pytest.mark.asyncio
+async def test_budget_ceiling_still_escalates_and_charges_nothing_for_the_lost_reply(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -351,7 +353,7 @@ def test_budget_ceiling_still_escalates_and_charges_nothing_for_the_lost_reply(
         escalation_trigger=first_turn_trigger,
         llm_clarifying=False,
     )
-    process_chat_message(
+    await run_chat_turn(
         tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
     )
     chat = _chat(db_session, session_id)
@@ -368,7 +370,7 @@ def test_budget_ceiling_still_escalates_and_charges_nothing_for_the_lost_reply(
         escalation_trigger=first_turn_trigger,
         llm_clarifying=True,
     )
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "and what about domains?", session_id, db_session, api_key=api_key
     )
 
@@ -384,7 +386,8 @@ def test_budget_ceiling_still_escalates_and_charges_nothing_for_the_lost_reply(
     assert props["handoff_stood_down"] is False
 
 
-def test_loop_detection_overrules_the_stand_down(
+@pytest.mark.asyncio
+async def test_loop_detection_overrules_the_stand_down(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -413,7 +416,7 @@ def test_loop_detection_overrules_the_stand_down(
         llm_clarifying=True,
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "the widget shows an error", session_id, db_session, api_key=api_key
     )
 
@@ -429,7 +432,8 @@ def test_loop_detection_overrules_the_stand_down(
     assert props["turn_outcome"] == "escalate"
 
 
-def test_explicit_human_request_still_escalates_immediately(
+@pytest.mark.asyncio
+async def test_explicit_human_request_still_escalates_immediately(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -479,7 +483,7 @@ def test_explicit_human_request_still_escalates_immediately(
         EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id,
         "billing is broken, connect me to a human please",
         session_id,

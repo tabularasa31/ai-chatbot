@@ -20,16 +20,13 @@ from backend.chat.steps.generate import (
     async_generate_answer,
 )
 from backend.chat.language import LanguageDetectionResult, LocalizationResult
-from backend.chat.service import (
-    process_chat_message,
-)
 from backend.chat.types import (
     ChatPipelineResult,
     RetrievalContext,
 )
 from backend.chat.steps.pre_retrieval import (
+    _async_lookup_quick_answers,
     _quick_answer_keys_for_question,
-    _quick_answers_context,
 )
 from backend.chat.steps.retrieval import (
     async_retrieve_context,
@@ -58,7 +55,7 @@ from backend.models import (
     UrlSource,
 )
 from backend.search.service import build_reliability_assessment
-from tests._async_utils import as_async, as_async as _as_async, as_async_generate
+from tests._async_utils import as_async, as_async as _as_async, as_async_generate, run_chat_turn
 from tests.conftest import (
     get_default_bot_public_id,
     post_chat_message,
@@ -132,9 +129,11 @@ def test_generate_answer_allows_quick_answers_without_retrieval_chunks(
     mock_openai_client.chat.completions.create.assert_called_once()
 
 
-def test_quick_answers_context_returns_structured_lines(
+@pytest.mark.asyncio
+async def test_quick_answers_context_returns_structured_lines(
     tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     token = register_and_verify_user(tenant, db_session, email="quick-answer-docs@example.com")
     create_resp = tenant.post(
@@ -179,9 +178,8 @@ def test_quick_answers_context_returns_structured_lines(
     )
     db_session.commit()
 
-    answer = _quick_answers_context(
-        tenant_id, db_session, QuestionIntentResult(documentation=True)
-    )
+    selected_keys = _quick_answer_keys_for_question(QuestionIntentResult(documentation=True))
+    answer = await _async_lookup_quick_answers(tenant_id, selected_keys, async_search_session)
 
     assert answer == ["Documentation: https://docs.example.com/"]
 
@@ -219,9 +217,11 @@ def test_quick_answer_keys_for_question_filters_by_topic() -> None:
     ]
 
 
-def test_quick_answers_context_prefers_higher_quality_documentation_source_over_newer_fallback(
+@pytest.mark.asyncio
+async def test_quick_answers_context_prefers_higher_quality_documentation_source_over_newer_fallback(
     tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     token = register_and_verify_user(tenant, db_session, email="quick-answer-quality@example.com")
     create_resp = tenant.post(
@@ -278,9 +278,8 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
     )
     db_session.commit()
 
-    answer = _quick_answers_context(
-        tenant_id, db_session, QuestionIntentResult(documentation=True)
-    )
+    selected_keys = _quick_answer_keys_for_question(QuestionIntentResult(documentation=True))
+    answer = await _async_lookup_quick_answers(tenant_id, selected_keys, async_search_session)
 
     assert answer == ["Documentation: https://docs.example.com/guide"]
 
@@ -1464,7 +1463,8 @@ def _zh_stub_pre_retrieval(
     )
 
 
-def test_first_zero_hits_emits_soft_reply_and_sets_flag(
+@pytest.mark.asyncio
+async def test_first_zero_hits_emits_soft_reply_and_sets_flag(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -1487,7 +1487,7 @@ def test_first_zero_hits_emits_soft_reply_and_sets_flag(
     )
 
     session_id = uuid.uuid4()
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id, "Tell me about borscht recipe", session_id, db_session,
         api_key=api_key,
     )
@@ -1501,7 +1501,8 @@ def test_first_zero_hits_emits_soft_reply_and_sets_flag(
     assert chat.last_reply_was_rephrase_prompt is True
 
 
-def test_consecutive_zero_hits_relevant_escalates(
+@pytest.mark.asyncio
+async def test_consecutive_zero_hits_relevant_escalates(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -1568,7 +1569,7 @@ def test_consecutive_zero_hits_relevant_escalates(
         ),
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id, "Question with no docs", session_id, db_session,
         api_key=api_key,
     )
@@ -1586,7 +1587,8 @@ def test_consecutive_zero_hits_relevant_escalates(
     assert any(call.get("force_llm_check") is True for call in consecutive_calls)
 
 
-def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
+@pytest.mark.asyncio
+async def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -1640,7 +1642,7 @@ def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
     monkeypatch.setattr("backend.chat.handlers.rag.render_pre_confirm_text", _slow_render)
     monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _slow_render)
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id, "Question with no docs", session_id, db_session,
         api_key=api_key,
     )
@@ -1658,7 +1660,8 @@ def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
     assert outcome.text != "too late"
 
 
-def test_consecutive_zero_hits_not_relevant_emits_offtopic_reject(
+@pytest.mark.asyncio
+async def test_consecutive_zero_hits_not_relevant_emits_offtopic_reject(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -1695,7 +1698,7 @@ def test_consecutive_zero_hits_not_relevant_emits_offtopic_reject(
     db_session.add(chat)
     db_session.commit()
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id, "Some unrelated query", session_id, db_session,
         api_key=api_key,
     )
@@ -1711,7 +1714,8 @@ def test_consecutive_zero_hits_not_relevant_emits_offtopic_reject(
     assert outcome.text
 
 
-def test_successful_turn_resets_rephrase_flag(
+@pytest.mark.asyncio
+async def test_successful_turn_resets_rephrase_flag(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -1739,7 +1743,7 @@ def test_successful_turn_resets_rephrase_flag(
     db_session.add(chat)
     db_session.commit()
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id, "A real question", session_id, db_session, api_key=api_key,
     )
 
@@ -1807,7 +1811,8 @@ def test_intervening_non_rag_turn_resets_rephrase_flag(
     assert chat.last_reply_was_rephrase_prompt is False
 
 
-def test_no_profile_relevance_verdict_does_not_escalate(
+@pytest.mark.asyncio
+async def test_no_profile_relevance_verdict_does_not_escalate(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -1849,7 +1854,7 @@ def test_no_profile_relevance_verdict_does_not_escalate(
     db_session.add(chat)
     db_session.commit()
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id, "Q two", session_id, db_session, api_key=api_key,
     )
 
@@ -1864,7 +1869,8 @@ def test_no_profile_relevance_verdict_does_not_escalate(
     assert chat.last_reply_was_rephrase_prompt is False
 
 
-def test_session_ended_event_stales_rephrase_flag(
+@pytest.mark.asyncio
+async def test_session_ended_event_stales_rephrase_flag(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -1917,7 +1923,7 @@ def test_session_ended_event_stales_rephrase_flag(
     db_session.add(chat)
     db_session.commit()
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id, "Returning question", session_id, db_session, api_key=api_key,
     )
 
@@ -2154,7 +2160,8 @@ def _nodocs_chat(db_session: Session, session_id: uuid.UUID) -> Chat:
     return chat
 
 
-def test_first_zero_chunk_turn_keeps_its_answer(
+@pytest.mark.asyncio
+async def test_first_zero_chunk_turn_keeps_its_answer(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2165,7 +2172,7 @@ def test_first_zero_chunk_turn_keeps_its_answer(
     events = _nodocs_patch_common(monkeypatch)
     _nodocs_patch_pipeline(monkeypatch)
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
     )
 
@@ -2181,7 +2188,8 @@ def test_first_zero_chunk_turn_keeps_its_answer(
     assert props["handoff_stood_down"] is False
 
 
-def test_second_zero_chunk_turn_escalates(
+@pytest.mark.asyncio
+async def test_second_zero_chunk_turn_escalates(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2191,12 +2199,12 @@ def test_second_zero_chunk_turn_escalates(
     events = _nodocs_patch_common(monkeypatch)
     _nodocs_patch_pipeline(monkeypatch)
 
-    first = process_chat_message(
+    first = await run_chat_turn(
         tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
     )
     assert first.text == _NODOCS_GENERATED_ANSWER
     events.clear()
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "and per seat?", session_id, db_session, api_key=api_key
     )
 
@@ -2210,7 +2218,8 @@ def test_second_zero_chunk_turn_escalates(
     assert _nodocs_turn_props(events)["escalated"] is True
 
 
-def test_zero_chunk_then_weak_turn_escalates(
+@pytest.mark.asyncio
+async def test_zero_chunk_then_weak_turn_escalates(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2221,7 +2230,7 @@ def test_zero_chunk_then_weak_turn_escalates(
     _nodocs_patch_common(monkeypatch)
     _nodocs_patch_pipeline(monkeypatch)
 
-    process_chat_message(
+    await run_chat_turn(
         tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
     )
     _nodocs_patch_pipeline(
@@ -2229,7 +2238,7 @@ def test_zero_chunk_then_weak_turn_escalates(
         retrieval=_nodocs_weak_retrieval(),
         escalation_trigger=EscalationTrigger.low_similarity,
     )
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
     )
 
@@ -2242,7 +2251,8 @@ def test_zero_chunk_then_weak_turn_escalates(
     )
 
 
-def test_weak_then_zero_chunk_turn_escalates(
+@pytest.mark.asyncio
+async def test_weak_then_zero_chunk_turn_escalates(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2257,11 +2267,11 @@ def test_weak_then_zero_chunk_turn_escalates(
         escalation_trigger=EscalationTrigger.low_similarity,
     )
 
-    process_chat_message(
+    await run_chat_turn(
         tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
     )
     _nodocs_patch_pipeline(monkeypatch)
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
     )
 
@@ -2274,7 +2284,8 @@ def test_weak_then_zero_chunk_turn_escalates(
     )
 
 
-def test_zero_hits_fast_path_escalation_is_not_deferred(
+@pytest.mark.asyncio
+async def test_zero_hits_fast_path_escalation_is_not_deferred(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2297,14 +2308,14 @@ def test_zero_hits_fast_path_escalation_is_not_deferred(
         reject_reason="rephrase",
     )
 
-    first = process_chat_message(
+    first = await run_chat_turn(
         tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
     )
     assert first.text == _NODOCS_REPHRASE_PROMPT
     assert _nodocs_chat(db_session, session_id).last_reply_was_rephrase_prompt is True
 
     _nodocs_patch_pipeline(monkeypatch, answer=_NODOCS_REPHRASE_PROMPT)
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "the workspace limit?", session_id, db_session, api_key=api_key
     )
 
@@ -2317,7 +2328,8 @@ def test_zero_hits_fast_path_escalation_is_not_deferred(
     )
 
 
-def test_needs_human_marker_still_offers_the_handoff(
+@pytest.mark.asyncio
+async def test_needs_human_marker_still_offers_the_handoff(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2328,7 +2340,7 @@ def test_needs_human_marker_still_offers_the_handoff(
     events = _nodocs_patch_common(monkeypatch)
     _nodocs_patch_pipeline(monkeypatch, llm_needs_human=True)
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "what is the workspace limit?", session_id, db_session, api_key=api_key
     )
 
@@ -2425,7 +2437,8 @@ def _lowconf_patch_weak_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_a_good_turn_between_two_weak_ones_resets_the_tracker(
+@pytest.mark.asyncio
+async def test_a_good_turn_between_two_weak_ones_resets_the_tracker(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2435,7 +2448,7 @@ def test_a_good_turn_between_two_weak_ones_resets_the_tracker(
     session_id = uuid.uuid4()
     _lowconf_patch_weak_turn(monkeypatch)
 
-    process_chat_message(
+    await run_chat_turn(
         tenant_id, "are Workers supported?", session_id, db_session, api_key=api_key
     )
 
@@ -2456,7 +2469,7 @@ def test_a_good_turn_between_two_weak_ones_resets_the_tracker(
     monkeypatch.setattr(
         "backend.chat.service.async_run_chat_pipeline", _confident_pipeline
     )
-    process_chat_message(
+    await run_chat_turn(
         tenant_id, "and how do I deploy?", session_id, db_session, api_key=api_key
     )
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
@@ -2464,7 +2477,7 @@ def test_a_good_turn_between_two_weak_ones_resets_the_tracker(
     assert chat.last_reply_was_low_confidence is False
 
     _lowconf_patch_weak_turn(monkeypatch)
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id, "what about custom domains?", session_id, db_session, api_key=api_key
     )
 
@@ -2474,12 +2487,13 @@ def test_a_good_turn_between_two_weak_ones_resets_the_tracker(
 
 
 # ---------------------------------------------------------------------------
-# Chat pipeline orchestration (process_chat_message) -- absorbed from the
+# Chat pipeline orchestration (async_process_chat_message) -- absorbed from the
 # deleted test_chat_pipeline.py
 # ---------------------------------------------------------------------------
 
 
-def test_process_chat_message_ends_followup_span_on_exception(
+@pytest.mark.asyncio
+async def test_process_chat_message_ends_followup_span_on_exception(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2548,7 +2562,7 @@ def test_process_chat_message_ends_followup_span_on_exception(
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        process_chat_message(
+        await run_chat_turn(
             client_row.id,
             "no thanks",
             chat.session_id,
@@ -2565,7 +2579,8 @@ def test_process_chat_message_ends_followup_span_on_exception(
     ]
 
 
-def test_process_chat_message_adds_variant_summary_to_trace(
+@pytest.mark.asyncio
+async def test_process_chat_message_adds_variant_summary_to_trace(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2655,7 +2670,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
         lambda *args, **kwargs: (False, None),
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         client_row.id,
         "How do I reset my password?",
         uuid.uuid4(),
@@ -2714,7 +2729,8 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     assert fake_trace.update_calls[-1]["tags"] == ["variants:multi"]
 
 
-def test_trace_metadata_language_confidence_and_response_language_across_turns(
+@pytest.mark.asyncio
+async def test_trace_metadata_language_confidence_and_response_language_across_turns(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2817,7 +2833,7 @@ def test_trace_metadata_language_confidence_and_response_language_across_turns(
         "Сколько времени занимает восстановление доступа?",
     ]
     for question in questions:
-        process_chat_message(
+        await run_chat_turn(
             client_row.id,
             question,
             session_id,
@@ -2852,7 +2868,8 @@ def test_trace_metadata_language_confidence_and_response_language_across_turns(
     assert "language_is_reliable" not in metadatas[2]
 
 
-def test_trace_metadata_stamps_knowledge_base_updated_at(
+@pytest.mark.asyncio
+async def test_trace_metadata_stamps_knowledge_base_updated_at(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2913,7 +2930,7 @@ def test_trace_metadata_stamps_knowledge_base_updated_at(
 
     monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _fake_async_pipeline)
 
-    process_chat_message(tenant_id, "How do I reset my password?", uuid.uuid4(), db_session, api_key=api_key)
+    await run_chat_turn(tenant_id, "How do I reset my password?", uuid.uuid4(), db_session, api_key=api_key)
     assert traces[-1].stamp() is None
 
     older = dt.datetime(2026, 9, 1, 8, 0, 0)
@@ -2932,11 +2949,12 @@ def test_trace_metadata_stamps_knowledge_base_updated_at(
         )
     db_session.commit()
 
-    process_chat_message(tenant_id, "How do I reset my password?", uuid.uuid4(), db_session, api_key=api_key)
+    await run_chat_turn(tenant_id, "How do I reset my password?", uuid.uuid4(), db_session, api_key=api_key)
     assert traces[-1].stamp() == "2026-09-14T03:30:00Z"
 
 
-def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
+@pytest.mark.asyncio
+async def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -2963,7 +2981,7 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
         _fake_async_pipeline,
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id,
         "How to connect domain?",
         session_id,
@@ -2974,7 +2992,8 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     assert outcome.text == "Which domain provider are you trying to configure?"
     assert outcome.tokens_used == 3
 
-def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
+@pytest.mark.asyncio
+async def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -3002,7 +3021,7 @@ def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
         fake_generate_greeting_in_language_result,
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         client_row.id,
         "",
         uuid.uuid4(),

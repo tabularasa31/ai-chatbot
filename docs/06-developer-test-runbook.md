@@ -44,7 +44,7 @@ pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m 
 
 ## Clarification policy (decision engine)
 
-Use this after touching `backend/chat/decision.py`, `backend/chat/slots.py`,
+Use this after touching `backend/chat/decision.py`,
 the `chats.clarification_count` budget, the block-rules gate in
 `backend/chat/handlers/rag.py`, or any of the trace/PostHog fields produced
 by `Decision.trace_dict()`.

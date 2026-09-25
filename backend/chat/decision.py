@@ -115,7 +115,7 @@ class DecisionKind(str, Enum):
 class TurnContext:
     """All signals needed to make a single turn decision.
 
-    Populated in process_chat_message after the RAG pipeline runs, then
+    Populated in async_process_chat_message after the RAG pipeline runs, then
     passed to decide(). Fields are read-only; build a new instance per turn.
     """
 
@@ -164,7 +164,7 @@ class TurnContext:
 class Decision:
     """Turn decision returned by decide().
 
-    Read by process_chat_message and the trace layer; no other module
+    Read by async_process_chat_message and the trace layer; no other module
     should infer its own clarify/answer/escalate outcome.
     """
 

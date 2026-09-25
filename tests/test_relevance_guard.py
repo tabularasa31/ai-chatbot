@@ -551,46 +551,6 @@ async def test_async_relevance_uses_model_from_settings(monkeypatch: pytest.Monk
     assert async_mock.call_args.kwargs["model"] == "gpt-test-async"
 
 
-@pytest.mark.asyncio
-async def test_async_relevance_precheck_loads_profile_and_delegates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The precheck wrapper loads the profile via ``AsyncSession.get`` and
-    returns the guard verdict for it."""
-    from backend.guards.relevance_checker import _cache, async_check_relevance_precheck
-
-    _cache.clear()
-
-    async_mock = AsyncMock(
-        return_value=Mock(
-            choices=[Mock(message=Mock(content='{"category": "relevant", "reason": "ok"}'))]
-        )
-    )
-    mock_client = Mock()
-    mock_client.chat.completions.create = async_mock
-    monkeypatch.setattr(
-        "backend.guards.relevance_checker.get_async_openai_client",
-        lambda _key, **_kw: mock_client,
-    )
-
-    tid = uuid.uuid4()
-    profile = _make_profile(tid)
-    db = Mock()
-    db.get = AsyncMock(return_value=profile)
-
-    relevant, reason = _rr(await async_check_relevance_precheck(
-        tenant_id=tid,
-        user_question="how do I configure the integration module",
-        db=db,
-        api_key="sk-test",
-    ))
-
-    db.get.assert_awaited_once_with(TenantProfile, tid)
-    assert relevant is True
-    assert reason == "relevant"
-    assert async_mock.await_count == 1
-
-
 # ---------------------------------------------------------------------------
 # Category classification + dialog context (86ey7x2mh)
 # ---------------------------------------------------------------------------

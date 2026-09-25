@@ -6,8 +6,6 @@ import json
 import time
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from backend.core.config import settings
 from backend.core.openai_client import completion_kwargs, get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
@@ -406,26 +404,3 @@ async def async_check_relevance_with_profile(
     _cache_set(cache_key, relevant, reason)
     return _finalize(_verdict_from_category(reason), False)
 
-
-async def async_check_relevance_precheck(
-    *,
-    tenant_id: uuid.UUID,
-    user_question: str,
-    db: AsyncSession,
-    api_key: str,
-    trace: TraceHandle | None = None,
-) -> Verdict:
-    """Relevance pre-check before RAG.
-
-    Thin wrapper around :func:`async_check_relevance_with_profile` that loads
-    the profile from the DB. Use the profile variant directly when the profile
-    has already been fetched (e.g. for concurrent execution).
-    """
-    profile = await db.get(TenantProfileModel, tenant_id)
-    return await async_check_relevance_with_profile(
-        tenant_id=tenant_id,
-        user_question=user_question,
-        profile=profile,
-        api_key=api_key,
-        trace=trace,
-    )

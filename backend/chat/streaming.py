@@ -234,13 +234,6 @@ def _scrub_marker_literals(text: str) -> str:
     return text
 
 
-def _scrub_offer_marker_literal(text: str) -> str:
-    """Strip stray :data:`OFFER_MARKER` literals only."""
-    if not text or OFFER_MARKER not in text:
-        return text
-    return text.replace(OFFER_MARKER, "")
-
-
 def _split_boundary_suffix_len(buf: str, candidates: tuple[str, ...]) -> int:
     """Longest tail of ``buf`` that could still grow into one of ``candidates``."""
     longest = 0
@@ -322,10 +315,6 @@ class MarkerStreamFilter:
             return
         self._emit(self._buf)
         self._buf = ""
-
-
-# Legacy name kept for the offer-marker call sites and their tests.
-OfferMarkerStreamFilter = MarkerStreamFilter
 
 
 class ThoughtStreamFilter:

@@ -17,15 +17,13 @@ from backend.chat.language import (
 from backend.chat.language_context import (
     _load_recent_user_turn_texts,
 )
-from backend.chat.service import (
-    process_chat_message,
-)
 from backend.chat.types import (
     ChatPipelineResult,
     RetrievalContext,
 )
 from backend.models import Chat, EscalationTicket, EscalationTrigger, Message, MessageRole
 from backend.search.reliability import build_reliability_assessment
+from tests._async_utils import run_chat_turn
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -380,7 +378,8 @@ def _patch_process_chat_dependencies(
     )
 
 
-def test_chat_locks_on_first_high_confidence_non_english_turn_and_stays_locked(
+@pytest.mark.asyncio
+async def test_chat_locks_on_first_high_confidence_non_english_turn_and_stays_locked(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -401,13 +400,13 @@ def test_chat_locks_on_first_high_confidence_non_english_turn_and_stays_locked(
         },
     )
 
-    first = process_chat_message(tenant_id, "Привет мир", session_id, db_session, api_key=api_key)
+    first = await run_chat_turn(tenant_id, "Привет мир", session_id, db_session, api_key=api_key)
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert first.text == "lang=ru"
     assert chat.last_response_language == "ru"
     assert chat.language_locked is True
 
-    second = process_chat_message(
+    second = await run_chat_turn(
         tenant_id, "Hello there everyone", session_id, db_session, api_key=api_key
     )
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
@@ -416,7 +415,8 @@ def test_chat_locks_on_first_high_confidence_non_english_turn_and_stays_locked(
     assert chat.last_response_language == "ru"
 
 
-def test_chat_does_not_lock_on_first_english_turn_but_locks_after_second(
+@pytest.mark.asyncio
+async def test_chat_does_not_lock_on_first_english_turn_but_locks_after_second(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -433,18 +433,19 @@ def test_chat_does_not_lock_on_first_english_turn_but_locks_after_second(
         {"Hello there": _detection("en"), "How are you": _detection("en")},
     )
 
-    process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
+    await run_chat_turn(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
     chat_after_first = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert chat_after_first.last_response_language == "en"
     assert chat_after_first.language_locked is False
 
-    process_chat_message(tenant_id, "How are you", session_id, db_session, api_key=api_key)
+    await run_chat_turn(tenant_id, "How are you", session_id, db_session, api_key=api_key)
     chat_after_second = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert chat_after_second.language_locked is True
     assert chat_after_second.last_response_language == "en"
 
 
-def test_chat_switches_language_after_two_consistent_turns_and_logs_it(
+@pytest.mark.asyncio
+async def test_chat_switches_language_after_two_consistent_turns_and_logs_it(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -468,9 +469,9 @@ def test_chat_switches_language_after_two_consistent_turns_and_logs_it(
     )
 
     with caplog.at_level("INFO"):
-        first = process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
-        second = process_chat_message(tenant_id, "Как дела", session_id, db_session, api_key=api_key)
-        third = process_chat_message(tenant_id, "Нужна помощь", session_id, db_session, api_key=api_key)
+        first = await run_chat_turn(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
+        second = await run_chat_turn(tenant_id, "Как дела", session_id, db_session, api_key=api_key)
+        third = await run_chat_turn(tenant_id, "Нужна помощь", session_id, db_session, api_key=api_key)
 
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert first.text == "lang=en"
@@ -487,7 +488,8 @@ def test_chat_switches_language_after_two_consistent_turns_and_logs_it(
     )
 
 
-def test_chat_escalation_uses_user_response_language(
+@pytest.mark.asyncio
+async def test_chat_escalation_uses_user_response_language(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -570,7 +572,7 @@ def test_chat_escalation_uses_user_response_language(
     monkeypatch.setattr("backend.chat.handlers.escalation.build_chat_messages_for_openai", lambda *args, **kwargs: [])
 
     with caplog.at_level("INFO"):
-        process_chat_message(
+        await run_chat_turn(
             tenant_id,
             "Как сбросить пароль",
             session_id,
@@ -594,7 +596,8 @@ def test_chat_escalation_uses_user_response_language(
     )
 
 
-def test_rag_escalation_engages_pre_confirm_fsm(
+@pytest.mark.asyncio
+async def test_rag_escalation_engages_pre_confirm_fsm(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -658,7 +661,7 @@ def test_rag_escalation_engages_pre_confirm_fsm(
         _fake_render_pre_confirm,
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         tenant_id,
         "what is your support email?",
         session_id,

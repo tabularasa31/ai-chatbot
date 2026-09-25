@@ -2,8 +2,38 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 from typing import Any
+
+from sqlalchemy.orm import Session
+
+from backend.core import db as core_db
+from backend.chat.handlers import ChatTurnOutcome
+from backend.chat.service import async_process_chat_message
+
+
+async def run_chat_turn(
+    tenant_id: uuid.UUID,
+    question: str,
+    session_id: uuid.UUID,
+    db_session: Session,
+    **kwargs: Any,
+) -> ChatTurnOutcome:
+    """Drive a chat turn through the real async pipeline from a sync test.
+
+    Mirrors what the removed sync ``process_chat_message`` shim did: commit
+    the caller's sync session so SQLite releases its locks, run the turn on
+    its own ``AsyncSession`` (rebound to the test engine by the ``tenant``
+    fixture), then expire the sync session so later reads see the writes.
+    """
+    db_session.commit()
+    async with core_db.AsyncSessionLocal() as async_db:
+        result = await async_process_chat_message(
+            tenant_id, question, session_id, async_db, **kwargs
+        )
+    db_session.expire_all()
+    return result
 
 
 def as_async(fn: Callable[..., Any]) -> Callable[..., Any]:

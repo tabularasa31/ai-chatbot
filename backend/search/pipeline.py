@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.config import settings
 from backend.core.db import is_sqlite as _session_is_sqlite
 from backend.knowledge.entity_extractor import extract_entities_from_query
-from backend.models import RerankerStrategy, Tenant
+from backend.models import Embedding, RerankerStrategy, Tenant
 from backend.observability import TraceHandle
 from backend.observability.formatters import (
     format_embedding_results,
@@ -30,10 +30,12 @@ from backend.search.bm25 import (
     _bm25_queries_for_script,
     _format_bm25_trace_results,
     _is_en_query,
+    _resolve_bm25_expansion_mode,
     _run_bm25_search,
 )
 from backend.search.embedding import async_embed_queries_with_stats
 from backend.search.fusion import (
+    MMR_LAMBDA,
     _collect_score_map,
     apply_script_boost,
     detect_source_overlaps,
@@ -84,6 +86,7 @@ def _variant_mode_for_count(count: int) -> VariantMode:
 def build_variant_trace_metadata(bundle: SearchResultBundle) -> dict[str, object]:
     """Compact trace metadata used on parent request traces."""
     return {
+        "variant_mode": bundle.variant_mode,
         "query_variant_count": bundle.query_variant_count,
         "extra_embedded_queries": bundle.extra_embedded_queries,
         "extra_embedding_api_requests": bundle.extra_embedding_api_requests,
@@ -215,7 +218,7 @@ async def _async_run_ranking_stage(
         trace.span(
             name="mmr-pass",
             input={
-                "lambda": 0.7,
+                "lambda": MMR_LAMBDA,
                 "candidate_count": len(script_boosted_results),
                 "selection_strategy": "mmr-order-base-score-output",
             },
@@ -273,7 +276,7 @@ def _trace_vector_search(
     query_stage: _QueryStageResult,
     tenant_id: uuid.UUID,
     vector_engine: str,
-    vector_candidates: list[tuple[object, float]],
+    vector_candidates: list[tuple[Embedding, float]],
     vector_duration_ms: float,
     vector_search_call_count: int,
     top_k: int | None = None,
@@ -465,9 +468,7 @@ async def _async_run_candidate_stage(
     q = query_stage
     is_sqlite = _session_is_sqlite(db)
     vector_engine = "python-cosine" if is_sqlite else "pgvector"
-    bm25_expansion_mode: BM25ExpansionMode = (
-        "symmetric_variants" if settings.bm25_expansion_mode == "symmetric_variants" else "asymmetric"
-    )
+    bm25_expansion_mode: BM25ExpansionMode = _resolve_bm25_expansion_mode()
 
     kb_script = await async_detect_tenant_kb_script(tenant_id, db)
     bm25_variant_queries = _bm25_queries_for_script(
@@ -588,7 +589,7 @@ async def _async_run_candidate_stage(
 
     vector_for_rrf = vector_candidates[:rrf_candidate_pool]
 
-    entity_results: list[tuple[object, float]] = []
+    entity_results: list[tuple[Embedding, float]] = []
     query_entities: list[str] = []
     entity_duration_ms = 0.0
     if ner_task is not None:
@@ -698,7 +699,7 @@ async def _async_run_candidate_stage(
 
 async def _async_run_quality_stage(
     *,
-    final_results: list[tuple[object, float]],
+    final_results: list[tuple[Embedding, float]],
     tenant_id: uuid.UUID,
     db: AsyncSession,
     api_key: str,

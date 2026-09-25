@@ -5,13 +5,9 @@ import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { clearSession, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
-import { useClientMe, useBots } from "@/hooks/useApi";
-
-const APP_URL =
-  process.env.NEXT_PUBLIC_APP_URL ||
-  (typeof window !== "undefined" ? window.location.origin : "");
-const WIDGET_LOADER_URL =
-  process.env.NEXT_PUBLIC_WIDGET_LOADER_URL || "https://widget.getchat9.live/widget.js";
+import { buildEmbedSnippet } from "@/lib/widget-embed";
+import { PageLoader } from "@/components/ui/page-loader";
+import { useClientMe, useActiveBot } from "@/hooks/useApi";
 
 function DashboardContent() {
   const searchParams = useSearchParams();
@@ -19,9 +15,8 @@ function DashboardContent() {
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
 
   const { data: client, error: clientError, isLoading: clientLoading } = useClientMe();
-  const { data: bots, isLoading: botsLoading } = useBots();
+  const { activeBot: firstActiveBot, isLoading: botsLoading } = useActiveBot({ fallbackToFirst: true });
 
-  const firstActiveBot = bots?.find((b) => b.is_active) ?? bots?.[0];
   const botPublicId = firstActiveBot?.public_id ?? null;
 
   useEffect(() => {
@@ -35,23 +30,12 @@ function DashboardContent() {
   }, [clientError, router]);
 
   function getEmbedSnippet() {
-    // Loader lives on a CDN-style domain (widget.getchat9.live), separate from
-    // the dashboard. apiBase tells the widget where to send /widget/chat etc.
-    // — defaults to the production dashboard, override on staging via
-    // NEXT_PUBLIC_APP_URL during snippet rendering.
-    const apiBaseOverride =
-      APP_URL && APP_URL !== "https://getchat9.live" ? APP_URL : null;
-    const startConfig = apiBaseOverride
-      ? `{ apiBase: ${JSON.stringify(apiBaseOverride)} }`
-      : "";
-    return `<script\n  src="${WIDGET_LOADER_URL}"\n  data-bot-id="${botPublicId ?? ""}">\n</script>\n<script>\n  Chat9Widget.start(${startConfig});\n</script>`;
+    return buildEmbedSnippet({ botId: botPublicId ?? "", configFormat: "inline" });
   }
 
   if (clientLoading || botsLoading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
-      </div>
+      <PageLoader />
     );
   }
 
@@ -147,9 +131,7 @@ function DashboardContent() {
 export default function DashboardPage() {
   return (
     <Suspense fallback={
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
-      </div>
+      <PageLoader />
     }>
       <DashboardContent />
     </Suspense>

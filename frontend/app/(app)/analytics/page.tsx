@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { AnalyticsPeriod } from "@/lib/api";
 import { useAnalyticsSummary } from "@/hooks/useApi";
+import { StatCard } from "@/components/ui/stat-card";
 
 const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
   { value: "7d", label: "7 days" },
@@ -24,15 +25,6 @@ function formatPercent(rate: number | null): string {
 
 function formatCount(value: number | undefined): string {
   return value == null ? "—" : value.toLocaleString();
-}
-
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
-    </div>
-  );
 }
 
 function PeriodSwitcher({

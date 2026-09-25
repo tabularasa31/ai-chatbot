@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useClientMe, useInboxSummary } from "@/hooks/useApi";
 
 type NavItem = {
   href: string;
@@ -15,8 +16,6 @@ type NavItem = {
 };
 
 const INBOX_BADGE_POLL_MS = 30_000;
-/** Fired by the Inbox page after an operator action, so the badge does not wait for the next poll. */
-export const INBOX_CHANGED_EVENT = "chat9:inbox-changed";
 
 const mainNav: NavItem[] = [
   {
@@ -151,49 +150,24 @@ const adminNav: NavItem[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [gapBadgeCount, setGapBadgeCount] = useState(0);
+
   // Assume owner until /tenants/me says otherwise: the dashboard's own owner
   // sees no flicker, and an operator loses the owner-only links a moment later.
-  const [isOwner, setIsOwner] = useState(true);
-  const [gapBadgeCount, setGapBadgeCount] = useState(0);
-  const [inboxBadgeCount, setInboxBadgeCount] = useState(0);
+  const { data: client } = useClientMe();
+  const isAdmin = client?.is_admin ?? false;
+  const isOwner = client?.role === "owner" || client === undefined;
 
-  useEffect(() => {
-    api.clients
-      .getMe()
-      .then((c) => {
-        setIsAdmin(c.is_admin);
-        setIsOwner(c.role === "owner");
-      })
-      .catch(() => {});
-  }, []);
+  // Visitors waiting for a person. Polled, because the badge is the only
+  // place an operator on another page learns somebody is waiting.
+  const { data: inboxSummary } = useInboxSummary(INBOX_BADGE_POLL_MS);
+  const inboxBadgeCount = inboxSummary?.waiting_count ?? 0;
 
   useEffect(() => {
     api.gapAnalyzer
       .getSummary()
       .then((data) => setGapBadgeCount(data.summary.new_badge_count))
       .catch(() => {});
-  }, []);
-
-  // Visitors waiting for a person. Polled, because the badge is the only
-  // place an operator on another page learns somebody is waiting.
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
-      api.operator
-        .summary()
-        .then((data) => {
-          if (!cancelled) setInboxBadgeCount(data.waiting_count);
-        })
-        .catch(() => {});
-    load();
-    const id = setInterval(load, INBOX_BADGE_POLL_MS);
-    window.addEventListener(INBOX_CHANGED_EVENT, load);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-      window.removeEventListener(INBOX_CHANGED_EVENT, load);
-    };
   }, []);
 
   function isActive(href: string) {

@@ -3,15 +3,9 @@ import { useEffect, useState } from "preact/hooks";
 import "./styles.css";
 import { ChatWidget } from "./ChatWidget";
 import { t } from "./strings";
+import type { UserHints } from "@chat9/widget-shared";
 
-export type UserHints = {
-  user_id?: string;
-  email?: string;
-  name?: string;
-  locale?: string;
-  plan_tier?: string;
-  audience_tag?: string;
-};
+export type { UserHints };
 
 // undefined = waiting for parent handshake; null = anonymous resolved; object = hints.
 type HintsState = UserHints | null | undefined;

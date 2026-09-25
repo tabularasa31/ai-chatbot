@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, type DisclosureLevel } from "@/lib/api";
-import { useClientMe, useBots, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
+import { useClientMe, useActiveBot, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
 import DeleteWorkspaceCard from "./DeleteWorkspaceCard";
+import { PageLoader } from "@/components/ui/page-loader";
 
 const DISCLOSURE_OPTIONS: {
   value: DisclosureLevel;
@@ -51,10 +52,9 @@ export default function SettingsPage() {
   const [disclosureSavedOk, setDisclosureSavedOk] = useState(false);
 
   const { data: client, error: clientError, isLoading: clientLoading, mutate: mutateClient } = useClientMe();
-  const { data: bots, isLoading: botsLoading, mutate: mutateBots } = useBots();
+  const { bots, activeBot: defaultBot, isLoading: botsLoading, mutate: mutateBots } = useActiveBot();
   const { data: support, isLoading: supportLoading, mutate: mutateSupport } = useSupportSettings();
 
-  const defaultBot = bots?.find((b) => b.is_active) ?? null;
   const { data: disclosure, isLoading: disclosureLoading, mutate: mutateDisclosure } = useBotDisclosure(defaultBot?.id);
 
   const initialized = useRef(false);
@@ -193,9 +193,7 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
-      </div>
+      <PageLoader />
     );
   }
 

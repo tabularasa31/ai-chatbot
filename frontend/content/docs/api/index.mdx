@@ -5,7 +5,7 @@ description: Chat9 HTTP API — schema-accurate reference auto-generated from th
 
 Chat9 exposes its HTTP API at **`https://api.getchat9.live`**. The pages
 below are generated directly from the live OpenAPI spec, so they stay
-in sync with the running service. Three authentication models are in
+in sync with the running service. Two authentication models are in
 use; the rest of this page explains them, then the sidebar takes over.
 
 ## Hosts
@@ -29,8 +29,7 @@ Two surfaces, two credentials:
   attach an HMAC-SHA256 token signed by your backend.
 
 - **Dashboard / management endpoints** (Documents, Gap Analyzer,
-  Knowledge, and the read side of Chat — sessions, logs, history) —
-  authenticated with a JWT bearer token. `POST /auth/login` with your
+  Knowledge) — authenticated with a JWT bearer token. `POST /auth/login` with your
   e-mail and password returns an `access_token`; send that as
   `Authorization: Bearer <access_token>` on each request. The
   account-level endpoints themselves (sign-up, login, tenant settings,
@@ -63,7 +62,7 @@ event bodies natively).
 ## Models used by the chat pipeline
 
 `POST /widget/chat` generates answers with
-`gpt-5-mini` and run lightweight guard / validation checks with
+`gpt-5-mini` and runs lightweight guard / validation checks with
 `gpt-4o-mini` by default. See [Pricing and limits](/docs/pricing-and-limits)
 for cost guidance.
 

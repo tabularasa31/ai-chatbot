@@ -9,9 +9,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import (
-    process_chat_message,
-)
 from backend.chat.types import (
     RetrievalContext,
 )
@@ -19,7 +16,7 @@ from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.models import Tenant, Document, DocumentStatus, DocumentType, Embedding
 from backend.search.service import build_reliability_assessment
 
-from tests._async_utils import as_async as _as_async, as_async_generate
+from tests._async_utils import as_async as _as_async, as_async_generate, run_chat_turn
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -112,7 +109,8 @@ class _FakeTrace:
         return None
 
 
-def test_embedding_once(
+@pytest.mark.asyncio
+async def test_embedding_once(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -157,7 +155,7 @@ def test_embedding_once(
         _no_rewrite,
     )
 
-    _ = process_chat_message(
+    _ = await run_chat_turn(
         cl_row.id,
         "Reset password",
         uuid.uuid4(),
@@ -168,7 +166,8 @@ def test_embedding_once(
     assert mock_openai_client.embeddings.create.call_count == 1
 
 
-def test_faq_context_in_prompt(
+@pytest.mark.asyncio
+async def test_faq_context_in_prompt(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -223,7 +222,7 @@ def test_faq_context_in_prompt(
     )
 
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id,
         "Reset password",
         uuid.uuid4(),
@@ -243,7 +242,8 @@ def test_faq_context_in_prompt(
     assert "A: Use the reset link." in user_message
 
 
-def test_langfuse_faq_match_span(
+@pytest.mark.asyncio
+async def test_langfuse_faq_match_span(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -297,7 +297,7 @@ def test_langfuse_faq_match_span(
         as_async_generate(lambda *_, **__: ("Answer", 1)),
     )
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id,
         "Reset password",
         uuid.uuid4(),
@@ -322,7 +322,8 @@ def test_langfuse_faq_match_span(
     assert metadata["generation_skipped"] is False
 
 
-def test_upstream_query_embedding_span_present_with_precomputed_path(
+@pytest.mark.asyncio
+async def test_upstream_query_embedding_span_present_with_precomputed_path(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -379,7 +380,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
         _no_rewrite,
     )
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id,
         "Reset password",
         uuid.uuid4(),
@@ -395,7 +396,8 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
     assert payload["upstream_precomputed"] is True
 
 
-def test_faq_direct_skips_retrieval_and_generation(
+@pytest.mark.asyncio
+async def test_faq_direct_skips_retrieval_and_generation(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -438,7 +440,7 @@ def test_faq_direct_skips_retrieval_and_generation(
         as_async_generate(_unexpected_generate),
     )
 
-    outcome = process_chat_message(
+    outcome = await run_chat_turn(
         cl_row.id,
         "Reset password",
         uuid.uuid4(),
@@ -450,7 +452,8 @@ def test_faq_direct_skips_retrieval_and_generation(
     assert outcome.text == faq_answer
 
 
-def test_guard_error_degrades_to_context(
+@pytest.mark.asyncio
+async def test_guard_error_degrades_to_context(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -507,7 +510,7 @@ def test_guard_error_degrades_to_context(
         as_async_generate(lambda *_, **__: (called.__setitem__("generation", True) or "Answer", 1)),
     )
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id,
         "Reset password",
         uuid.uuid4(),

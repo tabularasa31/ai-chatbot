@@ -30,9 +30,6 @@ from backend.chat.language import ResolvedLanguageContext
 from backend.chat.types import (
     RetrievalContext,
 )
-from backend.chat.service import (
-    process_chat_message,
-)
 from backend.chat.steps import answer_cache as cache_steps
 from backend.chat.types import ChatPipelineResult, PipelineRun
 from backend.core import redis as redis_mod
@@ -53,7 +50,7 @@ from backend.models import (
 from backend.models.base import _utcnow
 from backend.observability import cache_metrics
 from backend.search.service import build_reliability_assessment
-from tests._async_utils import as_async as _as_async
+from tests._async_utils import as_async as _as_async, run_chat_turn
 from tests.test_rag_pipeline import _create_client, _FakeTrace, _insert_single_chunk
 
 
@@ -595,12 +592,13 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
     return counters
 
 
-def _ask(cl_row: Tenant, api_key: str, db: Session, question: str = "How do I reset my password?", **kwargs):
+async def _ask(cl_row: Tenant, api_key: str, db: Session, question: str = "How do I reset my password?", **kwargs):
     session_id = kwargs.pop("session_id", None) or uuid.uuid4()
-    return process_chat_message(cl_row.id, question, session_id, db, api_key=api_key, **kwargs)
+    return await run_chat_turn(cl_row.id, question, session_id, db, api_key=api_key, **kwargs)
 
 
-def test_repeated_question_is_served_from_cache_without_openai(
+@pytest.mark.asyncio
+async def test_repeated_question_is_served_from_cache_without_openai(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -629,8 +627,8 @@ def test_repeated_question_is_served_from_cache_without_openai(
     # Widget flow: the session opens with an empty bootstrap turn (persisted
     # greeting), then the visitor's first question.
     session_id = uuid.uuid4()
-    _ask(cl_row, api_key, db_session, "", session_id=session_id)
-    first = _ask(cl_row, api_key, db_session, session_id=session_id)
+    await _ask(cl_row, api_key, db_session, "", session_id=session_id)
+    first = await _ask(cl_row, api_key, db_session, session_id=session_id)
     assert first.text == "Use the reset link in Settings."
     assert counters == {"embed": 1, "generate": 1, "retrieve": 1}
     assert db_session.query(AnswerCacheEntry).count() == 1
@@ -651,7 +649,7 @@ def test_repeated_question_is_served_from_cache_without_openai(
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: trace)
 
     started = perf_counter()
-    second = _ask(cl_row, api_key, db_session, "  how do I reset my PASSWORD? ")
+    second = await _ask(cl_row, api_key, db_session, "  how do I reset my PASSWORD? ")
 
     assert perf_counter() - started < 2.0
     assert second.text == first.text
@@ -667,7 +665,8 @@ def test_repeated_question_is_served_from_cache_without_openai(
     assert "answer-cache" in trace.spans
 
 
-def test_knowledge_base_or_agent_layer_change_invalidates_cached_answer(
+@pytest.mark.asyncio
+async def test_knowledge_base_or_agent_layer_change_invalidates_cached_answer(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -687,27 +686,28 @@ def test_knowledge_base_or_agent_layer_change_invalidates_cached_answer(
     assert bot.preset == "support_agent"
     assert bot.custom_instructions is None
 
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    await _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    await _ask(cl_row, api_key, db_session, bot_id=bot.id)
     assert counters["generate"] == 1
 
     _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="New doc")
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    await _ask(cl_row, api_key, db_session, bot_id=bot.id)
     assert counters["generate"] == 2
 
     import backend.chat.presets as presets_module
 
     monkeypatch.setitem(presets_module.PRESETS, "support_agent", "Replaced preset text.")
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    await _ask(cl_row, api_key, db_session, bot_id=bot.id)
     assert counters["generate"] == 3
 
     bot.custom_instructions = "Answer only in bullet points."
     db_session.commit()
-    _ask(cl_row, api_key, db_session, bot_id=bot.id)
+    await _ask(cl_row, api_key, db_session, bot_id=bot.id)
     assert counters["generate"] == 4
 
 
-def test_language_switch_does_not_serve_cached_answer(
+@pytest.mark.asyncio
+async def test_language_switch_does_not_serve_cached_answer(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -722,17 +722,18 @@ def test_language_switch_does_not_serve_cached_answer(
         return lambda **_kwargs: _language_context(language)
 
     monkeypatch.setattr("backend.chat.service._resolve_chat_language_context", _resolve("en"))
-    _ask(cl_row, api_key, db_session)
-    _ask(cl_row, api_key, db_session)
+    await _ask(cl_row, api_key, db_session)
+    await _ask(cl_row, api_key, db_session)
     assert counters["generate"] == 1
 
     # Same wording, different resolved response language → separate key.
     monkeypatch.setattr("backend.chat.service._resolve_chat_language_context", _resolve("de"))
-    _ask(cl_row, api_key, db_session)
+    await _ask(cl_row, api_key, db_session)
     assert counters["generate"] == 2
 
 
-def test_personal_and_session_dependent_turns_bypass_the_cache(
+@pytest.mark.asyncio
+async def test_personal_and_session_dependent_turns_bypass_the_cache(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -756,8 +757,8 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
         return sum(1 for key in lookups if key.startswith("cache:answer:"))
 
     # Identified visitor and PII-redacted question: neither read nor stored.
-    _ask(cl_row, api_key, db_session, user_context=identified)
-    _ask(cl_row, api_key, db_session, "Reset the password for john.doe@example.com please")
+    await _ask(cl_row, api_key, db_session, user_context=identified)
+    await _ask(cl_row, api_key, db_session, "Reset the password for john.doe@example.com please")
     assert cache_lookups() == 0
     # No answer-cache key was written (the injection guard's own semantic
     # verdict cache is unrelated and may still populate `fake_redis`).
@@ -765,17 +766,17 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
     assert db_session.query(AnswerCacheEntry).count() == 0
 
     # Anonymous first turn is cached; the identified visitor still gets a fresh answer.
-    _ask(cl_row, api_key, db_session)
+    await _ask(cl_row, api_key, db_session)
     assert db_session.query(AnswerCacheEntry).count() == 1
-    _ask(cl_row, api_key, db_session, user_context=identified)
+    await _ask(cl_row, api_key, db_session, user_context=identified)
     assert counters["generate"] == 4
     assert cache_lookups() == 1
 
     # A follow-up in an existing chat is neither read from nor stored in the cache.
     session_id = uuid.uuid4()
-    _ask(cl_row, api_key, db_session, "Where can I find the notification settings page?", session_id=session_id)
+    await _ask(cl_row, api_key, db_session, "Where can I find the notification settings page?", session_id=session_id)
     assert db_session.query(AnswerCacheEntry).count() == 2
-    _ask(cl_row, api_key, db_session, session_id=session_id)  # the cached wording, second turn
+    await _ask(cl_row, api_key, db_session, session_id=session_id)  # the cached wording, second turn
     assert counters["generate"] == 6
     assert cache_lookups() == 2
     assert db_session.query(AnswerCacheEntry).count() == 2
@@ -785,7 +786,7 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
         "backend.chat.steps.generate.should_escalate",
         lambda *_, **__: (True, EscalationTrigger.low_similarity),
     )
-    _ask(cl_row, api_key, db_session, "Do you support SAML?")
+    await _ask(cl_row, api_key, db_session, "Do you support SAML?")
     assert db_session.query(AnswerCacheEntry).count() == 2
 
     # A chat waiting on the pre-confirm gate and a chat held by a live
@@ -810,12 +811,13 @@ def test_personal_and_session_dependent_turns_bypass_the_cache(
         "backend.chat.handlers.escalation.classify_pre_confirm_reply", _as_async(lambda **_: ("unclear", 0))
     )
     before = cache_lookups()
-    assert _ask(cl_row, api_key, db_session, session_id=pre_confirm.session_id).text != "Answer"
-    assert _ask(cl_row, api_key, db_session, session_id=held.session_id).delivered_to_operator
+    assert (await _ask(cl_row, api_key, db_session, session_id=pre_confirm.session_id)).text != "Answer"
+    assert (await _ask(cl_row, api_key, db_session, session_id=held.session_id)).delivered_to_operator
     assert cache_lookups() == before
 
 
-def test_redis_unavailable_keeps_the_pipeline_working(
+@pytest.mark.asyncio
+async def test_redis_unavailable_keeps_the_pipeline_working(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -836,8 +838,8 @@ def test_redis_unavailable_keeps_the_pipeline_working(
     monkeypatch.setattr(redis_mod, "cache_get", _down_get)
     monkeypatch.setattr(redis_mod, "cache_set_with_ttl", _down_set)
 
-    assert _ask(cl_row, api_key, db_session).text == "Answer"
+    assert (await _ask(cl_row, api_key, db_session)).text == "Answer"
     # The semantic level still catches the identical question on its own.
-    assert _ask(cl_row, api_key, db_session).text == "Answer"
+    assert (await _ask(cl_row, api_key, db_session)).text == "Answer"
     assert counters["generate"] == 1
     assert cache_metrics.snapshot()["answer_semantic"]["hits"] == 1

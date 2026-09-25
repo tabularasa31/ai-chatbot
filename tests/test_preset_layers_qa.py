@@ -24,14 +24,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.presets import PRESET_SUPPORT_AGENT, PRESETS
-from backend.chat.service import (
-    process_chat_message,
-)
 from backend.models import Bot
+from tests._async_utils import run_chat_turn
 from tests.test_rag_pipeline import _FakeTrace, _create_client, _insert_single_chunk
 
 
-def test_chat_pipeline_system_message_contains_bot_custom_and_preset_text(
+@pytest.mark.asyncio
+async def test_chat_pipeline_system_message_contains_bot_custom_and_preset_text(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -53,7 +52,7 @@ def test_chat_pipeline_system_message_contains_bot_custom_and_preset_text(
     bot.custom_instructions = "Always mention our 14-day refund window."
     db_session.commit()
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id,
         "How do I reset my password?",
         uuid.uuid4(),
@@ -69,7 +68,8 @@ def test_chat_pipeline_system_message_contains_bot_custom_and_preset_text(
     assert preset_opening in system_prompt
 
 
-def test_chat_pipeline_picks_up_preset_change_on_next_turn_no_snapshot(
+@pytest.mark.asyncio
+async def test_chat_pipeline_picks_up_preset_change_on_next_turn_no_snapshot(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -89,7 +89,7 @@ def test_chat_pipeline_picks_up_preset_change_on_next_turn_no_snapshot(
     bot = db_session.query(Bot).filter(Bot.tenant_id == cl_row.id).first()
     assert bot.preset == "support_agent"
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id, "First question", uuid.uuid4(), db_session, api_key=api_key, bot_id=bot.id
     )
     first_system_prompt = fake_trace.generation_calls[-1]["input"][0]["content"]
@@ -97,7 +97,7 @@ def test_chat_pipeline_picks_up_preset_change_on_next_turn_no_snapshot(
 
     monkeypatch.setitem(PRESETS, "support_agent", "REPLACED PRESET TEXT for {product_name}.")
 
-    process_chat_message(
+    await run_chat_turn(
         cl_row.id, "Second question", uuid.uuid4(), db_session, api_key=api_key, bot_id=bot.id
     )
     second_system_prompt = fake_trace.generation_calls[-1]["input"][0]["content"]

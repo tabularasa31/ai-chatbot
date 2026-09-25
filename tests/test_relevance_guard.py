@@ -17,7 +17,7 @@ from backend.guards.reject_response import (
 )
 from backend.guards.types import Verdict, VerdictReason
 from backend.models import Tenant, TenantProfile
-from backend.search.service import build_reliability_assessment
+from backend.search.reliability import build_reliability_assessment
 
 from tests._async_utils import as_async as _as_async, as_async_generate, async_assert_not_called, run_chat_turn
 from tests.conftest import register_and_verify_user, set_client_openai_key

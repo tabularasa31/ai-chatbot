@@ -1,7 +1,7 @@
 """Retrieval pipeline steps.
 
 * :func:`async_retrieve_context` — embed the query and run hybrid search
-  (pgvector + BM25 + RRF via ``backend.search.service``).
+  (pgvector + BM25 + RRF via ``backend.search.pipeline``).
 * :func:`run_retrieval` — consume the speculative retrieval task started in
   the pre-retrieval step (or run retrieval fresh) under a ``retrieval``
   Langfuse span.
@@ -65,7 +65,7 @@ async def async_retrieve_context(
     Uses ``search_similar_chunks_detailed_async`` so the event loop is not
     blocked during embedding and pgvector queries.
     """
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     _retrieval_start = perf_counter()
     try:

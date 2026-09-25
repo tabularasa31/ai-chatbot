@@ -49,7 +49,7 @@ from backend.models import (
 )
 from backend.models.base import _utcnow
 from backend.observability import cache_metrics
-from backend.search.service import build_reliability_assessment
+from backend.search.reliability import build_reliability_assessment
 from tests._async_utils import as_async as _as_async, run_chat_turn
 from tests.test_rag_pipeline import _create_client, _FakeTrace, _insert_single_chunk
 

@@ -45,7 +45,7 @@ from backend.chat.types import ChatPipelineResult, PipelineRun, PipelineState, R
 from backend.models import MessageRole, OperatorState
 from backend.models.base import _utcnow
 from backend.observability import TraceHandle, record_stage_ms
-from backend.search.service import default_retrieval_reliability
+from backend.search.reliability import default_retrieval_reliability
 
 if TYPE_CHECKING:
     from backend.chat.handlers.base import HandlerContext

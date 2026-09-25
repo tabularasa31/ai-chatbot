@@ -555,7 +555,7 @@ def test_widget_stream_language_mismatch_aborts_before_client_sees_it(
     from backend.chat.language import LanguageDetectionResult
     from backend.chat.language import detect_language as _real_detect
     from backend.chat.types import RetrievalContext
-    from backend.search.service import build_reliability_assessment
+    from backend.search.reliability import build_reliability_assessment
     from tests._async_utils import as_async as _as_async
 
     _, bot_public_id = _setup_widget_tenant(

@@ -85,7 +85,7 @@ async def test_pgvector_search_returns_results(
 ) -> None:
     """_async_pgvector_search returns embeddings ordered by cosine proximity."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import _async_pgvector_search
+    from backend.search.retrieval_db import _async_pgvector_search
 
     user = _create_user(pg_db_session, email="pv_basic@example.com")
     cl = _create_client(pg_db_session, user, name="PV Basic")
@@ -121,7 +121,7 @@ async def test_pgvector_search_respects_client_isolation(
 ) -> None:
     """_async_pgvector_search must not leak embeddings across tenants."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import _async_pgvector_search
+    from backend.search.retrieval_db import _async_pgvector_search
 
     user_a = _create_user(pg_db_session, email="pv_iso_a@example.com")
     user_b = _create_user(pg_db_session, email="pv_iso_b@example.com")
@@ -151,7 +151,7 @@ async def test_pgvector_search_empty_when_no_vector(
     """_async_pgvector_search skips rows with NULL vector column."""
     from tests.test_models import _create_client, _create_user
     from backend.models import Embedding
-    from backend.search.service import _async_pgvector_search
+    from backend.search.retrieval_db import _async_pgvector_search
 
     user = _create_user(pg_db_session, email="pv_nullvec@example.com")
     cl = _create_client(pg_db_session, user, name="PV NullVec")
@@ -187,7 +187,7 @@ async def test_hybrid_search_uses_pgvector_path(
 ) -> None:
     """search_similar_chunks_detailed_async must take the pgvector branch (not SQLite fallback) on PG."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_basic@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Basic")
@@ -219,7 +219,7 @@ async def test_hybrid_search_bm25_rrf_boosts_keyword_match(
     BM25 + RRF merges the results: both chunks should appear in top_k=2.
     """
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_rrf@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid RRF")
@@ -256,7 +256,7 @@ async def test_hybrid_search_limits_results_with_mixed_candidates(
 ) -> None:
     """Hybrid search keeps top_k when candidates mix keyword and weak/noisy chunks."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_mixed@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Mixed")
@@ -287,7 +287,7 @@ async def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_
 ) -> None:
     """Non-EN query routes BM25 through the EN rewrite, producing lexical signal against English corpus."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_symmetric@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Symmetric")
@@ -298,14 +298,14 @@ async def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_
     async def fake_embed_queries(queries, **kwargs):
         return [query_vec for _ in queries]
 
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    monkeypatch.setattr("backend.search.embedding.async_embed_queries", fake_embed_queries)
 
     # Simulate query rewrite: Cyrillic query → EN keyword phrase
     async def fake_rewrite(query, **kwargs):
         return "reset password instructions"
 
     monkeypatch.setattr(
-        "backend.search.service._async_rewrite_query_for_retrieval", fake_rewrite
+        "backend.search.pipeline._async_rewrite_query_for_retrieval", fake_rewrite
     )
 
     _insert_embedding(pg_db_session, doc_id, "unrelated foo content", [0.5] + [0.0] * 1535)
@@ -343,7 +343,7 @@ async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_
 ) -> None:
     """EN query uses original query for BM25; ranking is stable with or without a rewrite variant."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_control@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Control")
@@ -354,7 +354,7 @@ async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_
     async def fake_embed_queries(queries, **kwargs):
         return [query_vec for _ in queries]
 
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    monkeypatch.setattr("backend.search.embedding.async_embed_queries", fake_embed_queries)
 
     _insert_embedding(
         pg_db_session,
@@ -374,7 +374,7 @@ async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_
         return None
 
     monkeypatch.setattr(
-        "backend.search.service._async_rewrite_query_for_retrieval", no_rewrite_fn
+        "backend.search.pipeline._async_rewrite_query_for_retrieval", no_rewrite_fn
     )
     no_rewrite = await search_similar_chunks_detailed_async(
         cl.id,
@@ -389,7 +389,7 @@ async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_
         return "cors origin configuration allow list"
 
     monkeypatch.setattr(
-        "backend.search.service._async_rewrite_query_for_retrieval", en_rewrite_fn
+        "backend.search.pipeline._async_rewrite_query_for_retrieval", en_rewrite_fn
     )
     with_rewrite = await search_similar_chunks_detailed_async(
         cl.id,

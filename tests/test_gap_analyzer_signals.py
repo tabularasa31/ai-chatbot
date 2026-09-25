@@ -17,7 +17,7 @@ from backend.models import (
     Message,
     MessageRole,
 )
-from backend.search.service import build_reliability_assessment
+from backend.search.reliability import build_reliability_assessment
 from tests.conftest import register_and_verify_user
 
 

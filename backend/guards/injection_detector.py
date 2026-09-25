@@ -23,11 +23,8 @@ from backend.guards.injection_seeds import INJECTION_SEEDS, INJECTION_SEEDS_HASH
 from backend.guards.types import Verdict, VerdictReason
 from backend.observability import TraceHandle, record_stage_ms
 from backend.observability.cache_metrics import record_hit, record_miss
-from backend.search.service import (
-    async_embed_queries,
-    async_embed_query,
-    cosine_similarity,
-)
+from backend.search.embedding import async_embed_queries, async_embed_query
+from backend.utils.math import cosine_similarity
 
 logger = logging.getLogger(__name__)
 

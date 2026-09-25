@@ -27,7 +27,7 @@ from backend.documents.parsers import (
 )
 from backend.models import Document, DocumentStatus, DocumentType
 from backend.observability.metrics import emit_tenant_event
-from backend.search.service import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_search_caches
 
 _HEALTH_WARNING_TYPES = frozenset(
     {

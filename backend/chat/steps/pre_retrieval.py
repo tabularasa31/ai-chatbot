@@ -51,14 +51,14 @@ from backend.guards.relevance_checker import (
 )
 from backend.models import TenantProfile
 from backend.observability import record_stage_ms
-from backend.search.service import (
-    async_detect_tenant_kb_scripts,
-    async_embed_queries,
+from backend.search.embedding import async_embed_queries
+from backend.search.query_variants import (
     async_semantic_query_rewrite,
     async_semantic_query_rewrite_for_kb,
     detect_query_script_bucket,
     expand_query,
 )
+from backend.search.retrieval_db import async_detect_tenant_kb_scripts
 
 logger = logging.getLogger(__name__)
 

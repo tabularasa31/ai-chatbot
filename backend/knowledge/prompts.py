@@ -9,7 +9,7 @@ Three prompts:
 
 - ``build_ner_query_messages``: extract entities from a user question. Used at
   query time to add an entity-overlap channel to hybrid retrieval (alongside
-  dense + BM25 in ``backend/search/service.py``).
+  dense + BM25 in ``backend/search/pipeline.py``).
 - ``build_ner_passage_messages``: extract entities from an FAQ chunk. Used at
   indexing time to populate the entity index for the overlap channel.
 - ``build_triple_extraction_messages``: extract (subject, relation, object)

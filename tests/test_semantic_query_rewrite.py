@@ -1,4 +1,4 @@
-"""Unit tests for async_semantic_query_rewrite() in search/service.py.
+"""Unit tests for async_semantic_query_rewrite() in search/query_variants.py.
 
 All tests are pure-unit: no DB, no HTTP client, no real OpenAI call.
 OpenAI is mocked at the get_async_openai_client / async_call_openai_with_retry
@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.core.config import settings
-from backend.search.service import async_semantic_query_rewrite
+from backend.search.query_variants import async_semantic_query_rewrite
 
 
 # ---------------------------------------------------------------------------
@@ -46,9 +46,9 @@ def _patch_rewrite_layer():
     The retry helper is an AsyncMock because production code awaits it.
     """
     return (
-        patch("backend.search.service.get_async_openai_client"),
+        patch("backend.search.query_variants.get_async_openai_client"),
         patch(
-            "backend.search.service.async_call_openai_with_retry",
+            "backend.search.query_variants.async_call_openai_with_retry",
             new_callable=AsyncMock,
         ),
     )
@@ -236,9 +236,9 @@ class TestSemanticQueryRewriteFailures:
     async def test_returns_none_on_openai_exception(self):
         """Any OpenAI exception results in None (never propagates)."""
         with (
-            patch("backend.search.service.get_async_openai_client"),
+            patch("backend.search.query_variants.get_async_openai_client"),
             patch(
-                "backend.search.service.async_call_openai_with_retry",
+                "backend.search.query_variants.async_call_openai_with_retry",
                 new_callable=AsyncMock,
                 side_effect=Exception("openai timeout"),
             ),
@@ -280,7 +280,7 @@ class TestSemanticQueryRewriteFailures:
     )
     async def test_returns_none_and_skips_api_call_on_empty_argument(self, question, api_key):
         """Empty query or empty API key short-circuits before any API call."""
-        with patch("backend.search.service.get_async_openai_client") as mock_client:
+        with patch("backend.search.query_variants.get_async_openai_client") as mock_client:
             result = await async_semantic_query_rewrite(question, api_key=api_key)
 
         mock_client.assert_not_called()
@@ -290,7 +290,7 @@ class TestSemanticQueryRewriteFailures:
     async def test_returns_none_on_get_client_exception(self):
         """Exception from get_async_openai_client → None."""
         with patch(
-            "backend.search.service.get_async_openai_client",
+            "backend.search.query_variants.get_async_openai_client",
             side_effect=RuntimeError("bad key"),
         ):
             result = await async_semantic_query_rewrite("some question", api_key="sk-test")
@@ -307,7 +307,7 @@ class TestSemanticRewriteDeduplication:
 
     def test_dedup_case_insensitive(self):
         """If rewrite duplicates a lexical variant (case-insensitive), it's skipped."""
-        from backend.search.service import expand_query
+        from backend.search.query_variants import expand_query
 
         question = "language settings"  # lexical expand_query will produce this
         lexical = expand_query(question)  # ['language settings', 'language settings'] → deduped
@@ -323,7 +323,7 @@ class TestSemanticRewriteDeduplication:
 
     def test_new_semantic_variant_is_appended(self):
         """A genuinely new semantic rewrite is appended as an extra variant."""
-        from backend.search.service import expand_query
+        from backend.search.query_variants import expand_query
 
         question = "Почему бот отвечает только по-английски?"
         lexical = expand_query(question)
@@ -383,7 +383,7 @@ def _make_async_db(
 
 
 def _clear_kb_script_caches(tenant_id) -> None:
-    from backend.search.service import (
+    from backend.search.retrieval_db import (
         _TENANT_KB_SCRIPT_CACHE,
         _TENANT_KB_SCRIPTS_CACHE,
     )
@@ -418,7 +418,7 @@ class TestDetectTenantKbScript:
     )
     async def test_returns_the_dominant_or_only_script(self, script_rows, expected):
         import uuid
-        from backend.search.service import async_detect_tenant_kb_script
+        from backend.search.retrieval_db import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
@@ -432,7 +432,7 @@ class TestDetectTenantKbScript:
     async def test_falls_back_to_chunk_sampling_when_no_language_set(self):
         """Legacy KBs (Document.script all NULL) fall back to chunk sampling."""
         import uuid
-        from backend.search.service import async_detect_tenant_kb_script
+        from backend.search.retrieval_db import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
@@ -458,7 +458,7 @@ class TestDetectTenantKbScript:
         rewrite.
         """
         import uuid
-        from backend.search.service import async_detect_tenant_kb_script
+        from backend.search.retrieval_db import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
@@ -483,7 +483,7 @@ class TestDetectTenantKbScript:
     async def test_full_labeling_skips_chunk_sampling(self):
         """When every document has a script set, sampling is not invoked."""
         import uuid
-        from backend.search.service import async_detect_tenant_kb_script
+        from backend.search.retrieval_db import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
@@ -498,7 +498,7 @@ class TestDetectTenantKbScript:
     @pytest.mark.asyncio
     async def test_uses_cache_on_second_call(self):
         import uuid
-        from backend.search.service import async_detect_tenant_kb_script
+        from backend.search.retrieval_db import async_detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
@@ -548,7 +548,7 @@ class TestDetectTenantKbScripts:
     )
     async def test_returns_the_kb_script_set(self, script_rows, expected):
         import uuid
-        from backend.search.service import async_detect_tenant_kb_scripts
+        from backend.search.retrieval_db import async_detect_tenant_kb_scripts
 
         tenant_id = uuid.uuid4()
         _clear_kb_script_caches(tenant_id)
@@ -566,7 +566,7 @@ class TestSemanticQueryRewriteForKb:
 
     @pytest.mark.asyncio
     async def test_returns_a_rewrite_targeting_the_kb_script(self):
-        from backend.search.service import async_semantic_query_rewrite_for_kb
+        from backend.search.query_variants import async_semantic_query_rewrite_for_kb
 
         client_patch, retry_patch = _patch_rewrite_layer()
         with client_patch as mock_client, retry_patch as mock_retry:
@@ -586,7 +586,7 @@ class TestSemanticQueryRewriteForKb:
     @pytest.mark.asyncio
     async def test_rewrites_for_a_script_outside_the_two_legacy_buckets(self):
         """Regression: any KB script but latin/cyrillic used to return None."""
-        from backend.search.service import async_semantic_query_rewrite_for_kb
+        from backend.search.query_variants import async_semantic_query_rewrite_for_kb
 
         client_patch, retry_patch = _patch_rewrite_layer()
         with client_patch as mock_client, retry_patch as mock_retry:
@@ -608,7 +608,7 @@ class TestSemanticQueryRewriteForKb:
 
     @pytest.mark.asyncio
     async def test_returns_none_for_letterless_script(self):
-        from backend.search.service import async_semantic_query_rewrite_for_kb
+        from backend.search.query_variants import async_semantic_query_rewrite_for_kb
 
         result = await async_semantic_query_rewrite_for_kb(
             "Some question",
@@ -619,7 +619,7 @@ class TestSemanticQueryRewriteForKb:
 
     @pytest.mark.asyncio
     async def test_returns_none_on_llm_failure(self):
-        from backend.search.service import async_semantic_query_rewrite_for_kb
+        from backend.search.query_variants import async_semantic_query_rewrite_for_kb
 
         client_patch, retry_patch = _patch_rewrite_layer()
         with client_patch as mock_client, retry_patch as mock_retry:
@@ -680,7 +680,7 @@ class TestBm25QueriesForScriptNonEn:
     def test_orders_variants_by_script_match(
         self, query, en_rewrite, query_script, kb_script, expect_rewrite_first
     ):
-        from backend.search.service import _bm25_queries_for_script
+        from backend.search.bm25 import _bm25_queries_for_script
 
         variants = [query, en_rewrite]
         args = (query, variants, query_script)
@@ -692,7 +692,7 @@ class TestBm25QueriesForScriptNonEn:
         assert query in result and en_rewrite in result
 
     def test_en_query_unchanged(self):
-        from backend.search.service import _bm25_queries_for_script
+        from backend.search.bm25 import _bm25_queries_for_script
 
         query = "site does not open after connecting"
         result = _bm25_queries_for_script(query, [query], "latin")

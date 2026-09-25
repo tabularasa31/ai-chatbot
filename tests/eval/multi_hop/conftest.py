@@ -200,7 +200,11 @@ def synthetic_openai_client() -> Generator[Mock, None, None]:
     with (
         patch("backend.documents.embedder.get_openai_client", return_value=mock_client),
         patch(
-            "backend.search.service.get_async_openai_client",
+            "backend.search.embedding.get_async_openai_client",
+            return_value=async_mock_client,
+        ),
+        patch(
+            "backend.search.query_variants.get_async_openai_client",
             return_value=async_mock_client,
         ),
     ):

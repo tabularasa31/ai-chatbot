@@ -11,7 +11,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Layer | Technologies |
 |-------|----------------|
 | Backend | Python 3.11, FastAPI 0.111, Pydantic v2 (2.5), SQLAlchemy 2.0, Alembic |
-| Database | PostgreSQL 15 with **pgvector** (production, see `docker-compose.yml`); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/service.py`) |
+| Database | PostgreSQL 15 with **pgvector** (production, see `docker-compose.yml`); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/pipeline.py`) |
 | Cache / coordination | Redis 7 (foundational infra: rate-limit storage, caches, distributed locks). Optional locally — see "Redis" section below. |
 | Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single tenant/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user`, and role-gated ones add `require_owner` / `require_member` (see `backend/auth/roles.py`); routes a seat pays for add `require_seated_member` (see `backend/seats/`). **One owner per workspace, fixed:** the role is written when the account is created — owner for whoever created the workspace, operator for everyone invited — and never changes. There is no promotion, no demotion, no role route, and no role on an invitation, so `users.role` is a fact about how an account came into being rather than a permission model with transitions |
 | LLM | OpenAI API (per-tenant key; see `backend/core/openai_client.py`) |

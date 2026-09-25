@@ -2,7 +2,7 @@
 
 The detection lives in ``backend.documents.language_detection`` and is the
 seed for :func:`async_detect_tenant_kb_script` / ``async_detect_tenant_kb_scripts``
-in ``backend.search.service`` — those rely on accurate per-document language
+in ``backend.search.retrieval_db`` — those rely on accurate per-document language
 labels instead of query-time chunk sampling.
 """
 

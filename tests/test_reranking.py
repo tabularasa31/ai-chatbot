@@ -316,7 +316,7 @@ async def test_pipeline_reads_tenant_strategy_and_traces_it(
     monkeypatch, db_session: Session, async_search_session
 ) -> None:
     from backend.models import Document, DocumentStatus, DocumentType
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from backend.tenants.cache import clear_cache
     from tests.test_models import _create_client, _create_user
 
@@ -372,7 +372,7 @@ async def test_pipeline_reads_tenant_strategy_and_traces_it(
     async def fake_embed_queries(queries, **kwargs):
         return [[1.0, 0.0, 0.0] for _ in queries]
 
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    monkeypatch.setattr("backend.search.embedding.async_embed_queries", fake_embed_queries)
 
     async def fake_score(self, query, passages):
         return [0.1 if "settings page" in p else 1.0 for p in passages]

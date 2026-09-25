@@ -29,7 +29,7 @@ from backend.chat.types import (
 from backend.faq.faq_matcher import FAQMatchResult
 from backend.guards.types import Verdict, VerdictReason
 from backend.models import Chat, Message, MessageRole, Tenant
-from backend.search.service import build_reliability_assessment
+from backend.search.reliability import build_reliability_assessment
 
 from tests._async_utils import as_async as _as_async, as_async_generate, run_chat_turn
 from tests.conftest import register_and_verify_user, set_client_openai_key

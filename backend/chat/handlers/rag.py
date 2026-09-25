@@ -321,11 +321,8 @@ class RagHandler(PipelineHandler):
             chunks_preview_from_results,
         )
         from backend.models import EscalationTrigger
-        from backend.search.service import (
-            build_reliability_projection,
-            build_variant_trace_metadata,
-            build_variant_trace_tag,
-        )
+        from backend.search.pipeline import build_variant_trace_metadata, build_variant_trace_tag
+        from backend.search.reliability import build_reliability_projection
 
         chat = ctx.chat
         # ``_async_dispatch`` always pre-computes the async pipeline result and

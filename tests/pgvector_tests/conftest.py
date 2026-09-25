@@ -215,14 +215,15 @@ def mock_openai_client() -> Generator[Mock, None, None]:
 
     with (
         patch("backend.documents.embedder.get_openai_client", return_value=mock_client),
-        patch("backend.search.service.get_async_openai_client", return_value=async_mock_client),
+        patch("backend.search.embedding.get_async_openai_client", return_value=async_mock_client),
+        patch("backend.search.query_variants.get_async_openai_client", return_value=async_mock_client),
         patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True),
         patch(
             "backend.escalation.openai_escalation.get_async_openai_client",
             return_value=async_mock_esc_client,
         ),
         patch(
-            "backend.search.service._async_rewrite_query_for_retrieval",
+            "backend.search.pipeline._async_rewrite_query_for_retrieval",
             new=AsyncMock(return_value=None),
         ),
     ):

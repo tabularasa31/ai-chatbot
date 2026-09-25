@@ -9,14 +9,10 @@ import uuid
 
 import pytest
 
-from backend.search.service import (
-    apply_script_boost,
-    cosine_similarity,
-    detect_query_script_bucket,
-    expand_query,
-    mmr_select,
-)
+from backend.search.fusion import apply_script_boost, mmr_select
+from backend.search.query_variants import detect_query_script_bucket, expand_query
 from backend.search.reranking import rerank_candidates
+from backend.utils.math import cosine_similarity
 
 
 def test_cosine_similarity_basic() -> None:
@@ -47,7 +43,7 @@ def test_run_bm25_search_symmetric_merge_deduplicates_hits_and_keeps_earliest_ti
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import _run_bm25_search
+    from backend.search.bm25 import _run_bm25_search
 
     first = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="reset password guide")
     second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="password reset checklist")
@@ -59,7 +55,7 @@ def test_run_bm25_search_symmetric_merge_deduplicates_hits_and_keeps_earliest_ti
         return [(first, 1.0), (third, 0.9)]
 
     monkeypatch.setattr(
-        "backend.search.service._score_prepared_bm25_corpus",
+        "backend.search.bm25._score_prepared_bm25_corpus",
         fake_score,
     )
 
@@ -81,7 +77,7 @@ def test_run_bm25_search_symmetric_mode_can_match_asymmetric_when_no_effective_c
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import _run_bm25_search
+    from backend.search.bm25 import _run_bm25_search
 
     first = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="cors settings")
     second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="api key rotation")
@@ -90,7 +86,7 @@ def test_run_bm25_search_symmetric_mode_can_match_asymmetric_when_no_effective_c
         return [(first, 1.0), (second, 0.5)]
 
     monkeypatch.setattr(
-        "backend.search.service._score_prepared_bm25_corpus",
+        "backend.search.bm25._score_prepared_bm25_corpus",
         fake_score,
     )
 
@@ -118,7 +114,7 @@ def test_run_bm25_search_applies_cap_after_deterministic_merge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import _run_bm25_search
+    from backend.search.bm25 import _run_bm25_search
 
     first = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="reset password guide")
     second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="password reset checklist")
@@ -132,7 +128,7 @@ def test_run_bm25_search_applies_cap_after_deterministic_merge(
         return [(third, 0.8)]
 
     monkeypatch.setattr(
-        "backend.search.service._score_prepared_bm25_corpus",
+        "backend.search.bm25._score_prepared_bm25_corpus",
         fake_score,
     )
 
@@ -153,7 +149,7 @@ def test_run_bm25_search_uses_final_merged_output_for_lexical_signal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import _run_bm25_search
+    from backend.search.bm25 import _run_bm25_search
 
     alias_hit = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="alias documentation")
 
@@ -163,7 +159,7 @@ def test_run_bm25_search_uses_final_merged_output_for_lexical_signal(
         return []
 
     monkeypatch.setattr(
-        "backend.search.service._score_prepared_bm25_corpus",
+        "backend.search.bm25._score_prepared_bm25_corpus",
         fake_score,
     )
 
@@ -431,7 +427,7 @@ def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candida
 
 def test_bm25_signal_uses_overlap_fallback_when_raw_scores_are_flat() -> None:
     from backend.models import Embedding
-    from backend.search.service import _bm25_score_candidates_with_signal
+    from backend.search.bm25 import _bm25_score_candidates_with_signal
 
     matching = Embedding(
         id=uuid.uuid4(),
@@ -475,7 +471,7 @@ def test_normalize_scored_results(raw_scores: list[float], expected: list[float]
     [0, 1] with order preserved; a single unique match is always 1.0.
     """
     from backend.models import Embedding
-    from backend.search.service import _normalize_scored_results
+    from backend.search.bm25 import _normalize_scored_results
 
     scored = [
         (Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text=str(i), metadata_json={}), score)
@@ -490,7 +486,7 @@ def test_normalize_scored_results(raw_scores: list[float], expected: list[float]
 def test_normalize_scored_results_single_item_returns_one() -> None:
     """Single unique match: must return 1.0 — it is the top result by definition."""
     from backend.models import Embedding
-    from backend.search.service import _normalize_scored_results
+    from backend.search.bm25 import _normalize_scored_results
 
     emb = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="only", metadata_json={})
 

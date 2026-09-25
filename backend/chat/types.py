@@ -35,7 +35,7 @@ from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.guards.types import Verdict
 from backend.models import Chat, TenantProfile
 from backend.observability import TraceHandle
-from backend.search.service import (
+from backend.search.reliability import (
     RetrievalReliability,
     default_retrieval_reliability,
 )

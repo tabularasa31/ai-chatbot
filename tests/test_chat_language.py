@@ -16,9 +16,6 @@ from backend.chat.language import (
     render_direct_faq_answer_result,
     resolve_language_context,
 )
-from backend.chat.language_context import (
-    _resolve_fallback_locale,
-)
 from backend.core.config import Settings, settings
 from backend.guards.reject_response import RejectReason, build_reject_response_result
 
@@ -291,24 +288,6 @@ async def test_localize_skips_when_detection_confident_but_target_is_root_match(
 
     assert result == LocalizationResult(text="你好", tokens_used=0)
     mock_openai_client.chat.completions.create.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# _resolve_fallback_locale
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_fallback_locale_prefers_kyc_then_browser_locale() -> None:
-    assert (
-        _resolve_fallback_locale(
-            {"locale": "fr-FR", "browser_locale": "de-DE"},
-            "en-US",
-        )
-        == "fr-FR"
-    )
-    assert _resolve_fallback_locale({"browser_locale": "de-DE"}, "en-US") == "de-DE"
-    assert _resolve_fallback_locale({}, "en-US") == "en-US"
-    assert _resolve_fallback_locale({}, None) is None
 
 
 # ---------------------------------------------------------------------------

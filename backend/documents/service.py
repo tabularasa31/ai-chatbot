@@ -25,9 +25,9 @@ from backend.documents.parsers import (
     parse_swagger,
     parse_txt,
 )
-from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType
 from backend.observability.metrics import capture_event
+from backend.search.service import invalidate_tenant_search_caches
 
 _HEALTH_WARNING_TYPES = frozenset(
     {
@@ -537,4 +537,4 @@ def delete_document(
     doc = get_document(document_id, tenant_id, db)
     db.delete(doc)
     db.commit()
-    invalidate_bm25_cache_for_tenant(tenant_id)
+    invalidate_tenant_search_caches(tenant_id)

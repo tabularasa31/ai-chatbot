@@ -45,7 +45,6 @@ from backend.documents.quick_answers import (
 )
 from backend.documents.sitemap import DISCOVERY_ESTIMATE_CAP, MAX_DISCOVERY_DEPTH
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
-from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import (
     Document,
     DocumentStatus,
@@ -59,6 +58,7 @@ from backend.models import (
     UrlSourceRun,
 )
 from backend.observability.metrics import capture_event
+from backend.search.service import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +422,7 @@ def _upsert_page_document(
     doc.status = DocumentStatus.ready
     db.flush()
     db.commit()
-    invalidate_bm25_cache_for_tenant(source.tenant_id)
+    invalidate_tenant_search_caches(source.tenant_id)
     _embedder_mod._run_tenant_knowledge_extraction_best_effort(
         document_id=doc.id,
         tenant_id=source.tenant_id,
@@ -544,7 +544,7 @@ def _upsert_structured_document(
         doc.status = DocumentStatus.ready
         db.flush()
         db.commit()
-        invalidate_bm25_cache_for_tenant(source.tenant_id)
+        invalidate_tenant_search_caches(source.tenant_id)
         _embedder_mod._run_tenant_knowledge_extraction_best_effort(
             document_id=doc.id,
             tenant_id=source.tenant_id,
@@ -724,7 +724,7 @@ def delete_url_source(source_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -
     source = get_url_source(source_id, tenant_id, db)
     db.delete(source)
     db.commit()
-    invalidate_bm25_cache_for_tenant(tenant_id)
+    invalidate_tenant_search_caches(tenant_id)
 
 
 def delete_source_document(
@@ -749,7 +749,7 @@ def delete_source_document(
     db.flush()
     _recalculate_source_counts(source, db)
     db.commit()
-    invalidate_bm25_cache_for_tenant(tenant_id)
+    invalidate_tenant_search_caches(tenant_id)
 
 
 def trigger_refresh(
@@ -1036,6 +1036,7 @@ def _finalize_crawl(
     run.failed_urls = result.failures
     run.duration_seconds = max(0, int(time.monotonic() - started))
     db.commit()
+    invalidate_tenant_search_caches(source.tenant_id)
 
 
 def _summarize_crawl_failure(failures: list[dict[str, str]]) -> str:

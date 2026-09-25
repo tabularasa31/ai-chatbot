@@ -446,6 +446,8 @@ def test_tokenize_preserves_hyphenated_terms_and_is_unicode_aware() -> None:
 
     assert "rate-limit" in tokens
     assert "невероятно" in tokens
+    assert "rate\u2010limit" not in tokens
+    assert "rate-limit" in _tokenize("Rate\u2010limit guidance")
 
 
 def test_prepare_mode_b_clusters_skips_unknown_status() -> None:

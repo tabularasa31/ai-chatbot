@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, type TenantMember, type TenantRole, type TenantRoleValue } from "@/lib/api";
-import { useClientMe, useMembers } from "@/hooks/useApi";
+import { useClientMe, useMembers, useAuthUser } from "@/hooks/useApi";
 
 const ROLE_LABEL: Record<TenantRole, string> = {
   owner: "Owner",
@@ -35,16 +35,11 @@ export default function MembersPage() {
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
-  const [selfId, setSelfId] = useState<string | null>(null);
 
   // Who "you" are: /tenants/me carries the role, not the user id, and the
   // self-removal guard needs the id.
-  useEffect(() => {
-    api.auth
-      .getMe()
-      .then((user) => setSelfId(user.id))
-      .catch(() => {});
-  }, []);
+  const { data: authUser } = useAuthUser();
+  const selfId = authUser?.id ?? null;
 
   const isOwner = client?.role === "owner";
 
@@ -108,7 +103,7 @@ export default function MembersPage() {
         <p className="text-slate-500 text-sm mt-1">
           Invite colleagues to work the inbox with you. Everyone you invite is
           an operator: they answer conversations and read the knowledge base,
-          while settings, API keys and publishing stay with you as the owner.
+          while settings and publishing stay with you as the owner.
           Roles do not change — a workspace has one owner, the person who
           created it. Removing someone deletes their account; their past
           replies stay in the transcripts.

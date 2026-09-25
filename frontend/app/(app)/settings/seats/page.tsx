@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, type TenantMember } from "@/lib/api";
-import { useClientMe, useMembers } from "@/hooks/useApi";
+import { useClientMe, useMembers, useAuthUser } from "@/hooks/useApi";
+import { formatDate, parseApiDate } from "@/lib/format";
 
 /** Monthly price of one seat, in US dollars. Nothing is charged during the beta. */
 const SEAT_PRICE_USD = 10;
@@ -12,33 +13,22 @@ function money(amount: number): string {
 }
 
 function seatDate(value: string): string {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime())
-    ? ""
-    : parsed.toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
+  const parsed = parseApiDate(value);
+  return Number.isNaN(parsed.getTime()) ? "" : formatDate(value);
 }
 
 export default function SeatsPage() {
   const { data: client } = useClientMe();
   const { data, error: loadError, isLoading, mutate } = useMembers();
 
-  const [selfId, setSelfId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
   // /tenants/me carries the role, not the user id, and "your own seat" needs
   // the id to find your row in the list.
-  useEffect(() => {
-    api.auth
-      .getMe()
-      .then((user) => setSelfId(user.id))
-      .catch(() => {});
-  }, []);
+  const { data: authUser } = useAuthUser();
+  const selfId = authUser?.id ?? null;
 
   const isOwner = client?.role === "owner";
   const members: TenantMember[] = data?.items ?? [];

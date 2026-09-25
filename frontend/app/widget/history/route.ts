@@ -1,21 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+import { NextRequest } from "next/server";
+import { proxyToApi } from "@/lib/widget-proxy";
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const botId = searchParams.get("bot_id") ?? searchParams.get("botId");
-  const sessionId = searchParams.get("session_id");
-
-  if (!botId || !sessionId) {
-    return NextResponse.json(
-      { detail: "bot_id and session_id are required" },
-      { status: 400 },
-    );
-  }
-
-  const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
-  const res = await fetch(`${API_URL}/widget/history?${params}`);
-  const data = await res.json().catch(() => ({}));
-  return NextResponse.json(data, { status: res.status });
+  return proxyToApi(request, "/widget/history", {
+    method: "GET",
+    params: [
+      { name: "bot_id", aliases: ["botId"], required: true },
+      { name: "session_id", required: true },
+    ],
+  });
 }

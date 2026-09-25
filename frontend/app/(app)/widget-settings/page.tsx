@@ -1,36 +1,39 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { api, type BotResponse } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
+import { useActiveBot } from "@/hooks/useApi";
 
 export default function WidgetSettingsPage() {
-  const [defaultBot, setDefaultBot] = useState<BotResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const {
+    activeBot: defaultBot,
+    isLoading: loading,
+    isValidating,
+    error: loadError,
+    mutate: mutateBots,
+  } = useActiveBot();
   const [error, setError] = useState("");
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [copiedBotId, setCopiedBotId] = useState(false);
   const [linkSafetyEnabled, setLinkSafetyEnabled] = useState(false);
   const [allowedDomainsInput, setAllowedDomainsInput] = useState("");
   const [settingsSavedOk, setSettingsSavedOk] = useState(false);
-
-  const load = useCallback(async () => {
-    setError("");
-    try {
-      const bots = await api.bots.list();
-      const activeBot = bots.find((b) => b.is_active) ?? null;
-      setDefaultBot(activeBot);
-      setLinkSafetyEnabled(activeBot?.link_safety_enabled ?? false);
-      setAllowedDomainsInput((activeBot?.allowed_domains ?? []).join("\n"));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [seededBotId, setSeededBotId] = useState<string | null>(null);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (loadError) setError(loadError instanceof Error ? loadError.message : "Failed to load");
+  }, [loadError]);
+
+  // Seed the editable fields once the active bot's revalidation settles, and
+  // only once per bot id — a warm cache must not leave stale values, and a
+  // later background revalidation must not clobber in-progress edits.
+  useEffect(() => {
+    if (!defaultBot || isValidating) return;
+    if (seededBotId === defaultBot.id) return;
+    setSeededBotId(defaultBot.id);
+    setLinkSafetyEnabled(defaultBot.link_safety_enabled ?? false);
+    setAllowedDomainsInput((defaultBot.allowed_domains ?? []).join("\n"));
+  }, [defaultBot, isValidating, seededBotId]);
 
   async function copyBotId() {
     if (!defaultBot?.public_id) return;
@@ -56,7 +59,9 @@ export default function WidgetSettingsPage() {
         link_safety_enabled: linkSafetyEnabled,
         allowed_domains: parseAllowedDomains(),
       });
-      setDefaultBot(updated);
+      await mutateBots((bots) => bots?.map((b) => (b.id === updated.id ? updated : b)), {
+        revalidate: false,
+      });
       setAllowedDomainsInput((updated.allowed_domains ?? []).join("\n"));
       setSettingsSavedOk(true);
       setTimeout(() => setSettingsSavedOk(false), 2500);
@@ -67,7 +72,7 @@ export default function WidgetSettingsPage() {
     }
   }
 
-  if (loading) {
+  if (loading || (defaultBot && seededBotId !== defaultBot.id)) {
     return <p className="text-slate-600">Loading…</p>;
   }
 

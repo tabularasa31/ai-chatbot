@@ -100,10 +100,6 @@ export default function DeleteWorkspaceCard({
                 You are signed out, and there is no account left to sign back
                 in with. The same is true for every colleague you invited.
               </li>
-              <li>
-                Your API keys stop working, and anything built against them
-                stops with them.
-              </li>
             </ul>
             <p className="text-sm text-red-800/90">
               This removes everything we hold for this workspace, in our

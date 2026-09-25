@@ -33,7 +33,6 @@ from backend.models import (
     OperatorSession,
     OperatorState,
     Tenant,
-    TenantApiKey,
     User,
 )
 from backend.models.base import _utcnow
@@ -255,13 +254,6 @@ def test_operator_reaches_the_inbox_the_logs_and_the_knowledge_reads(
     "method,path,body",
     [
         pytest.param("patch", "/tenants/me", {"name": "Renamed"}, id="rename_workspace"),
-        pytest.param("get", "/tenants/me/api-keys", None, id="read_api_keys"),
-        pytest.param(
-            "post",
-            "/tenants/me/api-keys/rotate",
-            {"reason": "other", "revoke_old_immediately": False},
-            id="rotate_api_keys",
-        ),
         pytest.param(
             "put",
             "/tenants/me/support-settings",
@@ -574,17 +566,6 @@ def test_removing_a_member_cleans_up_after_them(
         db_session.query(OperatorSession).filter(OperatorSession.chat_id == held.id).one()
     )
 
-    rotated = tenant.post(
-        "/tenants/me/api-keys/rotate",
-        headers=ws.auth,
-        json={"reason": "scheduled", "revoke_old_immediately": False},
-    )
-    assert rotated.status_code == 201, rotated.text
-    key_id = uuid.UUID(rotated.json()["key"]["id"])
-    key = db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
-    key.created_by_user_id = member_id
-    db_session.commit()
-
     assert (
         tenant.delete(f"/tenants/members/{member_id}", headers=ws.auth).status_code
         == 204
@@ -603,10 +584,6 @@ def test_removing_a_member_cleans_up_after_them(
     stretch = db_session.query(OperatorSession).filter(OperatorSession.id == stretch.id).one()
     assert stretch.ended_at is not None
     assert stretch.operator_label == "ops@acme.example.com"
-
-    key = db_session.query(TenantApiKey).filter(TenantApiKey.id == key_id).one()
-    assert key.created_by_user_id is None
-    assert key.created_by_label == "ops@acme.example.com"
 
     reply = db_session.query(Message).filter(Message.id == reply.id).one()
     assert reply.operator_user_id is None

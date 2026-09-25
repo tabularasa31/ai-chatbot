@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Enum, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import JSON, Boolean, Column, DateTime, Enum, String, Text
 from sqlalchemy.orm import relationship
 
 from backend.core.utils import generate_public_id
-from backend.models.base import Base, TenantScopedMixin, TimestampMixin, UUIDPKMixin, _utcnow
+from backend.models.base import Base, TenantScopedMixin, TimestampMixin, UUIDPKMixin
 from backend.models.enums import RerankerStrategy
 
 
@@ -76,63 +75,6 @@ class Tenant(UUIDPKMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    api_keys = relationship(
-        "TenantApiKey",
-        back_populates="tenant",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-
-
-# Status values for TenantApiKey.status. Kept as plain strings (no Enum) to
-# match existing patterns in this module.
-TENANT_API_KEY_STATUS_ACTIVE = "active"
-TENANT_API_KEY_STATUS_REVOKING = "revoking"
-TENANT_API_KEY_STATUS_REVOKED = "revoked"
-
-TENANT_API_KEY_REASONS = ("leaked", "scheduled", "compromise", "manual", "other")
-
-
-class TenantApiKey(UUIDPKMixin, TenantScopedMixin, Base):
-    __tablename__ = "tenant_api_keys"
-
-    # SHA-256 of the plaintext ck_… key. 64 hex chars.
-    key_hash = Column(String(64), unique=True, nullable=False, index=True)
-    # Last 4 chars of the plaintext key, displayed in the UI to identify a
-    # rotated key without revealing its full value.
-    key_hint = Column(String(8), nullable=False)
-    status = Column(String(16), nullable=False, default=TENANT_API_KEY_STATUS_ACTIVE)
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    expires_at = Column(DateTime, nullable=True)
-    revoked_at = Column(DateTime, nullable=True)
-    revoked_reason = Column(String(32), nullable=True)
-    last_used_at = Column(DateTime, nullable=True)
-    created_by_user_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    # Signature kept when the account is deleted; see ``Message.operator_label``.
-    # Who issued a key is the first question asked when one leaks, and the
-    # person who issued it having since left makes it more pressing, not less.
-    created_by_label = Column(String(255), nullable=True)
-
-    tenant = relationship("Tenant", back_populates="api_keys")
-
-    __table_args__ = (
-        Index("ix_tenant_api_keys_tenant_status", "tenant_id", "status"),
-        # Partial unique index enforcing at most one ACTIVE row per tenant.
-        # The actual DDL is created in the alembic migration; this annotation
-        # keeps the constraint visible to anyone reading the model.
-        Index(
-            "uq_tenant_api_keys_one_active",
-            "tenant_id",
-            unique=True,
-            postgresql_where=(status == TENANT_API_KEY_STATUS_ACTIVE),
-            sqlite_where=(status == TENANT_API_KEY_STATUS_ACTIVE),
-        ),
-    )
-
 
 class Bot(UUIDPKMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "bots"

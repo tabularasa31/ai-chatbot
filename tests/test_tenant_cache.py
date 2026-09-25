@@ -150,7 +150,7 @@ def test_update_tenant_invalidates_cache(db_session: Session) -> None:
     from backend.tenants.service import create_tenant, update_tenant
 
     user = register_user("cache-owner@example.com", "pw123456", db_session)
-    tenant, _key = create_tenant(user.id, "Cache Co", db_session)
+    tenant = create_tenant(user.id, "Cache Co", db_session)
 
     tenant_cache.set_cached_tenant(tenant)
     assert tenant_cache.get_cached_tenant(tenant.id) is not None

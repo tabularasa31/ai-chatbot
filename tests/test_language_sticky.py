@@ -355,7 +355,7 @@ def _chat_test_setup(tenant: TestClient, db_session: Session, email: str) -> tup
         json={"name": "Sticky Language Tenant"},
     )
     set_client_openai_key(tenant, token)
-    return uuid.UUID(create_resp.json()["id"]), create_resp.json()["api_key"]
+    return uuid.UUID(create_resp.json()["id"]), "sk-test"
 
 
 def _patch_process_chat_dependencies(

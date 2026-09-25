@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_json import async_chat_json
+from backend.jobs._periodic import llm_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +31,9 @@ ALIAS_BASE_CONFIDENCE = 0.7
 ALIAS_CONFIDENCE_INCREMENT = 0.1
 ALIAS_CONFIDENCE_MAX = 0.9
 
-_LLM_SEMAPHORE: asyncio.Semaphore | None = None
-
 
 def _get_semaphore() -> asyncio.Semaphore:
-    global _LLM_SEMAPHORE
-    if _LLM_SEMAPHORE is None:
-        _LLM_SEMAPHORE = asyncio.Semaphore(3)
-    return _LLM_SEMAPHORE
+    return llm_semaphore(__name__)
 
 
 @dataclass

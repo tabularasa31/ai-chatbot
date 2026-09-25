@@ -390,7 +390,7 @@ How the second contour works:
 - Policies are **fail-open when no context is set**: background jobs, cron sweeps and
   Alembic run unchanged. With context set, cross-tenant reads return 0 rows and
   cross-tenant writes raise a row-level security error.
-- Auth-boundary tables (`tenants`, `users`, `bots`, `tenant_api_keys`) are exempt —
+- Auth-boundary tables (`tenants`, `users`, `bots`) are exempt —
   they are queried before the tenant is known.
 - **Platform-wide admin endpoints** (cross-tenant metrics, PII retention cleanup) use
   `Depends(get_platform_admin_user)`, which explicitly clears the tenant context set at

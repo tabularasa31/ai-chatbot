@@ -6,7 +6,6 @@ let authRedirectInProgress = false;
 export type TenantResponse = {
   id: string;
   name: string;
-  api_key_hint: string | null;
   public_id: string;
   has_openai_key: boolean;
   created_at: string;

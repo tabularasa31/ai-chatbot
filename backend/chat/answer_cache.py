@@ -17,7 +17,6 @@ miss. Which turns may read or store is decided in ``steps/answer_cache.py``.
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import hashlib
 import json
@@ -34,10 +33,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core import redis as redis_mod
 from backend.core.config import settings
+from backend.core.db import is_sqlite
 from backend.models import AnswerCacheEntry, Document, TenantFaq
 from backend.models.base import _utcnow
 from backend.observability.cache_metrics import record_hit, record_miss
-from backend.utils.math import cosine_similarity
+from backend.utils.math import coerce_vector, cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -297,31 +297,6 @@ async def promote_exact(scope: AnswerCacheScope, cached: CachedAnswer) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _bound_db_url(db: AsyncSession) -> str:
-    try:
-        return str(db.get_bind().url)
-    except Exception:
-        return ""
-
-
-def _vector_from_db(raw: Any) -> list[float] | None:
-    if raw is None:
-        return None
-    if hasattr(raw, "tolist"):
-        raw = raw.tolist()
-    if isinstance(raw, str):
-        try:
-            raw = ast.literal_eval(raw.strip())
-        except (ValueError, SyntaxError):
-            return None
-    if not isinstance(raw, (list, tuple)):
-        return None
-    try:
-        return [float(v) for v in raw]
-    except (TypeError, ValueError):
-        return None
-
-
 async def _safe_rollback(db: AsyncSession) -> None:
     try:
         await db.rollback()
@@ -341,11 +316,11 @@ async def _nearest_entry(
         AnswerCacheEntry.response_language == scope.response_language,
         AnswerCacheEntry.expires_at > _utcnow(),
     )
-    if "sqlite" in _bound_db_url(db):
+    if is_sqlite(db):
         rows = (await db.execute(select(AnswerCacheEntry).where(*in_scope))).scalars().all()
         best: tuple[AnswerCacheEntry, float] | None = None
         for row in rows:
-            vector = _vector_from_db(row.question_embedding)
+            vector = coerce_vector(row.question_embedding)
             if vector is None:
                 continue
             similarity = float(cosine_similarity(question_embedding, vector))

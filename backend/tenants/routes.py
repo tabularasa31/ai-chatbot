@@ -16,7 +16,7 @@ from backend.auth.middleware import (
 from backend.core.db import get_db
 from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import RerankerStrategy, Tenant, User
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 from backend.seats.service import holds_seat
 from backend.tenants.api_keys_service import (
     list_api_keys,
@@ -42,7 +42,6 @@ from backend.tenants.service import (
     delete_tenant,
     get_primary_api_key_hint,
     get_support_settings_for_user,
-    get_tenant_by_id,
     update_support_settings_for_user,
     update_tenant,
 )
@@ -143,18 +142,15 @@ def rotate_api_key_route(
         revoke_old_immediately=body.revoke_old_immediately,
         actor_user_id=current_user.id,
     )
-    try:
-        capture_event(
-            "tenant.api_key.rotated",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={
-                "reason": body.reason,
-                "revoke_old_immediately": body.revoke_old_immediately,
-            },
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "tenant.api_key.rotated",
+        tenant_public_id=str(tenant.public_id),
+        bot_public_id=None,
+        properties={
+            "reason": body.reason,
+            "revoke_old_immediately": body.revoke_old_immediately,
+        },
+    )
     return RotateTenantApiKeyResponse(
         api_key=plaintext,
         key=TenantApiKeyResponse.model_validate(new_row),
@@ -175,15 +171,12 @@ def revoke_api_key_route(
     """Immediately revoke a single key (no grace). Refuses if it would
     leave the tenant with no usable key."""
     row = revoke_api_key(tenant.id, key_id, db, reason="manual")
-    try:
-        capture_event(
-            "tenant.api_key.revoked",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
-            properties={"key_id": str(key_id)},
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "tenant.api_key.revoked",
+        tenant_public_id=str(tenant.public_id),
+        bot_public_id=None,
+        properties={"key_id": str(key_id)},
+    )
     return TenantApiKeyResponse.model_validate(row)
 
 
@@ -274,21 +267,6 @@ def update_my_client(
                 detail="Server misconfiguration: encryption is not configured. Contact support.",
             ) from e
         raise
-    return _tenant_to_response(tenant, db)
-
-
-@tenants_router.get("/{tenant_id}", response_model=TenantResponse, include_in_schema=False)
-def get_tenant_by_id_route(
-    tenant_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> TenantResponse:
-    """
-    Get tenant by UUID (protected JWT).
-
-    Returns 404 if not found or not owner.
-    """
-    tenant = get_tenant_by_id(tenant_id, current_user.id, db)
     return _tenant_to_response(tenant, db)
 
 

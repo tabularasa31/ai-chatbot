@@ -330,18 +330,6 @@ def test_a_reply_by_email_and_a_reply_from_the_console_look_the_same(
     assert by_mail["author_label"] == by_console["author_label"] == "same@example.com"
 
 
-def test_session_logs_carry_operator_turns(tenant: TestClient, db_session: Session) -> None:
-    ws = _workspace(tenant, db_session, email="logs@example.com", name="Logs Co")
-    chat = _chat(db_session, ws.tenant_id)
-    _say(db_session, chat, MessageRole.user, "help")
-    _say(db_session, chat, MessageRole.operator, "here", operator_user_id=ws.user_id)
-
-    resp = tenant.get(f"/chat/logs/session/{chat.session_id}", headers=ws.auth)
-
-    assert resp.status_code == 200, resp.text
-    assert [m["role"] for m in resp.json()["messages"]] == ["user", "operator"]
-
-
 # --------------------------------------------------------------------------
 # The seat gate
 # --------------------------------------------------------------------------
@@ -481,7 +469,7 @@ def test_resolving_a_held_chat_emits_ticket_resolved(
 
     captured: list[dict] = []
     monkeypatch.setattr(
-        "backend.chat.events.capture_event",
+        "backend.observability.metrics.capture_event",
         lambda event, **kwargs: captured.append({"event": event, **kwargs}),
     )
 
@@ -528,7 +516,7 @@ def test_resolving_a_chat_never_taken_still_emits_with_chat_was_with_operator_fa
 
     captured: list[dict] = []
     monkeypatch.setattr(
-        "backend.chat.events.capture_event",
+        "backend.observability.metrics.capture_event",
         lambda event, **kwargs: captured.append({"event": event, **kwargs}),
     )
 
@@ -556,7 +544,7 @@ def test_resolving_with_no_active_ticket_emits_nothing(
 
     captured: list[dict] = []
     monkeypatch.setattr(
-        "backend.chat.events.capture_event",
+        "backend.observability.metrics.capture_event",
         lambda event, **kwargs: captured.append({"event": event, **kwargs}),
     )
 

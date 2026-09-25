@@ -57,7 +57,8 @@ from backend.models import (
     UrlSource,
     UrlSourceRun,
 )
-from backend.observability.metrics import capture_event
+from backend.models.base import utcnow_naive as _utcnow
+from backend.observability.metrics import emit_tenant_event
 from backend.search.service import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
@@ -95,17 +96,6 @@ class UrlPreflightResult:
     title: str | None
     estimated_pages: int
     warnings: list[str]
-
-
-def _utcnow() -> dt.datetime:
-    # Naive UTC — every ``DateTime`` column this value lands on is declared
-    # without ``timezone=True`` (see ``backend/models/base._utcnow``). Returning
-    # aware would either crash asyncpg (``can't subtract offset-naive and
-    # offset-aware datetimes``) on write or get silently rewritten to naive by
-    # the ``before_flush`` listener mid-function — see ``_mark_run_finished``
-    # below where the listener was caught stripping ``run.finished_at`` between
-    # the assignment and the duration calculation.
-    return dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
 
 def _count_tenant_documents(db: Session, tenant_id: uuid.UUID) -> int:
@@ -365,6 +355,7 @@ def _upsert_page_document(
     page: ExtractedPage,
     db: Session,
     api_key: str | None,
+    tenant_public_id: str | None = None,
 ) -> tuple[Document, int]:
     existing = _find_existing_source_document(source.id, page.url, db)
     content_hash = _embedder_mod._content_hash(page.text)
@@ -418,23 +409,20 @@ def _upsert_page_document(
     doc.status = DocumentStatus.ready
     db.commit()
     _embedder_mod.after_document_indexed(doc, embeddings, api_key=api_key, db=db)
-    try:
-        capture_event(
-            "document_indexed",
-            distinct_id=str(source.tenant_id),
-            tenant_id=str(source.tenant_id),
-            properties={
-                "document_id": str(doc.id),
-                "file_type": "url",
-                "source_kind": "url_crawl",
-                "language": doc.language,
-                "language_detected": doc.language is not None,
-                "parsed_text_chars": len(doc.parsed_text or ""),
-                "chunks_created": len(page.chunks),
-            },
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "document_indexed",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=None,
+        properties={
+            "document_id": str(doc.id),
+            "file_type": "url",
+            "source_kind": "url_crawl",
+            "language": doc.language,
+            "language_detected": doc.language is not None,
+            "parsed_text_chars": len(doc.parsed_text or ""),
+            "chunks_created": len(page.chunks),
+        },
+    )
     return doc, len(page.chunks)
 
 
@@ -447,6 +435,7 @@ def _upsert_structured_document(
     chunks: list[OpenAPIChunk],
     db: Session,
     api_key: str | None,
+    tenant_public_id: str | None = None,
 ) -> tuple[Document, int]:
     existing = _find_existing_source_document(source.id, url, db)
     content_hash = _embedder_mod._content_hash(parsed_text)
@@ -504,23 +493,20 @@ def _upsert_structured_document(
         doc.status = DocumentStatus.ready
         db.commit()
         _embedder_mod.after_document_indexed(doc, embeddings, api_key=api_key, db=db)
-        try:
-            capture_event(
-                "document_indexed",
-                distinct_id=str(source.tenant_id),
-                tenant_id=str(source.tenant_id),
-                properties={
-                    "document_id": str(doc.id),
-                    "file_type": "swagger",
-                    "source_kind": "openapi",
-                    "language": doc.language,
-                    "language_detected": doc.language is not None,
-                    "parsed_text_chars": len(doc.parsed_text or ""),
-                    "chunks_created": len(rendered_chunks),
-                },
-            )
-        except Exception:
-            pass
+        emit_tenant_event(
+            "document_indexed",
+            tenant_public_id=tenant_public_id,
+            bot_public_id=None,
+            properties={
+                "document_id": str(doc.id),
+                "file_type": "swagger",
+                "source_kind": "openapi",
+                "language": doc.language,
+                "language_detected": doc.language is not None,
+                "parsed_text_chars": len(doc.parsed_text or ""),
+                "chunks_created": len(rendered_chunks),
+            },
+        )
         return doc, len(rendered_chunks)
     except (APIError, SQLAlchemyError, ValueError) as exc:
         logger.warning("Structured source embedding failed", extra={"url": url, "error": str(exc)})
@@ -815,6 +801,15 @@ def _index_pages(
     TODO: narrow to explicit OpenAI/auth/embedding error recognition rather than
     status-code matching alone.
     """
+    # Resolved once per run — never per page — and best-effort: a telemetry
+    # lookup must never abort indexing, so a failure here just means the
+    # document_indexed events for this run go out without a tenant id.
+    try:
+        tenant_public_id = db.query(Tenant.public_id).filter(Tenant.id == source.tenant_id).scalar()
+        tenant_public_id = str(tenant_public_id) if tenant_public_id else None
+    except Exception:
+        tenant_public_id = None
+
     structured_source = _fetch_openapi_source(source.url)
     if structured_source is not None:
         quick_answers = {
@@ -834,6 +829,7 @@ def _index_pages(
             chunks=structured_source.chunks,
             db=db,
             api_key=api_key,
+            tenant_public_id=tenant_public_id,
         )
         source.metadata_json = {
             **(source.metadata_json or {}),
@@ -887,7 +883,9 @@ def _index_pages(
             failures.append({"url": url, "reason": "No readable content extracted"})
             continue
         try:
-            _, page_chunks = _upsert_page_document(source=source, page=page, db=db, api_key=api_key)
+            _, page_chunks = _upsert_page_document(
+                source=source, page=page, db=db, api_key=api_key, tenant_public_id=tenant_public_id
+            )
         except HTTPException as exc:
             if exc.status_code in {400, 401, 500}:
                 source.status = SourceStatus.paused

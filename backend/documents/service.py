@@ -26,7 +26,7 @@ from backend.documents.parsers import (
     parse_txt,
 )
 from backend.models import Document, DocumentStatus, DocumentType
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 from backend.search.service import invalidate_tenant_search_caches
 
 _HEALTH_WARNING_TYPES = frozenset(
@@ -382,6 +382,7 @@ def upload_document(
     content: bytes,
     file_type: str,
     db: Session,
+    tenant_public_id: str | None = None,
 ) -> Document:
     """
     Upload and parse a document.
@@ -469,22 +470,19 @@ def upload_document(
         doc.status = DocumentStatus.error
     db.commit()
     db.refresh(doc)
-    try:
-        capture_event(
-            "document_indexed",
-            distinct_id=str(tenant_id),
-            tenant_id=str(tenant_id),
-            properties={
-                "document_id": str(doc.id),
-                "file_type": doc.file_type.value,
-                "source_kind": "upload",
-                "language": doc.language,
-                "language_detected": doc.language is not None,
-                "parsed_text_chars": len(doc.parsed_text or ""),
-            },
-        )
-    except Exception:
-        pass
+    emit_tenant_event(
+        "document_indexed",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=None,
+        properties={
+            "document_id": str(doc.id),
+            "file_type": doc.file_type.value,
+            "source_kind": "upload",
+            "language": doc.language,
+            "language_detected": doc.language is not None,
+            "parsed_text_chars": len(doc.parsed_text or ""),
+        },
+    )
     return doc
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -91,55 +90,3 @@ class WidgetChatTurnResponse(BaseModel):
     escalation_offered: bool = False
 
 
-class MessageResponse(BaseModel):
-    """Single message in chat history."""
-
-    id: UUID
-    role: str
-    content: str
-    created_at: datetime
-
-
-class ChatHistoryResponse(BaseModel):
-    """Chat history for a session."""
-
-    session_id: UUID
-    messages: list[MessageResponse]
-
-
-# --- Inbox / logs DTOs ---
-
-
-class ChatSessionSummaryResponse(BaseModel):
-    """Summary of a chat session for inbox list."""
-
-    session_id: UUID
-    message_count: int
-    last_question: str | None = None
-    last_answer_preview: str | None = None
-    last_activity: datetime
-
-
-class ChatSessionListResponse(BaseModel):
-    """List of chat sessions for a client."""
-
-    sessions: list[ChatSessionSummaryResponse]
-
-
-class ChatMessageLogItem(BaseModel):
-    """Single message in chat logs (read-only)."""
-
-    id: UUID
-    session_id: UUID
-    role: Literal["user", "assistant", "operator"]
-    content: str
-    created_at: datetime
-    # Conversation the message belongs to; a session spans several after
-    # idle rotation. The dashboard draws a divider on chat_id change.
-    chat_id: UUID | None = None
-
-
-class ChatMessageLogResponse(BaseModel):
-    """Full message log for a session."""
-
-    messages: list[ChatMessageLogItem]

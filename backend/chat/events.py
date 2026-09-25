@@ -12,7 +12,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 from backend.chat.decision import Decision
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import emit_tenant_event
 
 if TYPE_CHECKING:
     from backend.chat.types import PipelineRun
@@ -62,25 +62,16 @@ def _check_escalation_rate(tenant_public_id: str | None, bot_public_id: str | No
             threshold,
             extra={"escalation_count": count, "window_seconds": window},
         )
-        try:
-            capture_event(
-                "escalation.rate_exceeded",
-                distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
-                tenant_id=tenant_public_id,
-                bot_id=bot_public_id,
-                properties={
-                    "escalation_count": count,
-                    "window_seconds": window,
-                    "threshold": threshold,
-                },
-                groups={"tenant": tenant_public_id} if tenant_public_id else None,
-            )
-        except Exception:
-            pass
-
-
-def _metrics_distinct_id(bot_public_id: str | None, tenant_public_id: str | None) -> str:
-    return bot_public_id or tenant_public_id or "unknown"
+        emit_tenant_event(
+            "escalation.rate_exceeded",
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
+            properties={
+                "escalation_count": count,
+                "window_seconds": window,
+                "threshold": threshold,
+            },
+        )
 
 
 def _emit_quick_answer_lookup_event(
@@ -92,28 +83,19 @@ def _emit_quick_answer_lookup_event(
     bot_public_id: str | None,
     chat_id: str | None,
 ) -> None:
-    # Skip when neither identifier is known to avoid collapsing events under
-    # distinct_id="unknown" and polluting per-tenant rollups.
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    try:
-        capture_event(
-            "quick_answer.lookup",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "selected_keys": ",".join(selected_keys),
-                "selected_count": len(selected_keys),
-                "matched_count": matched_count,
-                "found": matched_count > 0,
-                "text_length": text_length,
-                "chat_id": chat_id,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
-        logger.warning("Failed to emit quick_answer.lookup event", exc_info=True)
+    emit_tenant_event(
+        "quick_answer.lookup",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        properties={
+            "selected_keys": ",".join(selected_keys),
+            "selected_count": len(selected_keys),
+            "matched_count": matched_count,
+            "found": matched_count > 0,
+            "text_length": text_length,
+            "chat_id": chat_id,
+        },
+    )
 
 
 def _emit_speculative_retrieval_event(
@@ -138,32 +120,29 @@ def _emit_speculative_retrieval_event(
     can distinguish which path each turn took. ``cross_lingual``, ``variant_mode``
     and ``retrieval_mode`` add orthogonal dimensions for richer breakdowns.
     """
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    strategy = {
-        "used": "speculative",
-        "fallback": "fallback",
-        "wasted_reject": "speculative_cancelled",
-    }[outcome]
     try:
-        capture_event(
-            "speculative_retrieval.outcome",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "outcome": outcome,
-                "strategy": strategy,
-                "duration_ms": duration_ms,
-                "chat_id": chat_id,
-                "cross_lingual": cross_lingual,
-                "variant_mode": variant_mode,
-                "retrieval_mode": retrieval_mode,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
+        strategy = {
+            "used": "speculative",
+            "fallback": "fallback",
+            "wasted_reject": "speculative_cancelled",
+        }[outcome]
+    except KeyError:
         logger.warning("Failed to emit speculative_retrieval.outcome event", exc_info=True)
+        return
+    emit_tenant_event(
+        "speculative_retrieval.outcome",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        properties={
+            "outcome": outcome,
+            "strategy": strategy,
+            "duration_ms": duration_ms,
+            "chat_id": chat_id,
+            "cross_lingual": cross_lingual,
+            "variant_mode": variant_mode,
+            "retrieval_mode": retrieval_mode,
+        },
+    )
 
 
 def _emit_no_rag_hits_event(
@@ -190,23 +169,16 @@ def _emit_no_rag_hits_event(
     * ``social_reply``    — zero-hits turn classified as social / bot-meta;
                             polite acknowledgement instead of a reject.
     """
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    try:
-        capture_event(
-            "no_rag_hits.outcome",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "outcome": outcome,
-                "chat_id": chat_id,
-                "relevance_reason": relevance_reason,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
-        logger.warning("Failed to emit no_rag_hits.outcome event", exc_info=True)
+    emit_tenant_event(
+        "no_rag_hits.outcome",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        properties={
+            "outcome": outcome,
+            "chat_id": chat_id,
+            "relevance_reason": relevance_reason,
+        },
+    )
 
 
 def _emit_chat_turn_event(
@@ -300,13 +272,12 @@ def _emit_chat_turn_event(
             props["escalation_reason"] = decision.escalate_reason or (
                 escalation_trigger if escalated else None
             )
-        capture_event(
+        emit_tenant_event(
             "chat.turn",
-            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
+            chat_id=chat_id,
             properties=props,
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
         # Also emit the dashboard-primary event with the enriched property set.
         _emit_chat_completed_event(
@@ -354,31 +325,25 @@ def _emit_chat_completed_event(
     plan_tier: str | None = None,
     session_id: str | None = None,
 ) -> None:
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    try:
-        capture_event(
-            "chat_completed",
-            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "chat_id": chat_id,
-                "session_id": session_id,
-                "latency_ms": latency_ms,
-                "tokens_input": tokens_input,
-                "tokens_output": tokens_output,
-                "model": model,
-                "lang_match": lang_match,
-                "cap_reason": cap_reason,
-                "reliability_score": reliability_score,
-                "decision_branch": decision_branch,
-                "plan_tier": plan_tier,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
-        logger.warning("Failed to emit chat_completed event", exc_info=True)
+    emit_tenant_event(
+        "chat_completed",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        chat_id=chat_id,
+        properties={
+            "chat_id": chat_id,
+            "session_id": session_id,
+            "latency_ms": latency_ms,
+            "tokens_input": tokens_input,
+            "tokens_output": tokens_output,
+            "model": model,
+            "lang_match": lang_match,
+            "cap_reason": cap_reason,
+            "reliability_score": reliability_score,
+            "decision_branch": decision_branch,
+            "plan_tier": plan_tier,
+        },
+    )
 
 
 def _emit_chat_escalated_event(
@@ -393,25 +358,21 @@ def _emit_chat_escalated_event(
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
-    try:
-        capture_event(
-            "chat_escalated",
-            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "chat_id": chat_id,
-                "escalation_reason": escalation_reason,
-                "trigger": escalation_trigger,
-                "escalation_trigger": escalation_trigger,
-                "plan_tier": plan_tier,
-                "priority": priority,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-        _check_escalation_rate(tenant_public_id, bot_public_id)
-    except Exception:
-        logger.warning("Failed to emit chat_escalated event", exc_info=True)
+    emit_tenant_event(
+        "chat_escalated",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        chat_id=chat_id,
+        properties={
+            "chat_id": chat_id,
+            "escalation_reason": escalation_reason,
+            "trigger": escalation_trigger,
+            "escalation_trigger": escalation_trigger,
+            "plan_tier": plan_tier,
+            "priority": priority,
+        },
+    )
+    _check_escalation_rate(tenant_public_id, bot_public_id)
 
 
 def _emit_ai_generation_event(
@@ -468,12 +429,12 @@ def _emit_ai_generation_event(
             properties["$ai_span_id"] = span_id
         if parent_id is not None:
             properties["$ai_parent_id"] = parent_id
-        capture_event(
+        emit_tenant_event(
             "$ai_generation",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
             properties=properties,
+            groups=False,
         )
     except Exception:
         logger.warning("Failed to emit $ai_generation event", exc_info=True)
@@ -520,12 +481,12 @@ def _emit_ai_embedding_event(
             properties["$ai_span_id"] = span_id
         if parent_id is not None:
             properties["$ai_parent_id"] = parent_id
-        capture_event(
+        emit_tenant_event(
             "$ai_embedding",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
             properties=properties,
+            groups=False,
         )
     except Exception:
         logger.warning("Failed to emit $ai_embedding event", exc_info=True)
@@ -569,12 +530,12 @@ def _emit_ai_span_event(
             for key, value in extra_properties.items():
                 if key not in properties:
                     properties[key] = value
-        capture_event(
+        emit_tenant_event(
             "$ai_span",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
             properties=properties,
+            groups=False,
         )
     except Exception:
         logger.warning("Failed to emit $ai_span event", exc_info=True)
@@ -636,28 +597,22 @@ def _emit_operator_session_ended_event(
     claim that produced nothing — the shape ``bounce_abandoned_claims``
     catches from the ticket side.
     """
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    try:
-        capture_event(
-            "operator_session_ended",
-            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "chat_id": chat_id,
-                "session_id": session_id,
-                "operator_session_id": operator_session_id,
-                "operator_user_id": operator_user_id,
-                "duration_ms": duration_ms,
-                "first_response_ms": first_response_ms,
-                "answered": answered,
-                "ended_reason": ended_reason,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
-        logger.warning("Failed to emit operator_session_ended event", exc_info=True)
+    emit_tenant_event(
+        "operator_session_ended",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        chat_id=chat_id,
+        properties={
+            "chat_id": chat_id,
+            "session_id": session_id,
+            "operator_session_id": operator_session_id,
+            "operator_user_id": operator_user_id,
+            "duration_ms": duration_ms,
+            "first_response_ms": first_response_ms,
+            "answered": answered,
+            "ended_reason": ended_reason,
+        },
+    )
 
 
 def _emit_ticket_resolved_event(
@@ -678,25 +633,19 @@ def _emit_ticket_resolved_event(
     """
     if resolved_count <= 0:
         return
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    try:
-        capture_event(
-            "ticket.resolved",
-            distinct_id=chat_id,
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "chat_id": chat_id,
-                "session_id": session_id,
-                "resolved_count": resolved_count,
-                "has_resolution_text": has_resolution_text,
-                "chat_was_with_operator": chat_was_with_operator,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
-        logger.warning("Failed to emit ticket.resolved event", exc_info=True)
+    emit_tenant_event(
+        "ticket.resolved",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        chat_id=chat_id,
+        properties={
+            "chat_id": chat_id,
+            "session_id": session_id,
+            "resolved_count": resolved_count,
+            "has_resolution_text": has_resolution_text,
+            "chat_was_with_operator": chat_was_with_operator,
+        },
+    )
 
 
 def _emit_chat_session_ended_event(
@@ -708,21 +657,15 @@ def _emit_chat_session_ended_event(
     session_id: str | None = None,
     duration_ms: int | None = None,
 ) -> None:
-    if tenant_public_id is None and bot_public_id is None:
-        return
-    try:
-        capture_event(
-            "chat_session_ended",
-            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
-            tenant_id=tenant_public_id,
-            bot_id=bot_public_id,
-            properties={
-                "chat_id": chat_id,
-                "session_id": session_id,
-                "duration_ms": duration_ms,
-                "outcome": outcome,
-            },
-            groups={"tenant": tenant_public_id} if tenant_public_id else None,
-        )
-    except Exception:
-        logger.warning("Failed to emit chat_session_ended event", exc_info=True)
+    emit_tenant_event(
+        "chat_session_ended",
+        tenant_public_id=tenant_public_id,
+        bot_public_id=bot_public_id,
+        chat_id=chat_id,
+        properties={
+            "chat_id": chat_id,
+            "session_id": session_id,
+            "duration_ms": duration_ms,
+            "outcome": outcome,
+        },
+    )

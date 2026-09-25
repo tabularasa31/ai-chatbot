@@ -10,7 +10,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -257,7 +257,7 @@ async def test_extract_and_merge_aliases_integration(db_session, client_with_pro
         )
     ]
     mock_openai = MagicMock()
-    mock_openai.chat.completions.create.return_value = mock_llm_response
+    mock_openai.chat.completions.create = AsyncMock(return_value=mock_llm_response)
 
     questions_list = [
         # Qualifying: 5 diverse questions
@@ -272,7 +272,7 @@ async def test_extract_and_merge_aliases_integration(db_session, client_with_pro
 
     with (
         patch(
-            "backend.jobs.alias_extractor.get_openai_client", return_value=mock_openai
+            "backend.jobs.alias_extractor.get_async_openai_client", return_value=mock_openai
         ),
         patch("backend.jobs.alias_extractor.should_extract_aliases", return_value=True),
     ):

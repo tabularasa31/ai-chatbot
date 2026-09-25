@@ -13,7 +13,8 @@ import logging
 import uuid
 from typing import Any
 
-from backend.core.queue import enqueue, get_main_loop, register_job
+from backend.core.queue import enqueue, register_job
+from backend.core.redis import run_coro_sync
 
 logger = logging.getLogger(__name__)
 
@@ -87,23 +88,10 @@ def enqueue_knowledge_extraction_sync(
     if the loop is unavailable or on timeout — callers must treat None as
     graceful degradation (log WARNING, never raise).
     """
-    loop = get_main_loop()
-    if loop is None or not loop.is_running():
-        logger.warning(
-            "knowledge_enqueue_sync_skipped reason=no_loop document_id=%s",
-            document_id,
-        )
-        return None
-    future = asyncio.run_coroutine_threadsafe(
-        enqueue_knowledge_extraction(document_id=document_id, tenant_id=tenant_id),
-        loop,
+    return run_coro_sync(
+        lambda: enqueue_knowledge_extraction(document_id=document_id, tenant_id=tenant_id),
+        timeout=5,
+        default=None,
+        label=f"knowledge_enqueue_sync document_id={document_id}",
+        background_enqueue=True,
     )
-    try:
-        return future.result(timeout=5)
-    except Exception:
-        logger.warning(
-            "knowledge_enqueue_sync_failed document_id=%s",
-            document_id,
-            exc_info=True,
-        )
-        return None

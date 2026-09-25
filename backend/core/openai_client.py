@@ -182,3 +182,23 @@ def is_reasoning_model(model: str) -> bool:
     """Return True for OpenAI reasoning models that restrict sampling parameters."""
     m = model.lower()
     return any(m == p or m.startswith(p + "-") for p in _REASONING_MODEL_PREFIXES)
+
+
+def completion_kwargs(
+    model: str,
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    json: bool = False,
+) -> dict:
+    """Model-dependent sampling kwargs: reasoning models drop temperature/response_format."""
+    if is_reasoning_model(model):
+        return {"max_completion_tokens": max_tokens} if max_tokens is not None else {}
+    kwargs: dict = {}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if max_tokens is not None:
+        kwargs["max_completion_tokens"] = max_tokens
+    if json:
+        kwargs["response_format"] = {"type": "json_object"}
+    return kwargs

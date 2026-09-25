@@ -16,7 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.core.scripts import NO_SCRIPT_BUCKET
-from backend.jobs._periodic import LockSpec, PeriodicJob
+from backend.jobs._periodic import PeriodicJob, daily_lock_spec
 from backend.models import Document, Tenant
 from backend.observability.metrics import capture_event
 
@@ -142,28 +142,15 @@ def _run_snapshot_once() -> None:
         db.close()
 
 
-def _today() -> str:
-    return datetime.now(UTC).date().isoformat()
-
-
-def _daily_lock_key() -> str:
-    return f"lock:kb_snapshot:daily:{_today()}"
-
-
-def _daily_done_marker() -> str:
-    return f"done:kb_snapshot:daily:{_today()}"
-
-
 _job = PeriodicJob(
     name="kb-language-snapshot",
     work=_run_snapshot_once,
     interval_seconds=_CHECK_INTERVAL_SECONDS,
     startup_delay_seconds=_STARTUP_DELAY_SECONDS,
-    lock=LockSpec(
+    lock=daily_lock_spec(
         job_kind="kb_snapshot_daily",
-        key_factory=_daily_lock_key,
+        key_prefix="kb_snapshot",
         ttl_seconds=_LOCK_TTL_SECONDS,
-        done_marker_factory=_daily_done_marker,
         done_ttl_seconds=_DONE_MARKER_TTL_SECONDS,
     ),
 )

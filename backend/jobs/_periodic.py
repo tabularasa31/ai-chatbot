@@ -27,8 +27,91 @@ import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy import ColumnElement
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+def daily_lock_spec(
+    *,
+    job_kind: str,
+    key_prefix: str,
+    ttl_seconds: int,
+    done_ttl_seconds: int,
+) -> LockSpec:
+    """Build a "run once per UTC day, across workers" :class:`LockSpec`.
+
+    Keys are ``lock:<key_prefix>:daily:<date>`` / ``done:<key_prefix>:daily:<date>``
+    — a new day is a fresh key, so the done-marker never needs its own cleanup
+    beyond ``done_ttl_seconds`` outlasting the day.
+    """
+
+    def _today() -> str:
+        return datetime.now(UTC).date().isoformat()
+
+    return LockSpec(
+        job_kind=job_kind,
+        key_factory=lambda: f"lock:{key_prefix}:daily:{_today()}",
+        ttl_seconds=ttl_seconds,
+        done_marker_factory=lambda: f"done:{key_prefix}:daily:{_today()}",
+        done_ttl_seconds=done_ttl_seconds,
+    )
+
+
+def purge_in_batches(
+    db: Session,
+    model: type,
+    condition: ColumnElement[bool],
+    batch_size: int,
+) -> int:
+    """Delete rows matching ``condition`` in committed batches; return count deleted.
+
+    Each batch is selected then deleted by id and committed separately, so the
+    purge never holds a long lock on the target table.
+    """
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy import select
+
+    total = 0
+    while True:
+        ids = (
+            db.execute(select(model.id).where(condition).limit(batch_size))
+            .scalars()
+            .all()
+        )
+        if not ids:
+            break
+        db.execute(sa_delete(model).where(model.id.in_(ids)))
+        db.commit()
+        total += len(ids)
+        if len(ids) < batch_size:
+            break
+    return total
+
+
+def run_purge_once(purge: Callable[[Session], int]) -> None:
+    """Run one purge tick in its own session; roll back and re-raise on failure.
+
+    Shared ``PeriodicJob`` ``work`` wrapper for the retention-window purge
+    jobs: rolling back leaves partial-batch commits in place (batches already
+    committed before the failure persist) and re-raising means ``PeriodicJob``
+    does not write its "done" marker, so the next tick retries.
+    """
+    from backend.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        purge(db)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @dataclass(frozen=True)

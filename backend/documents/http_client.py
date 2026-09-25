@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import ipaddress
 import logging
-import socket
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import HTTPException
+
+from backend.core import ssrf
 
 logger = logging.getLogger(__name__)
 
@@ -38,56 +38,21 @@ def _log_fetch(level: int, message: str, context: FetchContext, **extra: Any) ->
     logger.log(level, "%s [%s] %s", message, context.stage, context.url, extra=extra)
 
 
-def _is_forbidden_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    return any(
-        (
-            ip.is_private,
-            ip.is_loopback,
-            ip.is_link_local,
-            ip.is_multicast,
-            ip.is_reserved,
-            ip.is_unspecified,
-        )
-    )
-
-
-def _resolve_hostname(hostname: str) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+def _validate_public_hostname(hostname: str) -> None:
     try:
-        infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
+        ssrf.validate_public_hostname(hostname)
+    except ssrf.MissingHostnameError as exc:
+        raise HTTPException(status_code=400, detail="Please enter a valid public URL.") from exc
+    except ssrf.HostnameUnresolvedError as exc:
         raise HTTPException(
             status_code=400,
             detail="Couldn't resolve this URL. Check the address and try again.",
         ) from exc
-
-    resolved: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
-    for family, _, _, _, sockaddr in infos:
-        if family in (socket.AF_INET, socket.AF_INET6):
-            resolved.add(ipaddress.ip_address(sockaddr[0]))
-    if not resolved:
-        raise HTTPException(
-            status_code=400,
-            detail="Couldn't resolve this URL. Check the address and try again.",
-        )
-    return resolved
-
-
-def _validate_public_hostname(hostname: str) -> None:
-    if not hostname:
-        raise HTTPException(status_code=400, detail="Please enter a valid public URL.")
-
-    try:
-        parsed_ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        candidates = _resolve_hostname(hostname)
-    else:
-        candidates = {parsed_ip}
-
-    if any(_is_forbidden_ip(candidate) for candidate in candidates):
+    except ssrf.ForbiddenAddressError as exc:
         raise HTTPException(
             status_code=400,
             detail="Private, local, and reserved network addresses are not allowed.",
-        )
+        ) from exc
 
 
 def _http_client(timeout_seconds: float) -> httpx.Client:

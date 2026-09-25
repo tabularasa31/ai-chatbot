@@ -13,6 +13,7 @@ from backend.core.scripts import detect_script_bucket
 from backend.core.security import hash_password
 from backend.tenants.service import create_tenant
 from backend.documents import embedder as embedder_mod
+from backend.core import ssrf as ssrf_mod
 from backend.documents import http_client as http_client_mod
 from backend.documents import sitemap as sitemap_mod
 from backend.documents import url_service
@@ -111,7 +112,7 @@ def test_validate_public_hostname_rejects_private_targets(
 ) -> None:
     """SSRF guard: reject a literal private IP and a hostname that resolves to one."""
     if fake_getaddrinfo is not None:
-        monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
+        monkeypatch.setattr(ssrf_mod.socket, "getaddrinfo", fake_getaddrinfo)
 
     with pytest.raises(HTTPException) as exc_info:
         http_client_mod._validate_public_hostname(hostname)
@@ -138,7 +139,7 @@ def test_request_with_safe_redirects_blocks_local_redirect(
             request=request,
         )
 
-    monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(ssrf_mod.socket, "getaddrinfo", fake_getaddrinfo)
     transport = httpx.MockTransport(handler)
 
     with httpx.Client(transport=transport, follow_redirects=False, trust_env=False) as tenant:
@@ -164,7 +165,7 @@ def test_fetch_reachable_page_returns_404_for_missing_page(
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, request=request)
 
-    monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(ssrf_mod.socket, "getaddrinfo", fake_getaddrinfo)
     transport = httpx.MockTransport(handler)
 
     monkeypatch.setattr(

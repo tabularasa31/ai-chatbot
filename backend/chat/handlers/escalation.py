@@ -1,7 +1,7 @@
 """Escalation state machine — handles the FI-ESC pre-RAG paths.
 
 Encapsulates the escalation states that previously lived inline in
-``service.process_chat_message``:
+``service.async_process_chat_message``:
 
   * ``chat.escalation_awaiting_ticket_id`` → awaiting contact email
   * ``chat.escalation_followup_pending``    → follow-up yes/no

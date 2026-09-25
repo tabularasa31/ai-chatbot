@@ -4,7 +4,7 @@ Step 6 of the entity-aware retrieval epic ([ClickUp 86exe5pjx](https://app.click
 
 ## What it is
 
-A third RRF channel in the hybrid retriever (`backend/search/service.py`). On every chat turn, an LLM extracts named entities from the user's question; the retriever then surfaces FAQ chunks whose pre-indexed entity list overlaps with the query's. The result list is fused with the existing dense (pgvector) and BM25 channels via RRF.
+A third RRF channel in the hybrid retriever (`backend/search/pipeline.py`). On every chat turn, an LLM extracts named entities from the user's question; the retriever then surfaces FAQ chunks whose pre-indexed entity list overlaps with the query's. The result list is fused with the existing dense (pgvector) and BM25 channels via RRF.
 
 End-state per the epic: lifts retrieval recall on multi-hop / brand-specific / error-code queries without regressing generic ones.
 
@@ -63,7 +63,7 @@ Each tile below: **what it shows**, **what "healthy" looks like**, **what to do 
 **Healthy:** smooth curve that tracks chat-turn volume. Weekday/weekend patterns inherit from chat traffic.
 
 **Drift signals:**
-- **Cliff edges** → a deploy. Cross-reference with the deploy log; if the deploy is unrelated to entity-overlap, dig into recent commits to `backend/search/service.py` or `backend/knowledge/`.
+- **Cliff edges** → a deploy. Cross-reference with the deploy log; if the deploy is unrelated to entity-overlap, dig into recent commits to `backend/search/pipeline.py` or `backend/knowledge/`.
 - **Sudden jumps** → usually a new tenant onboarded with a large FAQ. Check the per-tenant tile to confirm.
 - **Slow downward trend** → tenants disabling the feature one by one (only relevant once per-tenant override lands). Or tenants with expired OpenAI keys.
 
@@ -190,7 +190,7 @@ There is no kill switch: the channel is always on, and the chat hot path has gra
 
 ## Future: per-tenant rollout
 
-When the first pilot client lands and we want to flip the channel **only for them** before a wider rollout, add a tenant-level gate (the former `_tenant_contradiction_adjudication_enabled` in `backend/search/service.py` was the precedent before it was removed):
+When the first pilot client lands and we want to flip the channel **only for them** before a wider rollout, add a tenant-level gate (the former `_tenant_contradiction_adjudication_enabled` in `backend/search/reliability.py` was the precedent before it was removed):
 
 1. Add `_tenant_entity_overlap_enabled(tenant: Tenant | None) -> bool` reading `tenant.settings["retrieval"]["entity_overlap"]["enabled"]`.
 2. Gate the NER task in `_run_candidate_stage` with an `if _tenant_entity_overlap_enabled(tenant)` check. This requires loading the `Tenant` row in `_run_candidate_stage` (currently only `tenant_id` is threaded through).

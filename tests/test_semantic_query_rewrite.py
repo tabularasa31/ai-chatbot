@@ -1,4 +1,4 @@
-"""Unit tests for async_semantic_query_rewrite() in search/service.py.
+"""Unit tests for async_semantic_query_rewrite() in search/query_variants.py.
 
 All tests are pure-unit: no DB, no HTTP client, no real OpenAI call.
 OpenAI is mocked at the get_async_openai_client / async_call_openai_with_retry

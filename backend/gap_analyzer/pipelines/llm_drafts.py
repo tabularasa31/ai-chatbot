@@ -9,12 +9,12 @@ click promotes it into ``tenant_faq``.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
+from backend.core.openai_json import async_chat_json
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +67,7 @@ def _format_questions(questions: list[str]) -> str:
     return "\n".join(f"- {q}" for q in cleaned[:10])
 
 
-def _parse_draft_payload(raw: str) -> DraftContent:
-    try:
-        parsed = json.loads(raw or "{}")
-    except json.JSONDecodeError:
-        logger.warning("gap_analyzer_draft_invalid_json preview=%r", (raw or "")[:200])
-        raise ValueError("LLM draft response was not valid JSON") from None
-    if not isinstance(parsed, dict):
-        logger.warning("gap_analyzer_draft_non_object_json preview=%r", (raw or "")[:200])
-        raise ValueError("LLM draft response was not a JSON object")
+def _parse_draft_payload(parsed: dict) -> DraftContent:
     title = (parsed.get("title") or "").strip()
     question = (parsed.get("question") or "").strip()
     markdown = (parsed.get("markdown") or "").strip()
@@ -112,7 +104,9 @@ async def generate_draft(
         f"Output language: {output_language}\n"
         "Return JSON with title, question, markdown."
     )
-    response = await client.chat.completions.create(
+    parsed = await async_chat_json(
+        "gap_analyzer_generate_draft",
+        client,
         model=settings.extraction_model,
         messages=[
             {"role": "system", "content": _FAQ_DRAFT_SYSTEM},
@@ -120,9 +114,9 @@ async def generate_draft(
         ],
         response_format={"type": "json_object"},
         temperature=0.2,
+        strict=True,
     )
-    raw_content = response.choices[0].message.content or "{}"
-    return _parse_draft_payload(raw_content)
+    return _parse_draft_payload(parsed)
 
 
 async def refine_draft(
@@ -149,7 +143,9 @@ async def refine_draft(
         f"Admin guidance: {guidance.strip()}\n\n"
         "Return JSON with title, question, markdown."
     )
-    response = await client.chat.completions.create(
+    parsed = await async_chat_json(
+        "gap_analyzer_refine_draft",
+        client,
         model=settings.extraction_model,
         messages=[
             {"role": "system", "content": _FAQ_REFINE_SYSTEM},
@@ -159,6 +155,6 @@ async def refine_draft(
         # Lower than generation: the admin is asking for a specific deterministic
         # edit, not creative variation.
         temperature=0.0,
+        strict=True,
     )
-    raw_content = response.choices[0].message.content or "{}"
-    return _parse_draft_payload(raw_content)
+    return _parse_draft_payload(parsed)

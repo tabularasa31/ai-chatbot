@@ -14,7 +14,11 @@ from backend.chat.language import (
     log_llm_tokens,
 )
 from backend.core.config import settings
-from backend.core.openai_client import get_async_openai_client, is_reasoning_model
+from backend.core.openai_client import (
+    completion_kwargs,
+    get_async_openai_client,
+    is_reasoning_model,
+)
 from backend.core.openai_retry import async_call_openai_with_retry
 from backend.models import EscalationPhase
 
@@ -194,7 +198,11 @@ async def _generate_context_pre_confirm(
     the canonical-template path. Never raises.
     """
     model_name = model or settings.escalation_model
-    _reasoning = is_reasoning_model(model_name)
+    _max_tokens = (
+        settings.chat_response_max_tokens_reasoning
+        if is_reasoning_model(model_name)
+        else settings.escalation_max_completion_tokens
+    )
     user_block = (
         f"RESPONSE_LANGUAGE:\n{response_language}\n\n"
         f"VARIANT:\n{variant}\n\n"
@@ -213,13 +221,7 @@ async def _generate_context_pre_confirm(
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                **({} if _reasoning else {"temperature": 0.3}),
-                max_completion_tokens=(
-                    settings.chat_response_max_tokens_reasoning
-                    if _reasoning
-                    else settings.escalation_max_completion_tokens
-                ),
-                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
+                **completion_kwargs(model_name, temperature=0.3, max_tokens=_max_tokens, json=True),
             ),
         )
         raw = response.choices[0].message.content or "{}"
@@ -335,6 +337,59 @@ _PRE_CONFIRM_CLASSIFIER_SYSTEM = (
 )
 
 
+async def _classify_json(
+    *,
+    operation: str,
+    system_prompt: str,
+    latest_user_text: str,
+    allowed: tuple[str, ...],
+    fallback: str | None,
+    api_key: str,
+    model: str | None,
+    langfuse_observation: Any | None,
+) -> tuple[str | None, int]:
+    """Shared narrow LLM call: classify the latest user message into a JSON `decision`.
+
+    Returns ``(decision, tokens_used)``. On a recognized decision, returns it
+    verbatim. On an unrecognized/missing decision, returns ``fallback``. Any
+    failure — API error or malformed output — returns ``("unclear", 0)`` so a
+    transient outage keeps the caller's gate rather than silently dropping it.
+    Never raises.
+    """
+    model_name = model or settings.escalation_model
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": f"LATEST_USER_MESSAGE:\n{latest_user_text}",
+        },
+    ]
+    try:
+        client = get_async_openai_client(
+            api_key, timeout=settings.escalation_openai_timeout_seconds
+        )
+        response = await async_call_openai_with_retry(
+            operation,
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                **completion_kwargs(model_name, temperature=0, max_tokens=20, json=True),
+            ),
+            langfuse_observation=langfuse_observation,
+        )
+        raw = response.choices[0].message.content or "{}"
+        decision_raw = json.loads(raw).get("decision")
+        tokens = response.usage.total_tokens if response.usage else 0
+        if decision_raw in allowed:
+            return decision_raw, tokens
+        return fallback, tokens
+    except Exception as exc:
+        logger.warning("%s failed: %s", operation, exc)
+        # Fail safe: never let a transient outage drop the caller's gate
+        # (which would ignore a real answer and skip the intended flow).
+        return "unclear", 0
+
+
 async def classify_pre_confirm_reply(
     *,
     latest_user_text: str,
@@ -352,41 +407,17 @@ async def classify_pre_confirm_reply(
     re-asks for confirmation and keeps the gate rather than silently
     dropping it. Never raises.
     """
-    model_name = model or settings.escalation_model
-    _reasoning = is_reasoning_model(model_name)
-    messages = [
-        {"role": "system", "content": _PRE_CONFIRM_CLASSIFIER_SYSTEM},
-        {
-            "role": "user",
-            "content": f"LATEST_USER_MESSAGE:\n{latest_user_text}",
-        },
-    ]
-    try:
-        client = get_async_openai_client(
-            api_key, timeout=settings.escalation_openai_timeout_seconds
-        )
-        response = await async_call_openai_with_retry(
-            "classify_pre_confirm_reply",
-            lambda: client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                **({} if _reasoning else {"temperature": 0}),
-                max_completion_tokens=20,
-                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
-            ),
-            langfuse_observation=langfuse_observation,
-        )
-        raw = response.choices[0].message.content or "{}"
-        decision_raw = json.loads(raw).get("decision")
-        tokens = response.usage.total_tokens if response.usage else 0
-        if decision_raw in ("yes", "no", "unclear"):
-            return decision_raw, tokens  # type: ignore[return-value]
-        return None, tokens
-    except Exception as exc:
-        logger.warning("classify_pre_confirm_reply failed: %s", exc)
-        # Fail safe to the re-ask path: never let a transient outage drop the
-        # pre_confirm gate (which would ignore a real yes/no and skip handoff).
-        return "unclear", 0
+    decision, tokens = await _classify_json(
+        operation="classify_pre_confirm_reply",
+        system_prompt=_PRE_CONFIRM_CLASSIFIER_SYSTEM,
+        latest_user_text=latest_user_text,
+        allowed=("yes", "no", "unclear"),
+        fallback=None,
+        api_key=api_key,
+        model=model,
+        langfuse_observation=langfuse_observation,
+    )
+    return decision, tokens  # type: ignore[return-value]
 
 
 _FOLLOWUP_CLASSIFIER_SYSTEM = (
@@ -426,42 +457,17 @@ async def classify_followup_reply(
     unrecognized output returns ``("unclear", 0)`` so the gate is never
     dropped on a transient outage. Never raises.
     """
-    model_name = model or settings.escalation_model
-    _reasoning = is_reasoning_model(model_name)
-    messages = [
-        {"role": "system", "content": _FOLLOWUP_CLASSIFIER_SYSTEM},
-        {
-            "role": "user",
-            "content": f"LATEST_USER_MESSAGE:\n{latest_user_text}",
-        },
-    ]
-    try:
-        client = get_async_openai_client(
-            api_key, timeout=settings.escalation_openai_timeout_seconds
-        )
-        response = await async_call_openai_with_retry(
-            "classify_followup_reply",
-            lambda: client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                **({} if _reasoning else {"temperature": 0}),
-                max_completion_tokens=20,
-                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
-            ),
-            langfuse_observation=langfuse_observation,
-        )
-        raw = response.choices[0].message.content or "{}"
-        decision_raw = json.loads(raw).get("decision")
-        tokens = response.usage.total_tokens if response.usage else 0
-        if decision_raw in ("yes", "no", "unclear", "new_question"):
-            return decision_raw, tokens  # type: ignore[return-value]
-        return "unclear", tokens
-    except Exception as exc:
-        logger.warning("classify_followup_reply failed: %s", exc)
-        # Fail safe to the existing follow-up flow: never let a transient
-        # outage drop the gate (which would lose the ticket-context forwarding
-        # on real clarifications).
-        return "unclear", 0
+    decision, tokens = await _classify_json(
+        operation="classify_followup_reply",
+        system_prompt=_FOLLOWUP_CLASSIFIER_SYSTEM,
+        latest_user_text=latest_user_text,
+        allowed=("yes", "no", "unclear", "new_question"),
+        fallback="unclear",
+        api_key=api_key,
+        model=model,
+        langfuse_observation=langfuse_observation,
+    )
+    return decision, tokens  # type: ignore[return-value]
 
 
 ESCALATION_SYSTEM = """You are the same assistant as in the embedded support chat.
@@ -570,10 +576,9 @@ async def complete_escalation_openai_turn(
         client = get_async_openai_client(
             api_key, timeout=settings.escalation_openai_timeout_seconds
         )
-        _esc_reasoning = is_reasoning_model(model_name)
         _esc_max_tokens = (
             settings.chat_response_max_tokens_reasoning
-            if _esc_reasoning
+            if is_reasoning_model(model_name)
             else settings.escalation_max_completion_tokens
         )
         response = await async_call_openai_with_retry(
@@ -581,9 +586,7 @@ async def complete_escalation_openai_turn(
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                **({} if _esc_reasoning else {"temperature": 0.3}),
-                max_completion_tokens=_esc_max_tokens,
-                **({} if _esc_reasoning else {"response_format": {"type": "json_object"}}),
+                **completion_kwargs(model_name, temperature=0.3, max_tokens=_esc_max_tokens, json=True),
             ),
             langfuse_observation=langfuse_observation,
         )

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import uuid
-
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
@@ -18,24 +16,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
-from backend.models.base import Base, _utcnow
+from backend.models.base import Base, TenantScopedMixin, TimestampMixin, UUIDPKMixin, _utcnow
 from backend.models.enums import DocumentStatus, DocumentType, SourceSchedule, SourceStatus
 
 
-class Document(Base):
+class Document(UUIDPKMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "documents"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     source_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("url_sources.id", ondelete="CASCADE"),
@@ -63,13 +50,6 @@ class Document(Base):
         nullable=True,
         default=None,
     )
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
-    )
 
     tenant = relationship("Tenant", back_populates="documents")
     source = relationship("UrlSource", back_populates="documents")
@@ -81,20 +61,9 @@ class Document(Base):
     )
 
 
-class UrlSource(Base):
+class UrlSource(UUIDPKMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "url_sources"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     name = Column(String(255), nullable=True)
     url = Column(Text, nullable=False)
     normalized_domain = Column(String(255), nullable=False, index=True)
@@ -122,13 +91,6 @@ class UrlSource(Base):
     error_message = Column(Text, nullable=True)
     warning_message = Column(Text, nullable=True)
     metadata_json = Column("metadata", JSON, nullable=False, default=dict)
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
-    )
 
     tenant = relationship("Tenant", back_populates="url_sources")
     documents = relationship(
@@ -151,14 +113,9 @@ class UrlSource(Base):
     )
 
 
-class UrlSourceRun(Base):
+class UrlSourceRun(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "url_source_runs"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
     source_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("url_sources.id", ondelete="CASCADE"),
@@ -171,32 +128,14 @@ class UrlSourceRun(Base):
     failed_urls = Column(JSON, nullable=False, default=list)
     duration_seconds = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
-    )
     finished_at = Column(DateTime, nullable=True)
 
     source = relationship("UrlSource", back_populates="runs")
 
 
-class QuickAnswer(Base):
+class QuickAnswer(UUIDPKMixin, TenantScopedMixin, Base):
     __tablename__ = "quick_answers"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     source_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("url_sources.id", ondelete="CASCADE"),
@@ -223,14 +162,9 @@ class QuickAnswer(Base):
     source = relationship("UrlSource", back_populates="quick_answers")
 
 
-class Embedding(Base):
+class Embedding(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "embeddings"
 
-    id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
     document_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("documents.id", ondelete="CASCADE"),
@@ -268,13 +202,6 @@ class Embedding(Base):
         nullable=False,
         default=list,
         server_default="[]",
-    )
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=_utcnow,
-        onupdate=_utcnow,
     )
 
     document = relationship("Document", back_populates="embeddings")

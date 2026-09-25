@@ -59,7 +59,12 @@ from backend.models import (
 from backend.models.base import _utcnow
 from backend.operator.unread_reply import mail_unread_operator_replies
 from tests.chat_utils import _chat_completion_side_effect
-from tests.conftest import register_and_verify_user, set_client_openai_key
+from tests.conftest import (
+    get_default_bot_public_id,
+    post_chat_message,
+    register_and_verify_user,
+    set_client_openai_key,
+)
 
 _SECRET = "inbound-secret-for-tests"
 _DOMAIN = "reply.getchat9.live"
@@ -103,7 +108,8 @@ def _workspace(
 def _workspace_with_key(
     client: TestClient, db: Session, *, email: str, name: str, seated: bool
 ) -> tuple[str, uuid.UUID, str]:
-    """Same as ``_workspace``, plus the widget API key for a ``/chat`` call."""
+    """Same as ``_workspace``, plus the default bot's public id for a
+    ``/widget/chat`` call."""
     token = register_and_verify_user(client, db, email=email)
     resp = client.post(
         "/tenants", headers={"Authorization": f"Bearer {token}"}, json={"name": name}
@@ -116,7 +122,8 @@ def _workspace_with_key(
         )
         assert seat.status_code == 200, seat.text
     body = resp.json()
-    return token, uuid.UUID(body["id"]), body["api_key"]
+    bot_public_id = get_default_bot_public_id(client, token)
+    return token, uuid.UUID(body["id"]), bot_public_id
 
 
 def _ticket(
@@ -489,7 +496,7 @@ def test_seat_holders_reply_take_answer_release_journey(
     * once released, the seat holder's own seat — not their role — is what
       decided the outcome: releasing it turns the same reply into a forward.
     """
-    token, tenant_id, api_key = _workspace_with_key(
+    token, tenant_id, bot_public_id = _workspace_with_key(
         tenant, db_session, email="owner-ingest@example.com", name="Ingest", seated=True
     )
     operator = _colleague(db_session, tenant_id, email="ann@agency.example", seated=True)
@@ -537,10 +544,8 @@ def test_seat_holders_reply_take_answer_release_journey(
     again.assert_not_called()
 
     # The bot is muted while the chat is live, same as after a `take`.
-    muted = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"question": "any update?", "session_id": str(chat.session_id)},
+    muted = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="any update?", session_id=str(chat.session_id)
     )
     assert muted.status_code == 200, muted.text
     assert muted.json()["text"] == ""
@@ -551,10 +556,8 @@ def test_seat_holders_reply_take_answer_release_journey(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert released.status_code == 200, released.text
-    resumed = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"question": "any update?", "session_id": str(chat.session_id)},
+    resumed = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="any update?", session_id=str(chat.session_id)
     )
     assert resumed.status_code == 200, resumed.text
     assert resumed.json()["text"] != ""

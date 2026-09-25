@@ -106,7 +106,6 @@ from backend.models import (
     OperatorSessionEndReason,
     OperatorState,
     Tenant,
-    TenantApiKey,
     User,
 )
 from backend.models.base import _utcnow
@@ -334,9 +333,6 @@ def _stamp_attribution(member: User, db: Session) -> None:
     db.query(GapDismissal).filter(GapDismissal.dismissed_by == member.id).update(
         {GapDismissal.dismissed_by_label: label}, synchronize_session=False
     )
-    db.query(TenantApiKey).filter(
-        TenantApiKey.created_by_user_id == member.id
-    ).update({TenantApiKey.created_by_label: label}, synchronize_session=False)
 
 
 def release_chats_held_by(member: User, db: Session) -> list[object]:

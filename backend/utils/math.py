@@ -1,6 +1,33 @@
 from __future__ import annotations
 
+import json
 import math
+
+
+def coerce_vector(raw: object) -> list[float] | None:
+    """Convert an embedding stored in an unknown format to ``list[float] | None``.
+
+    Handles the shapes an embedding column can come back as depending on
+    dialect/driver: a native list/tuple, a numpy/pgvector array exposing
+    ``tolist()``, or a JSON-encoded string (including SQLite, which stores
+    pgvector columns as TEXT).
+    """
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (list, tuple)):
+            return [float(value) for value in raw]
+        if hasattr(raw, "tolist"):
+            parsed = raw.tolist()
+            if isinstance(parsed, list):
+                return [float(value) for value in parsed]
+        if isinstance(raw, str):
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [float(value) for value in parsed]
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return None
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

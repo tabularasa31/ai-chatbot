@@ -13,6 +13,7 @@ from backend.core.scripts import detect_script_bucket
 from backend.core.security import hash_password
 from backend.tenants.service import create_tenant
 from backend.documents import embedder as embedder_mod
+from backend.core import ssrf as ssrf_mod
 from backend.documents import http_client as http_client_mod
 from backend.documents import sitemap as sitemap_mod
 from backend.documents import url_service
@@ -111,7 +112,7 @@ def test_validate_public_hostname_rejects_private_targets(
 ) -> None:
     """SSRF guard: reject a literal private IP and a hostname that resolves to one."""
     if fake_getaddrinfo is not None:
-        monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
+        monkeypatch.setattr(ssrf_mod.socket, "getaddrinfo", fake_getaddrinfo)
 
     with pytest.raises(HTTPException) as exc_info:
         http_client_mod._validate_public_hostname(hostname)
@@ -138,7 +139,7 @@ def test_request_with_safe_redirects_blocks_local_redirect(
             request=request,
         )
 
-    monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(ssrf_mod.socket, "getaddrinfo", fake_getaddrinfo)
     transport = httpx.MockTransport(handler)
 
     with httpx.Client(transport=transport, follow_redirects=False, trust_env=False) as tenant:
@@ -164,7 +165,7 @@ def test_fetch_reachable_page_returns_404_for_missing_page(
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, request=request)
 
-    monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(ssrf_mod.socket, "getaddrinfo", fake_getaddrinfo)
     transport = httpx.MockTransport(handler)
 
     monkeypatch.setattr(
@@ -442,7 +443,7 @@ def test_summarize_crawl_failure_prioritizes_dominant_reason(
 def test_upsert_page_document_skips_reembedding_when_hash_matches(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    tenant, _ = _make_tenant(db_session, "hash-check@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "hash-check@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -507,9 +508,10 @@ def test_upsert_page_document_persists_detected_script(
     """Document.script must be written on the crawl path too, not just uploads.
 
     Uses a writing system the old two-bucket detector could not represent, so
-    the assertion cannot pass by accident.
+    the assertion cannot pass by accident. Also covers crawled pages running
+    entity extraction (Step 4), same as uploads.
     """
-    tenant, _ = _make_tenant(db_session, "page-script@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "page-script@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -543,6 +545,13 @@ def test_upsert_page_document_persists_detected_script(
         ],
     )
     monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda *a, **k: [[0.1] * 1536])
+    extract_calls: list[str] = []
+
+    def _fake_extract(text: str, api_key: str, *, tenant_id: str | None = None) -> list[str]:
+        extract_calls.append(text)
+        return ["Acme CRM"]
+
+    monkeypatch.setattr(embedder_mod, "extract_entities_from_passage", _fake_extract)
 
     doc, _ = url_service._upsert_page_document(
         source=source,
@@ -552,13 +561,23 @@ def test_upsert_page_document_persists_detected_script(
     )
 
     assert doc.script == "greek"
+    rows = (
+        db_session.query(Embedding)
+        .filter(Embedding.document_id == doc.id)
+        .order_by(Embedding.created_at.asc())
+        .all()
+    )
+    assert len(rows) == 1
+    assert len(extract_calls) == len(rows)
+    for row in rows:
+        assert row.entities == ["Acme CRM"]
 
 
 def test_upsert_structured_document_persists_detected_script(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Document.script must be written on the structured-source path too."""
-    tenant, _ = _make_tenant(db_session, "structured-script@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "structured-script@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -620,7 +639,7 @@ def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
 
     monkeypatch.setattr(embedder_mod, "_run_tenant_knowledge_extraction_best_effort", capture_extraction)
 
-    tenant, _ = _make_tenant(db_session, "hash-extract-env@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "hash-extract-env@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -685,7 +704,7 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
     engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = Session(bind=engine)
-    tenant, _ = _make_tenant(session, "fail-check@example.com", "Tenant")
+    tenant = _make_tenant(session, "fail-check@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -735,7 +754,7 @@ def test_crawl_url_source_persists_quick_answers(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tenant, _ = _make_tenant(db_session, "quickanswers@example.com", "Quick Answers Tenant")
+    tenant = _make_tenant(db_session, "quickanswers@example.com", "Quick Answers Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -813,7 +832,7 @@ def test_crawl_url_source_persists_quick_answers(
 def test_upsert_structured_document_skips_reembedding_when_hash_matches(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    tenant, _ = _make_tenant(db_session, "structured-hash@example.com", "Tenant")
+    tenant = _make_tenant(db_session, "structured-hash@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -919,7 +938,7 @@ def test_crawl_url_source_marks_error_for_invalid_structured_openapi_payload(
     engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = Session(bind=engine)
-    tenant, _ = _make_tenant(session, "invalid-structured@example.com", "Tenant")
+    tenant = _make_tenant(session, "invalid-structured@example.com", "Tenant")
 
     source = UrlSource(
         tenant_id=tenant.id,

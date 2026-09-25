@@ -121,7 +121,7 @@ def test_create_embeddings_forbidden_for_unverified_user(
     db_session.refresh(user)
 
     token, _ = create_token_for_user(user)
-    cl, _ = create_tenant(user.id, "Emb Tenant", db_session)
+    cl = create_tenant(user.id, "Emb Tenant", db_session)
     cl.openai_api_key = "sk-test"
     db_session.commit()
     db_session.refresh(cl)
@@ -146,7 +146,7 @@ def test_create_embeddings_forbidden_for_unverified_user(
 
 
 @patch("backend.auth.routes.send_email")
-@patch("backend.embeddings.service.get_openai_client")
+@patch("backend.documents.embedder.get_openai_client")
 def test_create_embeddings_allowed_for_verified_user(
     mock_get_openai: Mock,
     mock_send_email: Mock,

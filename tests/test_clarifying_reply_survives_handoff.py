@@ -92,7 +92,7 @@ def _setup(tenant: TestClient, db_session: Session, email: str) -> tuple[uuid.UU
         json={"name": "Clarify Survival Tenant"},
     ).json()
     set_client_openai_key(tenant, token)
-    return uuid.UUID(created["id"]), created["api_key"]
+    return uuid.UUID(created["id"]), "sk-test"
 
 
 def _patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
@@ -113,7 +113,7 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     def _record(event: str, **kwargs: Any) -> None:
         events.append({"event": event, **kwargs})
 
-    monkeypatch.setattr("backend.chat.events.capture_event", _record)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _record)
 
     async def _fake_render_pre_confirm(**kwargs):
         return type(

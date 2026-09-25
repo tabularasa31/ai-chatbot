@@ -37,7 +37,7 @@ from backend.chat.steps import answer_cache as cache_steps
 from backend.chat.types import ChatPipelineResult, PipelineRun
 from backend.core import redis as redis_mod
 from backend.core.config import settings
-from backend.embeddings.service import delete_embeddings_for_document
+from backend.embeddings.service import create_embeddings_for_document
 from backend.faq.faq_matcher import FAQMatchResult
 from backend.models import (
     AnswerCacheEntry,
@@ -299,7 +299,7 @@ async def test_fingerprint_tracks_documents_bot_config_and_reindex(
 
     # Re-indexing rewrites embeddings without changing any other document
     # column; the embeddings service touches the row so the fingerprint moves.
-    delete_embeddings_for_document(doc.id, db_session)
+    create_embeddings_for_document(doc.id, db_session, api_key="sk-test")
     after_reindex = (await resolve()).kb_fingerprint
     assert after_reindex not in seen
     seen.add(after_reindex)
@@ -621,7 +621,7 @@ def test_repeated_question_is_served_from_cache_without_openai(
         if event == "chat.turn":
             turn_events.append(kwargs["properties"])
 
-    monkeypatch.setattr("backend.chat.events.capture_event", _capture)
+    monkeypatch.setattr("backend.observability.metrics.capture_event", _capture)
     cl_row, api_key = _create_client(tenant, db_session, email="answer-cache-hit@example.com")
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
     counters = _patch_pipeline_fakes(monkeypatch, answer="Use the reset link in Settings.")

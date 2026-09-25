@@ -16,9 +16,10 @@ from sqlalchemy import Text as SAText
 from sqlalchemy import cast, func, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import selectinload
 
 from backend.core.config import settings
+from backend.core.db import is_sqlite as _session_is_sqlite
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
 from backend.core.scripts import NO_SCRIPT_BUCKET, detect_script_bucket
@@ -49,6 +50,7 @@ from backend.search.reranking import (
 )
 from backend.tenants.cache import get_cached_tenant
 from backend.utils.math import cosine_similarity
+from backend.utils.text import token_set, word_tokens
 
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all tenant chunks.
@@ -1062,7 +1064,7 @@ def expand_query(query: str) -> list[str]:
     cleaned = re.sub(r"[^\w\s]", " ", query, flags=re.UNICODE)
     _push(cleaned)
 
-    tokens = re.findall(r"\w+", query.casefold(), flags=re.UNICODE)
+    tokens = word_tokens(query)
     if tokens:
         unique_tokens = list(dict.fromkeys(tokens))
         _push(" ".join(unique_tokens))
@@ -1145,6 +1147,19 @@ def invalidate_tenant_kb_script_cache(tenant_id: uuid.UUID) -> None:
     _TENANT_KB_SCRIPTS_CACHE.pop(key, None)
 
 
+def invalidate_tenant_search_caches(tenant_id: uuid.UUID) -> None:
+    """Drop every tenant-scoped search cache (BM25 corpus + KB script detection).
+
+    Call this after any KB change (upload, delete, reindex, crawl) so BM25
+    scoring and cross-lingual rewrite detection reflect the new corpus
+    immediately instead of waiting out their TTLs.
+    """
+    from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
+
+    invalidate_bm25_cache_for_tenant(tenant_id)
+    invalidate_tenant_kb_script_cache(tenant_id)
+
+
 def _normalize_query_variants(values: list[str]) -> list[str]:
     """Normalize and dedupe query variants while preserving first-seen order."""
     variants: list[str] = []
@@ -1186,14 +1201,12 @@ def _bm25_score_candidates(
 
 
 def _bm25_prefilter_tokens(query: str) -> list[str]:
-    """Unique, lowercase word tokens used for the BM25 search prefilter.
+    """Unique word tokens used for the BM25 search prefilter.
 
-    .lower() (not .casefold()) matches the SQL func.lower() applied to the
-    column and the BM25 scorer's tokenization, keeping prefilter and scoring
-    in lockstep.
+    Uses the same tokenizer as the BM25 scorer, so every token that can
+    score a match is also a token the prefilter searches for.
     """
-    raw_tokens = re.findall(r"\w+", query.lower(), flags=re.UNICODE)
-    unique_tokens = list(dict.fromkeys(raw_tokens))
+    unique_tokens = list(dict.fromkeys(word_tokens(query)))
     return unique_tokens[:BM25_PREFILTER_MAX_QUERY_TOKENS]
 
 
@@ -1210,7 +1223,7 @@ def _prepare_bm25_corpus(candidates: list[Embedding]) -> PreparedBM25Corpus:
     """Build the shared in-memory BM25 scorer once for a candidate pool."""
     if not candidates:
         return PreparedBM25Corpus(candidates=[], scorer=None)
-    corpus = [(emb.chunk_text or "").lower().split() for emb in candidates]
+    corpus = [word_tokens(emb.chunk_text or "") for emb in candidates]
     return PreparedBM25Corpus(candidates=candidates, scorer=BM25Okapi(corpus))
 
 
@@ -1260,7 +1273,7 @@ def _score_prepared_bm25_corpus(
     One corpus is built per request-stage candidate pool; repeated variant
     evaluation is only repeated lexical scoring over that already-built corpus.
     """
-    query_tokens = query.lower().split()
+    query_tokens = word_tokens(query)
     if not query_tokens or not prepared_corpus.candidates or prepared_corpus.scorer is None:
         return []
 
@@ -1514,14 +1527,10 @@ def apply_script_boost(
     return boosted[:top_k]
 
 
-def _token_set(text: str) -> set[str]:
-    return set(re.findall(r"\w+", text.casefold(), flags=re.UNICODE))
-
-
 def _candidate_similarity(first: Embedding, second: Embedding) -> float:
     """Approximate chunk similarity using Jaccard overlap."""
-    first_tokens = _token_set(first.chunk_text or "")
-    second_tokens = _token_set(second.chunk_text or "")
+    first_tokens = token_set(first.chunk_text or "")
+    second_tokens = token_set(second.chunk_text or "")
     if not first_tokens or not second_tokens:
         return 0.0
     union = first_tokens | second_tokens
@@ -1894,22 +1903,6 @@ def _build_empty_result_bundle(
 # (``_async_*`` prefix). The former sync twins were removed once the last
 # runtime callers (chat handlers, search routes) moved to this path.
 # ---------------------------------------------------------------------------
-
-
-def _session_is_sqlite(db: Session | AsyncSession) -> bool:
-    """Detect SQLite from a sync or async session (for test/pg branching).
-
-    Uses ``isinstance`` to pick the right bind accessor, then reads the
-    backing engine's URL.
-    """
-    try:
-        if isinstance(db, AsyncSession):
-            bind = db.sync_session.bind
-        else:
-            bind = db.bind
-        return "sqlite" in str(getattr(bind, "url", ""))
-    except Exception:
-        return False
 
 
 # ── Async OpenAI helpers ─────────────────────────────────────────────────────

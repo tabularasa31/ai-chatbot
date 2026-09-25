@@ -194,12 +194,9 @@ class OperatorHandler(PipelineHandler):
         return ctx.chat.operator_state is OperatorState.live
 
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
-        from backend.core.db import run_sync
-
-        return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
+        return await self._in_sync(ctx, self._handle_sync)
 
     def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome | None:
-        ctx.db = sync_db
         chat = ctx.chat
 
         if operator_is_idle(sync_db, chat):

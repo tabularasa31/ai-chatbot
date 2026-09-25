@@ -119,7 +119,6 @@ Redis is **foundational infra** — used for things that need cross-worker share
 | **Answer cache, exact level** | `backend/chat/answer_cache.py` → `exact_get` / `store` | Identical question of the same bot, language and knowledge-base fingerprint → stored answer, before any guard or LLM call. The semantic level lives in Postgres (`answer_cache_entries`, pgvector). See "Answer cache" below. |
 | **Distributed locks** (e.g. scheduled jobs, crawl throttle) | `backend/core/redis.py` → `acquire_lock` / `release_lock` | Atomic `SET NX EX` + Lua check-and-delete on release. |
 | **ARQ queue broker** | `backend/core/queue.py` (worker process: `backend/worker.py`) | Durable retry-aware background work — see "Job queue" below. |
-| **Idempotency keys** | `backend/core/idempotency.py` → `idempotent_section` | Replays the cached response for retries of write endpoints — see "Idempotency-Key" below. |
 
 **Configuration:**
 - `REDIS_URL` (env). Unset locally → in-memory rate-limit storage and no-op cache/lock helpers. Required in production (Railway provisions it via the Redis add-on).
@@ -131,7 +130,6 @@ Redis is **foundational infra** — used for things that need cross-worker share
 - `cache:guard:<sha256>` — guard-verdict caches
 - `cache:answer:<sha256>` — exact-level answer cache; `cache:answer_gen:<tenant_id>` — per-tenant generation counter folded into the answer-cache fingerprint
 - `lock:gap_analyzer:<job>` — distributed locks for periodic jobs
-- `idempotency:<scope>:<tenant_id>:<key>:response` / `:lock` — idempotent-write replays
 
 **Graceful degradation rules:**
 - Cache misses on Redis errors must not break the request — log at debug, return as if cache miss.
@@ -150,35 +148,6 @@ Two levels in front of the pipeline (`backend/chat/answer_cache.py`, steps in `b
 - **Observability**: `answer_exact` / `answer_semantic` in the admin cache-metrics endpoint; `answer_cache_hit` / `answer_cache_level` / `answer_cache_saved_ms` on the `chat.turn` PostHog event; an `answer-cache` span, `answer_cache_ms` stage timing, `answer_cache_*` trace metadata and the `answer_cache_hit` tag in Langfuse. Guard events are not written for exact hits (no guard ran).
 - **Degradation**: every Redis call is bounded to 300 ms and Postgres lookups to 2 s; Redis down → exact level misses (the semantic level still catches identical questions); lookup or store errors are logged at debug and never fail the turn.
 - **Evals**: a repeated golden question is served from the cache, so an eval run measures the cached answer unless it runs with `ANSWER_CACHE_TTL_SECONDS=0`.
-
----
-
-## Idempotency-Key (`backend/core/idempotency.py`)
-
-Non-streaming write endpoints accept an optional `Idempotency-Key` request header so client retries (mobile timeout, slow SSE bootstrap) do not double-process work or duplicate LLM calls.
-
-**Contract for callers (clients):**
-- Generate a UUIDv4 on the first attempt; reuse the same value on every retry of the same logical operation.
-- Replays return the original status code and JSON body verbatim for **24h** after the first successful processing.
-- Header missing → endpoint behaves as before (backwards-compatible).
-- A parallel duplicate that arrives while the first request is still in flight either gets the stored response (if the sibling finishes within ~5s) or **`409 Conflict`** with `code: "idempotency_in_flight"` (retry with backoff).
-
-**Currently applied to:**
-- `POST /chat` (scope `chat`).
-
-**Out of scope for this helper:** SSE streams (`POST /widget/chat`, where the response is `text/event-stream`) — streaming has different semantics; dedup for the widget's chat path is tracked separately.
-
-**Storage:** `idempotency:<scope>:<tenant_id>:<key>:response` (response, 24h TTL) and `:lock` (in-flight marker, ~30s TTL). Keys are scoped per `<tenant_id>` so different tenants reusing the same UUID never collide. When Redis is unavailable, the helper degrades to a no-op (handler runs unguarded).
-
-**Adding to a new endpoint:**
-```python
-async with idempotent_section(request, tenant_id=str(tenant.id), scope="my_op") as section:
-    if section.cached is not None:
-        return JSONResponse(status_code=section.cached.status_code, content=section.cached.body)
-    payload = MyResponse(...).model_dump(mode="json")
-    await section.record(status_code=200, body=payload)
-    return JSONResponse(status_code=200, content=payload)
-```
 
 ---
 
@@ -265,7 +234,7 @@ Chat responses now support structured clarification outcomes in addition to plai
 - `clarification`
 - `partial_with_clarification`
 
-For `/chat` and `/widget/chat`, the response body uses the canonical `text` field only. Legacy aliases (`answer` on `/chat`, `response` on `/widget/chat`) have been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
+For `/widget/chat`, the response body uses the canonical `text` field only. The legacy `response` alias has been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
 ### Deployment safety
 
@@ -368,8 +337,8 @@ Run the API from the repo root with `PYTHONPATH` pointing at the root so `backen
 - Modules and functions: `snake_case`.
 - SQLAlchemy model classes: `PascalCase` (`User`, `Tenant`, `EscalationTicket`).
 - DB tables: **plural, snake_case** (`users`, `tenants`, `escalation_tickets`, `contact_sessions`).
-- Pydantic API schemas: suffixes like `Request` / `Response` or descriptive names (`ChatMessageLogItem`), in the domain’s `schemas.py`.
-- Routers: `*_router`; path prefixes wired in `main.py` (e.g. `/auth`, `/chat`, `/tenants`).
+- Pydantic API schemas: suffixes like `Request` / `Response` or descriptive names, in the domain’s `schemas.py`.
+- Routers: `*_router`; path prefixes wired in `main.py` (e.g. `/auth`, `/tenants`, `/documents`).
 - Public string IDs for tenants/bots, etc.: follow existing patterns (`generate_public_id`, prefixes like `ch_` — do not invent new ones without a reason).
 - Terminology: the legacy product term "client" has been renamed **"tenant"** at the schema/API level; keep new code and docs on `tenant` / `tenant_id`. "Client" may still appear in marketing copy meaning "customer".
 
@@ -414,9 +383,8 @@ Tenant isolation has two contours:
 How the second contour works:
 
 - The resolved tenant id is stored in a `ContextVar` at the auth boundary — JWT
-  dependency (`backend/auth/middleware.py::get_current_user`), widget bot gate
-  (`backend/tenants/widget_chat_gate.py`), and X-API-Key resolve
-  (`backend/tenants/service.py::get_tenant_by_api_key`) all call `set_tenant_context`.
+  dependency (`backend/auth/middleware.py::get_current_user`) and widget bot gate
+  (`backend/tenants/widget_chat_gate.py`) both call `set_tenant_context`.
 - An engine-level `begin` listener emits `SET LOCAL app.tenant_id` on every new
   transaction (transaction-scoped, so pooled connections cannot leak context).
 - Policies are **fail-open when no context is set**: background jobs, cron sweeps and

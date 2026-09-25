@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,6 +34,7 @@ from backend.chat.llm_unavailable import LlmFailureType
 from backend.core import db as core_db
 from backend.email.service import send_email
 from backend.models import Tenant, User
+from backend.models.base import utcnow_naive as _now
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +51,6 @@ EMAIL_THROTTLE = timedelta(hours=24)
 def is_actionable(failure_type: str | LlmFailureType) -> bool:
     value = failure_type.value if isinstance(failure_type, LlmFailureType) else failure_type
     return value in _ACTIONABLE_TYPES
-
-
-def _now() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _email_subject(failure_type: str) -> str:

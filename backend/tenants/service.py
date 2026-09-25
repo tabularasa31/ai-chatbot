@@ -11,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.crypto import encrypt_value
-from backend.core.rls import set_tenant_context
 from backend.models import Bot, EscalationTicket, RerankerStrategy, Tenant, TenantProfile, User
 from backend.observability.metrics import capture_event, group_identify
 from backend.seats.events import (
@@ -21,11 +20,6 @@ from backend.seats.events import (
 )
 from backend.seats.service import release_seat
 from backend.support_config import public_support_config_dict, with_support_config
-from backend.tenants.api_keys_service import (
-    create_initial_api_key,
-    find_active_tenant_by_plain_key,
-    get_primary_active_key,
-)
 from backend.tenants.cache import invalidate_tenant
 
 logger = logging.getLogger(__name__)
@@ -35,13 +29,9 @@ DEFAULT_TENANT_NAME = "My Workspace"
 
 def create_tenant(
     user_id: uuid.UUID, name: str, db: Session
-) -> tuple[Tenant, str]:
+) -> Tenant:
     """
-    Create a tenant for a user.
-
-    Generates the initial widget API key (ck_-prefixed) and returns it
-    as plaintext alongside the tenant — this is the only point where the
-    plaintext is ever surfaced. Raises 409 if user already has a tenant.
+    Create a tenant for a user. Raises 409 if user already has a tenant.
     """
     existing = get_tenant_by_user(user_id, db)
     if existing:
@@ -53,9 +43,6 @@ def create_tenant(
     db.add(tenant)
     try:
         db.flush()
-        plaintext_key = create_initial_api_key(
-            tenant.id, db, created_by_user_id=user_id
-        )
         user = db.query(User).filter(User.id == user_id).first()
         if user:
             user.tenant_id = tenant.id
@@ -104,7 +91,7 @@ def create_tenant(
     except Exception:
         logger.warning("Failed to emit tenant.created event", exc_info=True)
 
-    return tenant, plaintext_key
+    return tenant
 
 
 def ensure_tenant_for_user(
@@ -112,18 +99,12 @@ def ensure_tenant_for_user(
     db: Session,
     name: str = DEFAULT_TENANT_NAME,
 ) -> Tenant:
-    """Return the user's tenant, creating it if needed.
-
-    The plaintext widget key generated on creation is intentionally
-    discarded here — callers that need it must use ``create_tenant``
-    directly.
-    """
+    """Return the user's tenant, creating it if needed."""
     tenant = get_tenant_by_user(user_id, db)
     if tenant:
         return tenant
     try:
-        tenant, _plain = create_tenant(user_id, name, db)
-        return tenant
+        return create_tenant(user_id, name, db)
     except HTTPException as exc:
         if exc.status_code != 409:
             raise
@@ -143,6 +124,13 @@ def get_tenant_by_user(user_id: uuid.UUID, db: Session) -> Tenant | None:
     )
 
 
+def get_tenant_owner(tenant_id: uuid.UUID, db: Session) -> User | None:
+    """The one member holding ``owner`` for this tenant, or ``None``."""
+    from backend.auth.roles import ROLE_OWNER
+
+    return db.query(User).filter(User.tenant_id == tenant_id, User.role == ROLE_OWNER).first()
+
+
 def get_tenant_by_id(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
@@ -155,41 +143,22 @@ def get_tenant_by_id(
     Raises 404 if not found or not a member.
     Pass require_owner=True for destructive operations (delete, rotate keys).
     """
+    from backend.auth.roles import ROLE_OWNER
+
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     user = db.query(User).filter(User.id == user_id).first()
     if not tenant or not user or user.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    if require_owner and user.role != "owner":
+    if require_owner and user.role != ROLE_OWNER:
         raise HTTPException(status_code=403, detail="Owner role required")
     return tenant
-
-
-def get_tenant_by_api_key(api_key: str, db: Session) -> Tenant | None:
-    """Resolve a tenant by a plaintext widget API key.
-
-    Lookup goes through tenant_api_keys by hash; revoked or expired keys
-    return ``None``. Used by /widget endpoints and the X-API-Key header
-    on /chat.
-    """
-    result = find_active_tenant_by_plain_key(api_key, db)
-    if result is None:
-        return None
-    tenant = result[0]
-    set_tenant_context(db, tenant.id)
-    return tenant
-
-
-def get_primary_api_key_hint(tenant_id: uuid.UUID, db: Session) -> str | None:
-    """Last 4 chars of the tenant's primary active key, for UI display."""
-    row = get_primary_active_key(tenant_id, db)
-    return row.key_hint if row else None
 
 
 def get_support_settings_for_user(user_id: uuid.UUID, db: Session) -> dict[str, str | None]:
     tenant = get_tenant_by_user(user_id, db)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    owner = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").limit(1).first()
+    owner = get_tenant_owner(tenant.id, db)
     raw = tenant.settings if isinstance(tenant.settings, dict) else None
     config = public_support_config_dict(raw)
     return {

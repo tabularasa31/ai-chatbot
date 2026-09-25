@@ -21,8 +21,9 @@ from backend.auth.roles import ROLE_OPERATOR, ROLE_OWNER
 from backend.core.db import get_db
 from backend.core.rls import clear_tenant_context, set_tenant_context
 from backend.core.security import decode_access_token
-from backend.models import User
+from backend.models import Tenant, User
 from backend.seats.service import holds_seat
+from backend.tenants.service import get_tenant_by_user
 
 security = HTTPBearer(auto_error=False)
 
@@ -169,6 +170,29 @@ require_member = require_role(ROLE_OWNER, ROLE_OPERATOR)
 #: still administers everything; their replies simply take the ordinary e-mail
 #: path like anyone else's.
 require_seated_member = require_role(ROLE_OWNER, ROLE_OPERATOR, seat=True)
+
+
+def _tenant_dependency(
+    user_dependency: Callable[..., Awaitable[User]],
+) -> Callable[..., Awaitable[Tenant]]:
+    """Build a dependency resolving the caller's tenant, 404 if none."""
+
+    def _dependency(
+        current_user: User = Depends(user_dependency),
+        db: Session = Depends(get_db),
+    ) -> Tenant:
+        tenant = get_tenant_by_user(current_user.id, db)
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+        return tenant
+
+    return _dependency
+
+
+get_current_tenant = _tenant_dependency(require_verified_user)
+get_owner_tenant = _tenant_dependency(require_owner)
+get_member_tenant = _tenant_dependency(require_member)
+get_seated_tenant = _tenant_dependency(require_seated_member)
 
 
 async def require_admin_user(

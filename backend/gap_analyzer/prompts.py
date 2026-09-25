@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_json import chat_json
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,9 @@ def extract_mode_a_candidates(
         + "\n\n---\n\n".join(sampled_chunks)
     )
 
-    response = openai_client.chat.completions.create(
+    parsed = chat_json(
+        "gap_analyzer_extract_mode_a_candidates",
+        openai_client,
         model=settings.extraction_model,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -48,10 +50,9 @@ def extract_mode_a_candidates(
         ],
         response_format={"type": "json_object"},
         temperature=0.2,
+        strict=True,
     )
-    raw_content = response.choices[0].message.content or "{}"
-    parsed = json.loads(raw_content)
-    raw_topics = parsed.get("topics") if isinstance(parsed, dict) else []
+    raw_topics = parsed.get("topics")
     if not isinstance(raw_topics, list):
         return []
 
@@ -75,25 +76,3 @@ def extract_mode_a_candidates(
             )
         )
     return candidates[:8]
-
-
-def embed_texts(
-    *,
-    encrypted_api_key: str,
-    texts: list[str],
-) -> list[list[float]]:
-    normalized = [text.strip() for text in texts if text.strip()]
-    if not normalized:
-        return []
-
-    openai_client = get_openai_client(encrypted_api_key)
-    response = openai_client.embeddings.create(
-        model=settings.embedding_model,
-        input=normalized,
-    )
-    vectors: list[list[float]] = []
-    for item in response.data:
-        embedding = getattr(item, "embedding", None)
-        if isinstance(embedding, list):
-            vectors.append([float(value) for value in embedding])
-    return vectors

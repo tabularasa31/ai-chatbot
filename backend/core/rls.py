@@ -7,7 +7,7 @@ itself refuses rows of other tenants even if a service forgot the filter.
 How it works:
 
 - The resolved tenant id lives in a ``ContextVar`` set at the auth boundary
-  (JWT dependency, widget bot gate, X-API-Key resolve). Each request task has
+  (JWT dependency, widget bot gate). Each request task has
   its own context, so values never leak between concurrent requests.
 - An engine-level ``begin`` listener emits ``SET LOCAL app.tenant_id`` on
   every new transaction. ``SET LOCAL`` is transaction-scoped, so pooled
@@ -85,12 +85,10 @@ CHILD_SCOPED_TABLES: dict[str, tuple[str, str]] = {
 }
 
 # Tables intentionally NOT under RLS: they are queried before the tenant is
-# known (login by email, JWT user lookup, widget bot public_id resolve,
-# X-API-Key hash lookup) — a fail-closed policy would break authentication,
-# and a fail-open one adds nothing since these lookups run with no context.
-AUTH_BOUNDARY_TABLES: frozenset[str] = frozenset(
-    {"bots", "tenant_api_keys", "tenants", "users"}
-)
+# known (login by email, JWT user lookup, widget bot public_id resolve) — a
+# fail-closed policy would break authentication, and a fail-open one adds
+# nothing since these lookups run with no context.
+AUTH_BOUNDARY_TABLES: frozenset[str] = frozenset({"bots", "tenants", "users"})
 
 # NULL when the GUC is unset or empty — the fail-open branch of every policy.
 _CTX = "NULLIF(current_setting('app.tenant_id', true), '')"

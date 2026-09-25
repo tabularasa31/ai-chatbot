@@ -13,7 +13,6 @@ from backend.chat.language import (
     LocalizationResult,
     async_localize_text_to_language_result,
     detect_language,
-    localize_text_result,
     render_direct_faq_answer_result,
     resolve_language_context,
 )
@@ -208,9 +207,9 @@ async def test_localize_skips_when_text_already_in_target_ru(
         lambda _text: LanguageDetectionResult("ru", 0.99, True),
     )
 
-    result = await localize_text_result(
+    result = await async_localize_text_to_language_result(
         canonical_text="Привет, мир",
-        response_language="ru",
+        target_language="ru",
         api_key="sk-test",
     )
 
@@ -244,9 +243,9 @@ async def test_localize_still_calls_llm_when_language_unknown(
         lambda _api_key: FakeClient(),
     )
 
-    result = await localize_text_result(
+    result = await async_localize_text_to_language_result(
         canonical_text="abc",
-        response_language="fr",
+        target_language="fr",
         api_key="sk-test",
     )
 
@@ -284,9 +283,9 @@ async def test_localize_skips_when_detection_confident_but_target_is_root_match(
         lambda _text: LanguageDetectionResult("zh", 0.95, True),
     )
 
-    result = await localize_text_result(
+    result = await async_localize_text_to_language_result(
         canonical_text="你好",
-        response_language="zh-Hant",
+        target_language="zh-Hant",
         api_key="sk-test",
     )
 
@@ -619,10 +618,11 @@ async def test_localize_logs_tokens_with_operation_label(
     )
 
     with caplog.at_level("INFO"):
-        result = await localize_text_result(
+        result = await async_localize_text_to_language_result(
             canonical_text="Hello",
-            response_language="ru",
+            target_language="ru",
             api_key="sk-test",
+            operation="localize",
         )
 
     assert result.tokens_used == 20
@@ -695,9 +695,9 @@ async def test_localization_model_overridden_via_env(
         lambda _text: LanguageDetectionResult("unknown", 0.0, False),
     )
 
-    result = await localize_text_result(
+    result = await async_localize_text_to_language_result(
         canonical_text="Hello",
-        response_language="fr",
+        target_language="fr",
         api_key="sk-test",
     )
 

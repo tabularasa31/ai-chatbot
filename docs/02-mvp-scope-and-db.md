@@ -8,7 +8,7 @@
 
 **Backend:**
 - User authentication (email/password + JWT + email verification via Brevo)
-- Tenant → Workspace → Bot hierarchy: tenant owns billing/API key/OpenAI key; workspace scopes knowledge; bot is the per‑channel behavior unit
+- Tenant → Workspace → Bot hierarchy: tenant owns billing/OpenAI key; workspace scopes knowledge; bot is the per‑channel behavior unit
 - Bot management (per‑workspace bots with disclosure / response‑detail config)
 - Document upload (PDF, Markdown, Swagger/OpenAPI)
 - URL knowledge sources (crawl + refresh)
@@ -26,7 +26,7 @@
 
 **Frontend:**
 - Login/signup page
-- Dashboard (API key, settings, OpenAI key setup)
+- Dashboard (settings, OpenAI key setup)
 - Document manager (upload, list, delete)
 - Chat logs viewer with feedback
 - Responsive design (Tailwind CSS)
@@ -71,15 +71,15 @@ User            Tenant              Workspace             Bot
 ────            ──────              ─────────             ───
 id              id                  id                    id
 email           name                tenant_id (FK)        workspace_id (FK)
-password_hash   api_key             name                  public_id  ← widget access
-tenant_id (FK)  openai_api_key      settings              name
-                is_active           is_active             disclosure_config
+password_hash   openai_api_key      name                  public_id  ← widget access
+tenant_id (FK)  is_active           settings              name
+                                    is_active             disclosure_config
                                                           is_active
 ```
 
 Separation of concerns:
 
-- **Tenant** → *ownership*. Billing, tenant‑wide API key (`X-Api-Key` server‑to‑server), OpenAI API key.
+- **Tenant** → *ownership*. Billing, OpenAI API key.
 - **Workspace** → *context*. Knowledge scope (documents, URL sources, chats, gap analysis). MVP: exactly **one** workspace per tenant, created automatically on signup; UI hides the selector.
 - **Bot** → *behavior*. Disclosure / response‑detail config, per‑channel tuning. MVP: exactly **one** bot per workspace (schema allows N, UI is single‑bot). Widget resolves by `Bot.public_id` via the `data-bot-id` attribute.
 - **public_id** → *access*. Lives on Bot only. Tenant has no `public_id`.
@@ -105,7 +105,6 @@ users
 tenants
 ├─ id (PK, UUID)
 ├─ name (VARCHAR, NOT NULL)
-├─ api_key (UNIQUE, NOT NULL, 32-char random — X-Api-Key for server-to-server)
 ├─ openai_api_key (VARCHAR, encrypted, nullable)
 ├─ is_active (BOOLEAN)
 ├─ created_at (TIMESTAMP)
@@ -272,12 +271,11 @@ LIMIT 3;
 
 ### Unique Constraints
 - `users.email` UNIQUE
-- `tenants.api_key` UNIQUE
 - `bots.public_id` UNIQUE
 
 ### Not Null Constraints
 - `users.email`, `users.password_hash`
-- `tenants.name`, `tenants.api_key`
+- `tenants.name`
 - `workspaces.tenant_id`, `workspaces.name`
 - `bots.workspace_id`, `bots.public_id`, `bots.name`
 - `documents.workspace_id`, `documents.filename`, `documents.file_type`

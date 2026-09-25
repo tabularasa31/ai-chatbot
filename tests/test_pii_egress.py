@@ -45,7 +45,12 @@ from backend.models import (
     PiiEventDirection,
 )
 from tests.chat_utils import _chat_completion_side_effect
-from tests.conftest import register_and_verify_user, set_client_openai_key
+from tests.conftest import (
+    get_default_bot_public_id,
+    post_chat_message,
+    register_and_verify_user,
+    set_client_openai_key,
+)
 
 SECRET_EMAIL = "victor.raw@example.com"
 QUESTION_WITH_PII = f"my invoice is broken, write me at {SECRET_EMAIL}"
@@ -82,7 +87,7 @@ def _seed_tenant_with_kb(
         json={"name": name},
     )
     set_client_openai_key(tenant, token)
-    api_key = cl_resp.json()["api_key"]
+    bot_public_id = get_default_bot_public_id(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
@@ -110,7 +115,7 @@ def _seed_tenant_with_kb(
         "Invoices are issued monthly.",
         total_tokens=42,
     )
-    return tenant_id, api_key
+    return tenant_id, bot_public_id
 
 
 # ── Storage keeps the original ────────────────────────────────────────────────
@@ -122,7 +127,7 @@ def test_chat_turn_stores_original_and_logs_the_egress_pii_event(
 ) -> None:
     """One chat turn with PII: storage keeps the original, and the privacy
     log still tells the tenant what was masked on the way out."""
-    tenant_id, api_key = _seed_tenant_with_kb(
+    tenant_id, bot_public_id = _seed_tenant_with_kb(
         mock_openai_client,
         tenant,
         db_session,
@@ -130,11 +135,7 @@ def test_chat_turn_stores_original_and_logs_the_egress_pii_event(
         name="Egress Store Tenant",
     )
 
-    resp = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"question": QUESTION_WITH_PII},
-    )
+    resp = post_chat_message(tenant, bot_public_id=bot_public_id, question=QUESTION_WITH_PII)
     assert resp.status_code == 200
 
     session_id = uuid.UUID(resp.json()["session_id"])
@@ -169,7 +170,7 @@ def test_question_sent_to_openai_is_redacted(
 
     Fails loudly if the pipeline is ever handed the raw question again.
     """
-    _tenant_id, api_key = _seed_tenant_with_kb(
+    _tenant_id, bot_public_id = _seed_tenant_with_kb(
         mock_openai_client,
         tenant,
         db_session,
@@ -177,11 +178,7 @@ def test_question_sent_to_openai_is_redacted(
         name="Egress Question Tenant",
     )
 
-    resp = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"question": QUESTION_WITH_PII},
-    )
+    resp = post_chat_message(tenant, bot_public_id=bot_public_id, question=QUESTION_WITH_PII)
     assert resp.status_code == 200
 
     sent = _openai_payload_text(mock_openai_client)
@@ -195,7 +192,7 @@ def test_prompt_history_sent_to_openai_is_redacted(
     db_session: Session,
 ) -> None:
     """Turn 2 must not smuggle turn 1's raw text back out via the history."""
-    _tenant_id, api_key = _seed_tenant_with_kb(
+    _tenant_id, bot_public_id = _seed_tenant_with_kb(
         mock_openai_client,
         tenant,
         db_session,
@@ -203,21 +200,18 @@ def test_prompt_history_sent_to_openai_is_redacted(
         name="Egress History Tenant",
     )
 
-    first = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"question": QUESTION_WITH_PII},
-    )
+    first = post_chat_message(tenant, bot_public_id=bot_public_id, question=QUESTION_WITH_PII)
     assert first.status_code == 200
     session_id = first.json()["session_id"]
 
     mock_openai_client.chat.completions.create.reset_mock()
     mock_openai_client.embeddings.create.reset_mock()
 
-    second = tenant.post(
-        "/chat",
-        headers={"X-API-Key": api_key},
-        json={"question": "any update on that?", "session_id": session_id},
+    second = post_chat_message(
+        tenant,
+        bot_public_id=bot_public_id,
+        question="any update on that?",
+        session_id=session_id,
     )
     assert second.status_code == 200
 

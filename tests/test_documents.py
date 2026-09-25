@@ -489,7 +489,7 @@ def test_delete_url_source_requires_verified_user(
 
     user = db_session.query(User).filter(User.email == "unverified-source-delete@example.com").first()
     assert user is not None
-    owner_client, _ = create_tenant(user.id, "Unverified Tenant", db_session)
+    owner_client = create_tenant(user.id, "Unverified Tenant", db_session)
 
     source = UrlSource(
         tenant_id=owner_client.id,
@@ -695,14 +695,26 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
             Document(
                 tenant_id=tenant_id,
                 source_id=source.id,
-                source_url=f"https://docs.example.com/page-{index}",
+                # page-0 predates canonical_url's trailing-slash stripping, and its
+                # content matches what this crawl re-extracts (unchanged path) — the
+                # row must still be reused, not deleted as stale + recreated.
+                source_url=f"https://docs.example.com/page-{index}/"
+                if index == 0
+                else f"https://docs.example.com/page-{index}",
                 filename=f"page-{index}",
                 file_type=DocumentType.url,
                 status=DocumentStatus.ready,
-                parsed_text=f"old {index}",
+                parsed_text=(
+                    "updated https://docs.example.com/page-0" if index == 0 else f"old {index}"
+                ),
             )
         )
     db_session.commit()
+    page_0_id_before_crawl = (
+        db_session.query(Document.id)
+        .filter(Document.source_id == source.id, Document.source_url.like("%page-0%"))
+        .scalar()
+    )
 
     discovered_urls = [f"https://docs.example.com/page-{index}" for index in range(70)]
     monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: discovered_urls)
@@ -726,6 +738,10 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     assert refreshed_source.warning_message is not None
     assert "Knowledge capacity reached" in refreshed_source.warning_message
     assert db_session.query(Document).filter(Document.tenant_id == tenant_id).count() == KNOWLEDGE_DOCUMENT_CAPACITY
+
+    page_0_doc = db_session.query(Document).filter(Document.source_url == "https://docs.example.com/page-0").first()
+    assert page_0_doc is not None
+    assert page_0_doc.id == page_0_id_before_crawl
 
 
 def test_delete_source_page_journey(
@@ -808,13 +824,30 @@ def test_delete_source_page_journey(
     assert refreshed_source.metadata_json["manually_excluded_page_urls"] == ["https://docs.example.com/start"]
 
     monkeypatch.setattr(
-        url_service, "_discover_urls", lambda root_url, exclusions, page_cap: ["https://docs.example.com/start"]
+        url_service,
+        "_discover_urls",
+        lambda root_url, exclusions, page_cap: [
+            "https://docs.example.com/start",
+            "https://docs.example.com/guide",
+        ],
     )
-    monkeypatch.setattr(http_client_mod, "_fetch_page_html", lambda url: "<html><body>start</body></html>")
-    monkeypatch.setattr(
-        embedder_mod, "_extract_page", lambda url, html: _fake_extracted_page(url, "Start", "start")
-    )
+
+    def _fake_fetch(url: str) -> str:
+        if url.endswith("/guide"):
+            return (
+                "<html><body><h1>Guide</h1><h2>Setup</h2>"
+                "<p>Intro text.</p>"
+                "<ul><li>Step one<p>Nested detail.</p></li></ul>"
+                "</body></html>"
+            )
+        return "<html><body>start</body></html>"
+
+    monkeypatch.setattr(http_client_mod, "_fetch_page_html", _fake_fetch)
     monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+    # No _extract_page patch here: exercise the real HTML -> markdown -> chunk
+    # path end to end, including the manually-excluded "start" URL staying
+    # excluded and "guide"'s chunk metadata (heading_path, section_title,
+    # source_url, page_title, chunk_index) and nested <li><p> text.
 
     url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()
@@ -823,9 +856,18 @@ def test_delete_source_page_journey(
     source_docs = db_session.query(Document).filter(Document.source_id == source.id).all()
 
     assert recrawled_source is not None
-    assert recrawled_source.pages_indexed == 0
-    assert recrawled_source.pages_found == 0
-    assert source_docs == []
+    assert recrawled_source.pages_indexed == 1
+    assert [doc.source_url for doc in source_docs] == ["https://docs.example.com/guide"]
+
+    guide_embeddings = db_session.query(Embedding).filter(Embedding.document_id == source_docs[0].id).all()
+    assert guide_embeddings
+    meta = guide_embeddings[0].metadata_json
+    assert meta["source_url"] == "https://docs.example.com/guide"
+    assert meta["page_title"] == "Guide"
+    assert meta["chunk_index"] == 0
+    assert meta["heading_path"]
+    assert meta["section_title"]
+    assert sum(emb.chunk_text.count("Nested detail.") for emb in guide_embeddings) == 1
 
 
 def test_crawl_url_source_detects_openapi_yaml_and_indexes_as_swagger(

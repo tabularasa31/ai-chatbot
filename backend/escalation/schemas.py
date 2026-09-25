@@ -6,10 +6,17 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from backend.models.enums import EscalationTrigger
+
+_ManualEscalateTrigger = Literal["user_request", "answer_rejected", "llm_unavailable"]
+assert set(_ManualEscalateTrigger.__args__) <= {t.value for t in EscalationTrigger}, (
+    "ManualEscalateRequest.trigger values must be a subset of EscalationTrigger"
+)
+
 
 class ManualEscalateRequest(BaseModel):
     user_note: str | None = Field(default=None, max_length=2000)
-    trigger: Literal["user_request", "answer_rejected", "llm_unavailable"] = "user_request"
+    trigger: _ManualEscalateTrigger = "user_request"
     # Populated only when trigger == "llm_unavailable". Used to enrich the
     # ticket without requiring a DB migration: failure_type is prefixed into
     # user_note, and original_user_message becomes primary_question.

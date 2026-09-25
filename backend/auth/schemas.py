@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
 
 # Password validation: min 8 chars, 1 uppercase, 1 number, 1 special char
 _PASSWORD_PATTERN = re.compile(
@@ -14,24 +15,26 @@ _PASSWORD_PATTERN = re.compile(
 )
 
 
+def _validate_password_strength(v: str) -> str:
+    """Validate password: min 8 chars, 1 uppercase, 1 number, 1 special char."""
+    if len(v) < 8:
+        raise ValueError("Password must be at least 8 characters long")
+    if not _PASSWORD_PATTERN.match(v):
+        raise ValueError(
+            "Password must include at least one uppercase letter, "
+            "one number, and one special character"
+        )
+    return v
+
+
+StrongPassword = Annotated[str, AfterValidator(_validate_password_strength)]
+
+
 class RegisterRequest(BaseModel):
     """Request body for user registration."""
 
     email: EmailStr
-    password: str
-
-    @field_validator("password")
-    @classmethod
-    def validate_password_strength(cls, v: str) -> str:
-        """Validate password: min 8 chars, 1 uppercase, 1 number, 1 special char."""
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters long")
-        if not _PASSWORD_PATTERN.match(v):
-            raise ValueError(
-                "Password must include at least one uppercase letter, "
-                "one number, and one special character"
-            )
-        return v
+    password: StrongPassword
 
 
 class LoginRequest(BaseModel):
@@ -71,12 +74,8 @@ class VerifyEmailRequest(BaseModel):
     token: str
 
 
-class VerifyEmailResponse(BaseModel):
+class VerifyEmailResponse(AuthResponse):
     """Response for email verification — includes JWT token."""
-
-    token: str
-    expires_in: int
-    user: UserResponse
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -95,30 +94,10 @@ class ResetPasswordRequest(BaseModel):
     """Request body for password reset."""
 
     token: str
-    new_password: str = Field(..., min_length=8, max_length=128)
-
-    @field_validator("new_password")
-    @classmethod
-    def validate_password_strength(cls, v: str) -> str:
-        """Validate password: min 8 chars, 1 uppercase, 1 number, 1 special char."""
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters long")
-        if not _PASSWORD_PATTERN.match(v):
-            raise ValueError(
-                "Password must include at least one uppercase letter, "
-                "one number, and one special character"
-            )
-        return v
+    new_password: StrongPassword = Field(..., min_length=8, max_length=128)
 
 
 class ResetPasswordResponse(BaseModel):
     """Response for password reset."""
 
     message: str
-
-
-class ErrorResponse(BaseModel):
-    """Error response model."""
-
-    detail: str
-    status_code: int

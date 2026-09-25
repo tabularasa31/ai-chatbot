@@ -441,11 +441,13 @@ def test_mode_b_followup_enqueues_durable_job(
 # Math / internal helpers
 # ---------------------------------------------------------------------------
 
-def test_tokenize_preserves_hyphenated_terms() -> None:
-    tokens = _tokenize("Rate-limit guidance for invoice-export flows")
+def test_tokenize_preserves_hyphenated_terms_and_is_unicode_aware() -> None:
+    tokens = _tokenize("Rate-limit guidance for невероятно flows")
 
     assert "rate-limit" in tokens
-    assert "invoice-export" in tokens
+    assert "невероятно" in tokens
+    assert "rate-limit" in _tokenize("Rate\u2010limit guidance")
+    assert _tokenize("Rate\u2011limit") == ["rate-limit"]
 
 
 def test_prepare_mode_b_clusters_skips_unknown_status() -> None:
@@ -547,7 +549,9 @@ def test_mode_b_skips_embedding_blank_questions(
 
     monkeypatch.setattr(
         "backend.gap_analyzer.orchestrator.embed_texts",
-        lambda *, encrypted_api_key, texts: [[0.9] * 1536] if texts == [valid_question.question_text] else [],
+        lambda texts, *_a, **_k: (
+            [[0.9] * 1536] if texts == [valid_question.question_text] else []
+        ),
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))

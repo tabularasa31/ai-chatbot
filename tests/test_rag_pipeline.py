@@ -38,7 +38,7 @@ def _create_client(
     )
     assert cl_resp.status_code in (200, 201), cl_resp.text
     set_client_openai_key(http, token)
-    api_key = cl_resp.json()["api_key"]
+    api_key = "sk-test"
     client_row = db.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
     return client_row, api_key

@@ -376,13 +376,14 @@ def mock_openai_client():
     )
 
     # Patch where get_openai_client is used (not where defined) so imports see the mock
-    with patch("backend.embeddings.service.get_openai_client", return_value=mock_client, create=True), \
+    with patch("backend.documents.embedder.get_openai_client", return_value=mock_client, create=True), \
          patch("backend.search.service.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
          patch("backend.chat.language.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.chat.steps.generate.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True), \
          patch("backend.gap_analyzer.prompts.get_openai_client", return_value=mock_client), \
+         patch("backend.gap_analyzer.orchestrator.get_openai_client", return_value=mock_client), \
          patch("backend.knowledge.routes.get_openai_client", return_value=mock_client), \
          patch("backend.tenant_knowledge.extract_tenant_knowledge.get_openai_client", return_value=mock_client), \
          patch("backend.tenant_knowledge.faq_service.get_openai_client", return_value=mock_client), \
@@ -486,6 +487,98 @@ def set_client_openai_key(test_client: TestClient, token: str, key: str = "sk-te
         json={"openai_api_key": key},
     )
     assert r.status_code == 200, f"Failed to set OpenAI key: {r.json()}"
+
+
+def get_default_bot_public_id(test_client: TestClient, token: str) -> str:
+    """Return the public_id of the tenant's default bot (created alongside
+    the tenant). Used by tests that need to address `/widget/chat`."""
+    resp = test_client.get("/bots", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.json()
+    items = resp.json()["items"]
+    assert items, "tenant has no bot"
+    return items[0]["public_id"]
+
+
+def _parse_widget_sse_response(raw_body: str) -> dict:
+    """Collapse SSE frames from `/widget/chat` into a legacy-style JSON
+    payload shaped like the old private `/chat` endpoint's response."""
+    import json as _json
+
+    chunks: list[str] = []
+    payload: dict = {}
+    for frame in raw_body.split("\n\n"):
+        frame = frame.strip()
+        if not frame:
+            continue
+        data_line = "\n".join(
+            line[len("data:"):].strip()
+            for line in frame.splitlines()
+            if line.startswith("data:")
+        )
+        if not data_line:
+            continue
+        try:
+            event = _json.loads(data_line)
+        except _json.JSONDecodeError:
+            continue
+        if event.get("type") == "chunk" and isinstance(event.get("text"), str):
+            chunks.append(event["text"])
+        elif event.get("type") == "done":
+            payload.update(event)
+            text = event.get("text")
+            payload["text"] = text if isinstance(text, str) else "".join(chunks)
+        elif event.get("type") == "error":
+            payload["detail"] = event.get("message")
+    if "text" not in payload and chunks:
+        payload["text"] = "".join(chunks)
+    # `WidgetChatTurnResponse` is dumped with exclude_none=True, so fields
+    # left at their default (None/False) are absent from the `done` frame —
+    # fill them back in so callers can key into the response unconditionally,
+    # as they could against the old `/chat` endpoint's plain JSON body.
+    payload.setdefault("ticket_number", None)
+    payload.setdefault("delivered_to_operator", False)
+    return payload
+
+
+class _WidgetSSEResponse:
+    """Thin wrapper letting tests call `.json()` / `.status_code` on a
+    streamed `/widget/chat` response as if it were the old `/chat` JSON
+    response."""
+
+    def __init__(self, response) -> None:
+        self._response = response
+        self._decoded = (
+            _parse_widget_sse_response(response.text) if response.status_code < 400 else None
+        )
+
+    def __getattr__(self, item):
+        return getattr(self._response, item)
+
+    def json(self):
+        if self._decoded is not None:
+            return self._decoded
+        return self._response.json()
+
+
+def post_chat_message(
+    test_client: TestClient,
+    *,
+    bot_public_id: str,
+    question: str,
+    session_id: str | None = None,
+) -> object:
+    """Send a chat turn through the public `/widget/chat` endpoint.
+
+    Stands in for the deleted private `POST /chat` (X-API-Key) endpoint in
+    tests that only used it as a transport to drive the chat pipeline; the
+    returned object exposes `.status_code` and a `.json()` shaped like the
+    old response (`text`, `session_id`, `ticket_number`, `delivered_to_operator`).
+    """
+    query = f"/widget/chat?bot_id={bot_public_id}"
+    if session_id:
+        query += f"&session_id={session_id}"
+    resp = test_client.post(query, json={"message": question})
+    return _WidgetSSEResponse(resp)
 
 
 def register_and_verify_user(

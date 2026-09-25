@@ -6,7 +6,6 @@ import logging
 import time
 import uuid
 from time import perf_counter
-from typing import Any, TypeVar
 
 from sqlalchemy import Text as SAText
 from sqlalchemy import cast, func, select
@@ -39,28 +38,6 @@ _KB_SCRIPT_SAMPLE_SIZE = 20
 # A stray document must not put the whole tenant on the hook; a genuine
 # minority-language section still clears the bar.
 _KB_SCRIPT_MIN_SHARE = 0.05
-
-_T = TypeVar("_T")
-
-
-_TTL_CACHE_MISS = object()
-
-
-def _ttl_cache_get(cache: dict[str, tuple[_T, float]], key: str) -> Any:
-    """Return the cached value for `key`, or a sentinel when missing/expired.
-
-    A sentinel (rather than ``None``) is required because a cached value of
-    ``None`` — as ``async_detect_tenant_kb_script`` legitimately stores — must
-    stay distinguishable from "not cached".
-    """
-    cached = cache.get(key)
-    if cached is not None and time.monotonic() - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
-        return cached[0]
-    return _TTL_CACHE_MISS
-
-
-def _ttl_cache_set(cache: dict[str, tuple[_T, float]], key: str, value: _T) -> None:
-    cache[key] = (value, time.monotonic())
 
 
 def invalidate_tenant_kb_script_cache(tenant_id: uuid.UUID) -> None:
@@ -374,9 +351,10 @@ async def async_detect_tenant_kb_script(
     map to a known script bucket.
     """
     key = str(tenant_id)
-    cached = _ttl_cache_get(_TENANT_KB_SCRIPT_CACHE, key)
-    if cached is not _TTL_CACHE_MISS:
-        return cached
+    now = time.monotonic()
+    cached = _TENANT_KB_SCRIPT_CACHE.get(key)
+    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
+        return cached[0]
 
     counts = await _async_resolve_kb_bucket_counts(tenant_id, db)
     result: str | None = None
@@ -385,7 +363,7 @@ async def async_detect_tenant_kb_script(
         if dominant != NO_SCRIPT_BUCKET:
             result = dominant
 
-    _ttl_cache_set(_TENANT_KB_SCRIPT_CACHE, key, result)
+    _TENANT_KB_SCRIPT_CACHE[key] = (result, now)
     return result
 
 
@@ -404,9 +382,10 @@ async def async_detect_tenant_kb_scripts(
     separately — see :func:`_async_resolve_kb_bucket_sources`.
     """
     key = str(tenant_id)
-    cached = _ttl_cache_get(_TENANT_KB_SCRIPTS_CACHE, key)
-    if cached is not _TTL_CACHE_MISS:
-        return cached
+    now = time.monotonic()
+    cached = _TENANT_KB_SCRIPTS_CACHE.get(key)
+    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
+        return cached[0]
 
     result: frozenset[str] = frozenset()
     for source in await _async_resolve_kb_bucket_sources(tenant_id, db):
@@ -415,5 +394,5 @@ async def async_detect_tenant_kb_scripts(
         result |= frozenset(
             b for b, n in counted.items() if n >= total * _KB_SCRIPT_MIN_SHARE
         )
-    _ttl_cache_set(_TENANT_KB_SCRIPTS_CACHE, key, result)
+    _TENANT_KB_SCRIPTS_CACHE[key] = (result, now)
     return result

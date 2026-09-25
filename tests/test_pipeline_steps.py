@@ -18,7 +18,7 @@ from backend.chat.language import ResolvedLanguageContext
 from backend.chat.steps import pre_retrieval, refusal, retrieval
 from backend.chat.types import PipelineRun, RetrievalContext
 from backend.guards.types import Verdict, VerdictReason
-from backend.search.service import build_reliability_assessment
+from backend.search.reliability import build_reliability_assessment
 
 
 def _language_context() -> ResolvedLanguageContext:

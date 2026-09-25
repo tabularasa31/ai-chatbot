@@ -316,7 +316,7 @@ async def test_pipeline_reads_tenant_strategy_and_traces_it(
     monkeypatch, db_session: Session, async_search_session
 ) -> None:
     from backend.models import Document, DocumentStatus, DocumentType
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from backend.tenants.cache import clear_cache
     from tests.test_models import _create_client, _create_user
 

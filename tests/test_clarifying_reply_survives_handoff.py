@@ -32,7 +32,7 @@ from backend.chat.types import (
     RetrievalContext,
 )
 from backend.models import Chat, EscalationTrigger
-from backend.search.service import build_reliability_assessment
+from backend.search.reliability import build_reliability_assessment
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 CLARIFYING_ANSWER = "Which page do you see the error on?"

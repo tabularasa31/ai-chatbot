@@ -52,7 +52,7 @@ from backend.search.contradiction_adjudication import (  # noqa: E402
     build_contradiction_adjudication_run,
     serialize_contradiction_adjudication_run,
 )
-from backend.search.service import (  # noqa: E402
+from backend.search.reliability import (  # noqa: E402
     AdjudicatedContradiction,
     ContradictionAdjudicationEvidence,
     ContradictionPair,

@@ -19,7 +19,7 @@ from backend.chat.handlers.rag import (
     _classify_kb_confidence,
     _floor_kb_confidence,
 )
-from backend.search.service import (
+from backend.search.reliability import (
     ContradictionPair,
     SourceOverlapPair,
     build_reliability_assessment,

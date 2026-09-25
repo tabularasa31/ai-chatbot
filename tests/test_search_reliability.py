@@ -18,7 +18,8 @@ from backend.search.contradiction_adjudication import (
     adjudicate_contradictions,
     build_contradiction_adjudication_run,
 )
-from backend.search.service import (
+from backend.search.fusion import detect_source_overlaps
+from backend.search.reliability import (
     AdjudicatedContradiction,
     ContradictionPair,
     ContradictionAdjudicationEvidence,
@@ -26,7 +27,6 @@ from backend.search.service import (
     build_reliability_assessment,
     build_reliability_projection,
     detect_metadata_contradictions,
-    detect_source_overlaps,
     serialize_reliability,
 )
 
@@ -864,7 +864,7 @@ def test_build_reliability_projection_includes_adjudication_execution_and_verdic
 
 
 def test_search_result_bundle_default_reliability_matches_canonical_empty_state() -> None:
-    from backend.search.service import SearchResultBundle
+    from backend.search.types import SearchResultBundle
 
     bundle = SearchResultBundle(results=[])
 
@@ -878,7 +878,7 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
     db_session: Session,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import _build_contradiction_adjudication_evidence
+    from backend.search.reliability import _build_contradiction_adjudication_evidence
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="adj-enabled@example.com")
@@ -914,7 +914,7 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
     )
 
     monkeypatch.setattr(
-        "backend.search.service.settings.contradiction_adjudication_max_facts",
+        "backend.search.reliability.settings.contradiction_adjudication_max_facts",
         1,
     )
 

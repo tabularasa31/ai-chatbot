@@ -13,16 +13,13 @@ from unittest.mock import Mock
 import pytest
 from sqlalchemy.orm import Session
 
-from backend.search.service import (
-    _async_rewrite_query_for_retrieval,
-    async_embed_queries,
-    async_embed_queries_with_stats,
-)
+from backend.search.embedding import async_embed_queries, async_embed_queries_with_stats
+from backend.search.query_variants import _async_rewrite_query_for_retrieval
 
 
 @pytest.mark.asyncio
 async def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> None:
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     class FakeSpan:
         def __init__(self, name: str) -> None:
@@ -106,7 +103,7 @@ async def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch)
 @pytest.mark.asyncio
 async def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatch) -> None:
     from backend.models import Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     class FakeSpan:
         def __init__(self, name: str) -> None:
@@ -266,7 +263,7 @@ async def test_search_trace_sqlite_runs_full_stage_contract(
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[1.0, 0.0, 0.0])]
 
     fake_trace = FakeTrace()
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     await search_similar_chunks_detailed_async(
         tenant_id=tenant_id,
@@ -377,7 +374,7 @@ async def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(
         Mock(embedding=[0.0, 0.0, 1.0]),  # variant 3: match on "tertiary" (index 1)
     ]
 
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     bundle = await search_similar_chunks_detailed_async(
         tenant_id=tenant_id,
@@ -398,7 +395,7 @@ async def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
     monkeypatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
 
     class FakeSpan:
         def __init__(self, name: str) -> None:
@@ -520,7 +517,7 @@ async def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
 @pytest.mark.asyncio
 async def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
     """async_embed_query calls OpenAI with correct model name."""
-    from backend.search.service import async_embed_query
+    from backend.search.embedding import async_embed_query
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
     await async_embed_query("test query", api_key="sk-test")
@@ -574,7 +571,7 @@ async def test_search_single_embedding_match(
 ) -> None:
     """Create tenant, document, embedding; mock the embedding call to return a similar vector."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     vec = [0.1] * 1536
@@ -628,7 +625,7 @@ async def test_search_sorts_by_similarity_desc_and_respects_top_k(
     - top_k truncates the result count even when more embeddings exist
     """
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="multi@example.com")
@@ -701,7 +698,7 @@ async def test_search_other_client_isolated(
 ) -> None:
     """Create embeddings for tenant A and B; search as user A → only A's results."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user_a = _create_user(db_session, email="isol_a@example.com")
@@ -765,7 +762,7 @@ async def test_search_no_embeddings_returns_empty_results(
     mock_openai_client: Mock, db_session: Session, async_search_session
 ) -> None:
     """No embeddings in DB → empty results."""
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="default@example.com")
@@ -794,7 +791,7 @@ async def test_search_low_vector_similarity_still_returns_chunk(
 ) -> None:
     """SQLite shared pipeline still returns lexical matches even with zero vector confidence."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="fallback@example.com")
@@ -847,7 +844,7 @@ async def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_pu
     async_search_session,
 ) -> None:
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="sqlitehybrid@example.com")
@@ -916,7 +913,7 @@ async def test_search_skips_unusable_vectors(
 ) -> None:
     """A malformed or wrong-dimension vector in metadata_json must be skipped, not crash the search."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="badvec@example.com")
@@ -1029,7 +1026,7 @@ async def test_entity_ner_runs_concurrently_with_vector_and_bm25(
     import time as _time
 
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="parallel_ner@example.com")
@@ -1061,7 +1058,7 @@ async def test_entity_ner_runs_concurrently_with_vector_and_bm25(
 
     # Make the vector candidate build "slow" so NER has time to run in parallel.
     real_build = __import__(
-        "backend.search.service", fromlist=["_async_build_vector_candidate_set"]
+        "backend.search.retrieval_db", fromlist=["_async_build_vector_candidate_set"]
     )._async_build_vector_candidate_set
 
     async def slow_vector_build(*args, **kwargs):
@@ -1111,7 +1108,7 @@ async def test_entity_ner_skipped_for_tenant_with_no_embeddings(
     the OpenAI call. Pre-check via _async_tenant_has_embeddings gates the
     submission so freshly-onboarded / empty-FAQ tenants pay zero.
     """
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="no_emb@example.com")
@@ -1157,7 +1154,7 @@ async def test_entity_ner_future_cancelled_on_empty_vector_path(
     keeps a thread + an OpenAI request alive for nothing.
     """
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed_async
+    from backend.search.pipeline import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="empty_path_ner@example.com")

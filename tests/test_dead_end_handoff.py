@@ -287,7 +287,7 @@ def _tenant_bot_public_id(tenant: TestClient, db_session: Session, email: str, n
 
 def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
     from backend.chat.types import RetrievalContext
-    from backend.search.service import build_reliability_assessment
+    from backend.search.reliability import build_reliability_assessment
 
     def _fake_retrieve(*_args, **_kwargs) -> RetrievalContext:
         return RetrievalContext(

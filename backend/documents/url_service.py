@@ -59,7 +59,7 @@ from backend.models import (
 )
 from backend.models.base import utcnow_naive as _utcnow
 from backend.observability.metrics import emit_tenant_event
-from backend.search.service import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 

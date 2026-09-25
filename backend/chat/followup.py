@@ -14,7 +14,7 @@ from surface features (word count, affirmation dictionaries):
 
 - the relevance guard (``backend.guards.relevance_checker``), so anaphoric
   replies ("what about X?") are judged against the conversation;
-- the semantic query rewrite (``backend.search.service``), which turns a
+- the semantic query rewrite (``backend.search.query_variants``), which turns a
   continuation into a standalone retrieval query — or ignores the history
   when the current message is self-contained.
 """

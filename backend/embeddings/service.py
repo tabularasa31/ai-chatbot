@@ -29,7 +29,7 @@ from backend.documents.parsers import (
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 from backend.models.base import _utcnow
-from backend.search.service import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 

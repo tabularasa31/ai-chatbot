@@ -57,7 +57,7 @@ from backend.models import (
     Tenant,
     UrlSource,
 )
-from backend.search.service import build_reliability_assessment
+from backend.search.reliability import build_reliability_assessment
 from tests._async_utils import as_async, as_async as _as_async, as_async_generate
 from tests.conftest import (
     get_default_bot_public_id,
@@ -849,7 +849,7 @@ def test_classified_intent_reaches_generation_as_quick_answers(
     fails if the verdict is dropped anywhere on the way to the prompt.
     """
     from backend.chat.types import RetrievalContext
-    from backend.search.service import build_reliability_assessment
+    from backend.search.reliability import build_reliability_assessment
 
     token = register_and_verify_user(tenant, db_session, email="intent-e2e@example.com")
     created = tenant.post(
@@ -935,7 +935,8 @@ def test_retrieve_context_propagates_reliability_cap_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import SearchResultBundle, build_reliability_assessment
+    from backend.search.reliability import build_reliability_assessment
+    from backend.search.types import SearchResultBundle
 
     embedding = Embedding(
         id=uuid.uuid4(),
@@ -945,7 +946,7 @@ def test_retrieve_context_propagates_reliability_cap_reason(
     )
 
     monkeypatch.setattr(
-        "backend.search.service.search_similar_chunks_detailed_async",
+        "backend.search.pipeline.search_similar_chunks_detailed_async",
         as_async(lambda *args, **kwargs: SearchResultBundle(
             results=[(embedding, 0.88)],
             best_vector_similarity=0.88,
@@ -983,7 +984,7 @@ def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import SearchResultBundle
+    from backend.search.types import SearchResultBundle
 
     embedding = Embedding(
         id=uuid.uuid4(),
@@ -993,7 +994,7 @@ def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
     )
 
     monkeypatch.setattr(
-        "backend.search.service.search_similar_chunks_detailed_async",
+        "backend.search.pipeline.search_similar_chunks_detailed_async",
         as_async(lambda *args, **kwargs: SearchResultBundle(
             results=[(embedding, 0.77)],
             best_vector_similarity=0.0,
@@ -2571,7 +2572,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Tenant
-    from backend.search.service import ContradictionPair, build_reliability_assessment
+    from backend.search.reliability import ContradictionPair, build_reliability_assessment
 
     class FakeSpan:
         def end(self, **kwargs: object) -> None:

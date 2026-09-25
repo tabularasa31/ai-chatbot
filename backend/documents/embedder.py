@@ -19,7 +19,7 @@ from backend.core.openai_retry import call_openai_with_retry
 from backend.documents.parsers import OpenAPIChunk
 from backend.knowledge.entity_extractor import extract_entities_from_passage
 from backend.models import Document, Embedding
-from backend.search.service import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 

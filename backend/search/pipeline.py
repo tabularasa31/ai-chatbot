@@ -1,10 +1,4 @@
-"""Async hybrid retrieval pipeline stages and the public orchestrator.
-
-Public entry points carry an ``async``/``_async`` affix (a naming relic of
-the staged sync→async migration); the pipeline stages are private
-(``_async_*`` prefix). The former sync twins were removed once the last
-runtime callers (chat handlers, search routes) moved to this path.
-"""
+"""Async hybrid retrieval pipeline stages and the public orchestrator."""
 
 from __future__ import annotations
 
@@ -27,6 +21,7 @@ from backend.observability.formatters import (
 )
 from backend.observability.metrics import capture_event
 from backend.search.bm25 import (
+    BM25_CANDIDATE_POOL,
     _bm25_queries_for_script,
     _format_bm25_trace_results,
     _is_en_query,
@@ -62,7 +57,6 @@ from backend.search.retrieval_db import (
     async_entity_overlap_search,
 )
 from backend.search.types import (
-    BM25ExpansionMode,
     BM25SearchBundle,
     SearchResultBundle,
     VariantMode,
@@ -73,7 +67,6 @@ from backend.search.types import (
 )
 from backend.tenants.cache import get_cached_tenant
 
-BM25_CANDIDATE_POOL = 200
 RRF_CANDIDATE_POOL_MULTIPLIER = 4
 
 logger = logging.getLogger(__name__)
@@ -270,45 +263,6 @@ def _build_empty_result_bundle(
     )
 
 
-def _trace_vector_search(
-    trace: TraceHandle | None,
-    *,
-    query_stage: _QueryStageResult,
-    tenant_id: uuid.UUID,
-    vector_engine: str,
-    vector_candidates: list[tuple[Embedding, float]],
-    vector_duration_ms: float,
-    vector_search_call_count: int,
-    top_k: int | None = None,
-) -> None:
-    """Write the single "vector-search" trace span shared by the empty and normal paths."""
-    if trace is None:
-        return
-    chunks = (
-        format_embedding_results(vector_candidates[: top_k * 2], score_name="similarity_score")
-        if top_k is not None
-        else []
-    )
-    trace.span(
-        name="vector-search",
-        input={
-            "query_embedding": format_query_embedding_preview(query_stage.trace_query_vector),
-            "query_variants": query_stage.query_variants,
-            "tenant_id": str(tenant_id),
-            "top_k": BM25_CANDIDATE_POOL,
-            "engine": vector_engine,
-        },
-    ).end(
-        output={
-            "chunks": chunks,
-            "duration_ms": vector_duration_ms,
-            "total_candidates_scanned": len(vector_candidates),
-            "vector_search_call_count": vector_search_call_count,
-            "extra_vector_search_calls": max(vector_search_call_count - 1, 0),
-        }
-    )
-
-
 # ── Async pipeline stages ────────────────────────────────────────────────────
 
 
@@ -468,7 +422,7 @@ async def _async_run_candidate_stage(
     q = query_stage
     is_sqlite = _session_is_sqlite(db)
     vector_engine = "python-cosine" if is_sqlite else "pgvector"
-    bm25_expansion_mode: BM25ExpansionMode = _resolve_bm25_expansion_mode()
+    bm25_expansion_mode = _resolve_bm25_expansion_mode()
 
     kb_script = await async_detect_tenant_kb_script(tenant_id, db)
     bm25_variant_queries = _bm25_queries_for_script(
@@ -498,19 +452,30 @@ async def _async_run_candidate_stage(
     vector_candidates = vector_candidate_set.candidates
     vector_search_call_count = vector_candidate_set.call_count
     vector_duration_ms = vector_candidate_set.duration_ms
+    extra_vector_search_calls = max(vector_search_call_count - 1, 0)
 
     if not vector_candidates:
         if ner_task is not None:
             ner_task.cancel()
-        _trace_vector_search(
-            trace,
-            query_stage=q,
-            tenant_id=tenant_id,
-            vector_engine=vector_engine,
-            vector_candidates=[],
-            vector_duration_ms=vector_duration_ms,
-            vector_search_call_count=vector_search_call_count,
-        )
+        if trace is not None:
+            trace.span(
+                name="vector-search",
+                input={
+                    "query_embedding": format_query_embedding_preview(q.trace_query_vector),
+                    "query_variants": q.query_variants,
+                    "tenant_id": str(tenant_id),
+                    "top_k": BM25_CANDIDATE_POOL,
+                    "engine": vector_engine,
+                },
+            ).end(
+                output={
+                    "chunks": [],
+                    "duration_ms": vector_duration_ms,
+                    "total_candidates_scanned": 0,
+                    "vector_search_call_count": vector_search_call_count,
+                    "extra_vector_search_calls": extra_vector_search_calls,
+                }
+            )
         return _CandidateStageResult(
             vector_candidates=[],
             vector_search_call_count=vector_search_call_count,
@@ -536,16 +501,28 @@ async def _async_run_candidate_stage(
         )
 
     vector_embs = [emb for emb, _ in vector_candidates]
-    _trace_vector_search(
-        trace,
-        query_stage=q,
-        tenant_id=tenant_id,
-        vector_engine=vector_engine,
-        vector_candidates=vector_candidates,
-        vector_duration_ms=vector_duration_ms,
-        vector_search_call_count=vector_search_call_count,
-        top_k=top_k,
-    )
+    if trace is not None:
+        trace.span(
+            name="vector-search",
+            input={
+                "query_embedding": format_query_embedding_preview(q.trace_query_vector),
+                "query_variants": q.query_variants,
+                "tenant_id": str(tenant_id),
+                "top_k": BM25_CANDIDATE_POOL,
+                "engine": vector_engine,
+            },
+        ).end(
+            output={
+                "chunks": format_embedding_results(
+                    vector_candidates[:top_k * 2],
+                    score_name="similarity_score",
+                ),
+                "duration_ms": vector_duration_ms,
+                "total_candidates_scanned": len(vector_candidates),
+                "vector_search_call_count": vector_search_call_count,
+                "extra_vector_search_calls": extra_vector_search_calls,
+            }
+        )
 
     rrf_candidate_pool = top_k * RRF_CANDIDATE_POOL_MULTIPLIER
     bm25_started_at = perf_counter()

@@ -30,7 +30,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy.orm import Session
 
-from backend.search.service import search_similar_chunks_detailed_async
+from backend.search.pipeline import search_similar_chunks_detailed_async
 from tests.eval.multi_hop import dataset as ds
 from tests.eval.multi_hop.metrics import (
     aggregate,

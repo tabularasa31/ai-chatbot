@@ -150,36 +150,6 @@ async def _async_rewrite_query_for_retrieval(
         return None
 
 
-async def _run_semantic_rewrite(
-    prompt: str,
-    *,
-    api_key: str,
-    timeout: float,
-    bot_id: str | None,
-    langfuse_observation: Any | None,
-) -> str | None:
-    """Shared single-message rewrite call used by both semantic-rewrite variants."""
-    try:
-        client = get_async_openai_client(api_key, timeout=timeout)
-        response = await async_call_openai_with_retry(
-            "semantic_query_rewrite",
-            lambda: client.chat.completions.create(
-                model=settings.query_rewrite_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
-            ),
-            bot_id=bot_id,
-            langfuse_observation=langfuse_observation,
-        )
-        rewrite = (response.choices[0].message.content or "").strip()
-        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
-            return rewrite
-    except Exception:
-        pass
-    return None
-
-
 async def async_semantic_query_rewrite(
     query: str,
     *,
@@ -209,13 +179,25 @@ async def async_semantic_query_rewrite(
     if not query or not api_key:
         return None
     prompt = _build_semantic_rewrite_prompt(query, dialog_context)
-    return await _run_semantic_rewrite(
-        prompt,
-        api_key=api_key,
-        timeout=timeout,
-        bot_id=bot_id,
-        langfuse_observation=langfuse_observation,
-    )
+    try:
+        client = get_async_openai_client(api_key, timeout=timeout)
+        response = await async_call_openai_with_retry(
+            "semantic_query_rewrite",
+            lambda: client.chat.completions.create(
+                model=settings.query_rewrite_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
+            ),
+            bot_id=bot_id,
+            langfuse_observation=langfuse_observation,
+        )
+        rewrite = (response.choices[0].message.content or "").strip()
+        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
+            return rewrite
+    except Exception:
+        pass
+    return None
 
 
 async def async_semantic_query_rewrite_for_kb(
@@ -248,10 +230,22 @@ async def async_semantic_query_rewrite_for_kb(
         "regardless of the input language. Reply with ONLY the search query, "
         "nothing else."
     )
-    return await _run_semantic_rewrite(
-        prompt,
-        api_key=api_key,
-        timeout=timeout,
-        bot_id=bot_id,
-        langfuse_observation=langfuse_observation,
-    )
+    try:
+        client = get_async_openai_client(api_key, timeout=timeout)
+        response = await async_call_openai_with_retry(
+            "semantic_query_rewrite_for_kb",
+            lambda: client.chat.completions.create(
+                model=settings.query_rewrite_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
+            ),
+            bot_id=bot_id,
+            langfuse_observation=langfuse_observation,
+        )
+        rewrite = (response.choices[0].message.content or "").strip()
+        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
+            return rewrite
+    except Exception:
+        pass
+    return None

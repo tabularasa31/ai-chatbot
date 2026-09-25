@@ -11,11 +11,16 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from sqlalchemy.orm import Session
+
 from backend.chunkers.html import clean_html_root
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_retry import call_openai_with_retry
 from backend.documents.parsers import OpenAPIChunk
-from backend.models import DocumentType
+from backend.knowledge.entity_extractor import extract_entities_from_passage
+from backend.models import Document, DocumentType, Embedding
+from backend.search.service import invalidate_tenant_search_caches
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +219,10 @@ def _render_structured_openapi_chunks(
     )
 
 
+def _chunk_text_value(chunk: dict[str, Any]) -> str:
+    return str(chunk.get("chunk_text") or chunk.get("text") or "")
+
+
 def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[list[float]]:
     if not chunks:
         return []
@@ -221,12 +230,136 @@ def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[lis
     vectors: list[list[float]] = []
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[start : start + EMBED_BATCH_SIZE]
-        response = oai.embeddings.create(
-            model=settings.embedding_model,
-            input=[chunk["chunk_text"] for chunk in batch],
+        inputs = [_chunk_text_value(chunk) for chunk in batch]
+        response = call_openai_with_retry(
+            "document_embed_chunks",
+            lambda inputs=inputs: oai.embeddings.create(
+                model=settings.embedding_model,
+                input=inputs,
+            ),
+            call_type="embedding",
         )
         vectors.extend(item.embedding for item in response.data)
     return vectors
+
+
+def persist_document_embeddings(
+    doc: Document,
+    chunks: list[dict[str, Any]],
+    api_key: str | None,
+    db: Session,
+    *,
+    extra_meta: dict[str, Any] | None = None,
+) -> list[Embedding]:
+    """Delete a document's embeddings and add freshly-chunked ones (flush, no commit).
+
+    Single persistence path for the upload and URL-crawl ingestion flows.
+    """
+    db.query(Embedding).filter(Embedding.document_id == doc.id).delete()
+    if not chunks:
+        db.flush()
+        return []
+
+    vectors = _embed_chunks(chunks, api_key)
+    embeddings: list[Embedding] = []
+    for i, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
+        meta: dict[str, Any] = {
+            "chunk_index": chunk.get("chunk_index", i),
+            "filename": doc.filename,
+            "file_type": doc.file_type.value,
+            **{k: v for k, v in chunk.items() if k not in ("text", "chunk_text")},
+        }
+        if doc.language:
+            meta.setdefault("language", doc.language)
+        if extra_meta:
+            meta.update(extra_meta)
+        meta["embedding_model"] = settings.embedding_model
+        emb = Embedding(
+            document_id=doc.id,
+            chunk_text=_chunk_text_value(chunk),
+            vector=vector,
+            metadata_json=meta,
+        )
+        db.add(emb)
+        embeddings.append(emb)
+    db.flush()
+    return embeddings
+
+
+def _populate_entities_for_embeddings(
+    *,
+    embeddings: list[Embedding],
+    api_key: str,
+    tenant_id: str | None,
+    db: Session,
+) -> None:
+    """Populate ``Embedding.entities`` via per-chunk NER (best-effort).
+
+    One commit per chunk — NER is slow (~1-2s/chunk), so this avoids
+    holding a single long transaction and lets partial progress survive
+    a crash mid-loop. Failures degrade to ``entities=[]``, never raise.
+    """
+    updated = 0
+    failed_commits = 0
+    for emb in embeddings:
+        try:
+            ents = extract_entities_from_passage(
+                emb.chunk_text or "",
+                api_key,
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            # Defense in depth: never let one bad chunk corrupt the whole ingest.
+            logger.warning(
+                "entity_extraction_unexpected_error",
+                extra={"embedding_id": str(emb.id)},
+            )
+            ents = []
+        emb.entities = ents
+        try:
+            db.commit()
+        except Exception:
+            # Roll back this chunk only; siblings keep their NER output.
+            logger.warning(
+                "entity_extraction_commit_failed",
+                extra={"embedding_id": str(emb.id)},
+            )
+            db.rollback()
+            failed_commits += 1
+            continue
+        if ents:
+            updated += 1
+    logger.info(
+        "entity_extraction_populated",
+        extra={
+            "chunks": len(embeddings),
+            "non_empty": updated,
+            "failed_commits": failed_commits,
+        },
+    )
+
+
+def after_document_indexed(
+    doc: Document,
+    embeddings: list[Embedding],
+    *,
+    api_key: str | None,
+    db: Session,
+) -> None:
+    """Invalidate search caches, populate entities, and enqueue knowledge extraction (in that order)."""
+    invalidate_tenant_search_caches(doc.tenant_id)
+    if embeddings and api_key:
+        _populate_entities_for_embeddings(
+            embeddings=embeddings,
+            api_key=api_key,
+            tenant_id=str(doc.tenant_id) if doc.tenant_id else None,
+            db=db,
+        )
+    _run_tenant_knowledge_extraction_best_effort(
+        document_id=doc.id,
+        tenant_id=doc.tenant_id,
+        api_key=api_key,
+    )
 
 
 def _url_knowledge_extract_when_unchanged() -> bool:

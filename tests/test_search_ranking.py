@@ -11,7 +11,6 @@ import pytest
 
 from backend.search.service import (
     apply_script_boost,
-    async_bm25_search_chunks,
     cosine_similarity,
     detect_query_script_bucket,
     expand_query,
@@ -428,70 +427,6 @@ def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candida
 
     assert len(reranked) == 3
     assert reranked[2][1] > 0.0
-
-
-@pytest.mark.asyncio
-async def test_bm25_search_chunks_finds_match(db_session, async_search_session) -> None:
-    """async_bm25_search_chunks returns chunks relevant to query tokens."""
-    from tests.test_models import _create_client, _create_user
-    from backend.models import Document, DocumentStatus, DocumentType, Embedding
-
-    user = _create_user(db_session, email="kw@example.com")
-    cl = _create_client(db_session, user, name="KW Tenant")
-    doc = Document(
-        tenant_id=cl.id,
-        filename="cors.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-        parsed_text="CORS configuration",
-    )
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    emb = Embedding(
-        document_id=doc.id,
-        chunk_text="CORS settings: allow_origins, allow_methods",
-        vector=None,
-        metadata_json={"chunk_index": 0},
-    )
-    decoy_one = Embedding(
-        document_id=doc.id,
-        chunk_text="Billing export guide for invoices",
-        vector=None,
-        metadata_json={"chunk_index": 1},
-    )
-    decoy_two = Embedding(
-        document_id=doc.id,
-        chunk_text="Rotate API keys in dashboard settings",
-        vector=None,
-        metadata_json={"chunk_index": 2},
-    )
-    decoy_three = Embedding(
-        document_id=doc.id,
-        chunk_text="CORS headers reference for browsers",
-        vector=None,
-        metadata_json={"chunk_index": 3},
-    )
-    db_session.add_all([emb, decoy_one, decoy_two, decoy_three])
-    db_session.commit()
-
-    results = await async_bm25_search_chunks(
-        cl.id, "cors settings", top_k=5, db=async_search_session
-    )
-    # decoy_one ("Billing export guide for invoices") shares no tokens with the
-    # query and is filtered out at the SQL layer; only chunks containing at
-    # least one query token are scored.
-    assert len(results) == 3
-    chunk_texts = {emb.chunk_text for emb, _ in results}
-    assert chunk_texts == {
-        "CORS settings: allow_origins, allow_methods",
-        "Rotate API keys in dashboard settings",
-        "CORS headers reference for browsers",
-    }
-    assert results[0][0].chunk_text == "CORS settings: allow_origins, allow_methods"
-    assert 0 < results[0][1] <= 1.0
-    assert results[0][1] > results[-1][1]
 
 
 def test_bm25_signal_uses_overlap_fallback_when_raw_scores_are_flat() -> None:

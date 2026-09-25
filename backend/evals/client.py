@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -175,10 +174,3 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
         error=error,
         raw_events=events,
     )
-
-
-@contextmanager
-def _maybe_open(resource: Any) -> Iterator[Any]:
-    """Helper for httpx-style context managers (currently unused; kept
-    as a placeholder if the runner moves to async.)"""
-    yield resource

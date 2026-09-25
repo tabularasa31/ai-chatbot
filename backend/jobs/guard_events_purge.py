@@ -26,14 +26,13 @@ idempotent anyway (a row deleted once cannot be re-selected).
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, select
-from sqlalchemy import delete as sa_delete
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
-from backend.jobs._periodic import LockSpec, PeriodicJob
+from backend.jobs._periodic import PeriodicJob, daily_lock_spec, purge_in_batches, run_purge_once
 from backend.models import GuardEvent
 from backend.models.base import _utcnow
 
@@ -76,66 +75,21 @@ def purge_guard_events(
         and_(GuardEvent.label.isnot(None), GuardEvent.created_at < labeled_cutoff),
     )
 
-    total = 0
-    while True:
-        ids = (
-            db.execute(select(GuardEvent.id).where(condition).limit(batch_size))
-            .scalars()
-            .all()
-        )
-        if not ids:
-            break
-        db.execute(sa_delete(GuardEvent).where(GuardEvent.id.in_(ids)))
-        db.commit()
-        total += len(ids)
-        if len(ids) < batch_size:
-            break
+    total = purge_in_batches(db, GuardEvent, condition, batch_size)
     if total:
         logger.info("guard_events_purge: deleted %d stale rows", total)
     return total
 
 
-def _purge_once() -> None:
-    from backend.core.db import SessionLocal
-
-    db = SessionLocal()
-    try:
-        purge_guard_events(db)
-    except Exception:
-        # Roll back the failed batch and let the error propagate. PeriodicJob
-        # writes its durable "done today" marker only when _work() returns
-        # cleanly, so re-raising leaves the marker unset and the next hourly
-        # tick retries — instead of a transient DB blip suppressing the purge
-        # for the rest of the UTC day. Batches committed before the failure
-        # persist (partial progress is kept). The loop wrapper logs the raise.
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-def _today() -> str:
-    return datetime.now(UTC).date().isoformat()
-
-
-def _daily_lock_key() -> str:
-    return f"lock:guard_events_purge:daily:{_today()}"
-
-
-def _daily_done_marker() -> str:
-    return f"done:guard_events_purge:daily:{_today()}"
-
-
 _job = PeriodicJob(
     name="guard-events-purge",
-    work=_purge_once,
+    work=lambda: run_purge_once(purge_guard_events),
     interval_seconds=_CHECK_INTERVAL_SECONDS,
     startup_delay_seconds=_STARTUP_DELAY_SECONDS,
-    lock=LockSpec(
+    lock=daily_lock_spec(
         job_kind="guard_events_purge",
-        key_factory=_daily_lock_key,
+        key_prefix="guard_events_purge",
         ttl_seconds=_LOCK_TTL_SECONDS,
-        done_marker_factory=_daily_done_marker,
         done_ttl_seconds=_DONE_MARKER_TTL_SECONDS,
     ),
 )

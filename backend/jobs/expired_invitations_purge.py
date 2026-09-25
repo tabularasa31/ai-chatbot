@@ -35,11 +35,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.jobs._periodic import LockSpec, PeriodicJob
+from backend.jobs._periodic import LockSpec, PeriodicJob, purge_in_batches, run_purge_once
 from backend.models import User
 from backend.models.base import _utcnow
 
@@ -89,20 +87,7 @@ def purge_expired_invitations(
         & (User.reset_password_expires_at < cutoff)
     )
 
-    total = 0
-    while True:
-        ids = (
-            db.execute(select(User.id).where(condition).limit(batch_size))
-            .scalars()
-            .all()
-        )
-        if not ids:
-            break
-        db.execute(sa_delete(User).where(User.id.in_(ids)))
-        db.commit()
-        total += len(ids)
-        if len(ids) < batch_size:
-            break
+    total = purge_in_batches(db, User, condition, batch_size)
     if total:
         logger.info(
             "expired_invitations_purge: deleted %d unaccepted invitations", total
@@ -110,25 +95,9 @@ def purge_expired_invitations(
     return total
 
 
-def _purge_once() -> None:
-    from backend.core.db import SessionLocal
-
-    db = SessionLocal()
-    try:
-        purge_expired_invitations(db)
-    except Exception:
-        # Roll back the failed batch and let the error propagate so the loop
-        # wrapper logs it and the next tick retries. Batches committed before
-        # the failure persist.
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
 _job = PeriodicJob(
     name="expired-invitations-purge",
-    work=_purge_once,
+    work=lambda: run_purge_once(purge_expired_invitations),
     interval_seconds=_CHECK_INTERVAL_SECONDS,
     startup_delay_seconds=_STARTUP_DELAY_SECONDS,
     lock=LockSpec(

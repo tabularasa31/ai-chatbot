@@ -10,7 +10,6 @@ from uuid import UUID
 
 from backend.gap_analyzer._math import (
     _cosine_similarity,
-    _tokenize,
     _vector_from_unknown,
     _vector_norm,
 )
@@ -21,13 +20,6 @@ from backend.gap_analyzer.repository import (
     ModeACorpusChunk,
     ModeADismissalRecord,
 )
-
-
-@dataclass(frozen=True)
-class _PreparedCorpusChunk:
-    tokens: set[str]
-    vector: list[float] | None
-    vector_norm: float
 
 
 @dataclass(frozen=True)
@@ -177,20 +169,6 @@ def _is_dismissed_candidate(
         ) > similarity_threshold:
             return True
     return False
-
-
-def _prepare_corpus_chunks(corpus_chunks: list[ModeACorpusChunk]) -> list[_PreparedCorpusChunk]:
-    prepared: list[_PreparedCorpusChunk] = []
-    for chunk in corpus_chunks:
-        vector = _vector_from_unknown(chunk.vector)
-        prepared.append(
-            _PreparedCorpusChunk(
-                tokens=set(_tokenize(chunk.chunk_text)),
-                vector=vector,
-                vector_norm=_vector_norm(vector),
-            )
-        )
-    return prepared
 
 
 def _prepare_dismissals(dismissals: list[ModeADismissalRecord]) -> list[_PreparedDismissal]:

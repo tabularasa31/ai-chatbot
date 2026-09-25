@@ -111,9 +111,3 @@ def load_dataset(path: str | Path) -> Dataset:
         raise FileNotFoundError(p)
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     return Dataset.model_validate(raw)
-
-
-def discover_datasets(root: str | Path) -> list[Path]:
-    """Return all ``*.yaml`` files under ``root`` (non-recursive)."""
-
-    return sorted(Path(root).glob("*.yaml"))

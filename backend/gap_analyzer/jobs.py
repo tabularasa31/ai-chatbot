@@ -13,7 +13,7 @@ from backend.core.openai_errors import OpenAIFailureKind, classify_openai_error
 from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import GapJobRecord, SqlAlchemyGapAnalyzerRepository
-from backend.models import Document, DocumentStatus, SourceStatus, Tenant, UrlSource
+from backend.models import Document, DocumentStatus, SourceStatus, UrlSource
 
 logger = logging.getLogger(__name__)
 _GAP_JOB_HEARTBEAT_SECONDS = 300
@@ -359,52 +359,3 @@ def run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id: UUID) -> None:
         job_kind=GapJobKind.mode_a,
         trigger="queue_empty",
     )
-
-
-def run_mode_b_for_tenant_best_effort(tenant_id: UUID) -> None:
-    db = core_db.SessionLocal()
-    try:
-        orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
-        orchestrator.run_mode_b(tenant_id)
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.warning(
-            "gap_analyzer_mode_b_best_effort_failed tenant_id=%s",
-            tenant_id,
-            exc_info=True,
-        )
-    finally:
-        db.close()
-
-
-def run_mode_b_weekly_reclustering_for_tenant_best_effort(tenant_id: UUID) -> None:
-    db = core_db.SessionLocal()
-    try:
-        orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
-        orchestrator.run_mode_b_weekly_reclustering(tenant_id)
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.warning(
-            "gap_analyzer_mode_b_weekly_reclustering_failed tenant_id=%s",
-            tenant_id,
-            exc_info=True,
-        )
-    finally:
-        db.close()
-
-
-def run_mode_b_weekly_reclustering_for_all_tenants_best_effort() -> None:
-    db = core_db.SessionLocal()
-    try:
-        tenant_ids = [tenant_id for (tenant_id,) in db.query(Tenant.id).order_by(Tenant.id.asc()).all()]
-    finally:
-        db.close()
-
-    for tenant_id in tenant_ids:
-        enqueue_gap_job_for_tenant_best_effort(
-            tenant_id,
-            job_kind=GapJobKind.mode_b_weekly_reclustering,
-            trigger="weekly_reclustering",
-        )

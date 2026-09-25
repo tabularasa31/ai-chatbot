@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from rank_bm25 import BM25Okapi
 from sqlalchemy import Text as SAText
-from sqlalchemy import cast, func, or_, select
+from sqlalchemy import cast, func, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -55,17 +55,11 @@ from backend.utils.text import token_set, word_tokens
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all tenant chunks.
 BM25_CANDIDATE_POOL = 200
-# Cap for the standalone async_bm25_search_chunks() prefilter: bounds memory and CPU
-# even when a query token matches a large fraction of a tenant's corpus.
-BM25_PREFILTER_CANDIDATE_LIMIT = 1000
-# Cap on unique query tokens used to build the prefilter OR-clause. Prevents
-# pathological queries from generating SQL with hundreds of LIKE branches.
-BM25_PREFILTER_MAX_QUERY_TOKENS = 32
-# Cap for async_entity_overlap_search() PG candidate pull. Mirrors BM25's prefilter
-# cap — a popular entity (e.g. "Pro plan" on a tenant with 10k chunks) could
-# otherwise pull every row into memory before the Python intersection scoring
-# step. The downstream RRF only consumes top RRF_CANDIDATE_POOL_MULTIPLIER *
-# top_k anyway, so any cap >> that pool is safe.
+# Cap for async_entity_overlap_search() PG candidate pull. A popular entity
+# (e.g. "Pro plan" on a tenant with 10k chunks) could otherwise pull every row
+# into memory before the Python intersection scoring step. The downstream RRF
+# only consumes top RRF_CANDIDATE_POOL_MULTIPLIER * top_k anyway, so any cap
+# >> that pool is safe.
 ENTITY_SEARCH_CANDIDATE_LIMIT = 1000
 RRF_CANDIDATE_POOL_MULTIPLIER = 4
 SCRIPT_BOOST_FACTOR = 0.1
@@ -1191,34 +1185,6 @@ def _bm25_score_candidates_with_signal(
     return scored, _has_lexical_signal(scored, query, top_k)
 
 
-def _bm25_score_candidates(
-    candidates: list[Embedding],
-    query: str,
-    top_k: int,
-) -> list[tuple[Embedding, float]]:
-    scored, _ = _bm25_score_candidates_with_signal(candidates, query, top_k)
-    return scored
-
-
-def _bm25_prefilter_tokens(query: str) -> list[str]:
-    """Unique word tokens used for the BM25 search prefilter.
-
-    Uses the same tokenizer as the BM25 scorer, so every token that can
-    score a match is also a token the prefilter searches for.
-    """
-    unique_tokens = list(dict.fromkeys(word_tokens(query)))
-    return unique_tokens[:BM25_PREFILTER_MAX_QUERY_TOKENS]
-
-
-def _escape_like(token: str) -> str:
-    """Escape SQL LIKE wildcards so query tokens match literally."""
-    return (
-        token.replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-    )
-
-
 def _prepare_bm25_corpus(candidates: list[Embedding]) -> PreparedBM25Corpus:
     """Build the shared in-memory BM25 scorer once for a candidate pool."""
     if not candidates:
@@ -2226,38 +2192,6 @@ async def _async_build_vector_candidate_set(
     )
 
 
-async def async_bm25_search_chunks(
-    tenant_id: uuid.UUID,
-    query: str,
-    top_k: int,
-    db: AsyncSession,
-) -> list[tuple[Embedding, float]]:
-    """Standalone BM25 search with an SQL token prefilter."""
-    tokens = _bm25_prefilter_tokens(query)
-    if not tokens:
-        return []
-
-    token_conditions = [
-        func.lower(Embedding.chunk_text).like(
-            f"%{_escape_like(token)}%", escape="\\"
-        )
-        for token in tokens
-    ]
-    stmt = (
-        select(Embedding)
-        .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.tenant_id == tenant_id)
-        .filter(Embedding.chunk_text.isnot(None))
-        .filter(or_(*token_conditions))
-        .order_by(Embedding.created_at.desc(), Embedding.id.desc())
-        .limit(BM25_PREFILTER_CANDIDATE_LIMIT)
-        .options(selectinload(Embedding.document))
-    )
-    result = await db.execute(stmt)
-    embeddings = result.scalars().all()
-    return _bm25_score_candidates(list(embeddings), query, top_k)
-
-
 async def async_entity_overlap_search(
     tenant_id: uuid.UUID,
     query_entities: list[str],
@@ -3065,23 +2999,3 @@ async def search_similar_chunks_detailed_async(
         query_embedding_duration_ms=q.query_embedding_duration_ms,
         vector_search_duration_ms=c.vector_duration_ms,
     )
-
-
-async def search_similar_chunks_async(
-    tenant_id: uuid.UUID,
-    query: str,
-    top_k: int,
-    db: AsyncSession,
-    *,
-    api_key: str,
-) -> list[tuple[Embedding, float]]:
-    """Compatibility wrapper returning ranked results only."""
-    return (
-        await search_similar_chunks_detailed_async(
-            tenant_id=tenant_id,
-            query=query,
-            top_k=top_k,
-            db=db,
-            api_key=api_key,
-        )
-    ).results

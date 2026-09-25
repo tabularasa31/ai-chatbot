@@ -30,7 +30,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy.orm import Session
 
-from backend.search.service import search_similar_chunks_async
+from backend.search.service import search_similar_chunks_detailed_async
 from tests.eval.multi_hop import dataset as ds
 from tests.eval.multi_hop.metrics import (
     aggregate,
@@ -47,10 +47,10 @@ async def _run_eval(
     k: int,
     ranking_depth: int,
 ):
-    """Run all 30 queries through search_similar_chunks_async; return list of CaseResult."""
+    """Run all 30 queries through search_similar_chunks_detailed_async; return list of CaseResult."""
     cases = []
     for query in ds.QUERIES:
-        results = await search_similar_chunks_async(
+        bundle = await search_similar_chunks_detailed_async(
             tenant_id=tenant_id,
             query=query.text,
             top_k=ranking_depth,
@@ -59,7 +59,7 @@ async def _run_eval(
         )
         ranking_chunk_ids = [
             uuid_to_chunk_id[emb.id]
-            for emb, _score in results
+            for emb, _score in bundle.results
             if emb.id in uuid_to_chunk_id
         ]
         cases.append(

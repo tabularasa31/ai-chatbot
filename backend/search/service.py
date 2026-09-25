@@ -97,6 +97,8 @@ from backend.search.reliability import (
     serialize_source_overlap_pair,
 )
 from backend.search.retrieval_db import (
+    _TENANT_KB_SCRIPT_CACHE,
+    _TENANT_KB_SCRIPTS_CACHE,
     ENTITY_SEARCH_CANDIDATE_LIMIT,
     _async_build_vector_candidate_set,
     _async_pgvector_search,
@@ -133,6 +135,8 @@ __all__ = [
     "QUERY_REWRITE_HTTP_TIMEOUT_SECONDS",
     "RRF_CANDIDATE_POOL_MULTIPLIER",
     "SCRIPT_BOOST_FACTOR",
+    "_TENANT_KB_SCRIPTS_CACHE",
+    "_TENANT_KB_SCRIPT_CACHE",
     "AdjudicatedContradiction",
     "BM25ExpansionMode",
     "BM25SearchBundle",

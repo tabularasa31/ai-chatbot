@@ -162,7 +162,7 @@ async def test_multi_hop_with_entity_overlap_channel(
     uuid_to_chunk_id: dict[uuid.UUID, str] = indexed_corpus["uuid_to_chunk_id"]
 
     with patch(
-        "backend.search.service.extract_entities_from_query",
+        "backend.search.pipeline.extract_entities_from_query",
         side_effect=stub_query_ner,
     ):
         cases = await _run_eval(

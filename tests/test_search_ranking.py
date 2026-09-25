@@ -59,7 +59,7 @@ def test_run_bm25_search_symmetric_merge_deduplicates_hits_and_keeps_earliest_ti
         return [(first, 1.0), (third, 0.9)]
 
     monkeypatch.setattr(
-        "backend.search.service._score_prepared_bm25_corpus",
+        "backend.search.bm25._score_prepared_bm25_corpus",
         fake_score,
     )
 
@@ -90,7 +90,7 @@ def test_run_bm25_search_symmetric_mode_can_match_asymmetric_when_no_effective_c
         return [(first, 1.0), (second, 0.5)]
 
     monkeypatch.setattr(
-        "backend.search.service._score_prepared_bm25_corpus",
+        "backend.search.bm25._score_prepared_bm25_corpus",
         fake_score,
     )
 
@@ -132,7 +132,7 @@ def test_run_bm25_search_applies_cap_after_deterministic_merge(
         return [(third, 0.8)]
 
     monkeypatch.setattr(
-        "backend.search.service._score_prepared_bm25_corpus",
+        "backend.search.bm25._score_prepared_bm25_corpus",
         fake_score,
     )
 
@@ -163,7 +163,7 @@ def test_run_bm25_search_uses_final_merged_output_for_lexical_signal(
         return []
 
     monkeypatch.setattr(
-        "backend.search.service._score_prepared_bm25_corpus",
+        "backend.search.bm25._score_prepared_bm25_corpus",
         fake_score,
     )
 

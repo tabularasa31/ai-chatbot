@@ -940,7 +940,7 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
         )
 
     monkeypatch.setattr(
-        "backend.search.service.adjudicate_contradictions",
+        "backend.search.reliability.adjudicate_contradictions",
         fake_adjudicate_contradictions,
     )
 

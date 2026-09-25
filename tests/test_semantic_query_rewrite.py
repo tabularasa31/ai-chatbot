@@ -46,9 +46,9 @@ def _patch_rewrite_layer():
     The retry helper is an AsyncMock because production code awaits it.
     """
     return (
-        patch("backend.search.service.get_async_openai_client"),
+        patch("backend.search.query_variants.get_async_openai_client"),
         patch(
-            "backend.search.service.async_call_openai_with_retry",
+            "backend.search.query_variants.async_call_openai_with_retry",
             new_callable=AsyncMock,
         ),
     )
@@ -236,9 +236,9 @@ class TestSemanticQueryRewriteFailures:
     async def test_returns_none_on_openai_exception(self):
         """Any OpenAI exception results in None (never propagates)."""
         with (
-            patch("backend.search.service.get_async_openai_client"),
+            patch("backend.search.query_variants.get_async_openai_client"),
             patch(
-                "backend.search.service.async_call_openai_with_retry",
+                "backend.search.query_variants.async_call_openai_with_retry",
                 new_callable=AsyncMock,
                 side_effect=Exception("openai timeout"),
             ),
@@ -280,7 +280,7 @@ class TestSemanticQueryRewriteFailures:
     )
     async def test_returns_none_and_skips_api_call_on_empty_argument(self, question, api_key):
         """Empty query or empty API key short-circuits before any API call."""
-        with patch("backend.search.service.get_async_openai_client") as mock_client:
+        with patch("backend.search.query_variants.get_async_openai_client") as mock_client:
             result = await async_semantic_query_rewrite(question, api_key=api_key)
 
         mock_client.assert_not_called()
@@ -290,7 +290,7 @@ class TestSemanticQueryRewriteFailures:
     async def test_returns_none_on_get_client_exception(self):
         """Exception from get_async_openai_client → None."""
         with patch(
-            "backend.search.service.get_async_openai_client",
+            "backend.search.query_variants.get_async_openai_client",
             side_effect=RuntimeError("bad key"),
         ):
             result = await async_semantic_query_rewrite("some question", api_key="sk-test")

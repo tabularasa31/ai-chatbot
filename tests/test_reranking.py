@@ -372,7 +372,7 @@ async def test_pipeline_reads_tenant_strategy_and_traces_it(
     async def fake_embed_queries(queries, **kwargs):
         return [[1.0, 0.0, 0.0] for _ in queries]
 
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    monkeypatch.setattr("backend.search.embedding.async_embed_queries", fake_embed_queries)
 
     async def fake_score(self, query, passages):
         return [0.1 if "settings page" in p else 1.0 for p in passages]

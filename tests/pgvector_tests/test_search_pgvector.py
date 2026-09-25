@@ -298,14 +298,14 @@ async def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_
     async def fake_embed_queries(queries, **kwargs):
         return [query_vec for _ in queries]
 
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    monkeypatch.setattr("backend.search.embedding.async_embed_queries", fake_embed_queries)
 
     # Simulate query rewrite: Cyrillic query → EN keyword phrase
     async def fake_rewrite(query, **kwargs):
         return "reset password instructions"
 
     monkeypatch.setattr(
-        "backend.search.service._async_rewrite_query_for_retrieval", fake_rewrite
+        "backend.search.pipeline._async_rewrite_query_for_retrieval", fake_rewrite
     )
 
     _insert_embedding(pg_db_session, doc_id, "unrelated foo content", [0.5] + [0.0] * 1535)
@@ -354,7 +354,7 @@ async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_
     async def fake_embed_queries(queries, **kwargs):
         return [query_vec for _ in queries]
 
-    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    monkeypatch.setattr("backend.search.embedding.async_embed_queries", fake_embed_queries)
 
     _insert_embedding(
         pg_db_session,
@@ -374,7 +374,7 @@ async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_
         return None
 
     monkeypatch.setattr(
-        "backend.search.service._async_rewrite_query_for_retrieval", no_rewrite_fn
+        "backend.search.pipeline._async_rewrite_query_for_retrieval", no_rewrite_fn
     )
     no_rewrite = await search_similar_chunks_detailed_async(
         cl.id,
@@ -389,7 +389,7 @@ async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_
         return "cors origin configuration allow list"
 
     monkeypatch.setattr(
-        "backend.search.service._async_rewrite_query_for_retrieval", en_rewrite_fn
+        "backend.search.pipeline._async_rewrite_query_for_retrieval", en_rewrite_fn
     )
     with_rewrite = await search_similar_chunks_detailed_async(
         cl.id,

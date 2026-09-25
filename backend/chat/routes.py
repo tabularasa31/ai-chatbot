@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from openai import APIError, RateLimitError
+from openai import APIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -21,8 +21,13 @@ from backend.chat.history_service import (
     get_session_logs,
     list_chat_sessions,
 )
-from backend.chat.language import async_localize_text_to_language_result, detect_language
-from backend.chat.llm_unavailable import LlmFailureType, classify_llm_failure
+from backend.chat.language import detect_language
+from backend.chat.llm_unavailable import (
+    OPENAI_KEY_NOT_CONFIGURED_MESSAGE,
+    LlmFailureType,
+    classify_llm_failure,
+    quota_exceeded_detail,
+)
 from backend.chat.schemas import (
     ChatHistoryResponse,
     ChatMessageLogItem,
@@ -39,15 +44,12 @@ from backend.chat.service import (
 from backend.core.db import get_async_db, get_db, run_sync
 from backend.core.idempotency import idempotent_section
 from backend.core.limiter import limiter
-from backend.core.openai_client import is_quota_exceeded
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
     Bot,
     Chat,
     EscalationTrigger,
-    Tenant,
-    TenantProfile,
     User,
 )
 from backend.tenants.llm_alerts import (
@@ -60,57 +62,6 @@ from backend.tenants.llm_alerts import (
 from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
 
 logger = logging.getLogger(__name__)
-
-
-def _notify_quota_exceeded(tenant: "Tenant", db: "Session") -> str:
-    """Log the quota-exceeded event to Sentry and return the canonical
-    (English) user-facing error detail string (includes support email if
-    known). Runs inside a ``run_sync`` greenlet on the event loop thread, so
-    it must not make provider calls — the caller localizes the returned text
-    via ``async_localize_text_to_language_result``.
-
-    Tenant alert state + email are raised separately via ``apply_llm_failure``
-    in a ``to_thread`` (off the event loop) — see the chat handler below.
-    """
-    logger.error(
-        "openai_quota_exceeded: tenant_id=%s tenant_name=%s",
-        tenant.id,
-        tenant.name,
-    )
-    try:
-        import sentry_sdk
-
-        with sentry_sdk.new_scope() as scope:
-            scope.set_tag("error_kind", "openai_quota_exceeded")
-            scope.set_context("tenant", {"tenant_id": str(tenant.id), "tenant_name": tenant.name})
-            sentry_sdk.capture_message(
-                f"OpenAI quota exceeded for tenant '{tenant.name}'",
-                level="error",
-                scope=scope,
-            )
-    except Exception:
-        pass
-
-    profile = db.get(TenantProfile, tenant.id)
-    support_email: str | None = profile.support_email if profile else None
-    contact = f" at {support_email}" if support_email else ""
-    return (
-        "We're currently experiencing technical difficulties and are unable to respond via chat. "
-        f"We apologize for the inconvenience — please contact our support team{contact} by email."
-    )
-
-
-async def _quota_exceeded_detail(
-    tenant: "Tenant", db: "AsyncSession", *, lang: str, api_key: str | None
-) -> str:
-    """Sentry notification + localized user-facing detail for the 402 path."""
-    canonical = await run_sync(db, lambda s: _notify_quota_exceeded(tenant, s))
-    result = await async_localize_text_to_language_result(
-        canonical_text=canonical,
-        target_language=lang,
-        api_key=api_key,
-    )
-    return result.text
 
 
 chat_router = APIRouter(tags=["chat"])
@@ -143,7 +94,7 @@ async def chat(
     if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,
-            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+            detail=OPENAI_KEY_NOT_CONFIGURED_MESSAGE,
         )
 
     session_id = body.session_id or uuid.uuid4()
@@ -201,23 +152,20 @@ async def chat(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        except RateLimitError as exc:
-            if is_quota_exceeded(exc):
+        except APIError as exc:
+            # RateLimitError is an APIError subclass; classify_llm_failure disambiguates it.
+            failure_state = classify_llm_failure(exc)
+            if failure_state.type is LlmFailureType.quota_exhausted:
                 lang = detect_language(body.question).detected_language
-                detail = await _quota_exceeded_detail(
+                detail = await quota_exceeded_detail(
                     tenant, db, lang=lang, api_key=tenant.openai_api_key
                 )
                 # Raise the tenant-level alert + throttled email off the
                 # event loop (sync httpx + DB inside).
                 await asyncio.to_thread(
-                    apply_llm_failure, tenant.id, LlmFailureType.quota_exhausted
+                    apply_llm_failure, tenant.id, failure_state.type
                 )
                 raise HTTPException(status_code=402, detail=detail) from None
-            raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
-        except APIError as exc:
-            # Classify so an invalid/revoked key surfaces a tenant-level alert
-            # the same way quota_exhausted does (RateLimitError path above).
-            failure_state = classify_llm_failure(exc)
             if is_actionable_llm_failure(failure_state.type):
                 await asyncio.to_thread(
                     apply_llm_failure, tenant.id, failure_state.type
@@ -267,13 +215,8 @@ async def chat_escalate(
     if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,
-            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+            detail=OPENAI_KEY_NOT_CONFIGURED_MESSAGE,
         )
-    trig = {
-        "user_request": EscalationTrigger.user_request,
-        "answer_rejected": EscalationTrigger.answer_rejected,
-        "llm_unavailable": EscalationTrigger.llm_unavailable,
-    }[body.trigger]
     try:
         msg, tnum = await perform_manual_escalation(
             db,
@@ -281,21 +224,20 @@ async def chat_escalate(
             session_id,
             api_key=tenant.openai_api_key,
             user_note=body.user_note,
-            trigger=trig,
+            trigger=EscalationTrigger(body.trigger),
             failure_type=body.failure_type,
             original_user_message=body.original_user_message,
         )
     except ValueError:
         raise HTTPException(status_code=404, detail="Session not found") from None
-    except RateLimitError as exc:
-        if is_quota_exceeded(exc):
+    except APIError as exc:
+        failure_state = classify_llm_failure(exc)
+        if failure_state.type is LlmFailureType.quota_exhausted:
             lang = detect_language(body.user_note).detected_language if body.user_note else "en"
-            detail = await _quota_exceeded_detail(
+            detail = await quota_exceeded_detail(
                 tenant, db, lang=lang, api_key=tenant.openai_api_key
             )
             raise HTTPException(status_code=402, detail=detail) from None
-        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
-    except APIError:
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     return ManualEscalateResponse(message=msg, ticket_number=tnum)
 

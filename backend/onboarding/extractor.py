@@ -1,62 +1,41 @@
 """Extract a short company description from a website URL using OpenAI."""
 from __future__ import annotations
 
-import ipaddress
 import logging
 import re
-import socket
 from urllib.parse import urlparse
 
-import httpx
 from bs4 import BeautifulSoup
 from openai import OpenAI
 
 from backend.core.config import settings
+from backend.documents.http_client import (
+    FETCH_TIMEOUT_SECONDS,
+    FetchContext,
+    _http_client,
+    _raise_for_upstream_status,
+    _request_with_safe_redirects,
+)
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT = 10.0
 _MAX_CONTENT_CHARS = 4000
 _WHITESPACE_RE = re.compile(r"\s{2,}")
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
-def _validate_url(url: str) -> None:
-    """Raise ValueError if the URL is not a safe public http/https target."""
-    parsed = urlparse(url)
-    if parsed.scheme not in _ALLOWED_SCHEMES:
-        raise ValueError(f"Unsupported URL scheme: {parsed.scheme!r}")
-    hostname = parsed.hostname
-    if not hostname:
-        raise ValueError("Missing hostname in URL")
-    try:
-        addrinfos = socket.getaddrinfo(hostname, None)
-    except socket.gaierror as exc:
-        raise ValueError(f"Cannot resolve hostname {hostname!r}") from exc
-    for *_, (ip_str, *_rest) in addrinfos:
-        addr = ipaddress.ip_address(ip_str)
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_reserved
-            or addr.is_multicast
-            or addr.is_unspecified
-        ):
-            raise ValueError(f"URL resolves to non-public address: {ip_str}")
-
-
 def _fetch_page_text(url: str) -> str:
-    """Validate URL, fetch the page, and return stripped plain text (title + meta + headings)."""
-    _validate_url(url)
-    resp = httpx.get(
-        url,
-        timeout=_TIMEOUT,
-        follow_redirects=False,
-        headers={"User-Agent": "Mozilla/5.0"},
-    )
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    """Validate URL, fetch through the crawler's SSRF-guarded HTTP client, and return stripped plain text (title + meta + headings)."""
+    scheme = urlparse(url).scheme
+    if scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"Unsupported URL scheme: {scheme!r}")
+
+    context = FetchContext(stage="onboarding:page", url=url)
+    with _http_client(FETCH_TIMEOUT_SECONDS) as client:
+        response = _request_with_safe_redirects(client, "GET", url, context=context)
+        _raise_for_upstream_status(response, context)
+
+    soup = BeautifulSoup(response.text, "html.parser")
 
     parts: list[str] = []
     if title := soup.find("title"):

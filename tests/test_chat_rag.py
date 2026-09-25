@@ -25,8 +25,8 @@ from backend.chat.types import (
     RetrievalContext,
 )
 from backend.chat.steps.pre_retrieval import (
+    _async_lookup_quick_answers,
     _quick_answer_keys_for_question,
-    _quick_answers_context,
 )
 from backend.chat.steps.retrieval import (
     async_retrieve_context,
@@ -129,9 +129,11 @@ def test_generate_answer_allows_quick_answers_without_retrieval_chunks(
     mock_openai_client.chat.completions.create.assert_called_once()
 
 
-def test_quick_answers_context_returns_structured_lines(
+@pytest.mark.asyncio
+async def test_quick_answers_context_returns_structured_lines(
     tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     token = register_and_verify_user(tenant, db_session, email="quick-answer-docs@example.com")
     create_resp = tenant.post(
@@ -176,9 +178,8 @@ def test_quick_answers_context_returns_structured_lines(
     )
     db_session.commit()
 
-    answer = _quick_answers_context(
-        tenant_id, db_session, QuestionIntentResult(documentation=True)
-    )
+    selected_keys = _quick_answer_keys_for_question(QuestionIntentResult(documentation=True))
+    answer = await _async_lookup_quick_answers(tenant_id, selected_keys, async_search_session)
 
     assert answer == ["Documentation: https://docs.example.com/"]
 
@@ -216,9 +217,11 @@ def test_quick_answer_keys_for_question_filters_by_topic() -> None:
     ]
 
 
-def test_quick_answers_context_prefers_higher_quality_documentation_source_over_newer_fallback(
+@pytest.mark.asyncio
+async def test_quick_answers_context_prefers_higher_quality_documentation_source_over_newer_fallback(
     tenant: TestClient,
     db_session: Session,
+    async_search_session,
 ) -> None:
     token = register_and_verify_user(tenant, db_session, email="quick-answer-quality@example.com")
     create_resp = tenant.post(
@@ -275,9 +278,8 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
     )
     db_session.commit()
 
-    answer = _quick_answers_context(
-        tenant_id, db_session, QuestionIntentResult(documentation=True)
-    )
+    selected_keys = _quick_answer_keys_for_question(QuestionIntentResult(documentation=True))
+    answer = await _async_lookup_quick_answers(tenant_id, selected_keys, async_search_session)
 
     assert answer == ["Documentation: https://docs.example.com/guide"]
 

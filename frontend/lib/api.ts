@@ -6,7 +6,6 @@ let authRedirectInProgress = false;
 export type TenantResponse = {
   id: string;
   name: string;
-  api_key_hint: string | null;
   public_id: string;
   has_openai_key: boolean;
   created_at: string;
@@ -60,27 +59,6 @@ export type TenantMemberList = {
 
 export type InviteMemberResponse = {
   member: TenantMember;
-};
-
-export type CreateTenantResponse = TenantResponse & {
-  api_key: string;
-};
-
-export type TenantApiKeyResponse = {
-  id: string;
-  key_hint: string;
-  status: "active" | "revoking" | "revoked";
-  created_at: string;
-  expires_at: string | null;
-  revoked_at: string | null;
-  revoked_reason: string | null;
-  last_used_at: string | null;
-};
-
-export type RotateTenantApiKeyResponse = {
-  api_key: string;
-  key: TenantApiKeyResponse;
-  message: string;
 };
 
 export type DisclosureLevel = "detailed" | "standard" | "corporate";
@@ -707,20 +685,6 @@ export const api = {
         method: "DELETE",
         skipAuthRedirect: true,
       });
-    },
-  },
-  apiKeys: {
-    list(): Promise<{ items: TenantApiKeyResponse[] }> {
-      return getJson(`${BASE_URL}/tenants/me/api-keys`, "Failed to list API keys");
-    },
-    rotate(args: {
-      reason: "leaked" | "scheduled" | "compromise" | "other";
-      revoke_old_immediately: boolean;
-    }): Promise<RotateTenantApiKeyResponse> {
-      return sendJson(`${BASE_URL}/tenants/me/api-keys/rotate`, "POST", args, "Failed to rotate API key");
-    },
-    revoke(keyId: string): Promise<TenantApiKeyResponse> {
-      return request(`${BASE_URL}/tenants/me/api-keys/${keyId}`, "Failed to revoke API key", { method: "DELETE" });
     },
   },
   members: {

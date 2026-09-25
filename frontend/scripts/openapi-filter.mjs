@@ -10,7 +10,6 @@
 export const PUBLIC_TAGS = new Set([
   'widget',
   'documents',
-  'chat',
   'gap-analyzer',
   'knowledge',
 ]);

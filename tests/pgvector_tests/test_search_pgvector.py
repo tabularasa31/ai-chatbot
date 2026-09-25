@@ -174,7 +174,7 @@ async def test_pgvector_search_empty_when_no_vector(
 
 
 # ---------------------------------------------------------------------------
-# search_similar_chunks_async — hybrid BM25 + RRF path on PostgreSQL
+# search_similar_chunks_detailed_async — hybrid BM25 + RRF path on PostgreSQL
 # ---------------------------------------------------------------------------
 
 
@@ -185,9 +185,9 @@ async def test_hybrid_search_uses_pgvector_path(
     pg_db_session: Session,
     pg_async_db_session,
 ) -> None:
-    """search_similar_chunks_async must take the pgvector branch (not SQLite fallback) on PG."""
+    """search_similar_chunks_detailed_async must take the pgvector branch (not SQLite fallback) on PG."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_async
+    from backend.search.service import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_basic@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Basic")
@@ -199,12 +199,12 @@ async def test_hybrid_search_uses_pgvector_path(
     vec = [0.9, 0.1] + [0.0] * 1534
     _insert_embedding(pg_db_session, doc_id, "hybrid test chunk", vec)
 
-    results = await search_similar_chunks_async(
+    bundle = await search_similar_chunks_detailed_async(
         cl.id, "hybrid test", top_k=3, db=pg_async_db_session, api_key="sk-test"
     )
 
-    assert len(results) == 1
-    assert results[0][0].chunk_text == "hybrid test chunk"
+    assert len(bundle.results) == 1
+    assert bundle.results[0][0].chunk_text == "hybrid test chunk"
 
 
 @pytest.mark.pgvector
@@ -219,7 +219,7 @@ async def test_hybrid_search_bm25_rrf_boosts_keyword_match(
     BM25 + RRF merges the results: both chunks should appear in top_k=2.
     """
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_async
+    from backend.search.service import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_rrf@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid RRF")
@@ -236,13 +236,13 @@ async def test_hybrid_search_bm25_rrf_boosts_keyword_match(
     query_vec = [1.0] + [0.0] * 1535
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    results = await search_similar_chunks_async(
+    bundle = await search_similar_chunks_detailed_async(
         cl.id, "cors configuration", top_k=2, db=pg_async_db_session, api_key="sk-test"
     )
 
     # Both chunks should be returned — hybrid search merges vector and BM25 signals
-    assert len(results) == 2
-    result_texts = [emb.chunk_text for emb, _ in results]
+    assert len(bundle.results) == 2
+    result_texts = [emb.chunk_text for emb, _ in bundle.results]
     assert "cors configuration settings" in result_texts
     assert "unrelated words xyz qrs" in result_texts
 
@@ -256,7 +256,7 @@ async def test_hybrid_search_limits_results_with_mixed_candidates(
 ) -> None:
     """Hybrid search keeps top_k when candidates mix keyword and weak/noisy chunks."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_async
+    from backend.search.service import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_mixed@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Mixed")
@@ -269,11 +269,11 @@ async def test_hybrid_search_limits_results_with_mixed_candidates(
     _insert_embedding(pg_db_session, doc_id, "random unrelated payload alpha beta", [0.6, 0.6] + [0.0] * 1534)
     _insert_embedding(pg_db_session, doc_id, "another noisy chunk", [0.2, 0.95] + [0.0] * 1534)
 
-    results = await search_similar_chunks_async(
+    bundle = await search_similar_chunks_detailed_async(
         cl.id, "cors setting", top_k=2, db=pg_async_db_session, api_key="sk-test"
     )
-    assert len(results) == 2
-    texts = [emb.chunk_text for emb, _ in results]
+    assert len(bundle.results) == 2
+    texts = [emb.chunk_text for emb, _ in bundle.results]
     assert any("cors" in t for t in texts)
 
 

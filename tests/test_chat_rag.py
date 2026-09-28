@@ -620,7 +620,7 @@ def test_enforce_response_language_translates_when_language_drifts(
     the post-generation guard must translate it back AND return the translation
     cost so callers can keep token accounting accurate."""
     russian_answer = (
-        "Откройте панель управления TurboFlare, перейдите в раздел CDN и проверьте "
+        "Откройте панель управления Nimbus, перейдите в раздел CDN и проверьте "
         "статус сертификата в подразделе SSL — это самый надёжный способ."
     )
     captured: dict[str, str | None] = {}
@@ -701,7 +701,7 @@ def test_generate_answer_skips_language_guard_when_streaming(
     monkeypatch.setattr(generate_step, "translate_text_result", _should_not_be_called)
 
     russian_text = (
-        "Откройте панель управления TurboFlare и перейдите в раздел CDN. "
+        "Откройте панель управления Nimbus и перейдите в раздел CDN. "
         "Проверьте статус сертификата в подразделе SSL — это самый надёжный способ."
     )
     mock_openai_client.chat.completions.create.return_value = Mock(

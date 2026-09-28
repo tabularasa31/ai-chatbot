@@ -44,25 +44,21 @@ Chat9 is a multi-tenant SaaS in production: a company (a *tenant*) connects its 
 
 ```mermaid
 flowchart LR
-    V[Visitor] --> W["Widget<br/>TS loader + Preact iframe"]
-    O[Tenant / operator] --> D["Dashboard<br/>Next.js 14"]
+    V[Visitor] --> W[Chat widget]
+    O[Tenant / operator] --> D[Dashboard]
     W --> API
     D --> API
-    subgraph Railway
-        API["API<br/>FastAPI, async"]
-        WK["Worker<br/>ARQ jobs + crons"]
-        PG[("PostgreSQL<br/>+ pgvector")]
-        R[(Redis)]
-    end
-    API --> PG
-    API --> R
+    API[API] --> PG[("Database<br/>+ vector search")]
+    API --> Q[(Job queue)]
+    Q --> WK[Background worker]
     WK --> PG
-    R --> WK
-    API --> OAI[OpenAI]
-    WK --> OAI
-    API --> BR["Brevo<br/>e-mail in/out"]
-    API -.-> OBS["Langfuse · Sentry · PostHog"]
+    API --> LLM[LLM provider]
+    WK --> LLM
+    API --> M["E-mail<br/>in and out"]
+    API -.-> OBS[Observability]
 ```
+
+**Stack:** Python 3.11, FastAPI, PostgreSQL + pgvector, Redis + ARQ, Next.js 14, Preact + Vite, OpenAI, Brevo, Langfuse, Sentry, PostHog. Hosted on Railway (API, worker, database) and Vercel (dashboard, widget).
 
 A chat turn goes through a fixed pipeline: injection guard → relevance guard → retrieval → generation → post-generation checks, streamed to the widget over SSE. Anything that should survive a deploy or be retried — crawls, embeddings, Gap Analyzer runs, e-mail — runs on the worker.
 

@@ -15,6 +15,17 @@ Chat9 is a multi-tenant SaaS in production: a company (a *tenant*) connects its 
 | **Product** | https://getchat9.live |
 | **API reference (Swagger)** | https://api.getchat9.live/docs |
 
+![Operator inbox: the bot hands a conversation to a human](docs/screenshots/inbox.png)
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/knowledge.png" alt="Knowledge Hub: files and crawled documentation sites"></td>
+    <td><img src="docs/screenshots/gap-analyzer.png" alt="Gap Analyzer: documentation gaps and failed-question clusters"></td>
+  </tr>
+</table>
+
+<sub>Screenshots from a local instance with fictional demo data.</sub>
+
 ---
 
 ## What it does

@@ -306,4 +306,4 @@ Gap Analyzer is the operator-facing backlog for documentation gaps and repeated 
 
 ## License
 
-MIT
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may read, run and modify the code for noncommercial purposes only. Commercial use requires a separate license from the author.

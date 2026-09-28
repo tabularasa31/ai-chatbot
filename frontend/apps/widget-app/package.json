@@ -2,6 +2,7 @@
   "name": "@chat9/widget-app",
   "version": "0.0.1",
   "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "scripts": {
     "build": "vite build && pnpm --filter @chat9/widget-loader build && node scripts/copy-loader.mjs",

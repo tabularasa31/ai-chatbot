@@ -57,7 +57,7 @@ def _create_ready_document(
 
 _STRUCTURED_TEXT = "\n".join(
     [
-        "# TurboFlare",
+        "# Nimbus",
         "",
         "## Setup",
         "",

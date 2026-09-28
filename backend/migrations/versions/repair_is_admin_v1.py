@@ -6,8 +6,7 @@ Revises: fi_esc_v1
 If `add_is_admin` never applied to a database (or schema drifted), ORM loads of
 User fail with 500 — browsers may report misleading CORS errors.
 
-See cursor_prompts/RULES-database-migrations.md — upgrade-only in deployed envs;
-downgrade() is intentionally a no-op (never run downgrade against prod).
+Upgrade-only in deployed envs; downgrade() is intentionally a no-op (never run downgrade against prod).
 """
 
 from __future__ import annotations

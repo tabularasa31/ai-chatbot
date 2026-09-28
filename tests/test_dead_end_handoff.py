@@ -1,12 +1,8 @@
 """Dead-end answers: the bot must never leave the user at an unreachable channel.
 
-Origin (Langfuse session 10ac60ad, tenant TurboFlare): asked "почему не приходит
-код?", the bot recited the docs and closed with "write to the support chat in the
-control panel (available after signing in)" — a channel the user was already
-inside, reached by the sign-in they could not complete. The turn was classified
-as a blocking clarify, but no question was asked and the clarification budget was
-charged anyway; the handoff offer that would have made the reply actionable was a
-prompt rule the model simply skipped.
+A reply that points the user to a support channel they cannot reach (e.g. a chat
+inside the control panel when they cannot sign in) is a dead end: the bot is the
+support channel, and an actionable reply offers the handoff instead.
 
 Covered here:
   * the prompt states that the bot IS the support channel and defines the
@@ -291,7 +287,7 @@ def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
 
     def _fake_retrieve(*_args, **_kwargs) -> RetrievalContext:
         return RetrievalContext(
-            chunk_texts=["TurboFlare > 1.2. Что делать, если не приходит SMS или письмо?"],
+            chunk_texts=["Nimbus > 1.2. Что делать, если не приходит SMS или письмо?"],
             document_ids=[],
             scores=[score],
             mode="hybrid",

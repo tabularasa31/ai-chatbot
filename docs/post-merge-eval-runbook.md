@@ -2,7 +2,7 @@
 
 When a backend PR claims to improve a measurable metric (latency, accuracy, cost), run this checklist after merge to confirm the win and surface regressions early.
 
-Last validated: PR [#522](https://github.com/tabularasa31/ai-chatbot/pull/522) — parallel embed + relevance guard. ClickUp [86exdt3ft](https://app.clickup.com/t/86exdt3ft). **Default dataset is now CHAT9-RU-20** (Chat9 internal docs, 20 cases). RU-54 / EN-98 are deprecated — TurboFlare became a real client.
+Last validated: PR [#522](https://github.com/tabularasa31/ai-chatbot/pull/522) — parallel embed + relevance guard. ClickUp [86exdt3ft](https://app.clickup.com/t/86exdt3ft). **Default dataset is now CHAT9-RU-20** (Chat9 internal docs, 20 cases). RU-54 / EN-98 are deprecated.
 
 ---
 
@@ -173,7 +173,7 @@ Sequential run (workers=1).
 
 - **No fixed seed.** Chat completions and the judge are stochastic. ±5% pass-rate variance is normal. To eliminate, set `temperature=0` in both the bot and the judge for eval runs — requires a feature flag we don't currently have.
 - **Small dataset.** CHAT9-RU-20 has 20 cases; 1 case swing = 5% pass-rate shift. For high-confidence latency/quality claims, expand to CHAT9-RU-50 first (see Appendix C).
-- **RU-54 / EN-98 deprecated.** TurboFlare became a real client — running evals there risks touching live user data. These datasets remain in the store for historical diffs but should not be used for new runs.
+- **RU-54 / EN-98 deprecated.** Their tenant now serves live traffic — running evals there risks touching live user data. These datasets remain in the store for historical diffs but should not be used for new runs.
 - **Judge model drift.** `claude-haiku-4-5-20251001` is pinned in the script. If you upgrade the judge, baselines become invalid — re-run before-merge baseline.
 - **Cold start spikes.** First case after Railway idle eats ~25–30s vs ~13s steady. Discard the first case from latency stats if you suspect cold start, or run a warmup call before the eval.
 - **No statistical test.** This runbook reports raw deltas, not significance. For high-stakes decisions, run N≥3 before and N≥3 after, then run Welch's t-test on the per-case latencies.
@@ -186,7 +186,7 @@ Sequential run (workers=1).
 |-------------|------|-----:|----------|--------|--------|
 | CHAT9-RU-20 | `~/Projects/ai-chatbot-eval-local/scripts/eval_chat9_docs_ru.py` → `TEST_CASES_CHAT9_RU` | 20 | RU | Chat9 internal docs (`frontend/content/docs/*.mdx`) | **Active — default** |
 | CHAT9-RU-50 | _planned expansion of CHAT9-RU-20_ | 50 | RU | Same corpus, 6 categories, ~15/10/10/8/5/2 | Pending |
-| RU-54       | `~/Projects/ai-chatbot-eval-local/scripts/eval_head_to_head_ru.py` → `TEST_CASES_RU` | 54 | RU | TurboFlare | **Deprecated** — TurboFlare is now a real client |
-| EN-98       | `~/Projects/ai-chatbot-eval-local/scripts/eval_turboflare.py` → `TEST_CASES`         | 98 | EN | TurboFlare | **Deprecated** — same reason |
+| RU-54       | _local eval scripts_ | 54 | RU | Live tenant | **Deprecated** — tenant serves live traffic |
+| EN-98       | _local eval scripts_ | 98 | EN | Live tenant | **Deprecated** — same reason |
 
 To add a new dataset: copy `eval_chat9_docs_ru.py`, replace `TEST_CASES_CHAT9_RU` and `DATASET_NAME`, update the judge system prompt if the tenant domain differs.

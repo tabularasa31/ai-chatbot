@@ -66,7 +66,7 @@ DOC_B = "22222222-2222-2222-2222-222222222222"
 DOC_C = "33333333-3333-3333-3333-333333333333"
 DOC_D = "44444444-4444-4444-4444-444444444444"
 
-REPEATED_QUESTION = "does turboflare provide web hosting"
+REPEATED_QUESTION = "does nimbus provide web hosting"
 
 
 def _signal(
@@ -195,17 +195,17 @@ def test_loop_signal_question_similarity_is_max_vs_prior_window() -> None:
 
 def test_loop_signal_question_similarity_is_token_based_not_exact() -> None:
     """A lightly rephrased repeat still counts: token Jaccard, not string
-    equality. 'does turboflare provide web hosting' vs the same words in a
+    equality. 'does nimbus provide web hosting' vs the same words in a
     different order is similarity 1.0; adding a couple of words keeps it
     above the 0.6 threshold."""
     chat = _ChatStub(
         messages=[
-            _user(1, "does turboflare provide web hosting"), _assistant(2, [DOC_A]),
-            _user(3, "does turboflare provide web hosting"), _assistant(4, [DOC_A]),
-            _user(5, "does turboflare provide web hosting"), _assistant(6, [DOC_A]),
+            _user(1, "does nimbus provide web hosting"), _assistant(2, [DOC_A]),
+            _user(3, "does nimbus provide web hosting"), _assistant(4, [DOC_A]),
+            _user(5, "does nimbus provide web hosting"), _assistant(6, [DOC_A]),
         ]
     )
-    signal = _signal(chat, current_question="web hosting does turboflare provide")
+    signal = _signal(chat, current_question="web hosting does nimbus provide")
     assert signal.questions_repeat is True
     assert signal.detected is True
 

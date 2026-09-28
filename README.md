@@ -8,264 +8,154 @@
 ![Railway](https://img.shields.io/badge/Railway-Deploy-0B0D0E.svg)
 ![Vercel](https://img.shields.io/badge/Vercel-Deploy-000000.svg)
 
----
+Chat9 is a multi-tenant SaaS in production: a company (a *tenant*) connects its documentation, gets an embeddable widget, and its visitors get grounded answers in their own language. When the bot cannot help, the conversation moves to a human operator without leaving the widget.
 
-## Live
+| | |
+|---|---|
+| **Product** | https://getchat9.live |
+| **API reference (Swagger)** | https://api.getchat9.live/docs |
 
-| Resource | URL |
-|----------|-----|
-| **Dashboard** | https://getchat9.live |
-| **API Docs (Swagger)** | https://ai-chatbot-production-6531.up.railway.app/docs |
+![Operator inbox: the bot hands a conversation to a human](docs/screenshots/inbox.png)
 
-**Embed on any website** (use the snippet from your Dashboard — it matches your `public_id` / URLs):
+<table>
+  <tr>
+    <td><img src="docs/screenshots/knowledge.png" alt="Knowledge Hub: files and crawled documentation sites"></td>
+    <td><img src="docs/screenshots/gap-analyzer.png" alt="Gap Analyzer: documentation gaps and failed-question clusters"></td>
+  </tr>
+</table>
 
-```html
-<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="ch_YOUR_PUBLIC_ID">
-</script>
-```
-
-`data-bot-id` is your bot's **`public_id`** (`ch_…`) from the Dashboard. It is safe to ship in page HTML — no secrets. If the frontend and API share the same origin (self-hosted), you can omit the `Chat9Config` line.
+<sub>Screenshots from a local instance with fictional demo data.</sub>
 
 ---
 
-## Features
+## What it does
 
-- **Multi-tenant** — one platform, many clients, full data isolation
-- **Document upload** — PDF, Markdown, Swagger/OpenAPI (JSON/YAML), Word (DOCX/DOC), plain text (TXT)
-- **URL knowledge sources** — add a documentation website URL, crawl up to 50 same-domain pages, refresh on demand
-- **Structured OpenAPI ingestion** — operation-aware indexing for Swagger/OpenAPI files and structured URL sources instead of treating specs as raw text
-- **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-5-mini` for answers, with lightweight `gpt-4o-mini` guard/validation classifiers
-- **Hybrid retrieval** — PostgreSQL: pgvector cosine candidate acquisition + BM25 (`rank-bm25`) + RRF + reranking; SQLite/tests: Python cosine candidate acquisition followed by the same downstream lexical/ranking orchestration
-- **Retrieval reliability policy** — canonical reliability includes overlap/contradiction evidence; a single contradiction fact stays evidence-only, while corroborated contradiction caps to `low`
-- **Clarification-first behavior** — when one missing detail blocks a grounded answer, the bot asks a focused follow-up question in the normal `text` reply flow
-- **Localized default greeting** — new empty chats can start with a product-aware greeting localized from locale hints before the first real question
-- **Embeddable widget** — TS-built loader (`widget.getchat9.live/widget.js`) + standalone Vite + Preact iframe UI (`widget.getchat9.live/v1/`), no dependencies on the host page
-- **Response controls (FI-DISC v1)** — tenant-wide answer detail level (Detailed / Standard / Corporate); dashboard **Response controls**; `GET`/`PUT /clients/me/disclosure`
-- **Optional identified sessions (FI-KYC)** — HMAC-signed identity token + `POST /widget/session/init`; dashboard **Widget API** page for signing secrets
-- **Gap Analyzer** — bounded docs-gap + user-signal backlog with Mode A/Mode B pipelines, linking/dedupe, archive lifecycle, draft generation, weekly reclustering, and lightweight badge summary endpoint
-- **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`) for files and URL sources, **Agents / Settings**, chat logs, escalations, admin metrics
-- **Chat logs** — inbox-style view of all conversations
-- **Email verification** — signup link via Brevo HTTP API
-- **Admin metrics** — platform-wide and per-client stats (admin role)
-- **Per-client OpenAI key** — encrypted at rest, client controls AI costs
+- **Knowledge ingestion** — PDF, Markdown, DOCX, plain text, OpenAPI specs (indexed per operation, not as raw text) and crawled documentation sites with scheduled refresh
+- **Grounded answers** — hybrid retrieval over the tenant's corpus; the bot answers only from sources, asks one focused question when a detail is missing, and cites what it used
+- **Any language** — replies follow the visitor's language; there are no per-language rules anywhere in the pipeline
+- **Human handoff** — the bot offers a ticket when it cannot answer; operators take the chat live from the inbox, the bot stays muted while a human holds it, and replies by e-mail return to the conversation
+- **Gap Analyzer** — finds under-covered topics in the docs and clusters questions the bot failed on into a backlog, with draft articles to close each gap
+- **Identified sessions** — optional HMAC-signed visitor identity from the tenant's backend
+- **Bring your own OpenAI key** — each tenant's key is encrypted at rest; token cost stays with the tenant
 
 ---
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    V[Visitor] --> W["Widget<br/>TS loader + Preact iframe"]
+    O[Tenant / operator] --> D["Dashboard<br/>Next.js 14"]
+    W --> API
+    D --> API
+    subgraph Railway
+        API["API<br/>FastAPI, async"]
+        WK["Worker<br/>ARQ jobs + crons"]
+        PG[("PostgreSQL<br/>+ pgvector")]
+        R[(Redis)]
+    end
+    API --> PG
+    API --> R
+    WK --> PG
+    R --> WK
+    API --> OAI[OpenAI]
+    WK --> OAI
+    API --> BR["Brevo<br/>e-mail in/out"]
+    API -.-> OBS["Langfuse · Sentry · PostHog"]
 ```
-User → Vercel (Next.js) → Railway (FastAPI) → PostgreSQL + pgvector → OpenAI API
-                                                                    ↘ Brevo (email)
+
+A chat turn goes through a fixed pipeline: injection guard → relevance guard → retrieval → generation → post-generation checks, streamed to the widget over SSE. Anything that should survive a deploy or be retried — crawls, embeddings, Gap Analyzer runs, e-mail — runs on the worker.
+
+---
+
+## Engineering highlights
+
+- **Hybrid retrieval** — pgvector similarity and BM25 fused with Reciprocal Rank Fusion, then reranked by a per-tenant strategy (heuristic, LLM or cross-encoder) under a hard timeout with heuristic fallback. A reliability score built from overlap and contradiction evidence decides whether to answer, clarify or hand off ([`backend/search/`](backend/search/)).
+- **Two-level prompt-injection guard** — a structural check, then a semantic one, before any generation; a relevance guard keeps the bot on the tenant's domain ([`backend/guards/`](backend/guards/)).
+- **PII never reaches the model** — structural redaction of e-mails, phones, cards, IPs, tokens and keys at the model egress boundary, while operators still see the original text ([`backend/chat/pii.py`](backend/chat/pii.py)).
+- **Prompt caching by design** — the system prompt is byte-stable across turns so the provider cache prefix holds; request-specific context goes after it.
+- **Escalation state machine** — explicit requests for a human escalate at once; bot-initiated handoffs ask the visitor first and do not fire on a single weak answer ([`backend/escalation/`](backend/escalation/)).
+- **Async end to end** on the critical chat path: `AsyncSession`, `AsyncOpenAI`, SSE streaming that releases its DB connection before the stream starts.
+- **Answer-quality evals** — golden datasets run against a live bot and are graded with deterministic metrics plus Claude as LLM-as-judge, nightly and on demand ([`backend/evals/`](backend/evals/)).
+- **Deploy safety** — CI rejects a second Alembic head, the OpenAPI schema is generated from code rather than fetched from a running API, and model prices are checked for drift.
+
+---
+
+## Repository layout
+
+```
+backend/            FastAPI app, one folder per domain (routes.py + service.py + schemas.py)
+  chat/             chat pipeline, prompts, language handling, PII redaction
+  search/           hybrid retrieval, fusion, reranking, reliability
+  guards/           injection and relevance guards
+  escalation/       handoff state machine
+  operator/         live operator takeover
+  gap_analyzer/     documentation-gap detection
+  evals/            answer-quality eval CLI
+  migrations/       Alembic
+frontend/           Next.js dashboard and marketing site
+  apps/widget-*     widget loader and iframe app (Vite + Preact)
+tests/              pytest: SQLite through the app, pgvector integration in tests/pgvector_tests/
+docs/               design docs and runbooks (docs/docs-ru/ — product docs in Russian)
 ```
 
 ---
 
-## Quick Start (Self-hosted)
+## Quick start (self-hosted)
 
-### Prerequisites
-
-- Python 3.11+
-- PostgreSQL 15 + pgvector extension (Docker recommended)
-- Node.js 18+
-
-### Database
+Prerequisites: Python 3.11+, Node.js 18+, Docker.
 
 ```bash
-docker compose up -d db
-```
+docker compose up -d db                 # PostgreSQL + pgvector
 
-The local `docker-compose.yml` provides a PostgreSQL + pgvector instance for development and pgvector integration tests.
-
-### Backend
-
-```bash
-git clone https://github.com/tabularasa31/ai-chatbot
-cd ai-chatbot
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in your values
+cp .env.example .env                    # fill in the values below
 alembic upgrade head
-uvicorn backend.main:app --reload
-```
+uvicorn backend.main:app --reload       # http://localhost:8000
 
-### Frontend
-
-```bash
 cd frontend
 npm install
-cp .env.local.example .env.local   # fill in API URL
-npm run dev
+cp .env.local.example .env.local        # NEXT_PUBLIC_API_URL=http://localhost:8000
+npm run dev                             # http://localhost:3000
 ```
 
----
-
-## CI (GitHub Actions)
-
-On every **push** to **`main`** and every **pull request** targeting **`main`**, GitHub runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): **Ruff** + **pytest** for the backend (from the repo root, suite in `tests/`) and **ESLint** + **`next build`** for the frontend.
-
-For grouped developer-focused test commands (P0 smoke, auth reset, escalation, RAG edge cases, pgvector), see [`docs/06-developer-test-runbook.md`](docs/06-developer-test-runbook.md).
-
-**Local checks** (after `pip install -r requirements.txt`):
-
-```bash
-ruff check backend
-make smoke
-make test-sqlite
-
-# With Docker Postgres (pgvector integration):
-make test-pgvector
-```
-
-### Full local test run + coverage
-
-Run the full suite (SQLite tests + pgvector tests) and show combined coverage at the end:
-
-```bash
-make test
-make coverage-all
-```
-
-### Answer-quality evals
-
-Separate from unit tests, `backend/evals/` runs golden datasets against a real chat backend and grades answers with deterministic metrics + Anthropic Claude as LLM-as-judge. See [`docs/06-developer-test-runbook.md`](docs/06-developer-test-runbook.md#eval-pipeline-backendevals) for the workflow (seeding the demo bot, running a dataset, before/after comparisons).
-
-### pgvector test credentials (local)
-
-`tests/pgvector_tests/` connects to Postgres using `PG_HOST/PG_PORT/PG_USER/PG_PASSWORD`.
-Defaults match [`docker-compose.yml`](docker-compose.yml): `postgres` / `password` on `chatbot`.
-
-If you still have an older data volume created with a different role (e.g. `user`), either run `docker compose down -v` and recreate, or override:
-
-```bash
-PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
-```
-
----
-
-## Environment Variables
+### Environment variables
 
 | Variable | Layer | Description |
 |----------|-------|-------------|
 | `DATABASE_URL` | Backend | PostgreSQL connection string |
 | `JWT_SECRET` | Backend | Secret for JWT (min 32 chars) |
-| `ANTHROPIC_API_KEY` | Backend (optional) | Anthropic key for the eval pipeline's LLM-as-judge (`backend/evals/`). Not used at runtime. |
+| `ENCRYPTION_KEY` | Backend | Fernet key for tenant OpenAI key encryption |
 | `ENVIRONMENT` | Backend | `development` or `production` |
-| `ENCRYPTION_KEY` | Backend | Fernet key for OpenAI key encryption |
-| `FRONTEND_URL` | Backend | Frontend URL (e.g. https://getchat9.live) |
-| `AUTH_COOKIE_DOMAIN` | Backend | Parent cookie domain for same-site auth (e.g. `.getchat9.live`). Frontend and API must share this parent — otherwise the cookie is not sent (e.g. on `*.vercel.app` previews). |
-| `AUTH_COOKIE_SAMESITE` | Backend | Auth cookie SameSite policy (`lax` for same-site API) |
-| `AUTH_COOKIE_SECURE` | Backend | Override auth cookie `Secure`; set `true` in production |
-| `CORS_ALLOWED_ORIGINS` | Backend | Allowed dashboard origins (e.g. `https://getchat9.live`) |
-| `EMAIL_FROM` | Backend | Sender email (e.g. no-reply@getchat9.live) |
-| `BREVO_API_KEY` | Backend | Brevo HTTP API key for transactional email |
-| `NEXT_PUBLIC_API_URL` | Frontend | Backend API base URL (production: `https://api.getchat9.live`) |
+| `FRONTEND_URL` | Backend | Dashboard URL |
+| `CORS_ALLOWED_ORIGINS` | Backend | Allowed dashboard origins |
+| `AUTH_COOKIE_DOMAIN` | Backend | Parent cookie domain shared by dashboard and API |
+| `AUTH_COOKIE_SAMESITE` / `AUTH_COOKIE_SECURE` | Backend | Auth cookie policy (`lax` / `true` in production) |
+| `EMAIL_FROM`, `BREVO_API_KEY` | Backend | Transactional e-mail via Brevo |
+| `ANTHROPIC_API_KEY` | Backend (optional) | LLM-as-judge for evals only, not used at runtime |
+| `NEXT_PUBLIC_API_URL` | Frontend | Backend API base URL |
 
-> Note: Each client provides their own OpenAI API key in the dashboard. The platform does not require a global `OPENAI_API_KEY`.
+There is no global `OPENAI_API_KEY`: each tenant adds its own key in the dashboard.
 
 ---
 
-## API Overview
+## Testing and CI
 
-### Auth
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/auth/register` | Register new user (sends verification email) |
-| POST | `/auth/login` | Login, get JWT |
-| POST | `/auth/verify-email` | Verify email with one-time token and provision the user's client/workspace |
+```bash
+ruff check backend
+make smoke          # fast P0 regression
+make test-sqlite    # full suite without Docker
+make test           # SQLite + pgvector (needs the db container)
+```
 
-### Tenants
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/tenants` | Create tenant manually; the normal signup flow provisions it on `/auth/verify-email` |
-| GET | `/tenants/me` | Get current tenant info (JWT) |
-| PATCH | `/tenants/me` | Update tenant name / OpenAI key (JWT, verified) |
-| GET | `/tenants/me/support-settings` | Support / escalation routing (JWT) |
-| PUT | `/tenants/me/support-settings` | Update support settings (JWT, verified) |
-| POST | `/tenants/me/kyc/secret` | Generate KYC signing secret (shown once) (JWT, verified) |
-| GET | `/tenants/me/kyc/status` | KYC secret metadata (JWT) |
-| POST | `/tenants/me/kyc/rotate` | Rotate the KYC signing secret (JWT, verified) |
-| GET | `/tenants/validate/{api_key}` | Public tenant lookup by API key (rate-limited) |
+Tests drive real requests through the FastAPI app; only the network edge (OpenAI, Langfuse) is stubbed. Retrieval quality is asserted against real pgvector. Grouped suites and the eval workflow are described in [`docs/06-developer-test-runbook.md`](docs/06-developer-test-runbook.md).
 
-### Bots
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/bots` | List bots for the current tenant (JWT) |
-| POST | `/bots` | Create bot (JWT, verified) |
-| GET | `/bots/{bot_id}` | Bot detail (JWT) |
-| PATCH | `/bots/{bot_id}` | Update bot (JWT, verified) |
-| DELETE | `/bots/{bot_id}` | Delete bot (JWT, verified) |
-| GET | `/bots/{bot_id}/disclosure` | Response detail level: `detailed` \| `standard` \| `corporate` (JWT) |
-| PUT | `/bots/{bot_id}/disclosure` | Update bot disclosure config (JWT, verified) |
-
-### Documents
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/documents` | Upload document (JWT, verified only) |
-| GET | `/documents` | List documents (JWT) |
-| GET | `/documents/sources` | List Knowledge sources: uploaded files + URL sources (JWT) |
-| POST | `/documents/sources/url` | Create URL source and start background indexing (JWT, verified only) |
-| GET | `/documents/sources/{source_id}` | Get URL source detail: recent runs + indexed pages (JWT) |
-| PATCH | `/documents/sources/{source_id}` | Update URL source name, schedule, exclusions (JWT, verified only) |
-| POST | `/documents/sources/{source_id}/refresh` | Re-crawl a URL source on demand (JWT, verified only) |
-| DELETE | `/documents/sources/{source_id}` | Delete a URL source and its indexed pages (JWT) |
-| DELETE | `/documents/sources/{source_id}/pages/{document_id}` | Delete one indexed URL-derived page and persist manual exclusion for later refreshes (JWT) |
-| DELETE | `/documents/{id}` | Delete document (JWT) |
-| POST | `/embeddings/documents/{id}` | Re-trigger embeddings generation (force re-index, JWT) |
-
-### Gap Analyzer
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/gap-analyzer` | Full Gap Analyzer dashboard payload: `summary`, `mode_a_items`, `mode_b_items` (JWT, verified) |
-| GET | `/gap-analyzer/summary` | Lightweight summary payload for navigation badge reads (JWT, verified) |
-| POST | `/gap-analyzer/recalculate` | Enqueue Mode A / Mode B recalculation (`mode_a`, `mode_b`, `both`) and return orchestration status (`202`) |
-| POST | `/gap-analyzer/{source}/{gap_id}/dismiss` | Dismiss a Mode A topic or Mode B cluster (JWT, verified) |
-| POST | `/gap-analyzer/{source}/{gap_id}/reactivate` | Reactivate a dismissed or inactive gap item (JWT, verified) |
-| POST | `/gap-analyzer/{source}/{gap_id}/draft` | Generate transient draft markdown for a gap item (JWT, verified) |
-
-### Operator console
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/operator/inbox` | Queue of sessions; `scope=attention` (default: waiting or live) or `scope=all` (newest first, `limit`); carries `waiting_count` / `attention_count` (JWT, any member) |
-| GET | `/operator/inbox/summary` | Just the counts, for the sidebar badge (JWT, any member) |
-| GET | `/operator/sessions/{id}` | One visitor's whole session with operator turns signed by author, plus the current ticket and handoff state (JWT, any member) |
-| POST | `/operator/chats/{id}/take` | Claim the chat and mute the bot; 409 if a colleague holds it (JWT, seat) |
-| POST | `/operator/chats/{id}/messages` | Reply as operator; claims an unclaimed chat (JWT, seat) |
-| POST | `/operator/chats/{id}/release` | Hand the chat back to the bot (JWT, seat) |
-| POST | `/operator/chats/{id}/resolve` | Resolve every active ticket of the session, revoke their reply tokens, hand the chat back (JWT, seat) |
-
-### Knowledge
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/knowledge/profile` | Tenant knowledge profile (product name, topics, glossary, aliases) (JWT) |
-| PATCH | `/knowledge/profile` | Update knowledge profile (JWT, verified) |
-| GET | `/knowledge/faq` | List FAQ candidates extracted from docs/logs (JWT) |
-| POST | `/knowledge/faq` | Create FAQ candidate (JWT, verified) |
-| PATCH | `/knowledge/faq/{faq_id}` | Update / approve a FAQ candidate (JWT, verified) |
-| DELETE | `/knowledge/faq/{faq_id}` | Delete FAQ candidate (JWT) |
-| POST | `/knowledge/faq/approve-all` | Bulk-approve pending FAQ candidates (JWT, verified) |
-
-### Admin
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/admin/metrics/summary` | Platform-wide stats (admin only) |
-| GET | `/admin/metrics/tenants` | Per-tenant stats (admin only) |
-| GET | `/admin/privacy/pii-events` | PII egress-redaction audit log (admin only) |
-| DELETE | `/admin/privacy/pii-events/retention` | Purge expired PII-event rows (admin only) |
-
-### Other
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| POST | `/widget/session/init` | Public widget session bootstrap; optional identified mode via signed `identity_token` |
-| POST | `/widget/chat` | Public widget chat by bot `public_id` (query param `bot_id`); streams SSE `chunk` events and finishes with a `done` event containing `text`, `session_id`, `chat_ended`, optional `ticket_number`, and optional `sources` |
-| POST | `/widget/escalate` | Public widget manual escalation |
+GitHub Actions ([`.github/workflows/`](.github/workflows/)) run lint, the test suite, the frontend build and a migration-head check on every PR, plus nightly answer-quality evals and a widget smoke test.
 
 ---
 
-## Embed Widget
+## Embedding the widget
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
@@ -275,32 +165,16 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 </script>
 ```
 
-Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat` (query `bot_id` required, optional `session_id` / `locale`; the SSE stream ends with a `done` event that includes `text`, `session_id`, `chat_ended`, and optional `ticket_number` / `sources`). Optional identified sessions: `POST /widget/session/init` with `bot_id` and optional signed `identity_token` / `locale`. Manual escalation from the widget UI uses `POST /widget/escalate` (proxied on the Next app as `/widget/escalate`).
+`data-bot-id` is the bot's public id from the dashboard and is safe to ship in page HTML. The loader adds an iframe that talks to `POST /widget/chat` and streams the answer over SSE.
 
 ---
 
-## Gap Analyzer at a glance
+## Documentation
 
-Gap Analyzer is the operator-facing backlog for documentation gaps and repeated user pain.
-
-- **Mode A** scans the indexed tenant corpus for under-covered documentation topics with deterministic sampling, extraction hashing, and dismissal persistence
-- **Mode B** clusters low-confidence / fallback / rejected / escalated user questions into reusable product gaps
-- linked active Mode A + Mode B pairs dedupe in the dashboard with Mode B as the primary item
-- archive views stay source-specific; older archived Mode B items can age into an explicit `inactive` bucket
-- manual recalc and chat-side follow-ups now run through a durable DB-backed Gap Analyzer job queue with retryable orchestration state
-
----
-
-## Tech Stack
-
-| Layer | Technology | Hosting |
-|-------|-----------|---------|
-| Backend | FastAPI + Python 3.11 | Railway |
-| Database | PostgreSQL 15 + pgvector | Railway |
-| AI | OpenAI `text-embedding-3-small`, `gpt-5-mini`, lightweight `gpt-4o-mini` guards | OpenAI API |
-| Frontend | Next.js 14 + TailwindCSS | Vercel |
-| Widget | TS loader (`widget.getchat9.live/widget.js`) + Vite + Preact iframe UI (`widget.getchat9.live/v1/`) | Vercel (separate `chat9-widget` project) |
-| Email | Brevo HTTP API | Brevo |
+- [`docs/04-features.md`](docs/04-features.md) — feature specs and expected behaviour
+- [`docs/09-gap-analyzer.md`](docs/09-gap-analyzer.md) — Gap Analyzer design
+- [`docs/07-observability-rollout.md`](docs/07-observability-rollout.md) — tracing, errors and product metrics
+- [`AGENTS.md`](AGENTS.md) — architecture conventions and deployment safety rules
 
 ---
 

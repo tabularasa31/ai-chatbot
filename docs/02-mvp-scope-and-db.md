@@ -1,8 +1,8 @@
-# MVP Scope & Database Schema
+# Product Scope & Database Schema
 
 ---
 
-## MVP Scope
+## Product Scope
 
 ### What's INCLUDED ✅
 
@@ -46,7 +46,7 @@
 
 - User customization (colors, logos, tone)
 - Team collaboration
-- Client analytics dashboard (FI-040)
+- Client analytics dashboard
 - Webhooks
 - Fine-tuning
 - Multiple LLM options
@@ -55,10 +55,10 @@
 
 ### Coming Next 🔜
 
-- Background embedding processing (FI-021) — async queue
-- Daily summary email (FI-039) — daily reports to clients via Brevo
-- Client analytics widget (FI-040)
-- Status page integration (FI-041) — real-time incident awareness
+- Background embedding processing — async queue
+- Daily summary email — daily reports to clients via Brevo
+- Client analytics widget
+- Status page integration — real-time incident awareness
 
 ---
 
@@ -80,8 +80,8 @@ tenant_id (FK)  is_active           settings              name
 Separation of concerns:
 
 - **Tenant** → *ownership*. Billing, OpenAI API key.
-- **Workspace** → *context*. Knowledge scope (documents, URL sources, chats, gap analysis). MVP: exactly **one** workspace per tenant, created automatically on signup; UI hides the selector.
-- **Bot** → *behavior*. Disclosure / response‑detail config, per‑channel tuning. MVP: exactly **one** bot per workspace (schema allows N, UI is single‑bot). Widget resolves by `Bot.public_id` via the `data-bot-id` attribute.
+- **Workspace** → *context*. Knowledge scope (documents, URL sources, chats, gap analysis). Currently exactly **one** workspace per tenant, created automatically on signup; UI hides the selector.
+- **Bot** → *behavior*. Disclosure / response‑detail config, per‑channel tuning. Currently exactly **one** bot per workspace (schema allows N, UI is single‑bot). Widget resolves by `Bot.public_id` via the `data-bot-id` attribute.
 - **public_id** → *access*. Lives on Bot only. Tenant has no `public_id`.
 
 All content tables (`documents`, `url_sources`, `chats`, `messages` via chat, `quick_answers`, `contact_sessions`, `escalation_tickets`, `gap_*`) scope by **`workspace_id`**, not `tenant_id`.
@@ -129,7 +129,7 @@ Indexes:
 └─ (tenant_id)
 ```
 
-MVP: `bootstrap_tenant_for_user` creates one `Tenant` + one default `Workspace` + one default `Bot` in a single transaction. UI treats the single workspace as implicit and hides the selector.
+Currently `bootstrap_tenant_for_user` creates one `Tenant` + one default `Workspace` + one default `Bot` in a single transaction. UI treats the single workspace as implicit and hides the selector.
 
 #### Bots (behavior)
 ```sql

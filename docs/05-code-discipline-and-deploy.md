@@ -29,7 +29,7 @@ backend/
 ├─ documents/              # upload, parsing, status
 ├─ embeddings/             # chunking, embeddings (sync indexing; no separate worker.py)
 ├─ search/                 # chunk retrieval
-├─ chat/                   # RAG chat: service, routes, pii.py (FI-043 redaction), …
+├─ chat/                   # RAG chat: service, routes, pii.py (PII redaction), …
 ├─ email/                  # transactional email (Brevo)
 │
 ├─ routes/                 # cross-cutting public HTTP
@@ -45,7 +45,7 @@ requirements.txt           # repo root — primary for local setup (see README)
 tests/
 ├─ conftest.py
 ├─ chat/
-│  └─ test_pii.py          # FI-043 redaction unit tests
+│  └─ test_pii.py          # PII redaction unit tests
 ├─ test_auth.py
 ├─ test_chat.py
 ├─ test_clients.py
@@ -429,7 +429,7 @@ The loader and widget UI deploy together from a single Vercel project (`chat9-wi
 
 ---
 
-## MVP Success Criteria
+## Success Criteria
 
 ### Technical ✅
 - All tests passing (100%)

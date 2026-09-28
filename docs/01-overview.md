@@ -1,6 +1,6 @@
 # Chat9 — Architecture Overview
 
-**Status:** MVP feature-complete, deployed to production
+**Status:** in production
 **Owner:** Elina
 
 ---
@@ -115,7 +115,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 
 ---
 
-## Key Features (MVP)
+## Key Features
 
 ✅ User authentication (email/password + JWT + email verification)  
 ✅ Forgot password flow (Brevo email + token reset)  

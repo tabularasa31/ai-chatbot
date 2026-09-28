@@ -321,5 +321,5 @@ Since Railway auto-sets `GIT_SHA` on every deploy, `release` always resolves to 
 - Redis/shared-store tenant counters for multi-instance deployments
 - true quick-answer implementation
 - true contradiction detection if we decide the heuristics are insufficient (model-backed reranking now exists behind `tenants.reranker_strategy`)
-- actual production review of FI-115 evidence and a follow-up guardrail decision if multi-variant tails are too expensive
+- actual production review of retrieval-observability evidence and a follow-up guardrail decision if multi-variant tails are too expensive
 - clarification abandonment lifecycle instrumentation outside the request path

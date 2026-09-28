@@ -176,7 +176,7 @@ For Swagger / OpenAPI documents, the embedding pipeline does **not** embed raw J
 
 URL sources can also be auto-routed into the same Swagger/OpenAPI pipeline when fetched content is structured JSON/YAML and matches OpenAPI heuristics (`openapi`, `swagger`, or `paths`), followed by semantic validation.
 
-### Asynchronous embedding (FI-021)
+### Asynchronous embedding
 
 Embedding is expensive for large documents (20+ chunks → multiple OpenAI calls → seconds of latency). To avoid HTTP timeouts:
 
@@ -186,7 +186,7 @@ Embedding is expensive for large documents (20+ chunks → multiple OpenAI calls
 - Document status transitions: `ready → embedding → ready` (success) or `error` (failure)
 - The **Knowledge hub** UI (`/knowledge`) **polls** `GET /documents/{id}` every 2 seconds and updates the status badge in real time (timeout: 120 seconds)
 
-### Chunking (FI-009, TD-033)
+### Chunking
 
 Documents are split into chunks before embedding by a **per-content-type chunker** selected from the registry in `backend/chunkers/registry.py` (keyed by `Document.file_type`). Adding a new format means registering a new chunker — the embedding pipeline core stays untouched. See `backend/chunkers/README.md` for the extension guide.
 
@@ -220,7 +220,7 @@ Each chunk stores: `chunk_text`, `chunk_index`, `char_offset`, `char_end`, `file
 
 **Note on re-indexing:** changing a chunking strategy only affects newly embedded documents. Existing tenants keep their old chunks until re-embedded (delete-and-recreate via `POST /embeddings/documents/{id}` or re-crawl). Retrieval-quality evals comparing before/after must bracket the re-index, not the deploy.
 
-### Document health check (FI-032)
+### Document health check
 
 After embedding, the system runs a deterministic health lint pass on the document:
 
@@ -230,7 +230,7 @@ After embedding, the system runs a deterministic health lint pass on the documen
 - User can manually trigger a re-check at any time via the **Re-check** button
 - API: `GET /documents/{id}/health`, `POST /documents/{id}/health/run`
 
-### URL knowledge sources (FI-URL v1)
+### URL knowledge sources
 
 The Knowledge hub can also index a documentation website from a root URL.
 
@@ -300,7 +300,7 @@ Contract notes:
 
 Each chunk is embedded with `text-embedding-3-small` (1536 dimensions) and stored in PostgreSQL with the `pgvector` extension. Similarity search uses **cosine distance** (`<=>` operator) on an **HNSW index** — sub-millisecond lookup even with millions of vectors.
 
-### Hybrid search: BM25 + RRF (FI-008)
+### Hybrid search: BM25 + RRF
 
 Pure vector search struggles with exact keyword matches (product names, error codes). Chat9 combines two signals:
 
@@ -334,7 +334,7 @@ Degradation is graceful, not a kill switch: every semantic pass runs under `RERA
 
 Rollout gate: switch the eval test tenant, run the eval before/after (`backend/evals/`, see `docs/06-developer-test-runbook.md` § Eval pipeline), and only widen a semantic strategy to other tenants when the pass rate improves by ≥ 5 points without moving latency p95.
 
-### Retrieval observability (FI-115)
+### Retrieval observability
 
 Retrieval is instrumented with Langfuse-style traces for chat requests. The search path now records:
 
@@ -736,7 +736,7 @@ endpoint, `answer_cache_hit` / `answer_cache_level` / `answer_cache_saved_ms` on
 to a miss (Redis calls are bounded to 300 ms); the turn then runs the full pipeline as before.
 Eval runs that repeat golden questions should set `ANSWER_CACHE_TTL_SECONDS=0`.
 
-### PII redaction (FI-043)
+### PII redaction
 
 Before any text is sent to OpenAI, the user's message is passed through the redactor (`backend/chat/pii.py`). Detected entities are replaced with neutral placeholders:
 
@@ -848,7 +848,7 @@ Widget protocol: `GET /widget/history` returns the last two conversations flatte
 
 ---
 
-## 7. L2 Escalation Tickets (FI-ESC)
+## 7. L2 Escalation Tickets
 
 When the bot cannot adequately answer, the conversation is **escalated to a human** and a support ticket is created.
 
@@ -1153,7 +1153,7 @@ ESCALATION_ALERT_WINDOW_SECONDS=3600
 
 ---
 
-## 8. Response Controls / Disclosure (FI-DISC)
+## 8. Response Controls / Disclosure
 
 Clients can set a client-wide response detail level that controls how the bot phrases answers across all channels (widget + API).
 

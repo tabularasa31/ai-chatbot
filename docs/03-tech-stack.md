@@ -33,8 +33,8 @@
 - **LLM Integration:** OpenAI API (via client's own API key)
   - `gpt-5-mini` for grounded chat answers
   - `gpt-4o-mini` defaults for lightweight classifiers: human-request guard (`HUMAN_REQUEST_MODEL`), relevance guard (`RELEVANCE_GUARD_MODEL`), and answer validation (`VALIDATION_MODEL`)
-  - Optional second `gpt-4o-mini` call per chat turn for answer validation (FI-034): groundedness check; failures trigger a safe fallback instead of returning an unverified answer
-  - **PII redaction / privacy hardening (FI-043 + follow-up hardening):** before embedding search, chat completion, and validation completion, the user question — and the chat history assembled into the prompt — is passed through redaction (`backend/chat/pii.py`); placeholders such as `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CARD]`, `[IP]`, `[URL_TOKEN]` are what reaches OpenAI, while `messages.content` stores the original text
+  - Optional second `gpt-4o-mini` call per chat turn for answer validation: groundedness check; failures trigger a safe fallback instead of returning an unverified answer
+  - **PII redaction / privacy hardening (with follow-up hardening):** before embedding search, chat completion, and validation completion, the user question — and the chat history assembled into the prompt — is passed through redaction (`backend/chat/pii.py`); placeholders such as `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CARD]`, `[IP]`, `[URL_TOKEN]` are what reaches OpenAI, while `messages.content` stores the original text
   - text-embedding-3-small for vectors (1536-dim)
   - Each client brings their own key — no platform markup
   
@@ -47,7 +47,7 @@
   
 - **Email:** Brevo HTTP API
   - Transactional emails (email verification)
-  - Daily summary reports (coming: FI-039)
+  - Daily summary reports (planned)
   
 - **Testing:** pytest
   - Industry standard
@@ -72,7 +72,7 @@
   
 - **State Management:** React hooks
   - useContext for global state
-  - No Redux needed for MVP
+  - No Redux needed
   
 - **HTTP Client:** fetch / axios
   - Simple API calls
@@ -148,7 +148,7 @@
 │    5. Search embeddings (pgvector)                       │
 │    6. Build prompt (+ safe user context line from hints) │
 │    7. Call OpenAI (client's key); optional validation    │
-│       call (FI-034) also uses redacted text              │
+│       call also uses redacted text              │
 │    8. Build TurnContext + call decide() (block-rules     │
 │       gate). decide() returns the authoritative          │
 │       Decision: answer / clarify / escalate / reject /   │
@@ -212,7 +212,7 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
    ↓
 3. Backend resolves the public bot ID (`bot_id` query param) → gets internal `tenant_id` + tenant's OpenAI key
    ↓
-4. PII redaction on question (FI-043) → typed placeholders for external calls
+4. PII redaction on question → typed placeholders for external calls
    ↓
 5. OpenAI API: Embed redacted question → vector(1536)  [client's key]
    ↓
@@ -227,7 +227,7 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
 8. OpenAI API: Chat completion  [client's key]
    gpt-5-mini
    ↓
-9. Optional: second gpt-4o-mini call for validation (FI-034) using same redacted question
+9. Optional: second gpt-4o-mini call for validation using same redacted question
    ↓
 10. Track tokens used → save the message with its original text
    ↓
@@ -290,7 +290,7 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 - Costs go directly to the client's OpenAI account
 - Chat9 never marks up or proxies OpenAI costs
 
-### User message privacy (FI-043)
+### User message privacy
 - Redaction on the user question before any OpenAI call (embedding, chat, validation)
 - `messages.content` keeps the original wording; redaction is applied where text is handed to the model, not when it is stored
 - Dashboard flows show the tenant their own conversations as written; `pii_events` audits what was masked on egress
@@ -319,7 +319,7 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 
 ### Backend
 - Stateless design (can run multiple instances)
-- Background embedding processing (FI-021) for document and URL-source indexing
+- Background embedding processing for document and URL-source indexing
 - OpenAI rate limit handling (retry logic)
 
 ### Frontend
@@ -347,7 +347,7 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 
 - **Backend:** Railway serves FastAPI; production deploys currently track `main`
 - **Frontend:** Vercel serves Next.js; production branch currently tracks `main`
-- **CI (FI-026):** GitHub Actions on `push` to `main` and `pull_request` targeting `main` — backend Ruff + pytest (`tests/`), frontend ESLint + `next build` (`.github/workflows/ci.yml`)
+- **CI:** GitHub Actions on `push` to `main` and `pull_request` targeting `main` — backend Ruff + pytest (`tests/`), frontend ESLint + `next build` (`.github/workflows/ci.yml`)
 - **Database:** PostgreSQL on Railway
 - **Email:** Brevo HTTP API (transactional + future daily reports)
 - **Secrets:** Environment variables (.env)

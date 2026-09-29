@@ -31,9 +31,10 @@ def _clean_optional_text(value: Any) -> str | None:
 def _extract_contact_id(user_context: dict[str, Any] | None) -> str | None:
     if not user_context:
         return None
-    # Never key a ContactSession off a user_id that hasn't been proven to
-    # belong to this visitor; chats without the flag count as unverified.
-    if user_context.get("identity_verified") is not True:
+    # A strict tenant marks an unverified session explicitly; never key a
+    # ContactSession off a user_id that hasn't been proven to belong to this
+    # visitor — that would let it touch/overwrite the real visitor's record.
+    if user_context.get("identity_verified") is False:
         return None
     return _clean_optional_text(user_context.get("user_id"))
 

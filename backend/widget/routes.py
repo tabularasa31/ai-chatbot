@@ -279,12 +279,14 @@ async def widget_session_init(
     )
 
     tenant_secret = None
+    strict_tenant = bool(tenant.widget_identity_secret)
     if tenant.widget_identity_secret:
         try:
             tenant_secret = decrypt_value(tenant.widget_identity_secret)
         except Exception:
-            # Corrupted ciphertext must not 500 a public endpoint; with no
-            # valid secret every id stays unverified.
+            # Corrupted ciphertext must not 500 a public endpoint. Stay
+            # strict with no valid secret — never fall back to legacy
+            # (unverified) resume, that would reopen the hole this guards.
             logger.error("widget_session_init_secret_decrypt_failed")
 
     session_id = uuid.uuid4()
@@ -302,16 +304,17 @@ async def widget_session_init(
         if hints:
             user_hash = hints.pop("user_hash", None)
             resume_eligible = "user_id" in hints
-            # A user_id is trusted only when user_hash verifies it against the
-            # tenant key; otherwise it is kept for personalization only, on a
-            # fresh session.
-            if resume_eligible:
+            # A strict tenant (has a widget_identity_secret) only resumes when
+            # user_hash verifies the client-supplied user_id; otherwise the
+            # user_id is kept for personalization only, on a fresh session.
+            if strict_tenant and resume_eligible:
                 identity_verified = (
                     verify_user_hash(tenant_secret, hints["user_id"], user_hash)
                     if tenant_secret is not None
                     else False
                 )
-                resume_eligible = identity_verified
+                if not identity_verified:
+                    resume_eligible = False
             # Synthesize a stable user_id when hints carry only an email so
             # ContactSession keying works (its contact_id == user_context.user_id).
             if "user_id" not in hints and "email" in hints:
@@ -321,7 +324,10 @@ async def widget_session_init(
                 hints,
                 browser_locale=locale,
             )
-            user_context["identity_verified"] = identity_verified
+            # A strict tenant always records verification explicitly, verified
+            # or not — a legacy tenant leaves the key absent.
+            if strict_tenant:
+                user_context["identity_verified"] = identity_verified
             mode = "hints"
             logger.info(
                 "widget_session_init_hints",
@@ -336,18 +342,24 @@ async def widget_session_init(
     if resume_eligible and user_context and user_context.get("user_id"):
 
         def _resume_existing(s):
-            # Only resume into a chat that was itself verified. Filtered in SQL
-            # (not Python, post-limit) so unverified rows cannot push the
-            # verified chat out of a fixed-size window.
+            filters = [
+                Chat.tenant_id == tenant.id,
+                Chat.bot_id == _bot.id,
+                Chat.user_context["user_id"].as_string()
+                == user_context["user_id"],
+            ]
+            if strict_tenant:
+                # A strict tenant only resumes into a chat that itself was
+                # previously verified — an unverified row must not be reused
+                # to reattach a spoofed user_id to real history. Filtered in
+                # SQL (not Python, post-limit) so an attacker cannot push the
+                # verified chat out of a fixed-size window with unverified rows.
+                filters.append(
+                    Chat.user_context["identity_verified"].as_boolean().is_(True)
+                )
             existing = (
                 s.query(Chat)
-                .filter(
-                    Chat.tenant_id == tenant.id,
-                    Chat.bot_id == _bot.id,
-                    Chat.user_context["user_id"].as_string()
-                    == user_context["user_id"],
-                    Chat.user_context["identity_verified"].as_boolean().is_(True),
-                )
+                .filter(*filters)
                 .order_by(Chat.created_at.desc())
                 .first()
             )
@@ -385,7 +397,14 @@ async def widget_session_init(
         )
         s.add(chat)
         s.flush()
-        if mode == "hints" and user_context and user_context.get("user_id") and identity_verified:
+        # For a strict tenant, an unverified user_id must not open a contact
+        # session — it would collide with the real visitor's record.
+        if (
+            mode == "hints"
+            and user_context
+            and user_context.get("user_id")
+            and (not strict_tenant or identity_verified)
+        ):
             start_user_session(
                 s,
                 tenant_id=tenant.id,

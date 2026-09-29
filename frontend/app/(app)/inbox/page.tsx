@@ -470,6 +470,9 @@ function InboxPageContent() {
               placeholder="Search by name, e-mail or ticket number"
               className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
             />
+            {inbox && (search.trim() || query) && (isLoading || search.trim() !== query) && (
+              <p className="px-1 pt-1 text-xs text-slate-400">Searching…</p>
+            )}
           </div>
           <div className="max-h-[calc(100vh-252px)] min-h-[368px] overflow-y-auto">
             {isLoading && !inbox ? (
@@ -484,15 +487,20 @@ function InboxPageContent() {
               </div>
             ) : (
               <ul className="divide-y divide-slate-100">
-                {rows.map((row) => (
-                  <InboxRowItem
-                    key={row.session_id}
-                    row={row}
-                    now={now}
-                    selected={selected === row.session_id}
-                    onSelect={() => select(row.session_id)}
-                  />
-                ))}
+                {rows.map((row) => {
+                  const isSelected = selected !== null && row.session_ids.includes(selected);
+                  return (
+                    <InboxRowItem
+                      key={row.session_id}
+                      row={row}
+                      now={now}
+                      selected={isSelected}
+                      onSelect={() => {
+                        if (!isSelected) select(row.session_id);
+                      }}
+                    />
+                  );
+                })}
               </ul>
             )}
           </div>

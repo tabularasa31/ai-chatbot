@@ -259,42 +259,40 @@ def test_one_visitors_sessions_are_one_row_one_thread_and_one_resolve(
     tenant: TestClient, db_session: Session
 ) -> None:
     ws = _workspace(tenant, db_session, email="fold@example.com", name="Fold Co")
-    by_id_old = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42"})
-    first = _ticket(db_session, by_id_old, created_ago=timedelta(days=2), user_email=None)
-    _say(db_session, by_id_old, MessageRole.user, "support is silent")
-    by_id_new = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42"})
-    second = _ticket(db_session, by_id_new, user_email=None)
-    _say(db_session, by_id_new, MessageRole.user, "still nothing")
+    older = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42"})
+    first = _ticket(db_session, older, created_ago=timedelta(days=2), user_email=None)
+    _say(db_session, older, MessageRole.user, "support is silent")
+    newer = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42"})
+    second = _ticket(db_session, newer, user_email=None)
+    _say(db_session, newer, MessageRole.user, "still nothing")
 
-    hinted = _chat(db_session, ws.tenant_id, user_context={"user_id": "hint:Bo@Example.com"})
-    _say(db_session, hinted, MessageRole.user, "hello from the site")
+    # An e-mail anyone can claim never folds: not as a hint, not in a ticket.
+    hinted = _chat(db_session, ws.tenant_id, user_context={"user_id": "hint:bo@example.com"})
+    _ticket(db_session, hinted, user_email=None)
     typed = _chat(db_session, ws.tenant_id)
     _ticket(db_session, typed, user_email="bo@example.com")
 
-    for _ in range(2):
-        anonymous = _chat(db_session, ws.tenant_id)
-        _ticket(db_session, anonymous, user_email=None)
-
     queue = tenant.get("/operator/inbox", headers=ws.auth).json()
-    assert queue["attention_count"] == 4
-    assert queue["waiting_count"] == 4
-    row = next(r for r in queue["items"] if r["chat_id"] == str(by_id_new.id))
+    assert (queue["attention_count"], queue["waiting_count"]) == (3, 3)
+    row = next(r for r in queue["items"] if r["chat_id"] == str(newer.id))
+    assert row["session_ids"] == [str(newer.session_id), str(older.session_id)]
     assert row["last_message_preview"] == "still nothing"
     assert row["ticket"]["ticket_number"] == second.ticket_number
-    everything = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()["items"]
-    assert len([r for r in everything if r["visitor_email"] == "bo@example.com"]) == 1
+    assert {str(hinted.id), str(typed.id)} <= {r["chat_id"] for r in queue["items"]}
 
-    thread = tenant.get(f"/operator/sessions/{by_id_old.session_id}", headers=ws.auth).json()
-    assert thread["chat"]["chat_id"] == str(by_id_new.id)
+    thread = tenant.get(f"/operator/sessions/{older.session_id}", headers=ws.auth).json()
+    assert thread["chat"]["chat_id"] == str(newer.id)
     assert [m["content"] for m in thread["messages"]] == ["support is silent", "still nothing"]
 
-    resp = tenant.post(f"/operator/chats/{by_id_new.id}/resolve", headers=ws.auth, json={})
+    tenant.post(f"/operator/chats/{newer.id}/messages", headers=ws.auth, json={"text": "on it"})
+    tenant.post(f"/operator/chats/{newer.id}/release", headers=ws.auth)
+    answered = tenant.get("/operator/inbox", headers=ws.auth).json()
+    assert (answered["attention_count"], answered["waiting_count"]) == (2, 2)
+
+    resp = tenant.post(f"/operator/chats/{newer.id}/resolve", headers=ws.auth, json={})
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["resolved_ticket_numbers"] == [first.ticket_number, second.ticket_number]
-    after = tenant.get("/operator/inbox", headers=ws.auth).json()
-    assert after["attention_count"] == 3
-    assert str(by_id_new.id) not in {r["chat_id"] for r in after["items"]}
 
 
 def test_search_finds_a_visitor_by_name_email_or_ticket_number_across_history(

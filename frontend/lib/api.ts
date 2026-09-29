@@ -101,6 +101,7 @@ export type InboxRow = {
   last_message_preview: string | null;
   last_activity: string;
   message_count: number;
+  session_ids: string[];
   visitor_email: string | null;
   visitor_name: string | null;
 };

@@ -502,10 +502,12 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
 ) -> None:
     """A tenant with widget_identity_secret set only resumes into a chat when
     user_hash verifies; a spoofed or missing hash never reattaches to that
-    user_id's history, and user_hash itself is never persisted."""
+    user_id's history or ContactSession, and user_hash itself is never
+    persisted."""
     client_uuid, bot_public_id = _setup_widget_tenant(
         tenant, db_session, "widget-strict-tenant@example.com"
     )
+    _seed_rag_chunk(db_session, client_uuid)
     secret = "tenant-widget-secret"
     tenant_row = db_session.query(Tenant).filter(Tenant.id == client_uuid).first()
     tenant_row.widget_identity_secret = encrypt_value(secret)
@@ -518,7 +520,7 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
         "/widget/session/init",
         json={
             "bot_id": bot_public_id,
-            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash},
+            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash, "name": "Victim Name"},
         },
     )
     assert verified.status_code == 200
@@ -528,7 +530,18 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     assert victim_chat.user_context["identity_verified"] is True
     assert "user_hash" not in victim_chat.user_context
 
-    # No hash: attacker with the victim's user_id never resumes.
+    _post_widget_chat(tenant, bot_public_id, message="hi", session_id=victim_session_id)
+    victim_contact = (
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "victim-1")
+        .first()
+    )
+    assert victim_contact is not None
+    assert victim_contact.name == "Victim Name"
+    assert victim_contact.conversation_turns == 1
+
+    # No hash: attacker with the victim's user_id never resumes, and a chat
+    # turn on that spoofed session never touches the victim's ContactSession.
     attacker_no_hash = tenant.post(
         "/widget/session/init",
         json={"bot_id": bot_public_id, "user_hints": {"user_id": "victim-1"}},
@@ -536,6 +549,15 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     assert attacker_no_hash.status_code == 200
     assert attacker_no_hash.json()["resumed"] is False
     assert attacker_no_hash.json()["session_id"] != victim_session_id
+    _post_widget_chat(
+        tenant,
+        bot_public_id,
+        message="attacker message",
+        session_id=attacker_no_hash.json()["session_id"],
+    )
+    db_session.refresh(victim_contact)
+    assert victim_contact.name == "Victim Name"
+    assert victim_contact.conversation_turns == 1
 
     # Wrong hash: same result.
     attacker_wrong_hash = tenant.post(
@@ -595,58 +617,6 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     )
     assert corrupted_secret.status_code == 200
     assert corrupted_secret.json()["resumed"] is False
-
-
-def test_widget_chat_turn_on_unverified_strict_session_does_not_touch_victim_contact(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """A strict tenant's unverified session (spoofed user_id, no/failed hash)
-    never touches the real visitor's ContactSession on a chat turn — neither
-    creating one under the spoofed id nor updating the victim's row."""
-    client_uuid, bot_public_id = _setup_widget_tenant(
-        tenant, db_session, "widget-strict-turn@example.com"
-    )
-    _seed_rag_chunk(db_session, client_uuid)
-    secret = "tenant-widget-secret"
-    tenant_row = db_session.query(Tenant).filter(Tenant.id == client_uuid).first()
-    tenant_row.widget_identity_secret = encrypt_value(secret)
-    db_session.commit()
-
-    valid_hash = hmac.new(secret.encode(), b"victim-1", hashlib.sha256).hexdigest()
-
-    verified = tenant.post(
-        "/widget/session/init",
-        json={
-            "bot_id": bot_public_id,
-            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash, "name": "Victim Name"},
-        },
-    )
-    victim_session_id = verified.json()["session_id"]
-    _post_widget_chat(tenant, bot_public_id, message="hi", session_id=victim_session_id)
-
-    victim_contact = (
-        db_session.query(ContactSession)
-        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "victim-1")
-        .first()
-    )
-    assert victim_contact is not None
-    assert victim_contact.name == "Victim Name"
-    assert victim_contact.conversation_turns == 1
-
-    attacker = tenant.post(
-        "/widget/session/init",
-        json={"bot_id": bot_public_id, "user_hints": {"user_id": "victim-1"}},
-    )
-    attacker_session_id = attacker.json()["session_id"]
-    assert attacker_session_id != victim_session_id
-    _post_widget_chat(
-        tenant, bot_public_id, message="attacker message", session_id=attacker_session_id
-    )
-
-    db_session.refresh(victim_contact)
-    assert victim_contact.name == "Victim Name"
-    assert victim_contact.conversation_turns == 1
 
 
 def test_widget_chat_stream_sse(

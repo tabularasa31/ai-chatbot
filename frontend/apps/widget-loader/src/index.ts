@@ -43,6 +43,7 @@ export {};
 
 type UserHints = {
   user_id?: string;
+  user_hash?: string;
   email?: string;
   name?: string;
   locale?: string;
@@ -137,6 +138,7 @@ declare global {
     if (!raw || typeof raw !== "object") return null;
     const allowed: (keyof UserHints)[] = [
       "user_id",
+      "user_hash",
       "email",
       "name",
       "locale",
@@ -147,7 +149,7 @@ declare global {
     for (const key of allowed) {
       const value = raw[key];
       if (typeof value === "string" && value.trim()) {
-        out[key] = value.trim();
+        out[key] = key === "user_hash" ? value.trim().slice(0, 128) : value.trim();
       }
     }
     return Object.keys(out).length > 0 ? out : null;

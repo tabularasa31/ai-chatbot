@@ -18,6 +18,7 @@ const HINTS_HANDSHAKE_TIMEOUT_MS = 2500;
 
 const HINT_KEYS: (keyof UserHints)[] = [
   "user_id",
+  "user_hash",
   "email",
   "name",
   "locale",
@@ -32,7 +33,7 @@ function coerceHints(raw: unknown): UserHints | null {
   for (const key of HINT_KEYS) {
     const value = source[key];
     if (typeof value === "string" && value.trim()) {
-      out[key] = value.trim();
+      out[key] = key === "user_hash" ? value.trim().slice(0, 128) : value.trim();
     }
   }
   return Object.keys(out).length > 0 ? out : null;

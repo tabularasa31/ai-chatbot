@@ -259,10 +259,10 @@ def test_one_visitors_sessions_are_one_row_one_thread_and_one_resolve(
     tenant: TestClient, db_session: Session
 ) -> None:
     ws = _workspace(tenant, db_session, email="fold@example.com", name="Fold Co")
-    older = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42", "identity_verified": True})
+    older = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42"})
     first = _ticket(db_session, older, created_ago=timedelta(days=2), user_email=None)
     _say(db_session, older, MessageRole.user, "support is silent")
-    newer = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42", "identity_verified": True})
+    newer = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42"})
     second = _ticket(db_session, newer, user_email=None)
     _say(db_session, newer, MessageRole.user, "still nothing")
 
@@ -295,8 +295,12 @@ def test_one_visitors_sessions_are_one_row_one_thread_and_one_resolve(
     assert resp.json()["resolved_ticket_numbers"] == [first.ticket_number, second.ticket_number]
 
 
-def test_only_verified_sessions_fold(tenant: TestClient, db_session: Session) -> None:
+def test_strict_tenant_folds_only_verified_sessions(tenant: TestClient, db_session: Session) -> None:
     ws = _workspace(tenant, db_session, email="strict@example.com", name="Strict Co")
+    db_session.query(Tenant).filter(Tenant.id == ws.tenant_id).update(
+        {"widget_identity_secret": "s3cr3t"}
+    )
+    db_session.commit()
 
     verified_older = _chat(
         db_session, ws.tenant_id, user_context={"user_id": "u-1", "identity_verified": True}

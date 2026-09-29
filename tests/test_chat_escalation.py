@@ -325,7 +325,7 @@ def test_chat_followup_no_keeps_active_user_session_open(
     chat = Chat(
         tenant_id=tenant_id,
         session_id=uuid.uuid4(),
-        user_context={"user_id": "u-follow", "identity_verified": True},
+        user_context={"user_id": "u-follow"},
         escalation_followup_pending=True,
     )
     db_session.add(chat)
@@ -335,7 +335,7 @@ def test_chat_followup_no_keeps_active_user_session_open(
     row = start_user_session(
         db_session,
         tenant_id=tenant_id,
-        user_context={"user_id": "u-follow", "identity_verified": True},
+        user_context={"user_id": "u-follow"},
     )
     assert row is not None
     db_session.commit()
@@ -395,7 +395,7 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
     chat = Chat(
         tenant_id=tenant_id,
         session_id=uuid.uuid4(),
-        user_context={"user_id": "u-follow-yes", "identity_verified": True},
+        user_context={"user_id": "u-follow-yes"},
         escalation_followup_pending=True,
     )
     db_session.add(chat)
@@ -405,7 +405,7 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
     row = start_user_session(
         db_session,
         tenant_id=tenant_id,
-        user_context={"user_id": "u-follow-yes", "identity_verified": True},
+        user_context={"user_id": "u-follow-yes"},
     )
     assert row is not None
     db_session.commit()

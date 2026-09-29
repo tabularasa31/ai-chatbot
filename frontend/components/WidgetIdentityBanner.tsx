@@ -42,8 +42,8 @@ export function WidgetIdentityBanner() {
       <div className="flex-1">
         <p className="font-semibold">Widget identity verification is here</p>
         <p className="mt-1 text-sm">
-          If you pass a <code className="text-violet-800">userId</code> to the widget, sign it —
-          unsigned IDs will stop restoring conversations across devices.
+          Conversations now continue across devices only for verified visitors. Set up identity
+          verification if you pass <code className="text-violet-800">user_id</code> to the widget.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm font-medium">
           <a href="/docs/changelog" className="text-violet-700 hover:underline">

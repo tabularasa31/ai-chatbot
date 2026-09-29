@@ -106,8 +106,8 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
       {!hasKey && !secret && (
         <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
           <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
-          No identity key yet — unsigned user IDs still restore conversations for now, but that fallback
-          will be removed. Set up verification.
+          No key yet. User IDs from your page personalize the chat, but conversations only continue across
+          devices for visitors verified by your server.
         </div>
       )}
 

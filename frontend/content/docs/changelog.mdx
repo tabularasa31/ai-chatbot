@@ -5,12 +5,12 @@ description: What's changed in Chat9, most recent first.
 
 ## 2026-09-29 — Widget identity verification
 
-If your site passes `user_id` in `userHints` so a visitor's conversation follows them across devices, you can now prove that `user_id` really belongs to the visitor, instead of trusting it as-is.
+You can now prove that a `user_id` passed to the widget really belongs to the visitor.
 
-**Who's affected:** any site passing `user_id` to the widget.
+**What's new:** a tenant owner can generate a signing key in **Dashboard → Widget settings → Widget identity verification**. Your server computes a `user_hash` from the key and the visitor's `user_id`, and passes it alongside `user_id` in `userHints`.
 
-**What changed:** a tenant owner can generate a signing key in **Dashboard → Widget settings → Widget identity verification**. Your server computes a `user_hash` from the key and the visitor's `user_id`, and passes it alongside `user_id` in `userHints`. Once a key is configured, cross-device resume requires a valid `user_hash` — a bare `user_id` becomes personalization only, and every new browser starts a fresh conversation.
+**What it means:** conversations now continue across devices, and sessions are grouped in the Inbox, only for verified visitors. A `user_id` without a valid `user_hash` personalizes the conversation and keeps it on the same browser.
 
-Sites that don't set up a key keep today's behavior for now, but that unverified fallback will be removed in a future release — set up verification now.
+**What to do:** if you pass `user_id` and want conversations to follow visitors across devices, set up verification.
 
 See [Embedding the Widget → Identity verification](/docs/embedding-the-widget#identity-verification) for the full setup guide.

@@ -236,6 +236,30 @@ Hints are used for greeting personalization, language selection, and escalation 
        ).hexdigest()
    ```
 
+   ```php
+   <?php
+   // PHP
+   function userHash(string $userId): string {
+       return hash_hmac("sha256", $userId, getenv("CHAT9_WIDGET_IDENTITY_KEY"));
+   }
+   ```
+
+   ```go
+   // Go
+   import (
+       "crypto/hmac"
+       "crypto/sha256"
+       "encoding/hex"
+       "os"
+   )
+
+   func userHash(userID string) string {
+       mac := hmac.New(sha256.New, []byte(os.Getenv("CHAT9_WIDGET_IDENTITY_KEY")))
+       mac.Write([]byte(userID))
+       return hex.EncodeToString(mac.Sum(nil))
+   }
+   ```
+
    `user_hash` is a lowercase hex HMAC-SHA256 of the exact `user_id` string, using the key as the HMAC key. Compute it wherever you already render the page for a logged-in visitor, and pass it down to the client alongside `user_id`.
 
    The server trims `user_id` and keeps at most 200 characters before verifying — sign exactly the trimmed id you send, since a longer id won't verify.

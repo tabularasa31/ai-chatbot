@@ -95,12 +95,10 @@ Set the **response detail level** (Detailed / Standard / Corporate) from **Dashb
 - **Standard** — plain language; avoids internal paths, stack traces, and vendor error names.
 - **Corporate** — polished, non-technical tone; no ETAs or deep technical detail; offers a support contact for ongoing issues.
 
-## Widget API (`/settings/widget`)
+## Widget settings (`/widget-settings`)
 
-- Manage **signing secret** (generate, rotate) for optional **identified** widget sessions.
-- Generating a new secret immediately invalidates the previous one — all in-flight tokens signed with the old secret will be rejected.
-- Server-side token example (Python) with copy-to-clipboard on the snippet block.
-- See [Embedding the Widget → Identified sessions](/docs/embedding-the-widget#identified-sessions-optional) for the full integration guide and SDK reference.
+- **Widget identity verification** — owner-only card to generate, reveal/copy, and rotate the key used to verify a visitor's `user_id`. Rotating replaces the key immediately; requests still signed with the old key stop verifying.
+- See [Embedding the Widget → Identity verification](/docs/embedding-the-widget#identity-verification) for the full setup guide.
 
 ## Escalation tickets
 

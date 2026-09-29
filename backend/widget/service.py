@@ -97,10 +97,8 @@ def apply_identity_context_patch(
     if locale_value is not None:
         patched["browser_locale"] = locale_value
 
-    # Carry the strict-tenant verification flag forward so a resumed or
-    # rotated chat never loses it — dropping it would make an unverified
-    # session read as legacy (key absent) and eligible for contact_id
-    # extraction again.
+    # Carry the verification flag forward so a resumed or rotated chat never
+    # loses it.
     if "identity_verified" in source:
         patched["identity_verified"] = source["identity_verified"]
 

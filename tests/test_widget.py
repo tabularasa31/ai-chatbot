@@ -569,6 +569,43 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     assert spoofed_hint.status_code == 200
     assert spoofed_hint.json()["mode"] == "anonymous"
 
+    # Flooding with unsigned sessions for the same user_id (each creates an
+    # unverified chat row) must not push the verified chat out of the resume
+    # query's window — the filter runs in SQL, not on a Python-side slice.
+    from backend.core.limiter import limiter as _limiter
+
+    for _ in range(21):
+        _limiter.reset()  # bypass the 10/minute widget_init limit for this flood
+        tenant.post(
+            "/widget/session/init",
+            json={"bot_id": bot_public_id, "user_hints": {"user_id": "victim-1"}},
+        )
+    _limiter.reset()
+    legit_after_flood = tenant.post(
+        "/widget/session/init",
+        json={
+            "bot_id": bot_public_id,
+            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash},
+        },
+    )
+    assert legit_after_flood.status_code == 200
+    assert legit_after_flood.json()["resumed"] is True
+    assert legit_after_flood.json()["session_id"] == victim_session_id
+
+    # Corrupted ciphertext in widget_identity_secret must not 500 the public
+    # endpoint: session init still succeeds, staying strict (no resume).
+    tenant_row.widget_identity_secret = "not-valid-fernet-ciphertext"
+    db_session.commit()
+    corrupted_secret = tenant.post(
+        "/widget/session/init",
+        json={
+            "bot_id": bot_public_id,
+            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash},
+        },
+    )
+    assert corrupted_secret.status_code == 200
+    assert corrupted_secret.json()["resumed"] is False
+
 
 def test_widget_chat_stream_sse(
     tenant: TestClient,

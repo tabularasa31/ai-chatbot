@@ -278,8 +278,16 @@ async def widget_session_init(
         reject_log_event="widget_session_init_rejected",
     )
 
-    tenant_secret = decrypt_value(tenant.widget_identity_secret) if tenant.widget_identity_secret else None
-    strict_tenant = tenant_secret is not None
+    tenant_secret = None
+    strict_tenant = bool(tenant.widget_identity_secret)
+    if tenant.widget_identity_secret:
+        try:
+            tenant_secret = decrypt_value(tenant.widget_identity_secret)
+        except Exception:
+            # Corrupted ciphertext must not 500 a public endpoint. Stay
+            # strict with no valid secret — never fall back to legacy
+            # (unverified) resume, that would reopen the hole this guards.
+            logger.error("widget_session_init_secret_decrypt_failed")
 
     session_id = uuid.uuid4()
     mode: Literal["hints", "anonymous"] = "anonymous"
@@ -300,7 +308,11 @@ async def widget_session_init(
             # user_hash verifies the client-supplied user_id; otherwise the
             # user_id is kept for personalization only, on a fresh session.
             if strict_tenant and resume_eligible:
-                identity_verified = verify_user_hash(tenant_secret, hints["user_id"], user_hash)
+                identity_verified = (
+                    verify_user_hash(tenant_secret, hints["user_id"], user_hash)
+                    if tenant_secret is not None
+                    else False
+                )
                 if not identity_verified:
                     resume_eligible = False
             # Synthesize a stable user_id when hints carry only an email so
@@ -328,31 +340,27 @@ async def widget_session_init(
     if resume_eligible and user_context and user_context.get("user_id"):
 
         def _resume_existing(s):
-            candidates = (
-                s.query(Chat)
-                .filter(
-                    Chat.tenant_id == tenant.id,
-                    Chat.bot_id == _bot.id,
-                    Chat.user_context["user_id"].as_string()
-                    == user_context["user_id"],
-                )
-                .order_by(Chat.created_at.desc())
-            )
+            filters = [
+                Chat.tenant_id == tenant.id,
+                Chat.bot_id == _bot.id,
+                Chat.user_context["user_id"].as_string()
+                == user_context["user_id"],
+            ]
             if strict_tenant:
                 # A strict tenant only resumes into a chat that itself was
                 # previously verified — an unverified row must not be reused
-                # to reattach a spoofed user_id to real history.
-                existing = next(
-                    (
-                        c
-                        for c in candidates.limit(20).all()
-                        if isinstance(c.user_context, dict)
-                        and c.user_context.get("identity_verified") is True
-                    ),
-                    None,
+                # to reattach a spoofed user_id to real history. Filtered in
+                # SQL (not Python, post-limit) so an attacker cannot push the
+                # verified chat out of a fixed-size window with unverified rows.
+                filters.append(
+                    Chat.user_context["identity_verified"].as_boolean().is_(True)
                 )
-            else:
-                existing = candidates.first()
+            existing = (
+                s.query(Chat)
+                .filter(*filters)
+                .order_by(Chat.created_at.desc())
+                .first()
+            )
             if existing is None:
                 return None
             existing.user_context = apply_identity_context_patch(

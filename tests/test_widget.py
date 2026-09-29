@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import uuid
 from unittest.mock import Mock
 
@@ -14,6 +16,7 @@ from backend.chat.service import (
     ChatTurnOutcome,
 )
 from backend.chat.types import RetrievalContext
+from backend.core.crypto import encrypt_value
 from backend.guards.reject_response import RejectReason, _build_canonical_reject_response
 from backend.guards.types import Verdict, VerdictReason
 from backend.models import Bot, Chat, ContactSession, Document, DocumentStatus, DocumentType, Embedding, Tenant
@@ -491,6 +494,80 @@ def test_widget_session_init_resume_modes(
         assert second.json()["session_id"] == first_session
     else:
         assert second.json()["session_id"] != first_session
+
+
+def test_widget_session_init_strict_tenant_verifies_user_hash(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A tenant with widget_identity_secret set only resumes into a chat when
+    user_hash verifies; a spoofed or missing hash never reattaches to that
+    user_id's history, and user_hash itself is never persisted."""
+    client_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-strict-tenant@example.com"
+    )
+    secret = "tenant-widget-secret"
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == client_uuid).first()
+    tenant_row.widget_identity_secret = encrypt_value(secret)
+    db_session.commit()
+
+    valid_hash = hmac.new(secret.encode(), b"victim-1", hashlib.sha256).hexdigest()
+
+    # Establishes the victim's verified session.
+    verified = tenant.post(
+        "/widget/session/init",
+        json={
+            "bot_id": bot_public_id,
+            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash},
+        },
+    )
+    assert verified.status_code == 200
+    assert verified.json()["resumed"] is False
+    victim_session_id = verified.json()["session_id"]
+    victim_chat = db_session.query(Chat).filter(Chat.session_id == uuid.UUID(victim_session_id)).first()
+    assert victim_chat.user_context["identity_verified"] is True
+    assert "user_hash" not in victim_chat.user_context
+
+    # No hash: attacker with the victim's user_id never resumes.
+    attacker_no_hash = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"user_id": "victim-1"}},
+    )
+    assert attacker_no_hash.status_code == 200
+    assert attacker_no_hash.json()["resumed"] is False
+    assert attacker_no_hash.json()["session_id"] != victim_session_id
+
+    # Wrong hash: same result.
+    attacker_wrong_hash = tenant.post(
+        "/widget/session/init",
+        json={
+            "bot_id": bot_public_id,
+            "user_hints": {"user_id": "victim-1", "user_hash": "0" * 64},
+        },
+    )
+    assert attacker_wrong_hash.status_code == 200
+    assert attacker_wrong_hash.json()["resumed"] is False
+    assert attacker_wrong_hash.json()["session_id"] != victim_session_id
+
+    # Correct hash resumes the verified session.
+    legit = tenant.post(
+        "/widget/session/init",
+        json={
+            "bot_id": bot_public_id,
+            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash},
+        },
+    )
+    assert legit.status_code == 200
+    assert legit.json()["resumed"] is True
+    assert legit.json()["session_id"] == victim_session_id
+
+    # A client-supplied hint:<...> user_id is dropped, even for a strict tenant.
+    spoofed_hint = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"user_id": "hint:victim@example.com"}},
+    )
+    assert spoofed_hint.status_code == 200
+    assert spoofed_hint.json()["mode"] == "anonymous"
 
 
 def test_widget_chat_stream_sse(

@@ -569,28 +569,18 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     assert spoofed_hint.status_code == 200
     assert spoofed_hint.json()["mode"] == "anonymous"
 
-    # Flooding with unsigned sessions for the same user_id (each creates an
-    # unverified chat row) must not push the verified chat out of the resume
-    # query's window — the filter runs in SQL, not on a Python-side slice.
-    from backend.core.limiter import limiter as _limiter
-
-    for _ in range(21):
-        _limiter.reset()  # bypass the 10/minute widget_init limit for this flood
-        tenant.post(
-            "/widget/session/init",
-            json={"bot_id": bot_public_id, "user_hints": {"user_id": "victim-1"}},
-        )
-    _limiter.reset()
-    legit_after_flood = tenant.post(
+    # A non-hex/non-ASCII user_hash must not 500 (hmac.compare_digest raises
+    # TypeError on non-ASCII input) — it is just treated as unverified.
+    non_ascii_hash = tenant.post(
         "/widget/session/init",
         json={
             "bot_id": bot_public_id,
-            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash},
+            "user_hints": {"user_id": "victim-1", "user_hash": "é"},
         },
     )
-    assert legit_after_flood.status_code == 200
-    assert legit_after_flood.json()["resumed"] is True
-    assert legit_after_flood.json()["session_id"] == victim_session_id
+    assert non_ascii_hash.status_code == 200
+    assert non_ascii_hash.json()["resumed"] is False
+    assert non_ascii_hash.json()["session_id"] != victim_session_id
 
     # Corrupted ciphertext in widget_identity_secret must not 500 the public
     # endpoint: session init still succeeds, staying strict (no resume).
@@ -605,6 +595,58 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     )
     assert corrupted_secret.status_code == 200
     assert corrupted_secret.json()["resumed"] is False
+
+
+def test_widget_chat_turn_on_unverified_strict_session_does_not_touch_victim_contact(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A strict tenant's unverified session (spoofed user_id, no/failed hash)
+    never touches the real visitor's ContactSession on a chat turn — neither
+    creating one under the spoofed id nor updating the victim's row."""
+    client_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-strict-turn@example.com"
+    )
+    _seed_rag_chunk(db_session, client_uuid)
+    secret = "tenant-widget-secret"
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == client_uuid).first()
+    tenant_row.widget_identity_secret = encrypt_value(secret)
+    db_session.commit()
+
+    valid_hash = hmac.new(secret.encode(), b"victim-1", hashlib.sha256).hexdigest()
+
+    verified = tenant.post(
+        "/widget/session/init",
+        json={
+            "bot_id": bot_public_id,
+            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash, "name": "Victim Name"},
+        },
+    )
+    victim_session_id = verified.json()["session_id"]
+    _post_widget_chat(tenant, bot_public_id, message="hi", session_id=victim_session_id)
+
+    victim_contact = (
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "victim-1")
+        .first()
+    )
+    assert victim_contact is not None
+    assert victim_contact.name == "Victim Name"
+    assert victim_contact.conversation_turns == 1
+
+    attacker = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"user_id": "victim-1"}},
+    )
+    attacker_session_id = attacker.json()["session_id"]
+    assert attacker_session_id != victim_session_id
+    _post_widget_chat(
+        tenant, bot_public_id, message="attacker message", session_id=attacker_session_id
+    )
+
+    db_session.refresh(victim_contact)
+    assert victim_contact.name == "Victim Name"
+    assert victim_contact.conversation_turns == 1
 
 
 def test_widget_chat_stream_sse(

@@ -77,6 +77,8 @@ class InboxRowResponse(BaseModel):
     last_message_preview: str | None = None
     last_activity: datetime
     message_count: int
+    # How many widget sessions of the same visitor this row folds together.
+    session_count: int
     visitor_email: str | None = None
     visitor_name: str | None = None
 

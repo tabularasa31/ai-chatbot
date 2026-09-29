@@ -101,6 +101,7 @@ export type InboxRow = {
   last_message_preview: string | null;
   last_activity: string;
   message_count: number;
+  session_count: number;
   visitor_email: string | null;
   visitor_name: string | null;
 };
@@ -869,8 +870,10 @@ export const api = {
     },
   },
   operator: {
-    inbox(scope: "attention" | "all"): Promise<InboxList> {
-      return getJson(`${BASE_URL}/operator/inbox?scope=${scope}`, "Failed to load inbox");
+    inbox(scope: "attention" | "all", query = ""): Promise<InboxList> {
+      const params = new URLSearchParams({ scope });
+      if (query) params.set("q", query);
+      return getJson(`${BASE_URL}/operator/inbox?${params}`, "Failed to load inbox");
     },
     summary(): Promise<InboxSummary> {
       return getJson(`${BASE_URL}/operator/inbox/summary`, "Failed to load inbox summary");

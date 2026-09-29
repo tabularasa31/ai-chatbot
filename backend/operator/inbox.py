@@ -12,13 +12,16 @@ widget asks a different question — "might a human still answer here?" — so
 it keeps polling on any active ticket; only the console narrows to "has
 nobody answered yet".
 
-The unit is the visitor's session, not the ``Chat`` row. A session spans
-several chats once idle rotation kicks in, and the ticket that put a visitor
-in the queue may sit on an older chat than the one they are writing in now.
-So a row is a session, it points at the session's newest chat (the only one
-that can be live and the one the widget is attached to), and its ticket is
-looked up across every chat of the session. The thread view and the resolve
-intent use the same rule, so what the queue shows is what resolving clears.
+The unit is the visitor, not the ``Chat`` row nor the widget session. A
+session spans several chats once idle rotation kicks in, and one visitor
+opens several sessions — another device, cleared storage, a second request
+days later. Sessions fold together when they share a visitor key
+(:func:`visitor_key`): the tenant's own user id, else an e-mail. Anonymous
+sessions stay one row each; nothing ties them together. A row points at the
+visitor's current chat — the one a human holds, else the newest, which is
+the one their widget is attached to — and its ticket is looked up across
+every chat of every session. The thread view and the resolve intent use the
+same rule, so what the queue shows is what resolving clears.
 
 All DB work is sync, bridged from the async routes via ``run_sync`` like the
 rest of the operator domain.
@@ -31,7 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from sqlalchemy import case, exists, func, or_, select
+from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from backend.escalation.service import ACTIVE_TICKET_STATUSES, request_raised_at
@@ -48,6 +51,7 @@ InboxScope = Literal["attention", "all"]
 HandoffState = Literal["waiting", "live", "bot"]
 
 PREVIEW_MAX_LEN = 140
+HINT_USER_ID_PREFIX = "hint:"
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,7 @@ class InboxRow:
     last_message_preview: str | None
     last_activity: datetime
     message_count: int
+    session_count: int
     visitor: Visitor
 
 
@@ -297,64 +302,229 @@ def _preview(text: str) -> str:
     return text
 
 
-def list_inbox(
-    db: Session, *, tenant_id: uuid.UUID, scope: InboxScope, limit: int = 200
-) -> list[InboxRow]:
-    """The queue: one row per session, pointing at the session's newest chat.
+def visitor_key(chat: Chat, ticket: EscalationTicket | None) -> str | None:
+    """Who a session belongs to, for folding a visitor's sessions together.
 
-    ``attention`` keeps only sessions that need a human — a chat of theirs is
+    The tenant's own user id wins. A bare e-mail is the fallback, whether the
+    tenant passed it as a hint (the widget turns it into a ``hint:`` user id)
+    or the visitor typed it into a ticket. ``None`` for an anonymous visitor.
+    """
+    ctx = chat.user_context if isinstance(chat.user_context, dict) else {}
+    user_id = ctx.get("user_id")
+    if isinstance(user_id, str) and user_id.startswith(HINT_USER_ID_PREFIX):
+        email = user_id.removeprefix(HINT_USER_ID_PREFIX)
+    elif user_id:
+        return f"id:{user_id}"
+    else:
+        email = visitor_of(chat, ticket).email
+    return f"email:{email.lower()}" if email else None
+
+
+def _may_belong_to(key: str):
+    """A chat-level superset of the sessions :func:`visitor_key` maps to ``key``."""
+    kind, _, value = key.partition(":")
+    user_id = Chat.user_context["user_id"].as_string()
+    if kind == "id":
+        return user_id == value
+    return or_(
+        func.lower(user_id) == HINT_USER_ID_PREFIX + value,
+        func.lower(Chat.user_context["email"].as_string()) == value,
+        exists().where(
+            EscalationTicket.chat_id == Chat.id,
+            func.lower(EscalationTicket.user_email) == value,
+        ),
+    )
+
+
+def _matches(query: str):
+    """Chats whose visitor name, e-mail or ticket number contains ``query``."""
+    return or_(
+        Chat.user_context["name"].as_string().icontains(query, autoescape=True),
+        Chat.user_context["email"].as_string().icontains(query, autoescape=True),
+        exists().where(
+            EscalationTicket.chat_id == Chat.id,
+            or_(
+                EscalationTicket.ticket_number.icontains(query, autoescape=True),
+                EscalationTicket.user_email.icontains(query, autoescape=True),
+                EscalationTicket.user_name.icontains(query, autoescape=True),
+            ),
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _SessionState:
+    chat: Chat
+    ticket: EscalationTicket | None
+    waiting: bool
+
+
+@dataclass(frozen=True)
+class _VisitorSessions:
+    """One visitor's sessions, newest first."""
+
+    sessions: list[_SessionState]
+
+    @property
+    def current(self) -> Chat:
+        chats = [s.chat for s in self.sessions]
+        live = [c for c in chats if c.operator_state is OperatorState.live]
+        return (live or chats)[0]
+
+    @property
+    def ticket(self) -> EscalationTicket | None:
+        tickets = sorted(
+            (s.ticket for s in self.sessions if s.ticket is not None),
+            key=lambda t: t.created_at,
+            reverse=True,
+        )
+        if not tickets:
+            return None
+        return min(tickets, key=lambda t: t.status not in ACTIVE_TICKET_STATUSES)
+
+    @property
+    def handoff_state(self) -> HandoffState:
+        return handoff_state(self.current, waiting=any(s.waiting for s in self.sessions))
+
+    @property
+    def waiting_since(self) -> datetime | None:
+        if self.handoff_state != "waiting":
+            return None
+        raised = [request_raised_at(s.ticket) for s in self.sessions if s.waiting and s.ticket]
+        return min(raised, default=None)
+
+    @property
+    def visitor(self) -> Visitor:
+        known = [visitor_of(s.chat, s.ticket) for s in self.sessions]
+        return Visitor(
+            email=next((v.email for v in known if v.email), None),
+            name=next((v.name for v in known if v.name), None),
+        )
+
+
+def _session_states(
+    db: Session, *, tenant_id: uuid.UUID, chats: list[Chat]
+) -> list[_SessionState]:
+    """``chats`` are the newest chat of each session."""
+    session_ids = [c.session_id for c in chats]
+    tickets = _tickets_by_session(db, tenant_id=tenant_id, session_ids=session_ids)
+    waiting = _waiting_sessions(db, tenant_id=tenant_id, session_ids=session_ids)
+    return [
+        _SessionState(
+            chat=c, ticket=tickets.get(c.session_id), waiting=c.session_id in waiting
+        )
+        for c in chats
+    ]
+
+
+def _by_visitor(states: list[_SessionState]) -> list[_VisitorSessions]:
+    groups: dict[object, list[_SessionState]] = {}
+    for state in states:
+        key = visitor_key(state.chat, state.ticket) or state.chat.session_id
+        groups.setdefault(key, []).append(state)
+    return [
+        _VisitorSessions(sorted(g, key=lambda s: s.chat.created_at, reverse=True))
+        for g in groups.values()
+    ]
+
+
+def _visitors(db: Session, *, tenant_id: uuid.UUID, session_ids) -> list[_VisitorSessions]:
+    chats = _newest_chats(db, tenant_id=tenant_id, session_ids=session_ids)
+    return _by_visitor(_session_states(db, tenant_id=tenant_id, chats=chats))
+
+
+def visitor_session_ids(
+    db: Session, *, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Every session of the visitor who owns ``session_id``, newest first.
+
+    Empty when the session is not this tenant's.
+    """
+    own = _session_states(
+        db,
+        tenant_id=tenant_id,
+        chats=_newest_chats(db, tenant_id=tenant_id, session_ids=[session_id]),
+    )
+    if not own:
+        return []
+    key = visitor_key(own[0].chat, own[0].ticket)
+    if key is None:
+        return [session_id]
+    candidates = _visitors(
+        db, tenant_id=tenant_id, session_ids=_session_ids_where(tenant_id, _may_belong_to(key))
+    )
+    return [
+        s.chat.session_id
+        for v in candidates
+        for s in v.sessions
+        if visitor_key(s.chat, s.ticket) == key
+    ]
+
+
+def list_inbox(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    scope: InboxScope,
+    query: str | None = None,
+    limit: int = 200,
+) -> list[InboxRow]:
+    """The queue: one row per visitor, pointing at their current chat.
+
+    ``attention`` keeps only visitors who need a human — a chat of theirs is
     live, or a ticket of theirs is active and nobody has answered it yet —
     ordered longest wait first, then whoever is being served, newest
     activity first. ``all`` is every conversation the tenant has, newest
-    first, capped at ``limit`` because a tenant's history is unbounded and
-    the console is a queue, not an archive.
+    first, capped at ``limit`` sessions because a tenant's history is
+    unbounded and the console is a queue, not an archive.
     Sessions without a single message are left out of ``all`` unless they
     need a human: a mount the visitor never typed into is not a conversation
     anyone can act on, and ``all`` must still contain the whole queue.
+    ``query`` narrows either scope to visitors whose name, e-mail or ticket
+    number contains it.
     """
     if scope == "attention":
-        chats = _newest_chats(
-            db,
-            tenant_id=tenant_id,
-            session_ids=_session_ids_where(tenant_id, _needs_attention(tenant_id)),
-        )
+        predicate = _needs_attention(tenant_id)
     else:
-        chats = _newest_chats(
-            db,
-            tenant_id=tenant_id,
-            session_ids=_session_ids_where(
-                tenant_id, or_(_has_messages(), _needs_attention(tenant_id))
-            ),
-            limit=limit,
+        predicate = or_(_has_messages(), _needs_attention(tenant_id))
+    if query:
+        predicate = and_(
+            predicate, Chat.session_id.in_(_session_ids_where(tenant_id, _matches(query)))
         )
+    chats = _newest_chats(
+        db,
+        tenant_id=tenant_id,
+        session_ids=_session_ids_where(tenant_id, predicate),
+        limit=None if scope == "attention" else limit,
+    )
+    visitors = _by_visitor(_session_states(db, tenant_id=tenant_id, chats=chats))
 
-    session_ids = [c.session_id for c in chats]
-    tickets = _tickets_by_session(db, tenant_id=tenant_id, session_ids=session_ids)
-    waiting_sessions = _waiting_sessions(db, tenant_id=tenant_id, session_ids=session_ids)
-    last = _last_messages(db, [c.id for c in chats])
+    last = _last_messages(db, [s.chat.id for v in visitors for s in v.sessions])
     emails = _emails_by_user(
-        db, {c.assigned_operator_id for c in chats if c.assigned_operator_id}
+        db, {v.current.assigned_operator_id for v in visitors if v.current.assigned_operator_id}
     )
 
     rows: list[InboxRow] = []
-    for chat in chats:
-        ticket = tickets.get(chat.session_id)
-        state = handoff_state(chat, waiting=chat.session_id in waiting_sessions)
-        newest, count = last.get(chat.id, (None, 0))
+    for v in visitors:
+        current = v.current
+        ticket = v.ticket
+        per_chat = [last[s.chat.id] for s in v.sessions if s.chat.id in last]
+        newest = max((m for m, _ in per_chat), key=lambda m: m.created_at, default=None)
         rows.append(
             InboxRow(
-                session_id=chat.session_id,
-                chat_id=chat.id,
-                handoff_state=state,
+                session_id=current.session_id,
+                chat_id=current.id,
+                handoff_state=v.handoff_state,
                 ticket=ticket,
-                assigned_operator_id=chat.assigned_operator_id,
-                assigned_operator_email=emails.get(chat.assigned_operator_id),
-                waiting_since=request_raised_at(ticket) if state == "waiting" and ticket else None,
+                assigned_operator_id=current.assigned_operator_id,
+                assigned_operator_email=emails.get(current.assigned_operator_id),
+                waiting_since=v.waiting_since,
                 last_message_role=newest.role.value if newest is not None else None,
                 last_message_preview=_preview(newest.content) if newest is not None else None,
-                last_activity=newest.created_at if newest is not None else chat.created_at,
-                message_count=count,
-                visitor=visitor_of(chat, ticket),
+                last_activity=newest.created_at if newest is not None else current.created_at,
+                message_count=sum(count for _, count in per_chat),
+                session_count=len(v.sessions),
+                visitor=v.visitor,
             )
         )
 
@@ -367,57 +537,42 @@ def list_inbox(
 
 
 def inbox_counts(db: Session, *, tenant_id: uuid.UUID) -> InboxCounts:
-    """How many sessions wait for a human, and how many need one at all.
+    """How many visitors wait for a human, and how many need one at all.
 
     ``waiting`` is the sidebar badge: it drops to zero when every request has
     been answered or is being served. ``attention`` is the size of the default
-    queue. Both count sessions, like the queue does; a session with a live
-    chat is being served whatever its older chats' tickets say.
+    queue. Both count visitors, like the queue does; a visitor with a live
+    chat is being served whatever their other tickets say.
     """
-    live_sessions = _session_ids_where(tenant_id, Chat.operator_state == OperatorState.live)
-    waiting = (
-        db.query(func.count(func.distinct(Chat.session_id)))
-        .filter(
-            Chat.tenant_id == tenant_id,
-            Chat.session_id.in_(_waiting_session_ids(tenant_id)),
-            Chat.session_id.not_in(live_sessions),
-        )
-        .scalar()
-        or 0
+    visitors = _visitors(
+        db, tenant_id=tenant_id, session_ids=_session_ids_where(tenant_id, _needs_attention(tenant_id))
     )
-    attention = (
-        db.query(func.count(func.distinct(Chat.session_id)))
-        .filter(Chat.tenant_id == tenant_id, _needs_attention(tenant_id))
-        .scalar()
-        or 0
-    )
-    return InboxCounts(waiting=waiting, attention=attention)
+    waiting = sum(1 for v in visitors if v.handoff_state == "waiting")
+    return InboxCounts(waiting=waiting, attention=len(visitors))
 
 
 def load_thread(
     db: Session, *, tenant_id: uuid.UUID, session_id: uuid.UUID
 ) -> Thread | None:
-    """One visitor's whole session, every chat of it, oldest first.
+    """One visitor's whole history, every chat of every session, oldest first.
 
-    The operator actions apply to the newest chat: it is the only one that
-    can be live, and the one the visitor's widget is attached to. ``None``
-    when the session is not this tenant's — indistinguishable from one that
-    does not exist.
+    The operator actions apply to the visitor's current chat. ``None`` when
+    the session is not this tenant's — indistinguishable from one that does
+    not exist.
     """
-    chats = (
-        db.query(Chat)
-        .filter(Chat.session_id == session_id, Chat.tenant_id == tenant_id)
-        .order_by(Chat.created_at.asc())
-        .all()
-    )
-    if not chats:
+    session_ids = visitor_session_ids(db, tenant_id=tenant_id, session_id=session_id)
+    if not session_ids:
         return None
-    current = chats[-1]
+    visitor = _visitors(db, tenant_id=tenant_id, session_ids=session_ids)[0]
+    current = visitor.current
+    chat_ids = select(Chat.id).where(
+        Chat.tenant_id == tenant_id, Chat.session_id.in_(session_ids)
+    )
 
     rows = (
         db.query(Message, User.email)
         .outerjoin(User, User.id == Message.operator_user_id)
-        .filter(Message.chat_id.in_([c.id for c in chats]))
+        .filter(Message.chat_id.in_(chat_ids))
         .order_by(Message.created_at.asc(), Message.id.asc())
         .all()
     )
@@ -426,19 +581,15 @@ def load_thread(
         for m, email in rows
     ]
 
-    ticket = _tickets_by_session(db, tenant_id=tenant_id, session_ids=[session_id]).get(
-        session_id
-    )
-    waiting = bool(_waiting_sessions(db, tenant_id=tenant_id, session_ids=[session_id]))
     emails = _emails_by_user(
         db, {current.assigned_operator_id} if current.assigned_operator_id else set()
     )
     return Thread(
         session_id=session_id,
         chat=current,
-        handoff_state=handoff_state(current, waiting=waiting),
-        ticket=ticket,
+        handoff_state=visitor.handoff_state,
+        ticket=visitor.ticket,
         assigned_operator_email=emails.get(current.assigned_operator_id),
-        visitor=visitor_of(current, ticket),
+        visitor=visitor.visitor,
         messages=messages,
     )

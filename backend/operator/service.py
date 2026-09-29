@@ -30,6 +30,7 @@ from backend.models import (
     OperatorState,
 )
 from backend.models.base import _utcnow
+from backend.operator.inbox import visitor_session_ids
 from backend.operator.sessions import (
     emit_operator_session_ended,
     open_operator_session,
@@ -296,7 +297,7 @@ def resolve_from_operator(
     The fourth operator intent next to take, reply and release, and like the
     others channel-agnostic. Two things happen in one transaction:
 
-    * every ticket still being worked anywhere in the visitor's session goes
+    * every ticket still being worked in any of the visitor's sessions goes
       ``resolved`` and its e-mail reply token is revoked — a closed request is
       not somewhere an old notification should still be able to write;
     * the chat is handed back to the bot, closing the operator's stretch, so
@@ -311,7 +312,9 @@ def resolve_from_operator(
     tickets = resolve_session_tickets(
         db,
         tenant_id=tenant_id,
-        session_id=chat.session_id,
+        session_ids=visitor_session_ids(
+            db, tenant_id=tenant_id, session_id=chat.session_id
+        ),
         resolution_text=resolution_text,
     )
     chat_was_with_operator = chat.operator_state is not OperatorState.bot

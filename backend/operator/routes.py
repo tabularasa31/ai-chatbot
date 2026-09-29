@@ -112,6 +112,7 @@ def _row(row: InboxRow) -> InboxRowResponse:
         last_message_preview=row.last_message_preview,
         last_activity=row.last_activity,
         message_count=row.message_count,
+        session_count=row.session_count,
         visitor_email=row.visitor.email,
         visitor_name=row.visitor.name,
     )
@@ -152,14 +153,19 @@ async def inbox(
     db: Annotated[AsyncSession, Depends(get_async_db)],
     scope: Annotated[InboxScope, Query()] = "attention",
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    q: Annotated[str | None, Query(max_length=200)] = None,
 ) -> InboxListResponse:
     """The queue. ``attention`` is what needs a human; ``all`` is everything.
 
     ``limit`` caps ``all`` only: the attention set is bounded by nature.
+    ``q`` searches visitor name, e-mail and ticket number within the scope.
     """
+    query = q.strip() if q else None
 
     def _work(sync_db) -> InboxListResponse:
-        rows = list_inbox(sync_db, tenant_id=tenant.id, scope=scope, limit=limit)
+        rows = list_inbox(
+            sync_db, tenant_id=tenant.id, scope=scope, query=query or None, limit=limit
+        )
         counts = inbox_counts(sync_db, tenant_id=tenant.id)
         return InboxListResponse(
             items=[_row(r) for r in rows],

@@ -10,6 +10,7 @@ import { parseApiDate, formatDateTime, formatTime } from "@/lib/format";
 type Scope = "attention" | "all";
 
 const INBOX_REFRESH_MS = 15_000;
+const SEARCH_DEBOUNCE_MS = 300;
 const THREAD_REFRESH_MS: Record<HandoffState, number> = {
   live: 4_000,
   waiting: 8_000,
@@ -92,6 +93,7 @@ function InboxRowItem({
               ? `Held by ${row.assigned_operator_email}`
               : formatDateTime(row.last_activity)}
           {row.ticket && ` · ${row.ticket.ticket_number}`}
+          {row.session_count > 1 && ` · ${row.session_count} conversations`}
         </p>
       </button>
     </li>
@@ -403,6 +405,8 @@ function InboxPageContent() {
   const sessionFromUrl = searchParams.get("session");
   const [scope, setScope] = useState<Scope>("attention");
   const [selected, setSelected] = useState<string | null>(sessionFromUrl);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -410,12 +414,17 @@ function InboxPageContent() {
   }, [sessionFromUrl]);
 
   useEffect(() => {
+    const id = setTimeout(() => setQuery(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);
 
   const { data: me } = useClientMe();
-  const { data: inbox, error, isLoading, mutate } = useInbox(scope, INBOX_REFRESH_MS);
+  const { data: inbox, error, isLoading, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(
@@ -465,12 +474,27 @@ function InboxPageContent() {
 
       <div className="flex flex-col md:flex-row gap-4">
         <div className="w-full md:w-1/3 bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="max-h-[calc(100vh-200px)] min-h-[420px] overflow-y-auto">
+          <div className="border-b border-slate-100 p-2">
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              maxLength={200}
+              aria-label="Search conversations"
+              placeholder="Search by name, e-mail or ticket number"
+              className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
+            />
+          </div>
+          <div className="max-h-[calc(100vh-252px)] min-h-[368px] overflow-y-auto">
             {isLoading && !inbox ? (
               <div className="p-4 text-slate-500 text-sm">Loading…</div>
             ) : rows.length === 0 ? (
               <div className="p-4 text-slate-500 text-sm">
-                {scope === "attention" ? "Nobody is waiting. All conversations are with the bot." : "No conversations yet."}
+                {query
+                  ? `Nothing matches “${query}”${scope === "attention" ? " among conversations that need attention. Try All." : "."}`
+                  : scope === "attention"
+                    ? "Nobody is waiting. All conversations are with the bot."
+                    : "No conversations yet."}
               </div>
             ) : (
               <ul className="divide-y divide-slate-100">

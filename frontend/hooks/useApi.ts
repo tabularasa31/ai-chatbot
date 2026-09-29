@@ -48,9 +48,10 @@ export function useBotDisclosure(botId: string | null | undefined) {
   );
 }
 
-export function useInbox(scope: "attention" | "all", refreshInterval = 0) {
-  return useSWR<InboxList>(["operator/inbox", scope], () => api.operator.inbox(scope), {
+export function useInbox(scope: "attention" | "all", query: string, refreshInterval = 0) {
+  return useSWR<InboxList>(["operator/inbox", scope, query], () => api.operator.inbox(scope, query), {
     refreshInterval,
+    keepPreviousData: true,
   });
 }
 

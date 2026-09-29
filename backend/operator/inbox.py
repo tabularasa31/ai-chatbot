@@ -44,7 +44,6 @@ from backend.models import (
     Message,
     MessageRole,
     OperatorState,
-    Tenant,
     User,
 )
 
@@ -292,7 +291,7 @@ def _preview(text: str) -> str:
     return text
 
 
-def visitor_key(chat: Chat, *, strict: bool) -> str | None:
+def visitor_key(chat: Chat) -> str | None:
     """The tenant's own id for the visitor, when their site passed one.
 
     Sessions sharing it are one visitor. An e-mail never folds sessions —
@@ -307,16 +306,9 @@ def visitor_key(chat: Chat, *, strict: bool) -> str | None:
     user_id = ctx.get("user_id")
     if not isinstance(user_id, str) or not user_id or user_id.startswith(HINT_USER_ID_PREFIX):
         return None
-    if strict and ctx.get("identity_verified") is not True:
+    if ctx.get("identity_verified") is not True:
         return None
     return user_id
-
-
-def _is_strict_tenant(db: Session, *, tenant_id: uuid.UUID) -> bool:
-    """Whether the tenant holds a widget identity secret (signed user ids)."""
-    return bool(
-        db.query(exists().where(Tenant.id == tenant_id, Tenant.widget_identity_secret.isnot(None))).scalar()
-    )
 
 
 def _matches(query: str):
@@ -477,15 +469,13 @@ def _visitors_of(
     db: Session, *, tenant_id: uuid.UUID, chats: list[Chat]
 ) -> list[_VisitorSessions]:
     """Group sessions by visitor, pulling in the visitor's sessions outside ``chats``."""
-    strict = _is_strict_tenant(db, tenant_id=tenant_id)
-    keys = {key for c in chats if (key := visitor_key(c, strict=strict))}
+    keys = {key for c in chats if (key := visitor_key(c))}
     if keys:
         seen = {c.session_id for c in chats}
-        id_matches = Chat.user_context["user_id"].as_string().in_(keys)
-        if strict:
-            id_matches = and_(
-                id_matches, Chat.user_context["identity_verified"].as_boolean().is_(True)
-            )
+        id_matches = and_(
+            Chat.user_context["user_id"].as_string().in_(keys),
+            Chat.user_context["identity_verified"].as_boolean().is_(True),
+        )
         same_visitor = _session_ids_where(tenant_id, id_matches)
         chats = chats + [
             c
@@ -495,7 +485,7 @@ def _visitors_of(
     groups: dict[object, list[_SessionState]] = {}
     for state in _session_states(db, tenant_id=tenant_id, chats=chats):
         groups.setdefault(
-            visitor_key(state.chat, strict=strict) or state.chat.session_id, []
+            visitor_key(state.chat) or state.chat.session_id, []
         ).append(state)
     return [
         _VisitorSessions(sorted(g, key=lambda s: s.chat.created_at, reverse=True))

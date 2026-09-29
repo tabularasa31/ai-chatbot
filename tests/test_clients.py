@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from backend.models import User
 from backend.tenants.service import ensure_tenant_for_user
 from tests.conftest import register_and_verify_user
 
@@ -112,6 +115,76 @@ def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> Non
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 404
+
+
+def test_widget_identity_secret_generate_rotate_and_role_gate(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Owner generates a key, reads it back, rotates it, and the tenant
+    payload flag flips false -> true. An operator (non-owner) is refused."""
+    owner_token = register_and_verify_user(tenant, db_session, email="owner@example.com")
+    owner_auth = {"Authorization": f"Bearer {owner_token}"}
+    tenant.post("/tenants", headers=owner_auth, json={"name": "Acme"})
+
+    me_before = tenant.get("/tenants/me", headers=owner_auth).json()
+    assert me_before["has_widget_identity_secret"] is False
+
+    read_before = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert read_before.status_code == 200
+    assert read_before.json()["secret"] is None
+
+    generated = tenant.post("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert generated.status_code == 200
+    first_secret = generated.json()["secret"]
+    assert first_secret
+
+    read_after = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert read_after.json()["secret"] == first_secret
+
+    me_after = tenant.get("/tenants/me", headers=owner_auth).json()
+    assert me_after["has_widget_identity_secret"] is True
+
+    stored = db_session.query(User.tenant_id).filter(User.email == "owner@example.com").one()
+    from backend.models import Tenant
+
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == stored.tenant_id).one()
+    assert tenant_row.widget_identity_secret is not None
+    assert tenant_row.widget_identity_secret != first_secret
+
+    rotated = tenant.post("/tenants/me/widget-identity-secret", headers=owner_auth)
+    second_secret = rotated.json()["secret"]
+    assert second_secret != first_secret
+
+    read_rotated = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert read_rotated.json()["secret"] == second_secret
+
+    with patch("backend.tenants.members_service.send_email"):
+        invite_resp = tenant.post(
+            "/tenants/members/invite",
+            headers=owner_auth,
+            json={"email": "operator@example.com"},
+        )
+    assert invite_resp.status_code == 201
+    member = db_session.query(User).filter(User.email == "operator@example.com").one()
+    reset_token = member.reset_password_token
+    assert reset_token is not None
+    accept_resp = tenant.post(
+        "/auth/reset-password",
+        json={"token": reset_token, "new_password": "OperatorPass1!"},
+    )
+    assert accept_resp.status_code == 200
+
+    login_resp = tenant.post(
+        "/auth/login",
+        json={"email": "operator@example.com", "password": "OperatorPass1!"},
+    )
+    assert login_resp.status_code == 200
+    operator_auth = {"Authorization": f"Bearer {login_resp.json()['token']}"}
+
+    member_read = tenant.get("/tenants/me/widget-identity-secret", headers=operator_auth)
+    assert member_read.status_code == 403
+    member_rotate = tenant.post("/tenants/me/widget-identity-secret", headers=operator_auth)
+    assert member_rotate.status_code == 403
 
 
 def test_delete_client_success(tenant: TestClient, db_session: Session) -> None:

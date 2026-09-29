@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import uuid
 from typing import Any
 
@@ -10,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.core.crypto import encrypt_value
+from backend.core.crypto import decrypt_value, encrypt_value
 from backend.models import Bot, EscalationTicket, RerankerStrategy, Tenant, TenantProfile, User
 from backend.observability.metrics import capture_event, group_identify
 from backend.seats.events import (
@@ -223,6 +224,31 @@ def update_tenant(
     return tenant
 
 
+def get_widget_identity_secret(user_id: uuid.UUID, db: Session) -> str | None:
+    """Plaintext secret for the caller's tenant, or ``None`` if none was generated."""
+    tenant = get_tenant_by_user(user_id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if not tenant.widget_identity_secret:
+        return None
+    return decrypt_value(tenant.widget_identity_secret)
+
+
+def rotate_widget_identity_secret(user_id: uuid.UUID, db: Session) -> str:
+    """Generate a new widget identity-signing secret, replacing any existing one.
+
+    Rotation is immediate and has no grace period: the previous secret stops
+    validating requests the moment this returns.
+    """
+    tenant = get_tenant_by_user(user_id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    plaintext = secrets.token_hex(32)
+    tenant.widget_identity_secret = encrypt_value(plaintext)
+    db.commit()
+    db.refresh(tenant)
+    invalidate_tenant(tenant.id)
+    return plaintext
 
 
 def collect_external_addresses(tenant_id: uuid.UUID, db: Session) -> list[str]:

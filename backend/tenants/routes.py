@@ -25,11 +25,14 @@ from backend.tenants.schemas import (
     TenantResponse,
     UpdateSupportSettingsRequest,
     UpdateTenantRequest,
+    WidgetIdentitySecretResponse,
 )
 from backend.tenants.service import (
     create_tenant,
     delete_tenant,
     get_support_settings_for_user,
+    get_widget_identity_secret,
+    rotate_widget_identity_secret,
     update_support_settings_for_user,
     update_tenant,
 )
@@ -43,6 +46,7 @@ def _tenant_to_response(tenant, db: Session | None = None) -> TenantResponse:
         name=tenant.name,
         public_id=tenant.public_id,
         has_openai_key=bool(tenant.openai_api_key),
+        has_widget_identity_secret=bool(tenant.widget_identity_secret),
         reranker_strategy=_reranker_strategy_name(tenant.reranker_strategy),
         created_at=tenant.created_at,
         updated_at=tenant.updated_at,
@@ -177,6 +181,29 @@ def update_my_client(
             ) from e
         raise
     return _tenant_to_response(tenant, db)
+
+
+@tenants_router.get("/me/widget-identity-secret", response_model=WidgetIdentitySecretResponse)
+def get_widget_identity_secret_route(
+    current_user: Annotated[User, Depends(require_owner)],
+    db: Annotated[Session, Depends(get_db)],
+) -> WidgetIdentitySecretResponse:
+    """Plaintext widget identity-signing secret, or ``null`` if none exists yet."""
+    secret = get_widget_identity_secret(current_user.id, db)
+    return WidgetIdentitySecretResponse(secret=secret)
+
+
+@tenants_router.post("/me/widget-identity-secret", response_model=WidgetIdentitySecretResponse)
+def rotate_widget_identity_secret_route(
+    current_user: Annotated[User, Depends(require_owner)],
+    db: Annotated[Session, Depends(get_db)],
+) -> WidgetIdentitySecretResponse:
+    """Generate a widget identity-signing secret, or rotate the existing one.
+
+    Rotation replaces the secret immediately, with no grace period.
+    """
+    secret = rotate_widget_identity_secret(current_user.id, db)
+    return WidgetIdentitySecretResponse(secret=secret)
 
 
 @tenants_router.delete(

@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { useActiveBot } from "@/hooks/useApi";
+import { useActiveBot, useClientMe } from "@/hooks/useApi";
+import WidgetIdentityKeyCard from "./WidgetIdentityKeyCard";
 
 export default function WidgetSettingsPage() {
   const {
@@ -12,6 +13,7 @@ export default function WidgetSettingsPage() {
     error: loadError,
     mutate: mutateBots,
   } = useActiveBot();
+  const { data: client, mutate: mutateClient } = useClientMe();
   const [error, setError] = useState("");
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [copiedBotId, setCopiedBotId] = useState(false);
@@ -173,6 +175,10 @@ export default function WidgetSettingsPage() {
           {settingsSavedOk && <span className="text-sm text-emerald-600">Saved</span>}
         </div>
       </section>
+
+      {client?.role === "owner" && (
+        <WidgetIdentityKeyCard hasKey={client.has_widget_identity_secret} onKeyChange={() => mutateClient()} />
+      )}
     </div>
   );
 }

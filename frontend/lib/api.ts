@@ -8,8 +8,13 @@ export type TenantResponse = {
   name: string;
   public_id: string;
   has_openai_key: boolean;
+  has_widget_identity_secret: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type WidgetIdentitySecretResponse = {
+  secret: string | null;
 };
 
 export type LlmAlertType = LlmFailureType;
@@ -685,6 +690,18 @@ export const api = {
       return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the workspace", {
         method: "DELETE",
         skipAuthRedirect: true,
+      });
+    },
+  },
+  widgetIdentity: {
+    /** Owner only; operators get a 403. */
+    get(): Promise<WidgetIdentitySecretResponse> {
+      return getJson(`${BASE_URL}/tenants/me/widget-identity-secret`, "Failed to load the widget identity key");
+    },
+    /** Creates the key if none exists yet, otherwise rotates it immediately. */
+    rotate(): Promise<WidgetIdentitySecretResponse> {
+      return request(`${BASE_URL}/tenants/me/widget-identity-secret`, "Failed to generate the widget identity key", {
+        method: "POST",
       });
     },
   },

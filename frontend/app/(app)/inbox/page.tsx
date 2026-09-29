@@ -93,7 +93,6 @@ function InboxRowItem({
               ? `Held by ${row.assigned_operator_email}`
               : formatDateTime(row.last_activity)}
           {row.ticket && ` · ${row.ticket.ticket_number}`}
-          {row.session_count > 1 && ` · ${row.session_count} conversations`}
         </p>
       </button>
     </li>
@@ -370,22 +369,9 @@ function ThreadView({
           <p className="text-slate-500 text-sm">No messages yet.</p>
         ) : (
           <div className="space-y-4">
-            {thread.messages.map((msg, index) => {
-              const prev = index > 0 ? thread.messages[index - 1] : null;
-              const newConversation = prev != null && prev.chat_id !== msg.chat_id;
-              return (
-                <div key={msg.id} className="space-y-4">
-                  {newConversation && (
-                    <div className="flex items-center gap-3 py-1">
-                      <div className="h-px flex-1 bg-slate-200" />
-                      <span className="text-xs uppercase tracking-wide text-slate-400">New conversation</span>
-                      <div className="h-px flex-1 bg-slate-200" />
-                    </div>
-                  )}
-                  <MessageBubble msg={msg} />
-                </div>
-              );
-            })}
+            {thread.messages.map((msg) => (
+              <MessageBubble key={msg.id} msg={msg} />
+            ))}
           </div>
         )}
       </div>

@@ -838,7 +838,7 @@ What resets when a *new* conversation opens (after the window) — not on an in-
 What survives rotation:
 
 - the session itself (`session_id`, widget localStorage, contact/user context)
-- previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and shown in the dashboard Inbox thread with per-conversation dividers)
+- previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and shown in the dashboard Inbox thread as one continuous history, together with the visitor's other sessions)
 - an **active escalation ticket still collecting the user's email** — one of two cases that *block* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
 - a **live operator handoff** (`operator_state = live`) — the other blocker. Rotating would open a fresh conversation with the bot answering while a human is mid-conversation on the old one, and the operator's thread would be orphaned. A handoff whose operator has really gone is released back to the bot by the sweeper first, so the block only ever holds a conversation someone is actually in.
 

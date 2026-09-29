@@ -112,7 +112,6 @@ def _row(row: InboxRow) -> InboxRowResponse:
         last_message_preview=row.last_message_preview,
         last_activity=row.last_activity,
         message_count=row.message_count,
-        session_count=row.session_count,
         visitor_email=row.visitor.email,
         visitor_name=row.visitor.name,
     )

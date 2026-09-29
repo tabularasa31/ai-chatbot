@@ -279,12 +279,10 @@ def test_one_visitors_sessions_are_one_row_one_thread_and_one_resolve(
     assert queue["attention_count"] == 4
     assert queue["waiting_count"] == 4
     row = next(r for r in queue["items"] if r["chat_id"] == str(by_id_new.id))
-    assert row["session_count"] == 2
     assert row["last_message_preview"] == "still nothing"
     assert row["ticket"]["ticket_number"] == second.ticket_number
     everything = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()["items"]
-    bo = next(r for r in everything if r["visitor_email"] == "bo@example.com")
-    assert bo["session_count"] == 2
+    assert len([r for r in everything if r["visitor_email"] == "bo@example.com"]) == 1
 
     thread = tenant.get(f"/operator/sessions/{by_id_old.session_id}", headers=ws.auth).json()
     assert thread["chat"]["chat_id"] == str(by_id_new.id)

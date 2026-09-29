@@ -73,7 +73,6 @@ class InboxRow:
     last_message_preview: str | None
     last_activity: datetime
     message_count: int
-    session_count: int
     visitor: Visitor
 
 
@@ -523,7 +522,6 @@ def list_inbox(
                 last_message_preview=_preview(newest.content) if newest is not None else None,
                 last_activity=newest.created_at if newest is not None else current.created_at,
                 message_count=sum(count for _, count in per_chat),
-                session_count=len(v.sessions),
                 visitor=v.visitor,
             )
         )

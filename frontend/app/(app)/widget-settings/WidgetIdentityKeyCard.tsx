@@ -1,11 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 
 type Props = {
   hasKey: boolean;
-  /** Called after a successful generate/rotate so the caller can refetch `has_widget_identity_secret`. */
   onKeyChange: () => void;
 };
 
@@ -29,10 +28,21 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
       setSecret(data.secret);
       setRevealed(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load the key");
+      if (e instanceof ApiError && e.status === 409) {
+        setError("This key can't be read. Rotate it to issue a new one.");
+      } else if (e instanceof ApiError) {
+        setError(e.message);
+      } else {
+        setError("Failed to load the key");
+      }
     } finally {
       setLoading(false);
     }
+  }
+
+  function hide() {
+    setRevealed(false);
+    setSecret(null);
   }
 
   async function generateOrRotate() {
@@ -45,7 +55,13 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
       setConfirmingRotate(false);
       onKeyChange();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to generate the key");
+      if (e instanceof ApiError && e.status === 429) {
+        setError("Too many key rotations. Try again in an hour.");
+      } else if (e instanceof ApiError) {
+        setError(e.message);
+      } else {
+        setError("Failed to generate the key");
+      }
     } finally {
       setLoading(false);
     }
@@ -53,9 +69,13 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
 
   async function copySecret() {
     if (!secret) return;
-    await navigator.clipboard.writeText(secret);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(secret);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Copy failed — select the key manually.");
+    }
   }
 
   return (
@@ -86,7 +106,8 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
       {!hasKey && !secret && (
         <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
           <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
-          No identity key yet — unsigned user IDs will not be treated as verified.
+          No identity key yet — unsigned user IDs still restore conversations for now, but that fallback
+          will be removed. Set up verification.
         </div>
       )}
 
@@ -108,6 +129,13 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
             className="rounded-lg bg-slate-900 text-white px-3 py-2 text-sm shrink-0"
           >
             {copied ? "Copied" : "Copy"}
+          </button>
+          <button
+            type="button"
+            onClick={hide}
+            className="rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm shrink-0"
+          >
+            Hide
           </button>
         </div>
       )}

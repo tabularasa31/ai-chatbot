@@ -438,6 +438,17 @@ export type GapRecalculateResponse = {
   retry_after_seconds: number | null;
 };
 
+/** Thrown by `request()` on a non-ok response; `status` lets callers branch on the HTTP code. */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 function getErrorMessage(data: unknown, fallback: string): string {
   const d = data as { detail?: unknown; message?: string };
   if (typeof d?.detail === "string") return d.detail;
@@ -593,7 +604,7 @@ async function request<T>(url: string, fallback: string, init: RequestOptions = 
     body: json !== undefined ? JSON.stringify(json) : body,
   });
   const data = res.ok ? await parseJsonSafe(res) : await parseJsonSafe(res).catch(() => undefined);
-  if (!res.ok) throw new Error(getErrorMessage(data, fallback));
+  if (!res.ok) throw new ApiError(getErrorMessage(data, fallback), res.status);
   return data as T;
 }
 
@@ -694,11 +705,9 @@ export const api = {
     },
   },
   widgetIdentity: {
-    /** Owner only; operators get a 403. */
     get(): Promise<WidgetIdentitySecretResponse> {
       return getJson(`${BASE_URL}/tenants/me/widget-identity-secret`, "Failed to load the widget identity key");
     },
-    /** Creates the key if none exists yet, otherwise rotates it immediately. */
     rotate(): Promise<WidgetIdentitySecretResponse> {
       return request(`${BASE_URL}/tenants/me/widget-identity-secret`, "Failed to generate the widget identity key", {
         method: "POST",

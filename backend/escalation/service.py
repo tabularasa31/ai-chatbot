@@ -1417,24 +1417,24 @@ def resolve_session_tickets(
     db: Session,
     *,
     tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
+    session_ids: list[uuid.UUID],
     resolution_text: str | None,
 ) -> list[EscalationTicket]:
-    """Resolve every ticket still being worked in a visitor's session. Staged.
+    """Resolve every ticket still being worked in a visitor's sessions. Staged.
 
     The operator's "mark resolved" is about the visitor, not about one ticket
     row: a session that rotated after the escalation carries its ticket on an
     older chat than the one the visitor is writing in, and a visitor who
-    escalated twice has two active tickets. Closing anything less would put
-    the row straight back into the queue. Returns what was resolved; an
-    empty list means nothing was active.
+    escalated twice — in one session or across several — has several active
+    tickets. Closing anything less would put the row straight back into the
+    queue. Returns what was resolved; an empty list means nothing was active.
     """
     tickets = (
         db.query(EscalationTicket)
         .join(Chat, Chat.id == EscalationTicket.chat_id)
         .filter(
             Chat.tenant_id == tenant_id,
-            Chat.session_id == session_id,
+            Chat.session_id.in_(session_ids),
             EscalationTicket.status.in_(ACTIVE_TICKET_STATUSES),
         )
         .order_by(EscalationTicket.created_at.asc())

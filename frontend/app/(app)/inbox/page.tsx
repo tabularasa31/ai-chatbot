@@ -10,6 +10,7 @@ import { parseApiDate, formatDateTime, formatTime } from "@/lib/format";
 type Scope = "attention" | "all";
 
 const INBOX_REFRESH_MS = 15_000;
+const SEARCH_DEBOUNCE_MS = 300;
 const THREAD_REFRESH_MS: Record<HandoffState, number> = {
   live: 4_000,
   waiting: 8_000,
@@ -368,22 +369,9 @@ function ThreadView({
           <p className="text-slate-500 text-sm">No messages yet.</p>
         ) : (
           <div className="space-y-4">
-            {thread.messages.map((msg, index) => {
-              const prev = index > 0 ? thread.messages[index - 1] : null;
-              const newConversation = prev != null && prev.chat_id !== msg.chat_id;
-              return (
-                <div key={msg.id} className="space-y-4">
-                  {newConversation && (
-                    <div className="flex items-center gap-3 py-1">
-                      <div className="h-px flex-1 bg-slate-200" />
-                      <span className="text-xs uppercase tracking-wide text-slate-400">New conversation</span>
-                      <div className="h-px flex-1 bg-slate-200" />
-                    </div>
-                  )}
-                  <MessageBubble msg={msg} />
-                </div>
-              );
-            })}
+            {thread.messages.map((msg) => (
+              <MessageBubble key={msg.id} msg={msg} />
+            ))}
           </div>
         )}
       </div>
@@ -403,6 +391,8 @@ function InboxPageContent() {
   const sessionFromUrl = searchParams.get("session");
   const [scope, setScope] = useState<Scope>("attention");
   const [selected, setSelected] = useState<string | null>(sessionFromUrl);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -410,12 +400,17 @@ function InboxPageContent() {
   }, [sessionFromUrl]);
 
   useEffect(() => {
+    const id = setTimeout(() => setQuery(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);
 
   const { data: me } = useClientMe();
-  const { data: inbox, error, isLoading, mutate } = useInbox(scope, INBOX_REFRESH_MS);
+  const { data: inbox, error, isLoading, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(
@@ -465,24 +460,47 @@ function InboxPageContent() {
 
       <div className="flex flex-col md:flex-row gap-4">
         <div className="w-full md:w-1/3 bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="max-h-[calc(100vh-200px)] min-h-[420px] overflow-y-auto">
+          <div className="border-b border-slate-100 p-2">
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              maxLength={200}
+              aria-label="Search conversations"
+              placeholder="Search by name, e-mail or ticket number"
+              className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
+            />
+            {inbox && (search.trim() || query) && (isLoading || search.trim() !== query) && (
+              <p className="px-1 pt-1 text-xs text-slate-400">Searching…</p>
+            )}
+          </div>
+          <div className="max-h-[calc(100vh-252px)] min-h-[368px] overflow-y-auto">
             {isLoading && !inbox ? (
               <div className="p-4 text-slate-500 text-sm">Loading…</div>
             ) : rows.length === 0 ? (
               <div className="p-4 text-slate-500 text-sm">
-                {scope === "attention" ? "Nobody is waiting. All conversations are with the bot." : "No conversations yet."}
+                {query
+                  ? `Nothing matches “${query}”${scope === "attention" ? " among conversations that need attention. Try All." : "."}`
+                  : scope === "attention"
+                    ? "Nobody is waiting. All conversations are with the bot."
+                    : "No conversations yet."}
               </div>
             ) : (
               <ul className="divide-y divide-slate-100">
-                {rows.map((row) => (
-                  <InboxRowItem
-                    key={row.session_id}
-                    row={row}
-                    now={now}
-                    selected={selected === row.session_id}
-                    onSelect={() => select(row.session_id)}
-                  />
-                ))}
+                {rows.map((row) => {
+                  const isSelected = selected !== null && row.session_ids.includes(selected);
+                  return (
+                    <InboxRowItem
+                      key={row.session_id}
+                      row={row}
+                      now={now}
+                      selected={isSelected}
+                      onSelect={() => {
+                        if (!isSelected) select(row.session_id);
+                      }}
+                    />
+                  );
+                })}
               </ul>
             )}
           </div>

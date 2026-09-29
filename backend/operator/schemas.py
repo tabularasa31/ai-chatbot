@@ -77,6 +77,8 @@ class InboxRowResponse(BaseModel):
     last_message_preview: str | None = None
     last_activity: datetime
     message_count: int
+    # Every widget session of the visitor this row covers, newest first.
+    session_ids: list[uuid.UUID]
     visitor_email: str | None = None
     visitor_name: str | None = None
 

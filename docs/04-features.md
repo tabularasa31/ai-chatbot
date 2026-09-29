@@ -838,7 +838,7 @@ What resets when a *new* conversation opens (after the window) — not on an in-
 What survives rotation:
 
 - the session itself (`session_id`, widget localStorage, contact/user context)
-- previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and shown in the dashboard Inbox thread with per-conversation dividers)
+- previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and shown in the dashboard Inbox thread as one continuous history, together with the visitor's other sessions)
 - an **active escalation ticket still collecting the user's email** — one of two cases that *block* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
 - a **live operator handoff** (`operator_state = live`) — the other blocker. Rotating would open a fresh conversation with the bot answering while a human is mid-conversation on the old one, and the operator's thread would be orphaned. A handoff whose operator has really gone is released back to the bot by the sweeper first, so the block only ever holds a conversation someone is actually in.
 
@@ -993,7 +993,7 @@ The conversation is never closed by escalation. The user keeps exchanging messag
 
 ### Ticket inbox (dashboard)
 
-Tickets live inside the conversation. The dashboard **Inbox** (`/inbox`, `GET /operator/inbox`) lists sessions that need a person — an active ticket nobody holds, longest wait first, then the chats an operator is serving — and the thread header shows the ticket number, status (`open` / `in_progress` / `resolved` / `auto_closed`), trigger and priority. **Mark resolved** → `POST /operator/chats/{id}/resolve` resolves every active ticket of the session, revokes their e-mail reply tokens and hands the chat back to the bot. Reads are open to any member; take, reply, release and resolve need an operator seat.
+Tickets live inside the conversation. The dashboard **Inbox** (`/inbox`, `GET /operator/inbox`) lists visitors that need a person — an active ticket nobody holds, longest wait first, then the chats an operator is serving — and the thread header shows the ticket number, status (`open` / `in_progress` / `resolved` / `auto_closed`), trigger and priority. A visitor's widget sessions fold into one row and one thread when they share the tenant's `user_id` from the widget hints; e-mails (a `hint:` id, a ticket's `user_email`) never fold, since anyone can claim one on the public widget. Actions go to the visitor's newest chat, and an operator turn in any of their sessions answers every request raised before it. `?q=` searches visitor name, e-mail and ticket number within the scope. **Mark resolved** → `POST /operator/chats/{id}/resolve` resolves every active ticket of every session of the visitor, revokes their e-mail reply tokens and hands the chat back to the bot. Reads are open to any member; take, reply, release and resolve need an operator seat.
 
 `in_progress` is set automatically when an operator takes the conversation
 (either entry point — `POST /operator/chats/{id}/take` or simply answering via

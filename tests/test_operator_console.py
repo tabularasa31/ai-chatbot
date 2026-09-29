@@ -108,11 +108,14 @@ def _ticket(
     *,
     status: EscalationStatus = EscalationStatus.open,
     created_ago: timedelta = timedelta(0),
-    user_email: str | None = "visitor@example.com",
+    user_email: str | None = ...,
 ) -> EscalationTicket:
+    number = next(_ticket_seq)
+    if user_email is ...:
+        user_email = f"visitor{number}@example.com"
     ticket = EscalationTicket(
         tenant_id=chat.tenant_id,
-        ticket_number=f"ESC-{next(_ticket_seq)}",
+        ticket_number=f"ESC-{number}",
         primary_question="How do refunds work?",
         trigger=EscalationTrigger.user_request,
         status=status,
@@ -145,7 +148,7 @@ def test_the_queue_lists_what_needs_a_human_longest_wait_first(
     _say(db_session, recent, MessageRole.user, "I need a person")
 
     old = _chat(db_session, ws.tenant_id)
-    _ticket(db_session, old, created_ago=timedelta(hours=1))
+    old_ticket = _ticket(db_session, old, created_ago=timedelta(hours=1))
     _say(db_session, old, MessageRole.user, "still waiting")
 
     live = _chat(
@@ -175,7 +178,7 @@ def test_the_queue_lists_what_needs_a_human_longest_wait_first(
     waiting = body["items"][0]
     assert waiting["assigned_operator_email"] is None
     assert waiting["waiting_since"] is not None
-    assert waiting["visitor_email"] == "visitor@example.com"
+    assert waiting["visitor_email"] == old_ticket.user_email
     assert waiting["visitor_name"] == "Ivan"
 
 
@@ -252,6 +255,68 @@ def test_the_summary_is_the_badge(tenant: TestClient, db_session: Session) -> No
     assert resp.json() == {"waiting_count": 2, "attention_count": 3}
 
 
+def test_one_visitors_sessions_are_one_row_one_thread_and_one_resolve(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="fold@example.com", name="Fold Co")
+    older = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42"})
+    first = _ticket(db_session, older, created_ago=timedelta(days=2), user_email=None)
+    _say(db_session, older, MessageRole.user, "support is silent")
+    newer = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-42"})
+    second = _ticket(db_session, newer, user_email=None)
+    _say(db_session, newer, MessageRole.user, "still nothing")
+
+    # An e-mail anyone can claim never folds: not as a hint, not in a ticket.
+    hinted = _chat(db_session, ws.tenant_id, user_context={"user_id": "hint:bo@example.com"})
+    _ticket(db_session, hinted, user_email=None)
+    typed = _chat(db_session, ws.tenant_id)
+    _ticket(db_session, typed, user_email="bo@example.com")
+
+    queue = tenant.get("/operator/inbox", headers=ws.auth).json()
+    assert (queue["attention_count"], queue["waiting_count"]) == (3, 3)
+    row = next(r for r in queue["items"] if r["chat_id"] == str(newer.id))
+    assert row["session_ids"] == [str(newer.session_id), str(older.session_id)]
+    assert row["last_message_preview"] == "still nothing"
+    assert row["ticket"]["ticket_number"] == second.ticket_number
+    assert {str(hinted.id), str(typed.id)} <= {r["chat_id"] for r in queue["items"]}
+
+    thread = tenant.get(f"/operator/sessions/{older.session_id}", headers=ws.auth).json()
+    assert thread["chat"]["chat_id"] == str(newer.id)
+    assert [m["content"] for m in thread["messages"]] == ["support is silent", "still nothing"]
+
+    tenant.post(f"/operator/chats/{newer.id}/messages", headers=ws.auth, json={"text": "on it"})
+    tenant.post(f"/operator/chats/{newer.id}/release", headers=ws.auth)
+    answered = tenant.get("/operator/inbox", headers=ws.auth).json()
+    assert (answered["attention_count"], answered["waiting_count"]) == (2, 2)
+
+    resp = tenant.post(f"/operator/chats/{newer.id}/resolve", headers=ws.auth, json={})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["resolved_ticket_numbers"] == [first.ticket_number, second.ticket_number]
+
+
+def test_search_finds_a_visitor_by_name_email_or_ticket_number_across_history(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="find@example.com", name="Find Co")
+    old = _chat(db_session, ws.tenant_id, user_context={"name": "yasuxapo30"})
+    ticket = _ticket(db_session, old, status=EscalationStatus.resolved, user_email="Olya_S@mail.ru")
+    _say(db_session, old, MessageRole.user, "domain question")
+    for _ in range(3):
+        _say(db_session, _chat(db_session, ws.tenant_id), MessageRole.user, "newer")
+
+    def found(q: str) -> list[str]:
+        resp = tenant.get("/operator/inbox", headers=ws.auth, params={"scope": "all", "limit": 1, "q": q})
+        assert resp.status_code == 200, resp.text
+        return [r["chat_id"] for r in resp.json()["items"]]
+
+    for q in ("xapo", "olya_s@MAIL", ticket.ticket_number.lower(), f" {ticket.ticket_number[-3:]} "):
+        assert found(q) == [str(old.id)], q
+    assert found("%") == []
+    attention = tenant.get("/operator/inbox", headers=ws.auth, params={"q": "xapo"}).json()
+    assert attention["items"] == []
+
+
 # --------------------------------------------------------------------------
 # The thread
 # --------------------------------------------------------------------------
@@ -288,7 +353,7 @@ def test_the_thread_spans_the_session_and_signs_operator_turns(
     assert body["chat"]["chat_id"] == str(second.id)
     assert body["chat"]["assigned_operator_email"] == "ann@thread.example"
     assert body["ticket"]["ticket_number"] == ticket.ticket_number
-    assert body["visitor_email"] == "visitor@example.com"
+    assert body["visitor_email"] == ticket.user_email
     assert [m["chat_id"] for m in body["messages"]] == [str(first.id)] * 2 + [str(second.id)] * 4
     assert [m["role"] for m in body["messages"]] == [
         "user", "assistant", "user", "operator", "operator", "operator"
@@ -506,7 +571,7 @@ def test_resolving_a_held_chat_emits_ticket_resolved(
     for value in event["properties"].values():
         assert value != ticket.primary_question
         assert value != "all set"
-        assert value != "visitor@example.com"
+        assert value != ticket.user_email
 
 
 def test_resolving_a_chat_never_taken_still_emits_with_chat_was_with_operator_false(

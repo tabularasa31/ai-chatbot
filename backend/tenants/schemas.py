@@ -94,6 +94,7 @@ class TenantResponse(BaseModel):
     name: str
     public_id: str
     has_openai_key: bool
+    has_widget_identity_secret: bool
     reranker_strategy: RerankerStrategyName = "heuristic"
     created_at: datetime
     updated_at: datetime
@@ -121,6 +122,14 @@ class UpdateTenantRequest(BaseModel):
     name: str | None = None
     openai_api_key: str | None = None  # None = remove key
     reranker_strategy: RerankerStrategyName | None = None
+
+
+class WidgetIdentitySecretResponse(BaseModel):
+    """Plaintext widget identity-signing secret, for the tenant to copy into
+    their own server. ``secret`` is ``null`` when none has been generated yet.
+    """
+
+    secret: str | None = None
 
 
 class SupportSettingsResponse(BaseModel):

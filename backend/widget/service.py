@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import re
 from typing import Any
+
+from backend.operator.inbox import HINT_USER_ID_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +20,7 @@ _IDENTITY_FIELD_CAPS = {
 _PATCHABLE_USER_CONTEXT_FIELDS = tuple(_IDENTITY_FIELD_CAPS.keys())
 _USER_ID_CAP = 200
 _BROWSER_LOCALE_CAP = 35
+_USER_HASH_CAP = 128
 _BCP47_RE = re.compile(
     r"^[A-Za-z]{2,3}(-[A-Za-z]{4})?(-([A-Za-z]{2}|\d{3}))?"
     r"(-([A-Za-z0-9]{5,8}|\d[A-Za-z0-9]{3}))*$"
@@ -92,6 +97,13 @@ def apply_identity_context_patch(
     if locale_value is not None:
         patched["browser_locale"] = locale_value
 
+    # Carry the strict-tenant verification flag forward so a resumed or
+    # rotated chat never loses it — dropping it would make an unverified
+    # session read as legacy (key absent) and eligible for contact_id
+    # extraction again.
+    if "identity_verified" in source:
+        patched["identity_verified"] = source["identity_verified"]
+
     return patched
 
 
@@ -99,7 +111,7 @@ def widget_session_error_detail(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
 
 
-_HINTS_ALLOWED_KEYS = ("user_id", *_IDENTITY_FIELD_CAPS.keys())
+_HINTS_ALLOWED_KEYS = ("user_id", "user_hash", *_IDENTITY_FIELD_CAPS.keys())
 
 
 def _is_plausible_email(value: str) -> bool:
@@ -114,9 +126,13 @@ def _is_plausible_email(value: str) -> bool:
 def sanitize_user_hints(raw: Any) -> dict[str, str]:
     """Coerce/cap untrusted userHints from the browser.
 
-    Whitelist: user_id, email, name, plan_tier, audience_tag, locale.
+    Whitelist: user_id, user_hash, email, name, plan_tier, audience_tag, locale.
     Drops unknown keys, empty strings, oversized values (capped, not rejected),
     and emails that fail a basic structural check. Returns {} if nothing valid.
+
+    A client-supplied user_id starting with HINT_USER_ID_PREFIX is dropped: that
+    prefix is reserved for the server's own synthesized hint:<email> ids, and a
+    client claiming one would collide with a real visitor's synthesized session.
     """
     if not isinstance(raw, dict):
         return {}
@@ -124,9 +140,17 @@ def sanitize_user_hints(raw: Any) -> dict[str, str]:
     for key in _HINTS_ALLOWED_KEYS:
         if key not in raw:
             continue
-        cap = _USER_ID_CAP if key == "user_id" else _IDENTITY_FIELD_CAPS[key]
+        if key == "user_hash":
+            cap = _USER_HASH_CAP
+        elif key == "user_id":
+            cap = _USER_ID_CAP
+        else:
+            cap = _IDENTITY_FIELD_CAPS[key]
         cleaned = _clean_capped_text(raw.get(key), cap)
         if cleaned is None:
+            continue
+        if key == "user_id" and cleaned.startswith(HINT_USER_ID_PREFIX):
+            logger.info("widget_hint_user_id_rejected")
             continue
         if key == "email" and not _is_plausible_email(cleaned):
             logger.info("widget_hint_email_rejected", extra={"length": len(cleaned)})
@@ -138,3 +162,19 @@ def sanitize_user_hints(raw: Any) -> dict[str, str]:
             cleaned = valid
         out[key] = cleaned
     return out
+
+
+_HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def verify_user_hash(secret: str, user_id: str, user_hash: str | None) -> bool:
+    """Constant-time, case-insensitive check that user_hash = HMAC-SHA256(secret, user_id)."""
+    if not user_hash:
+        return False
+    candidate = user_hash.strip().lower()
+    # hmac.compare_digest raises TypeError on a non-ASCII str; reject anything
+    # that isn't a plausible hex digest before it ever reaches the comparison.
+    if not _HEX64_RE.match(candidate):
+        return False
+    expected = hmac.new(secret.encode("utf-8"), user_id.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected.encode("ascii"), candidate.encode("ascii"))

@@ -295,6 +295,37 @@ def test_one_visitors_sessions_are_one_row_one_thread_and_one_resolve(
     assert resp.json()["resolved_ticket_numbers"] == [first.ticket_number, second.ticket_number]
 
 
+def test_strict_tenant_folds_only_verified_sessions(tenant: TestClient, db_session: Session) -> None:
+    ws = _workspace(tenant, db_session, email="strict@example.com", name="Strict Co")
+    db_session.query(Tenant).filter(Tenant.id == ws.tenant_id).update(
+        {"widget_identity_secret": "s3cr3t"}
+    )
+    db_session.commit()
+
+    verified_older = _chat(
+        db_session, ws.tenant_id, user_context={"user_id": "u-1", "identity_verified": True}
+    )
+    _ticket(db_session, verified_older, created_ago=timedelta(days=1), user_email=None)
+    verified_newer = _chat(
+        db_session, ws.tenant_id, user_context={"user_id": "u-1", "identity_verified": True}
+    )
+    _ticket(db_session, verified_newer, user_email=None)
+
+    # Same user_id, never signature-verified: stays its own visitor.
+    unverified = _chat(db_session, ws.tenant_id, user_context={"user_id": "u-1"})
+    _ticket(db_session, unverified, user_email=None)
+
+    queue = tenant.get("/operator/inbox", headers=ws.auth).json()
+    assert queue["attention_count"] == 2
+    verified_row = next(r for r in queue["items"] if r["chat_id"] == str(verified_newer.id))
+    assert verified_row["session_ids"] == [
+        str(verified_newer.session_id),
+        str(verified_older.session_id),
+    ]
+    unverified_row = next(r for r in queue["items"] if r["chat_id"] == str(unverified.id))
+    assert unverified_row["session_ids"] == [str(unverified.session_id)]
+
+
 def test_search_finds_a_visitor_by_name_email_or_ticket_number_across_history(
     tenant: TestClient, db_session: Session
 ) -> None:

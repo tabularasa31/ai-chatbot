@@ -20,6 +20,8 @@ class Tenant(UUIDPKMixin, TimestampMixin, Base):
         default=generate_public_id,
     )
     openai_api_key = Column(String(500), nullable=True, default=None)
+    # HMAC key used to sign widget visitor user_ids; encrypted at rest like openai_api_key.
+    widget_identity_secret = Column(String(500), nullable=True, default=None)
     settings = Column(JSON, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=True)
     reranker_strategy = Column(

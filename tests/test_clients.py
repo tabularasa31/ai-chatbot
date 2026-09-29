@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from backend.models import Tenant, User
 from backend.tenants.service import ensure_tenant_for_user
 from tests.conftest import register_and_verify_user
 
@@ -112,6 +113,51 @@ def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> Non
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 404
+
+
+def test_widget_identity_secret_generate_and_rotate(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Owner generates a key, reads it back, rotates it, and the tenant
+    payload flag flips false -> true."""
+    owner_token = register_and_verify_user(tenant, db_session, email="owner@example.com")
+    owner_auth = {"Authorization": f"Bearer {owner_token}"}
+    tenant.post("/tenants", headers=owner_auth, json={"name": "Acme"})
+
+    me_before = tenant.get("/tenants/me", headers=owner_auth).json()
+    assert me_before["has_widget_identity_secret"] is False
+
+    read_before = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert read_before.status_code == 200
+    assert read_before.json()["secret"] is None
+
+    generated = tenant.post("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert generated.status_code == 200
+    first_secret = generated.json()["secret"]
+    assert first_secret
+
+    read_after = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert read_after.json()["secret"] == first_secret
+
+    me_after = tenant.get("/tenants/me", headers=owner_auth).json()
+    assert me_after["has_widget_identity_secret"] is True
+
+    stored = db_session.query(User.tenant_id).filter(User.email == "owner@example.com").one()
+    tenant_row = db_session.query(Tenant).filter(Tenant.id == stored.tenant_id).one()
+    assert tenant_row.widget_identity_secret is not None
+    assert tenant_row.widget_identity_secret != first_secret
+
+    rotated = tenant.post("/tenants/me/widget-identity-secret", headers=owner_auth)
+    second_secret = rotated.json()["secret"]
+    assert second_secret != first_secret
+
+    read_rotated = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert read_rotated.json()["secret"] == second_secret
+
+    tenant_row.widget_identity_secret = "not-valid-fernet-ciphertext"
+    db_session.commit()
+    read_corrupted = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert read_corrupted.status_code == 409
 
 
 def test_delete_client_success(tenant: TestClient, db_session: Session) -> None:

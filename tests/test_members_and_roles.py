@@ -284,6 +284,12 @@ def test_operator_reaches_the_inbox_the_logs_and_the_knowledge_reads(
         pytest.param(
             "post", "/api/v1/knowledge/faq/approve-all", None, id="approve_all_faq"
         ),
+        pytest.param(
+            "get", "/tenants/me/widget-identity-secret", None, id="read_widget_identity_secret"
+        ),
+        pytest.param(
+            "post", "/tenants/me/widget-identity-secret", None, id="rotate_widget_identity_secret"
+        ),
     ],
 )
 def test_operator_is_refused_every_owner_only_route(

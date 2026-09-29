@@ -8,8 +8,13 @@ export type TenantResponse = {
   name: string;
   public_id: string;
   has_openai_key: boolean;
+  has_widget_identity_secret: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type WidgetIdentitySecretResponse = {
+  secret: string | null;
 };
 
 export type LlmAlertType = LlmFailureType;
@@ -433,6 +438,17 @@ export type GapRecalculateResponse = {
   retry_after_seconds: number | null;
 };
 
+/** Thrown by `request()` on a non-ok response; `status` lets callers branch on the HTTP code. */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 function getErrorMessage(data: unknown, fallback: string): string {
   const d = data as { detail?: unknown; message?: string };
   if (typeof d?.detail === "string") return d.detail;
@@ -588,7 +604,7 @@ async function request<T>(url: string, fallback: string, init: RequestOptions = 
     body: json !== undefined ? JSON.stringify(json) : body,
   });
   const data = res.ok ? await parseJsonSafe(res) : await parseJsonSafe(res).catch(() => undefined);
-  if (!res.ok) throw new Error(getErrorMessage(data, fallback));
+  if (!res.ok) throw new ApiError(getErrorMessage(data, fallback), res.status);
   return data as T;
 }
 
@@ -685,6 +701,16 @@ export const api = {
       return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the workspace", {
         method: "DELETE",
         skipAuthRedirect: true,
+      });
+    },
+  },
+  widgetIdentity: {
+    get(): Promise<WidgetIdentitySecretResponse> {
+      return getJson(`${BASE_URL}/tenants/me/widget-identity-secret`, "Failed to load the widget identity key");
+    },
+    rotate(): Promise<WidgetIdentitySecretResponse> {
+      return request(`${BASE_URL}/tenants/me/widget-identity-secret`, "Failed to generate the widget identity key", {
+        method: "POST",
       });
     },
   },

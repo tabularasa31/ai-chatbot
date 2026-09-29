@@ -108,7 +108,7 @@ Conversation history is stored on the server. The widget keeps a `session_id` in
 
 When `userHints` includes `user_id` or `email`, the storage key is scoped per visitor — different users on the same device get separate sessions.
 
-For visitors identified by a `user_id` in `userHints`, the conversation also resumes across devices and after `localStorage` is cleared: the server reattaches the visitor to their most recent open conversation. This applies to `user_id` only — an `email`-only hint always starts a fresh session, since an email is too easily guessed to safely reattach to someone's conversation. Anonymous visitors (no `userHints`) always start a fresh session.
+A `user_id` personalizes the conversation (greeting, language, escalation details), keeps it in the same browser, restores it on another device or after `localStorage` is cleared, and groups the visitor's sessions in the Inbox. Without a key the ID is not verified: anyone who knows or guesses a visitor's `user_id` can open that visitor's conversation in the widget. Use unguessable IDs, or turn on [identity verification](#identity-verification) if conversations may contain anything private. An `email`-only hint or an anonymous visitor (no `userHints`) always starts a fresh session on a new browser.
 
 Escalating to a human agent does not end the conversation. If the visitor's email is already known, the bot goes on answering their questions normally while the ticket is open. If it is not — the default for anonymous visitors — the bot asks for an email address and keeps asking until it gets one, because support replies by email. After the handoff the bot asks whether it can help with anything else; if the visitor declines, the bot says goodbye and the chat stays open — the next message is answered as usual. There is no closed state and no "start new chat" control: a conversation only rolls over into a fresh one after a week without messages, and the previous one stays visible above a "New conversation" separator.
 
@@ -183,7 +183,8 @@ Hints are used for greeting personalization, language selection, and escalation 
 
 | Field | Notes |
 |---|---|
-| `user_id` | Stable ID from your system. Primary key for session grouping. Falls back to `hint:<email>` if absent. |
+| `user_id` | Stable ID from your system. Personalizes the conversation, restores it across devices and groups the visitor's sessions in the Inbox. If you have an identity key, these last two need a valid `user_hash`. |
+| `user_hash` | Optional server-computed proof that `user_id` belongs to this visitor. Needed for cross-device restore and Inbox grouping only if you have an identity key. See [Identity verification](#identity-verification). |
 | `email` | Used in escalation notifications. Malformed values are dropped. |
 | `name` | Display name. |
 | `plan_tier` | `"free"`, `"starter"`, `"growth"`, `"pro"`, `"enterprise"`. Affects escalation priority. |
@@ -197,3 +198,87 @@ Hints are used for greeting personalization, language selection, and escalation 
 | User requests a human | High | **Critical** |
 | No relevant answer found | Medium | **High** |
 | Answer rejected by quality check | Medium | Medium |
+
+## Identity verification
+
+Without a key, `user_id` is trusted as-is: anyone who knows or guesses a visitor's `user_id` can open that visitor's conversation. Identity verification is a stronger, optional level: Chat9 confirms that a `user_id` really belongs to the visitor sending it. You choose whether to use it, and it needs a server that signs.
+
+### Set up
+
+1. In the Dashboard, go to **Widget settings → Widget identity verification** and generate a key. You can reveal/copy it later, and rotate it if it leaks — rotating invalidates the old key immediately, so any requests still signed with it stop verifying.
+2. On your server (never in the browser), compute `user_hash` for the visitor:
+
+   ```js
+   // Node.js
+   const crypto = require("crypto");
+
+   function userHash(userId) {
+     return crypto
+       .createHmac("sha256", process.env.CHAT9_WIDGET_IDENTITY_KEY)
+       .update(userId)
+       .digest("hex");
+   }
+   ```
+
+   ```python
+   # Python
+   import hashlib
+   import hmac
+   import os
+
+   def user_hash(user_id: str) -> str:
+       return hmac.new(
+           os.environ["CHAT9_WIDGET_IDENTITY_KEY"].encode("utf-8"),
+           user_id.encode("utf-8"),
+           hashlib.sha256,
+       ).hexdigest()
+   ```
+
+   ```php
+   <?php
+   // PHP
+   function userHash(string $userId): string {
+       return hash_hmac("sha256", $userId, getenv("CHAT9_WIDGET_IDENTITY_KEY"));
+   }
+   ```
+
+   ```go
+   // Go
+   import (
+       "crypto/hmac"
+       "crypto/sha256"
+       "encoding/hex"
+       "os"
+   )
+
+   func userHash(userID string) string {
+       mac := hmac.New(sha256.New, []byte(os.Getenv("CHAT9_WIDGET_IDENTITY_KEY")))
+       mac.Write([]byte(userID))
+       return hex.EncodeToString(mac.Sum(nil))
+   }
+   ```
+
+   `user_hash` is a lowercase hex HMAC-SHA256 of the exact `user_id` string, using the key as the HMAC key. Compute it wherever you already render the page for a logged-in visitor, and pass it down to the client alongside `user_id`.
+
+   The server trims `user_id` and keeps at most 200 characters before verifying — sign exactly the trimmed id you send, since a longer id won't verify.
+
+3. Pass both in `userHints`, at `start()` or via `setHints()`:
+
+   ```html
+   <script>
+     Chat9Widget.start({
+       userHints: {
+         user_id: "42",
+         user_hash: "<computed on your server>"
+       }
+     });
+   </script>
+   ```
+
+### How it works with and without a key
+
+- Without a key: `user_id` works fully. It personalizes the conversation, keeps it in the same browser, restores it across devices and after `localStorage` is cleared, and groups the visitor's sessions in the Inbox. The ID is not verified.
+- With a key: only visitors with a valid `user_hash` restore conversations across devices and are grouped in the Inbox. An unsigned `user_id` only personalizes the conversation and keeps it in the same browser.
+- A `user_id` that starts with `hint:` is always rejected and treated as absent — that prefix is reserved for the server's own synthesized IDs.
+- `email` is never used to restore a conversation, verified or not — it's too easy to guess.
+- In the dashboard **Inbox**, a visitor's sessions are grouped into one row by `user_id`; with an identity key, only for visitors with a valid `user_hash`.

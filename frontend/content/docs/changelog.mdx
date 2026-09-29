@@ -1,0 +1,14 @@
+---
+title: Changelog
+description: What's changed in Chat9, most recent first.
+---
+
+## 2026-09-29 — Widget identity verification (optional)
+
+You can now verify that a `user_id` passed to the widget really belongs to the visitor.
+
+**What's new:** generate a signing key in **Dashboard → Widget settings → Widget identity verification**. Your server computes a `user_hash` from the key and the visitor's `user_id`, and passes it alongside `user_id` in `userHints`.
+
+**Why you might want it:** without a key, user IDs are trusted as-is, so anyone who knows or guesses a visitor's ID can open their conversation. With a key, only visitors with a valid `user_hash` restore conversations across devices and are grouped in the Inbox; unsigned IDs only personalize the chat and keep it in the same browser.
+
+See [Embedding the Widget → Identity verification](/docs/embedding-the-widget#identity-verification) for the full setup guide.

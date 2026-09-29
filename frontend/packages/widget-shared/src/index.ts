@@ -2,6 +2,7 @@ export type WidgetSource = { title: string; url: string };
 
 export type UserHints = {
   user_id?: string;
+  user_hash?: string;
   email?: string;
   name?: string;
   locale?: string;

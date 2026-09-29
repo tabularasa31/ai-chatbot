@@ -99,6 +99,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 | `docs/06-developer-test-runbook.md` | Test command groups reference |
 | `docs/docs-ru/` | Internal Russian-language project documentation |
 | `frontend/content/docs/` | **Client-facing documentation** (MDX, rendered in the product UI) — update here when asked to update client docs |
+| `frontend/content/docs/changelog.mdx` | Public changelog for tenants (`/docs/changelog`) |
 
 ---
 
@@ -113,6 +114,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 - The bot is language-agnostic: replies must be in the user's language. New hardcoded strings in the chat pipeline go through `backend/chat/language.py` — never hardcode English-only copy.
 - Frontend components: `PascalCase`; utilities: `camelCase`; Tailwind for styles.
 - **Prompt caching contract.** When touching the chat generation prompt in `backend/chat/prompts.py`, keep the system message byte-identical across turns (stable cache prefix) and ≥ ~1024 tokens — request-specific content goes in the user message after the `Context:` split. Full rules in **AGENTS.md → "Prompt caching contract"**.
+- **Public changelog.** Any PR that changes something tenants can notice (widget behaviour, dashboard features, embed/API contract, client docs semantics) adds an entry to `frontend/content/docs/changelog.mdx` (rendered at `/docs/changelog`). Newest first, dated, in English. Say what changed, who it affects and what to do (if anything), and link the relevant docs section. Internal refactors, tests and infra-only changes don't get an entry. Public repo: no client names, prices or tracker references.
 
 ---
 

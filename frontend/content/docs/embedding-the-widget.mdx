@@ -238,6 +238,8 @@ Hints are used for greeting personalization, language selection, and escalation 
 
    `user_hash` is a lowercase hex HMAC-SHA256 of the exact `user_id` string, using the key as the HMAC key. Compute it wherever you already render the page for a logged-in visitor, and pass it down to the client alongside `user_id`.
 
+   The server trims `user_id` and keeps at most 200 characters before verifying — sign exactly the trimmed id you send, since a longer id won't verify.
+
 3. Pass both in `userHints`, at `start()` or via `setHints()`:
 
    ```html

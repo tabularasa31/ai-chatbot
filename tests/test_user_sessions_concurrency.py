@@ -36,7 +36,7 @@ def _active_sessions(db: Session, *, tenant_id: uuid.UUID, contact_id: str) -> l
 def test_start_user_session_two_writer_race_returns_winner_row(engine, db_session: Session, monkeypatch) -> None:
     user = _create_user(db_session, email="user-session-race-a@example.com")
     tenant = _create_client(db_session, user, name="User Session Race A")
-    user_context = {"user_id": "u1", "email": "user-session-race-a@example.com"}
+    user_context = {"user_id": "u1", "identity_verified": True, "email": "user-session-race-a@example.com"}
     session_factory = _session_factory(engine)
     with session_factory() as winner_db:
         winner_row = contact_session_service.start_user_session(
@@ -79,7 +79,7 @@ def test_start_user_session_close_then_race_creates_one_new_active_session(
 ) -> None:
     user = _create_user(db_session, email="user-session-race-b@example.com")
     tenant = _create_client(db_session, user, name="User Session Race B")
-    user_context = {"user_id": "u1", "email": "user-session-race-b@example.com"}
+    user_context = {"user_id": "u1", "identity_verified": True, "email": "user-session-race-b@example.com"}
     old_row = contact_session_service.start_user_session(
         db_session,
         tenant_id=tenant.id,
@@ -147,7 +147,7 @@ def test_start_user_session_savepoint_rollback_preserves_outer_transaction(
 ) -> None:
     user = _create_user(db_session, email="user-session-race-c@example.com")
     tenant = _create_client(db_session, user, name="User Session Race C")
-    user_context = {"user_id": "u1", "email": "user-session-race-c@example.com"}
+    user_context = {"user_id": "u1", "identity_verified": True, "email": "user-session-race-c@example.com"}
     old_row = contact_session_service.start_user_session(
         db_session,
         tenant_id=tenant.id,

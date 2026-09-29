@@ -420,12 +420,17 @@ def test_widget_chat_hints_session_increments_user_session_turns(
         tenant, db_session, "widget-user-session-turns@example.com"
     )
     _seed_rag_chunk(db_session, client_uuid)
+    db_session.query(Tenant).filter(Tenant.id == client_uuid).update(
+        {"widget_identity_secret": encrypt_value("turns-secret")}
+    )
+    db_session.commit()
+    user_hash = hmac.new(b"turns-secret", b"ext-42", hashlib.sha256).hexdigest()
 
     init_resp = tenant.post(
         "/widget/session/init",
         json={
             "bot_id": bot_public_id,
-            "user_hints": {"user_id": "ext-42", "email": "user@example.com"},
+            "user_hints": {"user_id": "ext-42", "user_hash": user_hash, "email": "user@example.com"},
         },
     )
     assert init_resp.status_code == 200
@@ -458,7 +463,7 @@ def test_widget_chat_hints_session_increments_user_session_turns(
 @pytest.mark.parametrize(
     "hints,expected_mode,expect_resume",
     [
-        pytest.param({"user_id": "ext-99"}, "hints", True, id="identified_user_resumes"),
+        pytest.param({"user_id": "ext-99"}, "hints", False, id="unsigned_user_never_resumes"),
         pytest.param(None, "anonymous", False, id="anonymous_always_new"),
         pytest.param({"email": "visitor@example.com"}, "hints", False, id="email_only_never_resumes"),
     ],
@@ -471,9 +476,9 @@ def test_widget_session_init_resume_modes(
     expect_resume: bool,
 ) -> None:
     """Session resume on repeat /widget/session/init depends on the hint
-    kind: a stable user_id resumes the open session; no hints (anonymous)
-    or an email-only hint (too guessable to safely reattach) always start
-    a fresh one."""
+    kind: no hints (anonymous), an email-only hint (too guessable to safely
+    reattach) or an unsigned user_id always start a fresh one. Signed
+    resume is covered by the user_hash test below."""
     _, bot_public_id = _setup_widget_tenant(
         tenant, db_session, f"widget-resume-{expected_mode}-{expect_resume}@example.com"
     )

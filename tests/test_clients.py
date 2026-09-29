@@ -115,7 +115,7 @@ def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> Non
     assert response.status_code == 404
 
 
-def test_widget_identity_secret_generate_rotate_and_role_gate(
+def test_widget_identity_secret_generate_and_rotate(
     tenant: TestClient, db_session: Session
 ) -> None:
     """Owner generates a key, reads it back, rotates it, and the tenant
@@ -153,6 +153,11 @@ def test_widget_identity_secret_generate_rotate_and_role_gate(
 
     read_rotated = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
     assert read_rotated.json()["secret"] == second_secret
+
+    tenant_row.widget_identity_secret = "not-valid-fernet-ciphertext"
+    db_session.commit()
+    read_corrupted = tenant.get("/tenants/me/widget-identity-secret", headers=owner_auth)
+    assert read_corrupted.status_code == 409
 
 
 def test_delete_client_success(tenant: TestClient, db_session: Session) -> None:

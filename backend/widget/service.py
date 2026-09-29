@@ -97,6 +97,13 @@ def apply_identity_context_patch(
     if locale_value is not None:
         patched["browser_locale"] = locale_value
 
+    # Carry the strict-tenant verification flag forward so a resumed or
+    # rotated chat never loses it — dropping it would make an unverified
+    # session read as legacy (key absent) and eligible for contact_id
+    # extraction again.
+    if "identity_verified" in source:
+        patched["identity_verified"] = source["identity_verified"]
+
     return patched
 
 
@@ -157,9 +164,17 @@ def sanitize_user_hints(raw: Any) -> dict[str, str]:
     return out
 
 
+_HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
 def verify_user_hash(secret: str, user_id: str, user_hash: str | None) -> bool:
     """Constant-time, case-insensitive check that user_hash = HMAC-SHA256(secret, user_id)."""
     if not user_hash:
         return False
+    candidate = user_hash.strip().lower()
+    # hmac.compare_digest raises TypeError on a non-ASCII str; reject anything
+    # that isn't a plausible hex digest before it ever reaches the comparison.
+    if not _HEX64_RE.match(candidate):
+        return False
     expected = hmac.new(secret.encode("utf-8"), user_id.encode("utf-8"), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected.lower(), user_hash.strip().lower())
+    return hmac.compare_digest(expected.encode("ascii"), candidate.encode("ascii"))

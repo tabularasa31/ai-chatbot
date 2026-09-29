@@ -324,8 +324,10 @@ async def widget_session_init(
                 hints,
                 browser_locale=locale,
             )
-            if identity_verified:
-                user_context["identity_verified"] = True
+            # A strict tenant always records verification explicitly, verified
+            # or not — a legacy tenant leaves the key absent.
+            if strict_tenant:
+                user_context["identity_verified"] = identity_verified
             mode = "hints"
             logger.info(
                 "widget_session_init_hints",
@@ -368,8 +370,6 @@ async def widget_session_init(
                 user_context,
                 browser_locale=locale,
             )
-            if identity_verified:
-                existing.user_context["identity_verified"] = True
             sync_user_session_identity(
                 s,
                 tenant_id=tenant.id,

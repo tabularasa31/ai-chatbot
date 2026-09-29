@@ -189,12 +189,25 @@ def get_widget_identity_secret_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> WidgetIdentitySecretResponse:
     """Plaintext widget identity-signing secret, or ``null`` if none exists yet."""
-    secret = get_widget_identity_secret(current_user.id, db)
+    try:
+        secret = get_widget_identity_secret(current_user.id, db)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=409,
+            detail="The stored widget identity secret could not be decrypted. Rotate it.",
+        ) from e
     return WidgetIdentitySecretResponse(secret=secret)
 
 
+# Same budget as workspace delete: an owner rotating this repeatedly is either
+# testing or has bigger problems, and each rotation immediately invalidates
+# every previously signed user_id.
 @tenants_router.post("/me/widget-identity-secret", response_model=WidgetIdentitySecretResponse)
+@limiter.limit("5/hour", key_func=owner_jwt_rate_limit_key)
 def rotate_widget_identity_secret_route(
+    request: Request,
     current_user: Annotated[User, Depends(require_owner)],
     db: Annotated[Session, Depends(get_db)],
 ) -> WidgetIdentitySecretResponse:

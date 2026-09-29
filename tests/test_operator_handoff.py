@@ -1570,7 +1570,7 @@ def test_an_operator_reply_does_not_count_as_a_visitor_turn(
     ws = _make_workspace(tenant, db_session, email="turns@example.com", name="Turns Co")
     contact_id = f"contact-{uuid.uuid4().hex[:8]}"
     chat = _make_chat(db_session, ws.tenant_id)
-    chat.user_context = {"user_id": contact_id, "identity_verified": True}
+    chat.user_context = {"user_id": contact_id}
     db_session.add(chat)
     db_session.commit()
 

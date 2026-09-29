@@ -87,9 +87,10 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Identity</p>
         <h2 className="mt-1 text-base font-semibold text-slate-800">Widget identity verification</h2>
         <p className="mt-1 text-sm text-slate-500">
-          If you pass a <code className="text-slate-700">userId</code> to the widget so a visitor&apos;s
-          conversation follows them across devices, sign it with this key on your server so Chat9 can
-          verify it belongs to that visitor.{" "}
+          Optional. Sign each visitor&apos;s <code className="text-slate-700">user_id</code> with this key
+          on your server so Chat9 can verify it belongs to that visitor. With a key, only verified
+          visitors restore conversations across devices and are grouped in the Inbox; unsigned IDs only
+          personalize the chat and keep it in the same browser.{" "}
           <a
             href="/docs/embedding-the-widget#identity-verification"
             target="_blank"
@@ -106,8 +107,8 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
       {!hasKey && !secret && (
         <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
           <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
-          No key yet. User IDs from your page personalize the chat, but conversations only continue across
-          devices for visitors verified by your server.
+          No key: user IDs from your page are trusted as-is — anyone who knows a visitor&apos;s ID can open
+          their conversation. Add a key to verify IDs on your server.
         </div>
       )}
 
@@ -179,7 +180,8 @@ export default function WidgetIdentityKeyCard({ hasKey, onKeyChange }: Props) {
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 space-y-3">
           <p className="text-sm text-amber-900">
             Rotating replaces the key immediately. The old key stops working right away, and any signed
-            visitors will be treated as unverified until your server signs with the new key.
+            visitors will be treated as unverified until your server signs with the new key. Unverified IDs
+            don&apos;t restore conversations across devices.
           </p>
           <div className="flex gap-2">
             <button

@@ -108,9 +108,7 @@ Conversation history is stored on the server. The widget keeps a `session_id` in
 
 When `userHints` includes `user_id` or `email`, the storage key is scoped per visitor — different users on the same device get separate sessions.
 
-A `user_id` on its own personalizes the conversation (greeting, language, escalation details) and keeps it on the same browser. It does not restore the conversation on another device or after `localStorage` is cleared, and it does not group the visitor's sessions in the Inbox.
-
-To restore the conversation across devices, [verify the visitor's identity](#identity-verification): pass a `user_id` together with a valid `user_hash` computed on your server. The server then reattaches the visitor to their most recent open conversation. Verification is optional and needs a server that signs. An `email`-only hint or an anonymous visitor (no `userHints`) always starts a fresh session on a new browser.
+A `user_id` personalizes the conversation (greeting, language, escalation details), keeps it in the same browser, restores it on another device or after `localStorage` is cleared, and groups the visitor's sessions in the Inbox. Without a key the ID is not verified: anyone who knows or guesses a visitor's `user_id` can open that visitor's conversation in the widget. Use unguessable IDs, or turn on [identity verification](#identity-verification) if conversations may contain anything private. An `email`-only hint or an anonymous visitor (no `userHints`) always starts a fresh session on a new browser.
 
 Escalating to a human agent does not end the conversation. If the visitor's email is already known, the bot goes on answering their questions normally while the ticket is open. If it is not — the default for anonymous visitors — the bot asks for an email address and keeps asking until it gets one, because support replies by email. After the handoff the bot asks whether it can help with anything else; if the visitor declines, the bot says goodbye and the chat stays open — the next message is answered as usual. There is no closed state and no "start new chat" control: a conversation only rolls over into a fresh one after a week without messages, and the previous one stays visible above a "New conversation" separator.
 
@@ -185,8 +183,8 @@ Hints are used for greeting personalization, language selection, and escalation 
 
 | Field | Notes |
 |---|---|
-| `user_id` | Stable ID from your system. Personalizes the conversation. With a valid `user_hash`, it also restores the conversation across devices and groups the visitor's sessions in the Inbox. |
-| `user_hash` | Server-computed proof that `user_id` belongs to this visitor. Required for cross-device restore and Inbox grouping. See [Identity verification](#identity-verification). |
+| `user_id` | Stable ID from your system. Personalizes the conversation, restores it across devices and groups the visitor's sessions in the Inbox. If you have an identity key, these last two need a valid `user_hash`. |
+| `user_hash` | Optional server-computed proof that `user_id` belongs to this visitor. Needed for cross-device restore and Inbox grouping only if you have an identity key. See [Identity verification](#identity-verification). |
 | `email` | Used in escalation notifications. Malformed values are dropped. |
 | `name` | Display name. |
 | `plan_tier` | `"free"`, `"starter"`, `"growth"`, `"pro"`, `"enterprise"`. Affects escalation priority. |
@@ -203,7 +201,7 @@ Hints are used for greeting personalization, language selection, and escalation 
 
 ## Identity verification
 
-`user_id` alone is unauthenticated — anyone with your bot ID could pass any `user_id` in the browser. Identity verification lets Chat9 confirm that a `user_id` really belongs to the visitor sending it, so the conversation can safely be restored across devices. It is optional and needs a server that signs.
+Without a key, `user_id` is trusted as-is: anyone who knows or guesses a visitor's `user_id` can open that visitor's conversation. Identity verification is a stronger, optional level: Chat9 confirms that a `user_id` really belongs to the visitor sending it. You choose whether to use it, and it needs a server that signs.
 
 ### Set up
 
@@ -277,10 +275,10 @@ Hints are used for greeting personalization, language selection, and escalation 
    </script>
    ```
 
-### What changes
+### How it works with and without a key
 
-- With a key and a valid `user_hash`, the conversation is restored across devices and after `localStorage` is cleared, and the visitor's sessions are grouped in the Inbox.
-- Without a key, or without a valid `user_hash`, `user_id` personalizes the conversation (greeting, language, escalation details) and keeps it on the same browser. It does not restore the conversation on another device or group sessions in the Inbox.
+- Without a key: `user_id` works fully. It personalizes the conversation, keeps it in the same browser, restores it across devices and after `localStorage` is cleared, and groups the visitor's sessions in the Inbox. The ID is not verified.
+- With a key: only visitors with a valid `user_hash` restore conversations across devices and are grouped in the Inbox. An unsigned `user_id` only personalizes the conversation and keeps it in the same browser.
 - A `user_id` that starts with `hint:` is always rejected and treated as absent — that prefix is reserved for the server's own synthesized IDs.
 - `email` is never used to restore a conversation, verified or not — it's too easy to guess.
-- In the dashboard **Inbox**, a visitor's sessions are grouped into one row only for verified visitors.
+- In the dashboard **Inbox**, a visitor's sessions are grouped into one row by `user_id`; with an identity key, only for visitors with a valid `user_hash`.

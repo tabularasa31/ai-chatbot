@@ -40,10 +40,10 @@ export function WidgetIdentityBanner() {
     >
       <Info className="mt-0.5 h-5 w-5 flex-shrink-0" aria-hidden="true" />
       <div className="flex-1">
-        <p className="font-semibold">Widget identity verification is here</p>
+        <p className="font-semibold">New: widget identity verification</p>
         <p className="mt-1 text-sm">
-          Conversations now continue across devices only for verified visitors. Set up identity
-          verification if you pass <code className="text-violet-800">user_id</code> to the widget.
+          Verify visitor IDs on your server so only the real visitor can reopen their conversation.
+          Optional, and it needs a server that signs <code className="text-violet-800">user_id</code>.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm font-medium">
           <a href="/docs/changelog" className="text-violet-700 hover:underline">

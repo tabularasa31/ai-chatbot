@@ -3,7 +3,7 @@ import { RootProvider } from 'fumadocs-ui/provider';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { source } from '@/lib/source';
 import { Logo } from '@/components/Logo';
-import { ForcedLightScheme } from './ForcedLightScheme';
+import { ForcedLightScheme } from '@/components/ui/forced-light-scheme';
 import './docs.css';
 
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {

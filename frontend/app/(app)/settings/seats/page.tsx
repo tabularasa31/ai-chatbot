@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { api, type TenantMember } from "@/lib/api";
-import { useClientMe, useMembers, useAuthUser } from "@/hooks/useApi";
+import { useMembers, useAuthUser } from "@/hooks/useApi";
+import { SettingsShell } from "../_components/SettingsShell";
 import { formatDate, parseApiDate } from "@/lib/format";
 import { LoadError } from "@/components/ui/load-error";
 
@@ -18,8 +19,7 @@ function seatDate(value: string): string {
   return Number.isNaN(parsed.getTime()) ? "" : formatDate(value);
 }
 
-export default function SeatsPage() {
-  const { data: client } = useClientMe();
+function SeatsPanel() {
   const { data, error: loadError, isLoading, mutate } = useMembers();
 
   const [saving, setSaving] = useState(false);
@@ -32,7 +32,6 @@ export default function SeatsPage() {
   const selfId = authUser?.id ?? null;
 
   const loadFailed = !data && Boolean(loadError);
-  const isOwner = client?.role === "owner";
   const members: TenantMember[] = data?.items ?? [];
   const seats = data?.seats ?? 0;
   const me = members.find((m) => m.id === selfId) ?? null;
@@ -65,22 +64,10 @@ export default function SeatsPage() {
     }
   }
 
-  if (client && !isOwner) {
-    return (
-      <div className="max-w-3xl">
-        <h1 className="text-2xl font-semibold text-slate-800">Seats</h1>
-        <p className="text-slate-500 text-sm mt-2">
-          Only an owner can see and change the workspace&apos;s seats.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-800">Seats</h1>
-        <p className="text-slate-500 text-sm mt-1">
+        <p className="text-slate-500 text-sm">
           A seat is what lets someone answer inside Chat9. Everyone in the
           workspace can sign in and read; a seat adds the Inbox actions — take a
           live conversation, write a reply the visitor sees in the widget, hand
@@ -89,7 +76,7 @@ export default function SeatsPage() {
         <p className="text-slate-500 text-sm mt-2">
           With a seat, the Inbox page is where you answer: take a conversation,
           reply, hand it back to the bot, mark it resolved. Replies sent by
-          e-mail from a seat holder land in the same conversation. Without a
+          email from a seat holder land in the same conversation. Without a
           seat the Inbox is read-only, and an emailed reply takes the ordinary
           path out of your own mailbox straight to the visitor.
         </p>
@@ -108,7 +95,7 @@ export default function SeatsPage() {
       )}
 
       {loadFailed ? (
-        <LoadError message="Couldn't load your seats. Try again." onRetry={() => mutate()} />
+        <LoadError message="Couldn't load your seats." onRetry={() => mutate()} />
       ) : (
         <>
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-3">
@@ -228,5 +215,13 @@ export default function SeatsPage() {
         this page.
       </p>
     </div>
+  );
+}
+
+export default function SeatsPage() {
+  return (
+    <SettingsShell active="seats">
+      <SeatsPanel />
+    </SettingsShell>
   );
 }

@@ -4,8 +4,10 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useActiveBot, useClientMe } from "@/hooks/useApi";
 import WidgetIdentityKeyCard from "./WidgetIdentityKeyCard";
+import { CopyButton } from "@/components/ui/copy-button";
+import { SettingsShell } from "../settings/_components/SettingsShell";
 
-export default function WidgetSettingsPage() {
+function WidgetSettingsPanel() {
   const {
     activeBot: defaultBot,
     isLoading: loading,
@@ -16,7 +18,6 @@ export default function WidgetSettingsPage() {
   const { data: client, mutate: mutateClient } = useClientMe();
   const [error, setError] = useState("");
   const [settingsBusy, setSettingsBusy] = useState(false);
-  const [copiedBotId, setCopiedBotId] = useState(false);
   const [linkSafetyEnabled, setLinkSafetyEnabled] = useState(false);
   const [allowedDomainsInput, setAllowedDomainsInput] = useState("");
   const [settingsSavedOk, setSettingsSavedOk] = useState(false);
@@ -36,13 +37,6 @@ export default function WidgetSettingsPage() {
     setLinkSafetyEnabled(defaultBot.link_safety_enabled ?? false);
     setAllowedDomainsInput((defaultBot.allowed_domains ?? []).join("\n"));
   }, [defaultBot, isValidating, seededBotId]);
-
-  async function copyBotId() {
-    if (!defaultBot?.public_id) return;
-    await navigator.clipboard.writeText(defaultBot.public_id);
-    setCopiedBotId(true);
-    setTimeout(() => setCopiedBotId(false), 2000);
-  }
 
   function parseAllowedDomains(): string[] {
     return allowedDomainsInput
@@ -80,13 +74,6 @@ export default function WidgetSettingsPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-800">Widget</h1>
-        <p className="mt-1 text-slate-500 text-sm">
-          Bot ID and link-safety configuration for the embedded widget.
-        </p>
-      </div>
-
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 text-red-800 px-4 py-3 text-sm">
           {error}
@@ -105,13 +92,9 @@ export default function WidgetSettingsPage() {
           <code className="text-xs break-all bg-slate-50 border border-slate-200 text-slate-900 font-mono rounded px-3 py-2 flex-1 min-w-0">
             {defaultBot?.public_id ?? "—"}
           </code>
-          <button
-            type="button"
-            onClick={copyBotId}
-            className="rounded-lg bg-slate-900 text-white px-3 py-2 text-sm shrink-0"
-          >
-            {copiedBotId ? "Copied" : "Copy"}
-          </button>
+          {defaultBot?.public_id && (
+            <CopyButton text={defaultBot.public_id} label="Copy" variant="secondary" />
+          )}
         </div>
       </section>
 
@@ -176,9 +159,17 @@ export default function WidgetSettingsPage() {
         </div>
       </section>
 
-      {client?.role === "owner" && (
+      {client && (
         <WidgetIdentityKeyCard hasKey={client.has_widget_identity_secret} onKeyChange={() => mutateClient()} />
       )}
     </div>
+  );
+}
+
+export default function WidgetSettingsPage() {
+  return (
+    <SettingsShell active="widget">
+      <WidgetSettingsPanel />
+    </SettingsShell>
   );
 }

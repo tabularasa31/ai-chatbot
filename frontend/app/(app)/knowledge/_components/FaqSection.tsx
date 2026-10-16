@@ -2,11 +2,9 @@
 
 import type { Dispatch, SetStateAction } from "react";
 import { api, type KnowledgeFaqItem } from "@/lib/api";
-import { KnowledgeTabs, confidenceBadge } from "./shared";
+import { confidenceBadge } from "./shared";
 
 export interface FaqSectionProps {
-  activeTab: "documents" | "profile" | "faq";
-  onTabChange: (tab: "documents" | "profile" | "faq") => void;
   faqLoading: boolean;
   faqItems: KnowledgeFaqItem[];
   setFaqItems: Dispatch<SetStateAction<KnowledgeFaqItem[]>>;
@@ -33,8 +31,6 @@ export interface FaqSectionProps {
 }
 
 export function FaqSection({
-  activeTab,
-  onTabChange,
   faqLoading,
   faqItems,
   setFaqItems,
@@ -60,12 +56,7 @@ export function FaqSection({
   loadFaq,
 }: FaqSectionProps) {
   return (
-    <div className="max-w-7xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-800">Knowledge Hub</h1>
-        <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
-      </div>
-      <KnowledgeTabs activeTab={activeTab} onChange={onTabChange} />
+    <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
         <span className={`rounded-full px-3 py-1 text-xs font-medium ${pendingCount > 0 ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>
           {pendingCount} pending review

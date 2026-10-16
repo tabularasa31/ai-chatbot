@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { mutate as mutateGlobal } from "swr";
 import { api, type HandoffState, type InboxRow, type Thread, type ThreadMessage } from "@/lib/api";
-import { useAuthUser, useClientMe, useInbox, useThread } from "@/hooks/useApi";
+import { useAuthUser, useClientMe, useInbox, useInboxSummary, useThread } from "@/hooks/useApi";
 import { parseApiDate, formatDateTime, formatTime } from "@/lib/format";
 import { LoadError } from "@/components/ui/load-error";
 
@@ -49,7 +49,7 @@ function ticketStatusLabel(status: string): string {
 
 function answeredByEmail(ticket: { forwarded_reply_at: string | null; forwarded_reply_from: string | null } | null): string | null {
   if (!ticket?.forwarded_reply_at || !ticket.forwarded_reply_from) return null;
-  return `Answered by e-mail · ${ticket.forwarded_reply_from} · ${formatDateTime(ticket.forwarded_reply_at)}`;
+  return `Answered by email · ${ticket.forwarded_reply_from} · ${formatDateTime(ticket.forwarded_reply_at)}`;
 }
 
 function previewPrefix(row: InboxRow, viewerId: string | undefined): string {
@@ -156,7 +156,7 @@ function ThreadHeader({ thread }: { thread: Thread }) {
           {answeredByEmail(ticket) && (
             <>
               {" · "}
-              <span className="text-amber-700" title="The reply went to the visitor by e-mail from an address without a seat; nothing was written into this conversation.">
+              <span className="text-amber-700" title="The reply went to the visitor by email from an address without a seat; nothing was written into this conversation.">
                 {answeredByEmail(ticket)}
               </span>
             </>
@@ -423,6 +423,7 @@ function InboxPageContent() {
   const { data: me } = useClientMe();
   const { data: authUser } = useAuthUser();
   const { data: inbox, error, isCurrent, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
+  const { data: inboxSummary } = useInboxSummary();
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(
@@ -458,13 +459,13 @@ function InboxPageContent() {
                 scope === s ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-50"
               }`}
             >
-              {s === "attention" ? `Needs attention${inbox ? ` (${inbox.attention_count})` : ""}` : "All"}
+              {s === "attention" ? `Needs attention${inboxSummary ? ` (${inboxSummary.attention_count})` : ""}` : "All"}
             </button>
           ))}
         </div>
       </div>
 
-      {error && <LoadError message="Couldn't load the inbox. Try again." onRetry={refresh} />}
+      {error && <LoadError message="Couldn't load the inbox." onRetry={refresh} />}
 
       <div className="flex flex-col md:flex-row gap-4">
         <div className="w-full md:w-1/3 bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -475,7 +476,7 @@ function InboxPageContent() {
               onChange={(e) => setSearch(e.target.value)}
               maxLength={200}
               aria-label="Search conversations"
-              placeholder="Search by name, e-mail or ticket number"
+              placeholder="Search by name, email or ticket number"
               className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
             />
             {inbox && (search.trim() || query) && (!isCurrent || search.trim() !== query) && (

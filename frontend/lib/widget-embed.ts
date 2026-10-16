@@ -19,9 +19,6 @@ export function buildEmbedSnippet(options: {
   botId: string;
   extraConfig?: Record<string, string>;
   extraHtml?: string;
-  // "inline" is the dashboard's pre-existing one-line `{ apiBase: "…" }`
-  // form; "multiline" (default) is the embed page's multi-key form.
-  configFormat?: "inline" | "multiline";
 }): string {
   const apiBaseOverride = getApiBaseOverride();
   const entries = Object.entries(options.extraConfig ?? {}).filter(([, v]) => v !== "");
@@ -29,10 +26,7 @@ export function buildEmbedSnippet(options: {
 
   let configLiteral = "";
   if (entries.length > 0) {
-    configLiteral =
-      options.configFormat === "inline"
-        ? `{ ${entries.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(", ")} }`
-        : `{\n${entries.map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`).join(",\n")}\n  }`;
+    configLiteral = `{\n${entries.map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`).join(",\n")}\n  }`;
   }
 
   const scriptTag = `<script\n  src="${WIDGET_LOADER_URL}"\n  data-bot-id="${options.botId}">\n</script>`;

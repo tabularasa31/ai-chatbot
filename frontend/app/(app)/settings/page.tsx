@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api, type DisclosureLevel } from "@/lib/api";
 import { useClientMe, useActiveBot, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
 import DeleteWorkspaceCard from "./DeleteWorkspaceCard";
+import { SettingsShell } from "./_components/SettingsShell";
 import { LoadError } from "@/components/ui/load-error";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -45,12 +46,12 @@ function CardFallback({
   what: string;
   onRetry: () => Promise<unknown>;
 }) {
-  if (failed) return <LoadError message={`Couldn't load ${what}. Try again.`} onRetry={onRetry} />;
+  if (failed) return <LoadError message={`Couldn't load ${what}.`} onRetry={onRetry} />;
   if (empty) return <EmptyState message="No active bot." />;
   return <p className="text-sm text-slate-500 animate-pulse">Loading…</p>;
 }
 
-export default function SettingsPage() {
+function BotSettingsPanel() {
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
   const [supportEmailInput, setSupportEmailInput] = useState("");
   const [escalationLanguageInput, setEscalationLanguageInput] = useState("");
@@ -225,14 +226,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-800">Settings</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Tenant-wide bot configuration for support routing, response behavior, and AI providers.
-        </p>
-      </div>
-
+    <div className="space-y-6">
       {/* Support inbox */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         <div>
@@ -468,7 +462,7 @@ export default function SettingsPage() {
       </div>
 
       {/* AI / Providers */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+      <div id="openai-key" className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-slate-800">AI / Providers</h2>
           <p className="text-sm text-slate-500 mt-1">
@@ -544,11 +538,17 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* Danger zone. Owner-gated here as well as in the sidebar, because a
-          direct URL does not go through the sidebar. */}
-      {client?.role === "owner" && client.name && (
+      {client?.name && (
         <DeleteWorkspaceCard workspaceName={client.name} workspaceId={client.id} />
       )}
     </div>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <SettingsShell active="bot">
+      <BotSettingsPanel />
+    </SettingsShell>
   );
 }

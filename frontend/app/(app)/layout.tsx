@@ -1,8 +1,8 @@
 import { Navbar } from "@/components/Navbar";
 import { Sidebar } from "@/components/Sidebar";
 import { DashboardWidgetLoader } from "@/components/DashboardWidgetLoader";
-import { LlmAlertBanner } from "@/components/LlmAlertBanner";
-import { WidgetIdentityBanner } from "@/components/WidgetIdentityBanner";
+import { ShellBanner } from "@/components/ShellBanner";
+import { ForcedLightScheme } from "@/components/ui/forced-light-scheme";
 import { getSessionFromCookie } from "@/lib/session";
 
 export default async function AppLayout({
@@ -12,12 +12,12 @@ export default async function AppLayout({
 }) {
   const session = await getSessionFromCookie();
   return (
-    <div className="min-h-screen bg-[#F8F9FA]">
+    <div className="min-h-screen bg-canvas">
+      <ForcedLightScheme />
       <Navbar initialEmail={session?.email ?? null} />
       <Sidebar />
-      <main className="ml-[200px] pt-[calc(48px+32px)] pb-8 px-8 min-h-screen text-slate-800">
-        <LlmAlertBanner />
-        <WidgetIdentityBanner />
+      <main className="ml-52 min-h-screen px-8 pb-8 pt-20 text-fg">
+        <ShellBanner />
         {children}
       </main>
       <DashboardWidgetLoader email={session?.email ?? null} />

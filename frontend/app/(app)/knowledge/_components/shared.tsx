@@ -1,6 +1,7 @@
 "use client";
 
 import type { DocumentListItem, UrlSource } from "@/lib/api";
+import type { SectionTab } from "@/components/ui/section-tabs";
 
 export type MixedRow =
   | { kind: "file"; item: DocumentListItem }
@@ -38,36 +39,13 @@ export function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export function KnowledgeTabs({
-  activeTab,
-  onChange,
-}: {
-  activeTab: "documents" | "profile" | "faq";
-  onChange: (tab: "documents" | "profile" | "faq") => void;
-}) {
-  return (
-    <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
-      <button
-        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "documents" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-        onClick={() => onChange("documents")}
-      >
-        Documents
-      </button>
-      <button
-        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "profile" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-        onClick={() => onChange("profile")}
-      >
-        Profile
-      </button>
-      <button
-        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "faq" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-        onClick={() => onChange("faq")}
-      >
-        FAQ
-      </button>
-    </div>
-  );
-}
+export type KnowledgeTab = "documents" | "profile" | "faq";
+
+export const KNOWLEDGE_TABS: readonly SectionTab<KnowledgeTab>[] = [
+  { id: "documents", label: "Documents" },
+  { id: "profile", label: "Profile" },
+  { id: "faq", label: "FAQ" },
+];
 
 export function formatSchedule(value: string) {
   if (value === "manual") return "Manual only";

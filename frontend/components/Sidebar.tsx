@@ -3,154 +3,87 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import {
+  Activity,
+  BookOpen,
+  ChartColumn,
+  CodeXml,
+  FileSearch,
+  Inbox,
+  Settings,
+  type LucideIcon,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { useClientMe, useInboxSummary } from "@/hooks/useApi";
+import { CountBadge } from "@/components/ui/count-badge";
+import { cn } from "@/components/ui/utils";
+
+type BadgeKey = "inbox" | "gaps";
 
 type NavItem = {
   href: string;
+  activeOn: string[];
   label: string;
-  icon: React.ReactNode;
-  adminOnly?: boolean;
+  Icon: LucideIcon;
   ownerOnly?: boolean;
-  badgeKey?: "gapAnalyzer" | "inbox";
+  adminOnly?: boolean;
+  badge?: BadgeKey;
 };
 
 const INBOX_BADGE_POLL_MS = 30_000;
 
-const mainNav: NavItem[] = [
-  {
-    href: "/dashboard",
-    label: "Dashboard",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <rect x="1" y="1" width="5.5" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
-        <rect x="8.5" y="1" width="5.5" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
-        <rect x="1" y="8.5" width="5.5" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
-        <rect x="8.5" y="8.5" width="5.5" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
-      </svg>
-    ),
-  },
-  {
-    href: "/knowledge",
-    label: "Knowledge Hub",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M7.5 1L13 4v7l-5.5 3L2 11V4L7.5 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-        <path d="M7.5 1v13M2 4l5.5 3 5.5-3" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/gap-analyzer",
-    label: "Gap Analyzer",
-    badgeKey: "gapAnalyzer",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M2 11.5L5.2 8.3L7.3 10.4L11.8 5.9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M9.8 5.9H11.8V7.9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/inbox",
-    label: "Inbox",
-    badgeKey: "inbox",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M2 3.5h11v8H2z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-        <path d="M2 8.5h3l1 1.5h3l1-1.5h3" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/analytics",
-    label: "Analytics",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M2 13V2M2 13h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M4.5 10.5V8M7.5 10.5V5.5M10.5 10.5V7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      </svg>
-    ),
-  },
+const BADGES: Record<BadgeKey, { tone: "brand" | "quiet"; meaning: string }> = {
+  inbox: { tone: "brand", meaning: "need attention" },
+  gaps: { tone: "quiet", meaning: "new" },
+};
+
+const NAV_GROUPS: NavItem[][] = [
+  [
+    { href: "/inbox", activeOn: ["/inbox"], label: "Inbox", Icon: Inbox, badge: "inbox" },
+    { href: "/gap-analyzer", activeOn: ["/gap-analyzer"], label: "Doc gaps", Icon: FileSearch, badge: "gaps" },
+    { href: "/knowledge", activeOn: ["/knowledge"], label: "Knowledge", Icon: BookOpen },
+    { href: "/analytics", activeOn: ["/analytics"], label: "Analytics", Icon: ChartColumn },
+  ],
+  [
+    { href: "/dashboard", activeOn: ["/dashboard"], label: "Install widget", Icon: CodeXml },
+    { href: "/settings", activeOn: ["/settings", "/widget-settings"], label: "Settings", Icon: Settings, ownerOnly: true },
+  ],
+  [
+    { href: "/admin/metrics", activeOn: ["/admin"], label: "Platform metrics", Icon: Activity, adminOnly: true },
+  ],
 ];
 
-const settingsNav: NavItem[] = [
-  {
-    href: "/embed",
-    label: "Embed",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M4.5 5L2 7.5 4.5 10M10.5 5L13 7.5 10.5 10M7.5 4l-1.5 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/settings",
-    label: "Settings",
-    ownerOnly: true,
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M2 4h11M2 7.5h7M2 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-        <circle cx="12" cy="11" r="1.8" stroke="currentColor" strokeWidth="1.3" />
-        <path d="M12 9.2V8M12 13.8V13" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-        <path d="M10.33 9.67l-.85-.85M14.52 13.18l-.85-.85M10.33 12.33l-.85.85M14.52 9.82l-.85.85" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/settings/members",
-    label: "Team",
-    ownerOnly: true,
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <circle cx="5.75" cy="5" r="2.25" stroke="currentColor" strokeWidth="1.3" />
-        <path d="M1.75 12.5c0-2.2 1.79-3.5 4-3.5s4 1.3 4 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-        <path d="M10.25 3.1a2.25 2.25 0 010 4.3M11.5 9.4c1.2.45 1.9 1.5 1.9 3.1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/settings/seats",
-    label: "Seats",
-    // Seats are the owner's to hand out, and the screen shows what the
-    // workspace is priced at. Hiding it beats a page that answers 403.
-    ownerOnly: true,
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <circle cx="7.5" cy="4.75" r="2.25" stroke="currentColor" strokeWidth="1.3" />
-        <path d="M3.5 12.25c0-2.2 1.79-3.5 4-3.5s4 1.3 4 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/widget-settings",
-    label: "Widget",
-    ownerOnly: true,
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M4.5 5L2 7.5 4.5 10M10.5 5L13 7.5 10.5 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-        <rect x="5" y="5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
-      </svg>
-    ),
-  },
-];
-
-const adminNav: NavItem[] = [
-  {
-    href: "/admin/metrics",
-    label: "Admin",
-    adminOnly: true,
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M7.5 1l1.545 3.13L12.5 4.635l-2.5 2.435.59 3.43L7.5 8.885 4.41 10.5l.59-3.43-2.5-2.435 3.455-.505L7.5 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-];
+function NavLink({
+  item,
+  active,
+  count,
+}: {
+  item: NavItem;
+  active: boolean;
+  count: number;
+}) {
+  const { Icon, badge } = item;
+  return (
+    <Link
+      href={item.href}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex h-11 items-center gap-3 rounded-control px-3 text-ui font-medium transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
+        active ? "bg-brand-subtle text-brand" : "text-fg-muted hover:bg-surface-alt hover:text-fg",
+      )}
+    >
+      <Icon size={16} aria-hidden="true" className="shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      {badge && <CountBadge count={count} {...BADGES[badge]} />}
+    </Link>
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
-  const [gapBadgeCount, setGapBadgeCount] = useState(0);
+  const [gapCount, setGapCount] = useState(0);
+  const onGapAnalyzer = pathname.startsWith("/gap-analyzer");
 
   // Assume owner until /tenants/me says otherwise: the dashboard's own owner
   // sees no flicker, and an operator loses the owner-only links a moment later.
@@ -158,87 +91,42 @@ export function Sidebar() {
   const isAdmin = client?.is_admin ?? false;
   const isOwner = client?.role === "owner" || client === undefined;
 
-  // Visitors waiting for a person. Polled, because the badge is the only
-  // place an operator on another page learns somebody is waiting.
   const { data: inboxSummary } = useInboxSummary(INBOX_BADGE_POLL_MS);
-  const inboxBadgeCount = inboxSummary?.waiting_count ?? 0;
+  const counts: Record<BadgeKey, number> = {
+    inbox: inboxSummary?.attention_count ?? 0,
+    gaps: gapCount,
+  };
 
   useEffect(() => {
     api.gapAnalyzer
       .getSummary()
-      .then((data) => setGapBadgeCount(data.summary.new_badge_count))
+      .then((data) => setGapCount(data.summary.new_badge_count))
       .catch(() => {});
-  }, []);
+  }, [onGapAnalyzer]);
 
-  function isActive(href: string) {
-    if (href === "/dashboard") return pathname === "/dashboard";
-    if (href === "/settings") return pathname === "/settings";
-    return pathname === href || pathname.startsWith(href + "/");
-  }
-
-  function NavLink({ item }: { item: NavItem }) {
-    const badgeValue =
-      item.badgeKey === "gapAnalyzer" ? gapBadgeCount : item.badgeKey === "inbox" ? inboxBadgeCount : 0;
-    return (
-      <Link
-        href={item.href}
-        className={`flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] relative transition-colors ${
-          isActive(item.href)
-            ? "text-nd-text bg-nd-accent/[0.08]"
-            : "text-nd-text/50 hover:text-nd-text/80 hover:bg-white/[0.03]"
-        }`}
-      >
-        {isActive(item.href) && (
-          <span className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-nd-accent" />
-        )}
-        <span className={isActive(item.href) ? "opacity-90" : "opacity-60"}>
-          {item.icon}
-        </span>
-        <span className="flex-1">{item.label}</span>
-        {badgeValue > 0 && (
-          <span className="rounded-full bg-nd-accent/20 px-1.5 py-0.5 text-[10px] font-semibold text-nd-accent-hover">
-            {badgeValue > 99 ? "99+" : badgeValue}
-          </span>
-        )}
-      </Link>
-    );
-  }
+  const isActive = (item: NavItem) =>
+    item.activeOn.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+  const isVisible = (item: NavItem) =>
+    (!item.ownerOnly || isOwner) && (!item.adminOnly || isAdmin);
 
   return (
-    <aside
-      className="fixed top-12 left-0 h-[calc(100vh-48px)] w-[200px] flex flex-col py-4 bg-nd-base border-r border-white/[0.07]"
-    >
-      <div className="flex flex-col gap-0.5 px-3">
-        {mainNav.map((item) => (
-          <NavLink key={item.href} item={item} />
-        ))}
-      </div>
-
-      <div className="mx-4 my-3 border-t border-white/[0.07]" />
-
-      <div className="px-3 mb-1">
-        <p className="text-[10px] uppercase tracking-widest text-nd-text/20 px-3 mb-1.5">
-          Configure
-        </p>
-        <div className="flex flex-col gap-0.5">
-          {settingsNav
-            .filter((item) => !item.ownerOnly || isOwner)
-            .map((item) => (
-              <NavLink key={item.href} item={item} />
-            ))}
-        </div>
-      </div>
-
-      {isAdmin && (
-        <>
-          <div className="mx-4 my-3 border-t border-white/[0.07]" />
-          <div className="px-3">
-            {adminNav.map((item) => (
-              <NavLink key={item.href} item={item} />
-            ))}
-          </div>
-        </>
-      )}
+    <aside className="fixed bottom-0 left-0 top-12 flex w-52 flex-col border-r border-line bg-surface p-3">
+      <nav aria-label="Main" className="flex flex-1 flex-col gap-6">
+        {NAV_GROUPS.map((group) => ({ key: group[0].href, items: group.filter(isVisible) }))
+          .filter(({ items }) => items.length > 0)
+          .map(({ key, items }) => (
+            <div key={key} className="flex flex-col gap-1">
+              {items.map((item) => (
+                <NavLink
+                  key={item.href}
+                  item={item}
+                  active={isActive(item)}
+                  count={item.badge ? counts[item.badge] : 0}
+                />
+              ))}
+            </div>
+          ))}
+      </nav>
     </aside>
   );
 }

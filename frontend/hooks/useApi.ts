@@ -3,6 +3,7 @@ import useSWR from "swr";
 import { api } from "@/lib/api";
 import type {
   TenantMeResponse,
+  TenantLlmAlertResponse,
   BotResponse,
   SupportSettingsResponse,
   DisclosureConfigResponse,
@@ -17,6 +18,16 @@ import type {
 
 export function useClientMe() {
   return useSWR<TenantMeResponse>("client/me", () => api.clients.getMe());
+}
+
+const LLM_ALERT_POLL_MS = 60_000;
+
+export function useLlmAlert() {
+  return useSWR<TenantLlmAlertResponse>("client/llm-alert", () => api.clients.getLlmAlert(), {
+    refreshInterval: LLM_ALERT_POLL_MS,
+    revalidateOnFocus: false,
+    shouldRetryOnError: false,
+  });
 }
 
 export function useAuthUser(enabled = true) {

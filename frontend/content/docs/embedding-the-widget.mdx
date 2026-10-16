@@ -88,7 +88,7 @@ connect-src https://api-ru.getchat9.live;
 ## Where to get the embed code
 
 1. Log in to your Dashboard at https://getchat9.live.
-2. Copy the embed block from the **Dashboard** home or the **Embed** page.
+2. Copy the embed block from the **Install widget** page.
 
 ## Lifecycle API
 
@@ -205,7 +205,7 @@ Without a key, `user_id` is trusted as-is: anyone who knows or guesses a visitor
 
 ### Set up
 
-1. In the Dashboard, go to **Widget settings → Widget identity verification** and generate a key. You can reveal/copy it later, and rotate it if it leaks — rotating invalidates the old key immediately, so any requests still signed with it stop verifying.
+1. In the Dashboard, go to **Settings → Widget → Widget identity verification** and generate a key. You can reveal/copy it later, and rotate it if it leaks — rotating invalidates the old key immediately, so any requests still signed with it stop verifying.
 2. On your server (never in the browser), compute `user_hash` for the visitor:
 
    ```js

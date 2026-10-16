@@ -104,6 +104,8 @@ export type InboxRow = {
   waiting_since: string | null;
   last_message_role: string | null;
   last_message_preview: string | null;
+  last_message_author_id: string | null;
+  last_message_author_label: string | null;
   last_activity: string;
   message_count: number;
   session_ids: string[];

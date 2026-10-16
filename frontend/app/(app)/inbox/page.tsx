@@ -49,7 +49,7 @@ function ticketStatusLabel(status: string): string {
 
 function answeredByEmail(ticket: { forwarded_reply_at: string | null; forwarded_reply_from: string | null } | null): string | null {
   if (!ticket?.forwarded_reply_at || !ticket.forwarded_reply_from) return null;
-  return `Answered by e-mail · ${ticket.forwarded_reply_from} · ${formatDateTime(ticket.forwarded_reply_at)}`;
+  return `Answered by email · ${ticket.forwarded_reply_from} · ${formatDateTime(ticket.forwarded_reply_at)}`;
 }
 
 function previewPrefix(row: InboxRow, viewerId: string | undefined): string {
@@ -156,7 +156,7 @@ function ThreadHeader({ thread }: { thread: Thread }) {
           {answeredByEmail(ticket) && (
             <>
               {" · "}
-              <span className="text-amber-700" title="The reply went to the visitor by e-mail from an address without a seat; nothing was written into this conversation.">
+              <span className="text-amber-700" title="The reply went to the visitor by email from an address without a seat; nothing was written into this conversation.">
                 {answeredByEmail(ticket)}
               </span>
             </>
@@ -464,7 +464,7 @@ function InboxPageContent() {
         </div>
       </div>
 
-      {error && <LoadError message="Couldn't load the inbox. Try again." onRetry={refresh} />}
+      {error && <LoadError message="Couldn't load the inbox." onRetry={refresh} />}
 
       <div className="flex flex-col md:flex-row gap-4">
         <div className="w-full md:w-1/3 bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -475,7 +475,7 @@ function InboxPageContent() {
               onChange={(e) => setSearch(e.target.value)}
               maxLength={200}
               aria-label="Search conversations"
-              placeholder="Search by name, e-mail or ticket number"
+              placeholder="Search by name, email or ticket number"
               className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
             />
             {inbox && (search.trim() || query) && (!isCurrent || search.trim() !== query) && (

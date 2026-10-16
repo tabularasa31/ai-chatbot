@@ -76,7 +76,7 @@ function SeatsPanel() {
         <p className="text-slate-500 text-sm mt-2">
           With a seat, the Inbox page is where you answer: take a conversation,
           reply, hand it back to the bot, mark it resolved. Replies sent by
-          e-mail from a seat holder land in the same conversation. Without a
+          email from a seat holder land in the same conversation. Without a
           seat the Inbox is read-only, and an emailed reply takes the ordinary
           path out of your own mailbox straight to the visitor.
         </p>
@@ -95,7 +95,7 @@ function SeatsPanel() {
       )}
 
       {loadFailed ? (
-        <LoadError message="Couldn't load your seats. Try again." onRetry={() => mutate()} />
+        <LoadError message="Couldn't load your seats." onRetry={() => mutate()} />
       ) : (
         <>
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-3">

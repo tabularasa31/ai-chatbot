@@ -46,7 +46,7 @@ function CardFallback({
   what: string;
   onRetry: () => Promise<unknown>;
 }) {
-  if (failed) return <LoadError message={`Couldn't load ${what}. Try again.`} onRetry={onRetry} />;
+  if (failed) return <LoadError message={`Couldn't load ${what}.`} onRetry={onRetry} />;
   if (empty) return <EmptyState message="No active bot." />;
   return <p className="text-sm text-slate-500 animate-pulse">Loading…</p>;
 }

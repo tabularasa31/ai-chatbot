@@ -43,11 +43,11 @@ const KEY_NOT_SET_BANNER: BannerContent = {
 
 const EMAIL_NOT_VERIFIED_BANNER: BannerContent = {
   tone: "warning",
-  lead: "Your e-mail is not verified.",
+  lead: "Your email is not verified.",
   text: "Check your inbox for the verification link.",
 };
 
-/** The one banner the page shows: blocking conditions first, then the e-mail warning. */
+/** The one banner the page shows: blocking conditions first, then the email warning. */
 export function useShellBanner(): BannerContent | null {
   const { data: client } = useClientMe();
   const { data: llmAlert } = useSWR("client/llm-alert", () => api.clients.getLlmAlert(), {

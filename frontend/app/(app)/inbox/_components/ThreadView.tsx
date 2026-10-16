@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HandoffState } from "@/lib/api";
+import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
 import { LoadError } from "@/components/ui/load-error";
 import { useThread } from "@/hooks/useApi";
 import { Composer } from "./Composer";
-import { DeferredSkeleton } from "./DeferredSkeleton";
 import { MessageBubble } from "./MessageBubble";
 import { ThreadHeader } from "./ThreadHeader";
 

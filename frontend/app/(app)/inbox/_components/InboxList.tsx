@@ -1,10 +1,10 @@
 import Link from "next/link";
 import type { InboxRow } from "@/lib/api";
 import { Button, FOCUS_RING, buttonClasses } from "@/components/ui/button";
+import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
 import { LoadError } from "@/components/ui/load-error";
 import { cn } from "@/components/ui/utils";
 import { previewPrefix, rowMeta, visitorLabel } from "../_lib/labels";
-import { DeferredSkeleton } from "./DeferredSkeleton";
 import { StatePill } from "./StatePill";
 
 export type Scope = "attention" | "all";
@@ -165,7 +165,7 @@ export function InboxList({
           )}
         />
         <p aria-live="polite" className="text-caption text-fg-muted">
-          {searching ? "Searching…" : null}
+          {searching && !error ? "Searching…" : null}
         </p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -178,16 +178,21 @@ export function InboxList({
         {noRows && !error && isCurrent && <EmptyList scope={scope} query={query} onShowAll={onShowAll} />}
         {!noRows && (
           <ul className="divide-y divide-line">
-            {rows.map((row) => (
-              <InboxRowItem
-                key={row.session_id}
-                row={row}
-                viewerId={viewerId}
-                now={now}
-                selected={selected !== null && row.session_ids.includes(selected)}
-                onSelect={() => onSelect(row.session_id)}
-              />
-            ))}
+            {rows.map((row) => {
+              const isSelected = selected !== null && row.session_ids.includes(selected);
+              return (
+                <InboxRowItem
+                  key={row.session_id}
+                  row={row}
+                  viewerId={viewerId}
+                  now={now}
+                  selected={isSelected}
+                  onSelect={() => {
+                    if (!isSelected) onSelect(row.session_id);
+                  }}
+                />
+              );
+            })}
           </ul>
         )}
       </div>

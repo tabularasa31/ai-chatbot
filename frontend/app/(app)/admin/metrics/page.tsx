@@ -1,23 +1,55 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { AdminMetricsSummary, AdminTenantMetricsItem } from "@/lib/api";
+import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
 import { LoadError } from "@/components/ui/load-error";
+import { cn } from "@/components/ui/utils";
 import { useAdminMetrics, useClientMe } from "@/hooks/useApi";
 
 const SKELETON_ROWS = 5;
-const COLUMN_COUNT = 10;
 
-const NUMERIC_COLUMNS = [
-  "Users",
-  "Documents",
-  "Embedded",
-  "Sessions",
-  "Visitor messages",
-  "Bot messages",
-  "Tokens",
-] as const;
+type Column = {
+  header: string;
+  value: (tenant: AdminTenantMetricsItem) => ReactNode;
+  numeric?: boolean;
+  sticky?: boolean;
+  cellClassName?: (tenant: AdminTenantMetricsItem) => string | undefined;
+};
+
+const count = (header: string, value: (tenant: AdminTenantMetricsItem) => number): Column => ({
+  header,
+  numeric: true,
+  value: (tenant) => value(tenant).toLocaleString(),
+});
+
+const COLUMNS: readonly Column[] = [
+  { header: "Public ID", sticky: true, value: (t) => t.public_id, cellClassName: () => "font-mono font-medium text-fg" },
+  {
+    header: "Owner email",
+    value: (t) =>
+      t.owner_email ? (
+        <span className="block max-w-64 truncate" title={t.owner_email}>
+          {t.owner_email}
+        </span>
+      ) : (
+        "—"
+      ),
+  },
+  count("Users", (t) => t.users_count),
+  count("Documents", (t) => t.documents_count),
+  count("Embedded", (t) => t.embedded_documents_count),
+  count("Sessions", (t) => t.chat_sessions_count),
+  count("Visitor messages", (t) => t.messages_user_count),
+  count("Bot messages", (t) => t.messages_assistant_count),
+  count("Tokens", (t) => t.tokens_used_chat),
+  {
+    header: "OpenAI key",
+    value: (t) => (t.has_openai_key ? "Yes" : "No"),
+    cellClassName: (t) => (t.has_openai_key ? "text-fg" : undefined),
+  },
+];
 
 const HEADER_CELL_CLASS = "px-4 py-2 align-bottom text-caption font-medium text-fg-muted";
 const CELL_CLASS = "px-4 py-2 text-ui text-fg-muted";
@@ -25,10 +57,6 @@ const STICKY_CELL_CLASS = "sticky left-0 bg-canvas";
 
 function isForbidden(error: unknown) {
   return error instanceof Error && (error.message.includes("403") || error.message.includes("Admin only"));
-}
-
-function formatCount(value: number) {
-  return value.toLocaleString();
 }
 
 function Totals({ summary }: { summary: AdminMetricsSummary }) {
@@ -45,7 +73,7 @@ function Totals({ summary }: { summary: AdminMetricsSummary }) {
       {totals.map(({ label, value }) => (
         <div key={label}>
           <dt className="text-caption font-medium text-fg-muted">{label}</dt>
-          <dd className="text-h2 tabular-nums text-fg">{formatCount(value)}</dd>
+          <dd className="text-h2 tabular-nums text-fg">{value.toLocaleString()}</dd>
         </div>
       ))}
     </dl>
@@ -53,61 +81,45 @@ function Totals({ summary }: { summary: AdminMetricsSummary }) {
 }
 
 function TenantRow({ tenant }: { tenant: AdminTenantMetricsItem }) {
-  const counts = [
-    tenant.users_count,
-    tenant.documents_count,
-    tenant.embedded_documents_count,
-    tenant.chat_sessions_count,
-    tenant.messages_user_count,
-    tenant.messages_assistant_count,
-    tenant.tokens_used_chat,
-  ];
   return (
     <tr className="group h-10 border-t border-line hover:bg-surface-alt">
-      <td className={`${CELL_CLASS} ${STICKY_CELL_CLASS} font-mono font-medium text-fg group-hover:bg-surface-alt`}>
-        {tenant.public_id}
-      </td>
-      <td className={CELL_CLASS}>
-        {tenant.owner_email ? (
-          <span className="block max-w-64 truncate" title={tenant.owner_email}>
-            {tenant.owner_email}
-          </span>
-        ) : (
-          "—"
-        )}
-      </td>
-      {counts.map((count, index) => (
-        <td key={NUMERIC_COLUMNS[index]} className={`${CELL_CLASS} text-right tabular-nums`}>
-          {formatCount(count)}
+      {COLUMNS.map((column) => (
+        <td
+          key={column.header}
+          className={cn(
+            CELL_CLASS,
+            column.numeric && "text-right tabular-nums",
+            column.sticky && cn(STICKY_CELL_CLASS, "group-hover:bg-surface-alt"),
+            column.cellClassName?.(tenant),
+          )}
+        >
+          {column.value(tenant)}
         </td>
       ))}
-      <td className={`${CELL_CLASS} ${tenant.has_openai_key ? "text-fg" : ""}`}>
-        {tenant.has_openai_key ? "Yes" : "No"}
-      </td>
     </tr>
   );
 }
 
 function TenantsTable({ tenants }: { tenants: AdminTenantMetricsItem[] }) {
   return (
-    <div role="region" aria-label="Per-tenant metrics" className="overflow-x-auto">
+    <div
+      role="region"
+      aria-label="Per-tenant metrics"
+      tabIndex={0}
+      className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
+    >
       <table className="min-w-full">
         <thead>
           <tr className="border-b border-line text-left">
-            <th scope="col" className={`${HEADER_CELL_CLASS} ${STICKY_CELL_CLASS}`}>
-              Public ID
-            </th>
-            <th scope="col" className={HEADER_CELL_CLASS}>
-              Owner email
-            </th>
-            {NUMERIC_COLUMNS.map((column) => (
-              <th key={column} scope="col" className={`${HEADER_CELL_CLASS} text-right`}>
-                {column}
+            {COLUMNS.map((column) => (
+              <th
+                key={column.header}
+                scope="col"
+                className={cn(HEADER_CELL_CLASS, column.numeric && "text-right", column.sticky && STICKY_CELL_CLASS)}
+              >
+                {column.header}
               </th>
             ))}
-            <th scope="col" className={HEADER_CELL_CLASS}>
-              OpenAI key
-            </th>
           </tr>
         </thead>
         <tbody>
@@ -116,7 +128,7 @@ function TenantsTable({ tenants }: { tenants: AdminTenantMetricsItem[] }) {
           ))}
           {tenants.length === 0 && (
             <tr className="border-t border-line">
-              <td colSpan={COLUMN_COUNT} className={`${CELL_CLASS} h-10`}>
+              <td colSpan={COLUMNS.length} className={cn(CELL_CLASS, "h-10")}>
                 No tenants yet.
               </td>
             </tr>
@@ -129,18 +141,20 @@ function TenantsTable({ tenants }: { tenants: AdminTenantMetricsItem[] }) {
 
 function MetricsSkeleton() {
   return (
-    <div role="status" aria-label="Loading" className="space-y-8">
-      <div className="grid grid-cols-3 gap-6 lg:grid-cols-6">
-        {Array.from({ length: 6 }, (_, index) => (
-          <div key={index} className="h-12 rounded-tag bg-surface-alt" />
-        ))}
+    <DeferredSkeleton>
+      <div className="space-y-8">
+        <div className="grid grid-cols-3 gap-6 lg:grid-cols-6">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="h-12 rounded-tag bg-surface-alt" />
+          ))}
+        </div>
+        <div className="space-y-2">
+          {Array.from({ length: SKELETON_ROWS }, (_, index) => (
+            <div key={index} className="h-10 rounded-tag bg-surface-alt" />
+          ))}
+        </div>
       </div>
-      <div className="space-y-2">
-        {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-          <div key={index} className="h-10 rounded-tag bg-surface-alt" />
-        ))}
-      </div>
-    </div>
+    </DeferredSkeleton>
   );
 }
 

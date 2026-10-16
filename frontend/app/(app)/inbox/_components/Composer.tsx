@@ -2,7 +2,7 @@
 
 import { useCallback, useState, type ButtonHTMLAttributes } from "react";
 import { Loader2 } from "lucide-react";
-import { api, type Thread } from "@/lib/api";
+import { ApiError, api, type Thread } from "@/lib/api";
 import { Button, FOCUS_RING } from "@/components/ui/button";
 import { cn } from "@/components/ui/utils";
 
@@ -14,6 +14,9 @@ const FAILURE_MESSAGE: Record<Action, string> = {
   release: "Couldn't return the conversation to the bot. Try again.",
   resolve: "Couldn't resolve the ticket. Try again.",
 };
+
+const CONFLICT_MESSAGE = "Another operator took this conversation.";
+const HTTP_CONFLICT = 409;
 
 const FIELD_CLASS = "w-full rounded-control border bg-surface px-3 text-ui text-fg placeholder:text-fg-faint";
 const HELPER_ID = "composer-helper";
@@ -34,11 +37,11 @@ function ActionButton({
       variant={variant}
       offset="surface"
       aria-busy={loading}
-      className={className}
+      className={cn("relative", className)}
       {...props}
     >
-      {loading && <Loader2 size={16} aria-hidden="true" className="animate-spin" />}
-      {children}
+      {loading && <Loader2 size={16} aria-hidden="true" className="absolute animate-spin" />}
+      <span className={cn(loading && "invisible")}>{children}</span>
     </Button>
   );
 }
@@ -60,12 +63,12 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
       setError("");
       try {
         await action();
-        await onChanged();
-      } catch {
-        setError(FAILURE_MESSAGE[name]);
-      } finally {
-        setBusy(null);
+      } catch (e) {
+        setError(e instanceof ApiError && e.status === HTTP_CONFLICT ? CONFLICT_MESSAGE : FAILURE_MESSAGE[name]);
       }
+      // A failed action can still have changed the chat (another operator took it): refresh either way.
+      await onChanged().catch(() => undefined);
+      setBusy(null);
     },
     [onChanged],
   );

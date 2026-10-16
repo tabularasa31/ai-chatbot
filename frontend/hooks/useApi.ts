@@ -87,7 +87,7 @@ export function useAdminMetrics(enabled: boolean) {
       const [summary, tenants] = await Promise.all([api.admin.getSummary(), api.admin.getTenants()]);
       return { summary, tenants };
     },
-    { shouldRetryOnError: false }
+    { shouldRetryOnError: false, revalidateOnFocus: false }
   );
 }
 

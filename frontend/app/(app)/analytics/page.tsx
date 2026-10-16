@@ -7,6 +7,7 @@ import { ArrowRight, Loader2 } from "lucide-react";
 import type { AnalyticsPeriod, AnalyticsSummaryResponse } from "@/lib/api";
 import { useAnalyticsSummary } from "@/hooks/useApi";
 import { buttonClasses } from "@/components/ui/button";
+import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
 import { LoadError } from "@/components/ui/load-error";
 import { SectionTabs, sectionTabId } from "@/components/ui/section-tabs";
 
@@ -115,15 +116,17 @@ function MetricList({ rows }: { rows: MetricRow[] }) {
 
 function MetricListSkeleton() {
   return (
-    <div role="status" aria-label="Loading" className="max-w-3xl">
-      {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-        <div key={index} className="flex items-center gap-4 border-t border-line py-4 first:border-t-0">
-          <div className="h-5 w-48 rounded-tag bg-surface-alt" />
-          <div className="h-5 flex-1 rounded-tag bg-surface-alt" />
-          <div className="h-7 w-24 rounded-tag bg-surface-alt" />
-        </div>
-      ))}
-    </div>
+    <DeferredSkeleton>
+      <div className="max-w-3xl">
+        {Array.from({ length: SKELETON_ROWS }, (_, index) => (
+          <div key={index} className="flex items-center gap-4 border-t border-line py-4 first:border-t-0">
+            <div className="h-5 w-48 rounded-tag bg-surface-alt" />
+            <div className="h-5 flex-1 rounded-tag bg-surface-alt" />
+            <div className="h-7 w-24 rounded-tag bg-surface-alt" />
+          </div>
+        ))}
+      </div>
+    </DeferredSkeleton>
   );
 }
 
@@ -166,7 +169,7 @@ function AnalyticsPageContent() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-h1 text-fg">Analytics</h1>
         <div className="flex items-center gap-2">
-          {isValidating && data && (
+          {isValidating && data && data.period !== period && (
             <span role="status">
               <Loader2 size={16} aria-hidden="true" className="animate-spin text-fg-muted" />
               <span className="sr-only">Updating</span>
@@ -185,7 +188,7 @@ function AnalyticsPageContent() {
       >
         {error && <LoadError message="Couldn't load analytics." onRetry={() => mutate()} />}
         {isLoading && <MetricListSkeleton />}
-        {data && (data.conversations === 0 ? <EmptyPeriod period={period} /> : <MetricList rows={metricRows(data)} />)}
+        {data && (data.conversations === 0 ? <EmptyPeriod period={data.period} /> : <MetricList rows={metricRows(data)} />)}
       </div>
     </div>
   );

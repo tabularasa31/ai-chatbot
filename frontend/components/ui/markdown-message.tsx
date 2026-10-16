@@ -1,25 +1,32 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { cn } from "./utils";
 
 const COMPONENTS: Components = {
-  a: ({ node: _node, ...props }) => (
-    // eslint-disable-next-line jsx-a11y/anchor-has-content -- content is spread from react-markdown props at runtime
-    <a {...props} target="_blank" rel="noopener noreferrer" className="text-brand underline" />
+  a: ({ node: _node, children, ...props }) => (
+    <a {...props} target="_blank" rel="noopener noreferrer" className="text-brand underline">
+      {children}
+    </a>
   ),
   img: () => null,
-  ul: ({ node: _node, ...props }) => <ul className="list-disc pl-4" {...props} />,
-  ol: ({ node: _node, ...props }) => <ol className="list-decimal pl-4" {...props} />,
-  pre: ({ node: _node, ...props }) => (
+  ul: ({ node: _node, className, ...props }) => <ul {...props} className={cn("list-disc pl-4", className)} />,
+  ol: ({ node: _node, className, ...props }) => <ol {...props} className={cn("list-decimal pl-4", className)} />,
+  pre: ({ node: _node, className, ...props }) => (
     <pre
-      className="overflow-x-auto rounded-control border border-line bg-surface p-3 font-mono text-caption text-fg"
       {...props}
+      className={cn(
+        "overflow-x-auto rounded-control border border-line bg-surface p-3 font-mono text-caption text-fg",
+        className,
+      )}
     />
   ),
-  code: ({ node: _node, children, ...props }) =>
+  code: ({ node: _node, className, children, ...props }) =>
     String(children).includes("\n") ? (
-      <code {...props}>{children}</code>
+      <code {...props} className={className}>
+        {children}
+      </code>
     ) : (
-      <code className="rounded-tag border border-line bg-surface px-1 font-mono text-caption" {...props}>
+      <code {...props} className={cn("rounded-tag border border-line bg-surface px-1 font-mono text-caption", className)}>
         {children}
       </code>
     ),

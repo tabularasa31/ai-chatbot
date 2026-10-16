@@ -1,6 +1,7 @@
 // Shared design tokens (DESIGN.md). Imported by the dashboard's
 // `frontend/tailwind.config.ts` and the standalone widget-app's
 // `frontend/apps/widget-app/tailwind.config.ts` so both builds stay in sync.
+import type { Config } from "tailwindcss";
 import plugin from "tailwindcss/plugin";
 
 export const ND_BRAND_COLORS = {
@@ -168,7 +169,7 @@ export const brandThemeExtend = {
     pop: "var(--shadow-pop)",
     overlay: "var(--shadow-overlay)",
   },
-};
+} satisfies NonNullable<Config["theme"]>;
 
 function fumadocsScheme(scheme: Scheme) {
   const c = SCHEME_COLORS[scheme];

@@ -592,6 +592,7 @@ def list_inbox(
             if newest is not None
             else None
         )
+        author_id = newest.operator_user_id if newest is not None and newest.operator_user_id in emails else None
         rows.append(
             InboxRow(
                 session_id=current.session_id,
@@ -603,7 +604,7 @@ def list_inbox(
                 waiting_since=v.waiting_since,
                 last_message_role=newest.role.value if newest is not None else None,
                 last_message_preview=_preview(newest.content) if newest is not None else None,
-                last_message_author_id=newest.operator_user_id if newest is not None else None,
+                last_message_author_id=author_id,
                 last_message_author_label=author_label,
                 last_activity=newest.created_at if newest is not None else current.created_at,
                 message_count=sum(count for _, count in per_chat),

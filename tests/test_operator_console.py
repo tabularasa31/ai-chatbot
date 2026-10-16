@@ -460,6 +460,8 @@ def test_an_author_from_another_tenant_is_not_shown_by_their_current_email(
     row = {r["chat_id"]: r for r in items}
     assert row[str(chat_of_stranger.id)]["last_message_author_label"] is None
     assert row[str(chat_of_stranger.id)]["assigned_operator_email"] is None
+    assert row[str(chat_of_stranger.id)]["last_message_author_id"] is None
+    assert row[str(chat_of_colleague.id)]["last_message_author_id"] == str(colleague.id)
     assert row[str(chat_of_colleague.id)]["last_message_author_label"] == "ann@scope.example"
     assert row[str(chat_of_colleague.id)]["assigned_operator_email"] == "ann@scope.example"
 

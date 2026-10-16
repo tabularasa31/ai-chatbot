@@ -1,13 +1,20 @@
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "./utils";
 
+const SAFE_URL = /^(https?:|mailto:)/i;
+
+const keepSafeUrls: UrlTransform = (url) => (SAFE_URL.test(url) ? url : null);
+
 const COMPONENTS: Components = {
-  a: ({ node: _node, children, ...props }) => (
-    <a {...props} target="_blank" rel="noopener noreferrer" className="text-brand underline">
-      {children}
-    </a>
-  ),
+  a: ({ node: _node, children, href, ...props }) =>
+    href ? (
+      <a {...props} href={href} target="_blank" rel="noopener noreferrer" className="text-brand underline">
+        {children}
+      </a>
+    ) : (
+      <>{children}</>
+    ),
   img: () => null,
   ul: ({ node: _node, className, ...props }) => <ul {...props} className={cn("list-disc pl-4", className)} />,
   ol: ({ node: _node, className, ...props }) => <ol {...props} className={cn("list-decimal pl-4", className)} />,
@@ -44,7 +51,7 @@ const COMPONENTS: Components = {
 export function MarkdownMessage({ text }: { text: string }) {
   return (
     <div className="space-y-2 break-words">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS} urlTransform={keepSafeUrls}>
         {text}
       </ReactMarkdown>
     </div>

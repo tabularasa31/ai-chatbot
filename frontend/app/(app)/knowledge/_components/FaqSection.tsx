@@ -219,7 +219,12 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
                     <Button variant="secondary" onClick={() => setEditing(null)} disabled={busy}>
                       Cancel
                     </Button>
-                    <Button variant="primary" busy={busy} onClick={() => void saveEdit(item)}>
+                    <Button
+                      variant="primary"
+                      busy={busy}
+                      disabled={editing.question === item.question && editing.answer === item.answer}
+                      onClick={() => void saveEdit(item)}
+                    >
                       Save changes
                     </Button>
                   </div>

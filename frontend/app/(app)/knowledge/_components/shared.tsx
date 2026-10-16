@@ -62,12 +62,15 @@ export function sourceStatus(status: string): { label: string; dot: StatusDot } 
     case "processing":
     case "embedding":
     case "indexing":
+    case "running":
       return { label: "Indexing", dot: null };
     case "queued":
       return { label: "Queued", dot: null };
     case "ready":
+    case "completed":
       return { label: "Ready", dot: null };
     case "error":
+    case "failed":
       return { label: "Failed", dot: "danger" };
     case "paused":
       return { label: "Paused", dot: "warning" };

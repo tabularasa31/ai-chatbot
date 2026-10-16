@@ -3,12 +3,14 @@
 import { Fragment, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Pencil, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type { DocumentListItem, UrlSource } from "@/lib/api";
-import { formatDateTimeLocale } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FileStatus, UrlStatus } from "./HealthPanel";
 import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, isIndexing, scheduleCaption } from "./shared";
 
 const CELL_CLASS = "px-4 py-3 align-top";
+const SOURCE_CELL_CLASS = "px-4 pb-3 align-top";
+const NAME_CAPTIONS_CLASS = "-mt-3";
 const NUMERIC_CELL_CLASS = `${CELL_CLASS} text-right text-ui tabular-nums text-fg`;
 
 function IconAction({
@@ -67,17 +69,17 @@ export function FileRow({
   const indexing = isIndexing(doc.status);
   return (
     <tr className="border-b border-line hover:bg-surface-alt">
-      <td className={CELL_CLASS}>
+      <td className={SOURCE_CELL_CLASS}>
         <button type="button" onClick={onPreview} className={`block break-words ${NAME_BUTTON_CLASS}`} title="View extracted text">
           {doc.filename}
         </button>
-        <p className="text-caption text-fg-muted">File</p>
+        <p className={`${NAME_CAPTIONS_CLASS} text-caption text-fg-muted`}>File</p>
       </td>
       <td className={CELL_CLASS}>
         <FileStatus doc={doc} />
       </td>
       <td className={`${CELL_CLASS} hidden xl:table-cell`} />
-      <td className={NUMERIC_CELL_CLASS}>{indexing ? "" : formatDateTimeLocale(doc.updated_at)}</td>
+      <td className={NUMERIC_CELL_CLASS}>{indexing ? "" : formatDateTime(doc.updated_at)}</td>
       <Actions>
         <IconAction label="Re-check health" icon={<RotateCw size={20} aria-hidden="true" />} busy={rechecking} disabled={indexing} onClick={onRecheck} />
         <IconAction label="Delete file" icon={<Trash2 size={20} aria-hidden="true" />} onClick={onRequestDelete} />
@@ -110,7 +112,7 @@ export function UrlRow({
   return (
     <Fragment>
       <tr className="cursor-pointer border-b border-line hover:bg-surface-alt" onClick={onToggle}>
-        <td className={CELL_CLASS}>
+        <td className={SOURCE_CELL_CLASS}>
           <button
             type="button"
             aria-expanded={expanded}
@@ -124,7 +126,7 @@ export function UrlRow({
             <Chevron size={16} aria-hidden="true" className="shrink-0" />
             <span className="min-w-0 break-words">{source.name}</span>
           </button>
-          <p className="truncate text-caption text-fg-muted" title={source.url}>
+          <p className={`${NAME_CAPTIONS_CLASS} truncate text-caption text-fg-muted`} title={source.url}>
             {displayUrl(source.url)}
           </p>
           <p className="text-caption text-fg-muted">{scheduleCaption(source)}</p>
@@ -134,7 +136,7 @@ export function UrlRow({
         </td>
         <td className={`${NUMERIC_CELL_CLASS} hidden xl:table-cell`}>{pages}</td>
         <td className={NUMERIC_CELL_CLASS}>
-          {formatDateTimeLocale(source.updated_at)}
+          {formatDateTime(source.updated_at)}
           <p className="text-caption text-fg-muted xl:hidden">{`${pages} pages`}</p>
         </td>
         <td className="px-2 py-2 align-top" onClick={(event) => event.stopPropagation()}>

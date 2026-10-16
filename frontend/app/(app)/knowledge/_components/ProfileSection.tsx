@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Trash2, X } from "lucide-react";
 import { api, type KnowledgeProfile } from "@/lib/api";
-import { formatDateTimeLocale, parseApiDate } from "@/lib/format";
+import { formatDateTime, parseApiDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
@@ -145,7 +145,7 @@ function StatusLine({
   }
   return (
     <p className="text-caption text-fg-muted">
-      {`Extracted from your documents. Updated ${formatDateTimeLocale(profile.updated_at)}`}
+      {`Extracted from your documents. Updated ${formatDateTime(profile.updated_at)}`}
     </p>
   );
 }

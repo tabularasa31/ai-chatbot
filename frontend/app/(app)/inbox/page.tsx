@@ -54,7 +54,8 @@ function answeredByEmail(ticket: { forwarded_reply_at: string | null; forwarded_
 function previewPrefix(row: InboxRow, viewerId: string | undefined): string {
   if (row.last_message_role === "assistant") return "Bot: ";
   if (row.last_message_role !== "operator") return "";
-  if (row.last_message_author_id !== null && row.last_message_author_id === viewerId) return "You: ";
+  if (viewerId === undefined) return "";
+  if (row.last_message_author_id === viewerId) return "You: ";
   return row.last_message_author_label ? `${row.last_message_author_label}: ` : "";
 }
 

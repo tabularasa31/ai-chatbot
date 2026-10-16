@@ -226,6 +226,8 @@ def test_the_list_names_the_operator_who_wrote_the_last_message(
     by_colleague = _chat(db_session, ws.tenant_id)
     _say(db_session, by_colleague, MessageRole.user, "help")
     _say(db_session, by_colleague, MessageRole.operator, "On it", operator_user_id=colleague.id)
+    departed = _chat(db_session, ws.tenant_id)
+    _say(db_session, departed, MessageRole.operator, "Bob was here", operator_label="bob@gone.example")
     unattributed = _chat(db_session, ws.tenant_id)
     _say(db_session, unattributed, MessageRole.operator, "From a mailbox")
     by_bot = _chat(db_session, ws.tenant_id)
@@ -235,8 +237,11 @@ def test_the_list_names_the_operator_who_wrote_the_last_message(
     row = {r["chat_id"]: r for r in items}
 
     named = row[str(by_colleague.id)]
-    assert named["last_message_author_id"] == str(colleague.id) != str(ws.user_id)
+    assert named["last_message_author_id"] == str(colleague.id)
     assert named["last_message_author_label"] == "tomas@author.example"
+    gone = row[str(departed.id)]
+    assert gone["last_message_author_id"] is None
+    assert gone["last_message_author_label"] == "bob@gone.example"
     for chat in (unattributed, by_bot):
         assert row[str(chat.id)]["last_message_author_id"] is None
         assert row[str(chat.id)]["last_message_author_label"] is None

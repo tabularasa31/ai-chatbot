@@ -579,6 +579,11 @@ def list_inbox(
         ticket = v.ticket
         per_chat = [last[s.chat.id] for s in v.sessions if s.chat.id in last]
         newest = max((m for m, _ in per_chat), key=lambda m: m.created_at, default=None)
+        author_label = (
+            (emails.get(newest.operator_user_id) or newest.operator_label)
+            if newest is not None
+            else None
+        )
         rows.append(
             InboxRow(
                 session_id=current.session_id,
@@ -591,11 +596,7 @@ def list_inbox(
                 last_message_role=newest.role.value if newest is not None else None,
                 last_message_preview=_preview(newest.content) if newest is not None else None,
                 last_message_author_id=newest.operator_user_id if newest is not None else None,
-                last_message_author_label=(
-                    emails.get(newest.operator_user_id) or newest.operator_label
-                    if newest is not None
-                    else None
-                ),
+                last_message_author_label=author_label,
                 last_activity=newest.created_at if newest is not None else current.created_at,
                 message_count=sum(count for _, count in per_chat),
                 session_ids=v.session_ids,

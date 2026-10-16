@@ -3,11 +3,13 @@ import { RootProvider } from 'fumadocs-ui/provider';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { source } from '@/lib/source';
 import { Logo } from '@/components/Logo';
+import { ForcedLightScheme } from './ForcedLightScheme';
 import './docs.css';
 
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {
   return (
     <RootProvider theme={{ defaultTheme: 'light', forcedTheme: 'light' }}>
+      <ForcedLightScheme />
       <DocsLayout
         tree={source.pageTree}
         nav={{

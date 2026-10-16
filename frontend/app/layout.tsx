@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { getMetadataBase } from "@/lib/site";
+import { SCHEME_BOOT_SCRIPT } from "@/lib/scheme";
 import { PostHogProvider } from "./providers/PostHogProvider";
 import "./globals.css";
 
@@ -30,10 +31,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable}`}
+      suppressHydrationWarning
+    >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: SCHEME_BOOT_SCRIPT }} />
+      </head>
+      <body className="antialiased">
         <PostHogProvider>{children}</PostHogProvider>
         <Analytics />
         <SpeedInsights />

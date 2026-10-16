@@ -98,7 +98,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
 
   return (
     <div
-      className="min-h-screen bg-[#0A0A0F] font-['Inter']"
+      className="min-h-screen bg-[#0A0A0F]"
       style={{ colorScheme: "dark" }}
     >
       <Navigation />

@@ -10,8 +10,8 @@ Contrast figures were computed by hand with the WCAG 2.x relative-luminance form
 
 - Sans: Geist Sans (variable, already in `frontend/app/fonts/GeistVF.woff`, self-hosted). Reason: neutral UI grotesque, readable at 12-14px, variable weights (one file), tabular figures, already shipped. Stack: `Geist, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`.
 - Mono: Geist Mono (already in repo) for code, IDs, keys, embed snippets only. Two families total; nothing else.
-- Widget uses the same stack (one visual language on tenant sites). Chat content arrives in any language, so the system-ui fallback must stay in the stack.
-- Coverage measured with fontTools (2026-10-16) on `frontend/app/fonts`: `GeistVF.woff` has Cyrillic U+0410-044F 64/64, Latin Extended-A 117/127, Greek U+0391-03C9 only 4 of ~57 (effectively none); `GeistMonoVF.woff` has the same profile. Keep the bundled Geist files, no new dependency (the widget is a separate Vite build, so Inter would add a package there). Greek and any other uncovered script fall back to `system-ui` per character by design; this is accepted.
+- Widget: system font stack (no font download), decision 2026-10-16. Sans `system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`; mono `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`. Chat content arrives in any language, which the system stack covers.
+- Coverage measured with fontTools (2026-10-16) on `frontend/app/fonts`: `GeistVF.woff` has Cyrillic U+0410-044F 64/64, Latin Extended-A 117/127, Greek U+0391-03C9 only 4 of ~57 (effectively none); `GeistMonoVF.woff` has the same profile. Keep the bundled Geist files, no new dependency. Greek and any other uncovered script fall back to `system-ui` per character by design; this is accepted.
 - `body` uses this stack; Arial and `font-['Inter']` are not used.
 
 ## 2. Type scale (6 sizes, 3 weights)
@@ -125,7 +125,7 @@ Contrast changes made to the existing look:
 
 - One shared setting with three values: System (default), Light, Dark. System follows `prefers-color-scheme`; if the browser gives no signal, light.
 - Stored in one cookie `chat9-scheme` (`system|light|dark`; `Path=/`, 1 year, `SameSite=Lax`, readable by script because the switch writes it). Marketing, auth, dashboard and docs read the same cookie, so the choice carries across them; site, auth, dashboard and docs are one Next.js app on one host, so a host-only cookie (no `Domain`) is enough.
-- No flash: the root layout reads the cookie on the server and renders `class="dark"` on `<html>` for Dark. For System it inlines a blocking script in `<head>` that resolves `matchMedia` and sets the class before first paint, and follows OS changes while System is active. `color-scheme: light dark` is set so native controls and scrollbars match.
+- No flash: the server renders no scheme class, so pages stay statically cacheable. A tiny blocking script in the root layout's `<head>` reads the cookie, resolves System through `matchMedia`, and sets `class="dark"` on `<html>` before first paint; it re-resolves when the OS preference or the cookie changes (the switch dispatches `chat9-scheme-change`). `<html>` carries `suppressHydrationWarning`. A surface that forces its own scheme (docs, until it is migrated) renders `[data-scheme-forced]`; while that element is mounted the script does not touch `<html>`. A migrated surface calls `resolveScheme()` (`frontend/lib/scheme.ts`) when it mounts, so client-side navigation from a forcing surface restores the stored scheme. A surface that has migrated to tokens renders `data-scheme-surface`, which sets `color-scheme` to match the resolved scheme so native controls and scrollbars follow.
 - Docs: remove `forcedTheme: light` and fumadocs' own toggle; fumadocs reads the same class (no second storage key, no second control).
 - Switch control (one component, everywhere): segmented radio group of three 44x44 icon buttons, lucide `Monitor` (System), `Sun` (Light), `Moon` (Dark), 16px, `aria-label` and tooltip with the word, selected = `brand-subtle` fill + `brand` icon, `role="radiogroup"`. Arrow keys move, selection applies immediately, no save step.
 - Placement, one per surface: dashboard = foot of the sidebar; marketing + blog = footer, right end of the bottom row; auth = below the card, left edge aligned to the card; docs = foot of the docs sidebar (inside the mobile drawer on narrow widths). Not in any header, not in the widget.
@@ -245,7 +245,7 @@ Settings tab strip (shared with the Knowledge tabs: one component, `<a>` per tab
 4. No tenant brand colour: the accent is the fixed violet everywhere, including the widget; nothing is built for an override. The sidebar follows the scheme (no always-dark block).
 5. Logo: the mark is unchanged (`#E879F9`/`#38BDF8`). Asset requirement: a variant for light backgrounds (same shapes; mark colours darkened until each part reaches 3:1 on `canvas` and `surface`, wordmark in `fg`), selected by scheme in header, auth, docs and sidebar. Not drawn yet.
 6. Targets: 44px minimum everywhere, including the dashboard; density comes from 14px type and spacing, not from smaller controls.
-7. Typeface: keep the bundled Geist Sans + Geist Mono; coverage result and fallback in section 1.
+7. Typeface: keep the bundled Geist Sans + Geist Mono for site, auth, dashboard and docs; the widget uses the system font stack (section 1).
 
 ## 11. Known product-wide fixes (token-level, for implementers)
 

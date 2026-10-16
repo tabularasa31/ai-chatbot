@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { api, clearSession } from "@/lib/api";
 import { LogoMark } from "@/components/Logo";
-import { useClientMe, useAuthUser } from "@/hooks/useApi";
+import { useAuthUser } from "@/hooks/useApi";
 
 const FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
@@ -17,8 +17,6 @@ export function Navbar({
   initialEmail?: string | null;
 }) {
   const router = useRouter();
-  const { data: client } = useClientMe();
-  const isVerified = client ? client.is_verified : null;
   const { data: authUser } = useAuthUser(!initialEmail);
   const userEmail = initialEmail ?? authUser?.email ?? null;
 
@@ -30,11 +28,6 @@ export function Navbar({
 
   return (
     <div>
-      {isVerified === false && (
-        <div className="bg-amber-50 border-b border-amber-200 text-amber-800 px-4 py-2 text-center text-sm">
-          Your email is not verified. Check your inbox for a verification link.
-        </div>
-      )}
       <header className="fixed left-0 right-0 top-0 z-[100] flex h-12 items-center justify-between border-b border-line bg-surface px-6">
         <Link
           href="/dashboard"
@@ -46,7 +39,7 @@ export function Navbar({
         </Link>
         <div className="flex items-center gap-4">
           {userEmail && (
-            <span title={userEmail} className="max-w-[280px] truncate text-ui text-fg-muted">
+            <span title={userEmail} className="max-w-72 truncate text-ui text-fg-muted">
               {userEmail}
             </span>
           )}

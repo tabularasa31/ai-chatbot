@@ -196,6 +196,12 @@ Banners and notices, by urgency (only the highest tier gets a prominent treatmen
 3. Confirmation of a completed action ("Saved"): plain `success` text with a check icon next to the button, `aria-live="polite"`, disappears after 4s. No toast component exists; none is added.
 Field errors: see input.
 
+Page banner (`ui/page-banner.tsx`, new, section 5 tiers 1 and 2): one row at the top of `<main>`; `danger-subtle` or `warning-subtle` fill, 1px semantic border, 16px `TriangleAlert`, bold lead sentence plus one sentence in `fg` 14/20, optional Secondary action (44px; `ExternalLink` icon and `rel="noopener noreferrer"` when it leaves the app). `role="alert"` for danger, `role="status"` for warning. Reason: replaces three hand-built banners (OpenAI alert, e-mail strip above the navbar, identity banner) so urgency is defined once; blocking conditions (key invalid, quota exhausted, key not set) get the prominent treatment, the e-mail warning is quieter and shows only when nothing blocks. Roles without the fix (operators) see the same text without the action.
+
+Inline notice (`ui/inline-notice.tsx`, new, section 5 tier 3 and confirmations): `info-subtle` fill, no border, 16px `Info`, `fg` text with text links, `role="status"`, optional 44px `X` dismiss (`aria-label` "Dismiss"). Reason: announcements and confirmations must never use alert styling; this is the single quiet notice. Dismissal of the widget identity announcement is remembered in the browser's `localStorage` (`chat9:widget-identity-banner-dismissed`), no expiry.
+
+Load error (`ui/load-error.tsx`): `danger-subtle` fill, no border, `TriangleAlert`, `fg` message, Secondary "Try again" (44px, spinner before the label while retrying), `role="alert"`; for a region whose data failed to load.
+
 States for any data region (list, table, document list, inbox, analytics):
 - Loading: nothing for the first 200ms, then skeleton blocks of the final layout in `surface-alt`, no shimmer; `aria-busy`. A whole-page spinner is not used; inline `Loader2` only for buttons and refetch.
 - Empty: left-aligned statement of what is missing in plain words (`text-ui`, `fg-muted`) plus the one action that fixes it, if it exists. No illustration, no dashed box. Centering only when the empty region is the whole page body.
@@ -227,7 +233,7 @@ Sidebar (208px, follows the scheme). Row = 44px, 16px lucide icon + 8px gap + la
 
 | Order | Label | Route | Icon | Badge / notes | Visible to |
 |---|---|---|---|---|---|
-| 1 | Inbox | /inbox | `inbox` | count of visitors waiting | everyone (actions need a seat) |
+| 1 | Inbox | /inbox | `inbox` | `attention_count` from the inbox summary (conversations that need a person) | everyone (actions need a seat) |
 | 2 | Doc gaps | /gap-analyzer | `file-search` | count of new gaps | everyone |
 | 3 | Knowledge | /knowledge | `book-open` | tabs Documents / Profile / FAQ | everyone |
 | 4 | Analytics | /analytics | `chart-column` | | everyone |
@@ -235,9 +241,9 @@ Sidebar (208px, follows the scheme). Row = 44px, 16px lucide icon + 8px gap + la
 | 6 | Settings | /settings, active on all four tab routes | `settings` | | owner only |
 | 7 | Platform metrics | /admin/metrics | `activity` | | platform admins only |
 
-Spacing groups: 1-4 daily work | 5-6 setup | 7 staff. Operators (invited colleagues) see 1-5. Badge: `rounded-full`, `brand` fill, `brand-on` text, `text-caption`, hidden at 0, `aria-label` "3 visitors waiting" / "3 new gaps"; the number must equal the count shown on its page.
+Spacing groups: 1-4 daily work | 5-6 setup | 7 staff. Operators (invited colleagues) see 1-5. Badge (`CountBadge`, section 6): Inbox is tone `brand`, Doc gaps tone `quiet`; hidden at 0; the pill is `aria-hidden` and a visually hidden suffix reads ", 3 need attention" / ", 3 new"; the Inbox number must equal the "Needs attention" count on its page.
 
-Settings tab strip (shared with the Knowledge tabs: one component, `<a>` per tab, 44px high, selected = `brand` text + 2px `brand` underline, `aria-current="page"`): Bot (/settings) | Widget (/widget-settings) | Team (/settings/members) | Seats (/settings/seats). Every tab keeps its URL, all four pages have h1 "Settings", all four are owner-only; a non-owner opening them by URL gets today's behaviour. Page headings follow the menu labels: Knowledge, Doc gaps, Install widget, Platform metrics ("Per-tenant metrics" inside). "Dashboard" from now on means the whole app, never a page. Docs pages, the FAQ and the changelog use these menu terms.
+Settings tab strip (shared with the Knowledge tabs: one component, `<a>` per tab, 44px high, selected = `brand-subtle` fill + `brand` text like a sidebar row, `aria-current="page"`): Bot (/settings) | Widget (/widget-settings) | Team (/settings/members) | Seats (/settings/seats). Every tab keeps its URL, all four pages have h1 "Settings", all four are owner-only; a non-owner opening them by URL gets today's behaviour. Page headings follow the menu labels: Knowledge, Doc gaps, Install widget, Platform metrics ("Per-tenant metrics" inside). "Dashboard" from now on means the whole app, never a page. Docs pages, the FAQ and the changelog use these menu terms.
 
 ## 10. Decisions
 

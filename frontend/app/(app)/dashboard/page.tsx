@@ -7,6 +7,8 @@ import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 import { buildEmbedSnippet } from "@/lib/widget-embed";
 import { PageLoader } from "@/components/ui/page-loader";
 import { LoadError } from "@/components/ui/load-error";
+import { InlineNotice } from "@/components/ui/inline-notice";
+import { WidgetIdentityNotice } from "@/components/WidgetIdentityNotice";
 import { useClientMe, useActiveBot } from "@/hooks/useApi";
 
 function DashboardContent() {
@@ -14,7 +16,7 @@ function DashboardContent() {
   const router = useRouter();
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
 
-  const { data: client, error: clientError, isLoading: clientLoading, mutate: mutateClient } = useClientMe();
+  const { error: clientError, isLoading: clientLoading, mutate: mutateClient } = useClientMe();
   const { activeBot: firstActiveBot, isLoading: botsLoading, error: botsError, mutate: mutateBots } = useActiveBot({ fallbackToFirst: true });
 
   const botPublicId = firstActiveBot?.public_id ?? null;
@@ -44,10 +46,11 @@ function DashboardContent() {
   return (
     <div className="space-y-6 max-w-2xl">
       {showVerificationBanner && (
-        <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm">
+        <InlineNotice>
           We sent a verification link to your email. Please check your inbox and click the link to verify your account.
-        </div>
+        </InlineNotice>
       )}
+      <WidgetIdentityNotice />
       <div>
         <h1 className="text-2xl font-semibold text-slate-800">Dashboard</h1>
       </div>
@@ -63,14 +66,6 @@ function DashboardContent() {
               {botPublicId}
             </code>
           </div>
-        </div>
-      )}
-
-      {!client?.has_openai_key && (
-        <div className="bg-amber-50 border border-amber-100 text-amber-700 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
-          OpenAI API key is not set —{" "}
-          <a href="/settings" className="underline font-medium">configure in Settings</a>
         </div>
       )}
 

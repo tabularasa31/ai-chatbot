@@ -75,6 +75,8 @@ class InboxRowResponse(BaseModel):
     waiting_since: datetime | None = None
     last_message_role: str | None = None
     last_message_preview: str | None = None
+    last_message_author_id: uuid.UUID | None = None
+    last_message_author_label: str | None = None
     last_activity: datetime
     message_count: int
     # Every widget session of the visitor this row covers, newest first.

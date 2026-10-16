@@ -72,6 +72,8 @@ class InboxRow:
     waiting_since: datetime | None
     last_message_role: str | None
     last_message_preview: str | None
+    last_message_author_id: uuid.UUID | None
+    last_message_author_label: str | None
     last_activity: datetime
     message_count: int
     session_ids: list[uuid.UUID]
@@ -566,7 +568,9 @@ def list_inbox(
 
     last = _last_messages(db, [s.chat.id for v in visitors for s in v.sessions])
     emails = _emails_by_user(
-        db, {v.current.assigned_operator_id for v in visitors if v.current.assigned_operator_id}
+        db,
+        {v.current.assigned_operator_id for v in visitors if v.current.assigned_operator_id}
+        | {m.operator_user_id for m, _ in last.values() if m.operator_user_id},
     )
 
     rows: list[InboxRow] = []
@@ -575,6 +579,11 @@ def list_inbox(
         ticket = v.ticket
         per_chat = [last[s.chat.id] for s in v.sessions if s.chat.id in last]
         newest = max((m for m, _ in per_chat), key=lambda m: m.created_at, default=None)
+        author_label = (
+            (emails.get(newest.operator_user_id) or newest.operator_label)
+            if newest is not None
+            else None
+        )
         rows.append(
             InboxRow(
                 session_id=current.session_id,
@@ -586,6 +595,8 @@ def list_inbox(
                 waiting_since=v.waiting_since,
                 last_message_role=newest.role.value if newest is not None else None,
                 last_message_preview=_preview(newest.content) if newest is not None else None,
+                last_message_author_id=newest.operator_user_id if newest is not None else None,
+                last_message_author_label=author_label,
                 last_activity=newest.created_at if newest is not None else current.created_at,
                 message_count=sum(count for _, count in per_chat),
                 session_ids=v.session_ids,

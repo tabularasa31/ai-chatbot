@@ -4,8 +4,9 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { mutate as mutateGlobal } from "swr";
 import { api, type HandoffState, type InboxRow, type Thread, type ThreadMessage } from "@/lib/api";
-import { useClientMe, useInbox, useThread } from "@/hooks/useApi";
+import { useAuthUser, useClientMe, useInbox, useThread } from "@/hooks/useApi";
 import { parseApiDate, formatDateTime, formatTime } from "@/lib/format";
+import { LoadError } from "@/components/ui/load-error";
 
 type Scope = "attention" | "all";
 
@@ -51,13 +52,23 @@ function answeredByEmail(ticket: { forwarded_reply_at: string | null; forwarded_
   return `Answered by e-mail · ${ticket.forwarded_reply_from} · ${formatDateTime(ticket.forwarded_reply_at)}`;
 }
 
+function previewPrefix(row: InboxRow, viewerId: string | undefined): string {
+  if (row.last_message_role === "assistant") return "Bot: ";
+  if (row.last_message_role !== "operator") return "";
+  if (viewerId === undefined) return "";
+  if (row.last_message_author_id === viewerId) return "You: ";
+  return row.last_message_author_label ? `${row.last_message_author_label}: ` : "";
+}
+
 function InboxRowItem({
   row,
+  viewerId,
   selected,
   now,
   onSelect,
 }: {
   row: InboxRow;
+  viewerId: string | undefined;
   selected: boolean;
   now: number;
   onSelect: () => void;
@@ -81,7 +92,7 @@ function InboxRowItem({
           </span>
         </div>
         <p className="text-sm text-slate-600 truncate mt-0.5" title={row.last_message_preview ?? ""}>
-          {row.last_message_role === "operator" ? "You: " : row.last_message_role === "assistant" ? "Bot: " : ""}
+          {previewPrefix(row, viewerId)}
           {row.last_message_preview ?? "(no messages)"}
         </p>
         <p className="text-xs text-slate-400 mt-1 truncate">
@@ -410,7 +421,8 @@ function InboxPageContent() {
   }, []);
 
   const { data: me } = useClientMe();
-  const { data: inbox, error, isLoading, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
+  const { data: authUser } = useAuthUser();
+  const { data: inbox, error, isCurrent, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(
@@ -452,11 +464,7 @@ function InboxPageContent() {
         </div>
       </div>
 
-      {error && (
-        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
-          {error instanceof Error ? error.message : "Failed to load the inbox"}
-        </div>
-      )}
+      {error && <LoadError message="Couldn't load the inbox. Try again." onRetry={refresh} />}
 
       <div className="flex flex-col md:flex-row gap-4">
         <div className="w-full md:w-1/3 bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -470,13 +478,13 @@ function InboxPageContent() {
               placeholder="Search by name, e-mail or ticket number"
               className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
             />
-            {inbox && (search.trim() || query) && (isLoading || search.trim() !== query) && (
+            {inbox && (search.trim() || query) && (!isCurrent || search.trim() !== query) && (
               <p className="px-1 pt-1 text-xs text-slate-400">Searching…</p>
             )}
           </div>
           <div className="max-h-[calc(100vh-252px)] min-h-[368px] overflow-y-auto">
-            {isLoading && !inbox ? (
-              <div className="p-4 text-slate-500 text-sm">Loading…</div>
+            {!isCurrent && (error || rows.length === 0) ? (
+              error ? null : <div className="p-4 text-slate-500 text-sm">Loading…</div>
             ) : rows.length === 0 ? (
               <div className="p-4 text-slate-500 text-sm">
                 {query
@@ -493,6 +501,7 @@ function InboxPageContent() {
                     <InboxRowItem
                       key={row.session_id}
                       row={row}
+                      viewerId={authUser?.id}
                       now={now}
                       selected={isSelected}
                       onSelect={() => {

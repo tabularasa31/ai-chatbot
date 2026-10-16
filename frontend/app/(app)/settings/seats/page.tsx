@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api, type TenantMember } from "@/lib/api";
 import { useClientMe, useMembers, useAuthUser } from "@/hooks/useApi";
 import { formatDate, parseApiDate } from "@/lib/format";
+import { LoadError } from "@/components/ui/load-error";
 
 /** Monthly price of one seat, in US dollars. Nothing is charged during the beta. */
 const SEAT_PRICE_USD = 10;
@@ -30,6 +31,7 @@ export default function SeatsPage() {
   const { data: authUser } = useAuthUser();
   const selfId = authUser?.id ?? null;
 
+  const loadFailed = !data && Boolean(loadError);
   const isOwner = client?.role === "owner";
   const members: TenantMember[] = data?.items ?? [];
   const seats = data?.seats ?? 0;
@@ -93,12 +95,9 @@ export default function SeatsPage() {
         </p>
       </div>
 
-      {(error || loadError) && (
+      {error && (
         <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
-          {error ||
-            (loadError instanceof Error
-              ? loadError.message
-              : "Failed to load your seats")}
+          {error}
         </div>
       )}
 
@@ -108,6 +107,10 @@ export default function SeatsPage() {
         </div>
       )}
 
+      {loadFailed ? (
+        <LoadError message="Couldn't load your seats. Try again." onRetry={() => mutate()} />
+      ) : (
+        <>
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-3">
         {isLoading && !data ? (
           <div className="text-slate-400 text-sm">Loading…</div>
@@ -216,6 +219,8 @@ export default function SeatsPage() {
           </div>
         )}
       </div>
+        </>
+      )}
 
       <p className="text-xs text-slate-500">
         The console screen, replies by email and the documentation loop are all

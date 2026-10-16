@@ -218,6 +218,35 @@ def test_scope_all_skips_sessions_nobody_wrote_in(
     assert {r["chat_id"] for r in everything["items"]} == {str(spoken.id), str(held.id)}
 
 
+def test_the_list_names_the_operator_who_wrote_the_last_message(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="viewer@example.com", name="Author Co")
+    colleague = _colleague(db_session, ws.tenant_id, email="tomas@author.example")
+    by_colleague = _chat(db_session, ws.tenant_id)
+    _say(db_session, by_colleague, MessageRole.user, "help")
+    _say(db_session, by_colleague, MessageRole.operator, "On it", operator_user_id=colleague.id)
+    departed = _chat(db_session, ws.tenant_id)
+    _say(db_session, departed, MessageRole.operator, "Bob was here", operator_label="bob@gone.example")
+    unattributed = _chat(db_session, ws.tenant_id)
+    _say(db_session, unattributed, MessageRole.operator, "From a mailbox")
+    by_bot = _chat(db_session, ws.tenant_id)
+    _say(db_session, by_bot, MessageRole.assistant, "Sure")
+
+    items = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()["items"]
+    row = {r["chat_id"]: r for r in items}
+
+    named = row[str(by_colleague.id)]
+    assert named["last_message_author_id"] == str(colleague.id)
+    assert named["last_message_author_label"] == "tomas@author.example"
+    gone = row[str(departed.id)]
+    assert gone["last_message_author_id"] is None
+    assert gone["last_message_author_label"] == "bob@gone.example"
+    for chat in (unattributed, by_bot):
+        assert row[str(chat.id)]["last_message_author_id"] is None
+        assert row[str(chat.id)]["last_message_author_label"] is None
+
+
 def test_a_rotated_session_is_one_row_pointing_at_its_newest_chat(
     tenant: TestClient, db_session: Session
 ) -> None:

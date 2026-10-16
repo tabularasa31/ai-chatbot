@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import type {
@@ -49,10 +50,13 @@ export function useBotDisclosure(botId: string | null | undefined) {
 }
 
 export function useInbox(scope: "attention" | "all", query: string, refreshInterval = 0) {
-  return useSWR<InboxList>(["operator/inbox", scope, query], () => api.operator.inbox(scope, query), {
+  const swr = useSWR<InboxList>(["operator/inbox", scope, query], () => api.operator.inbox(scope, query), {
     refreshInterval,
-    keepPreviousData: true,
   });
+  const lastLoaded = useRef<{ scope: string; data: InboxList } | null>(null);
+  if (swr.data) lastLoaded.current = { scope, data: swr.data };
+  const sameScopeData = lastLoaded.current?.scope === scope ? lastLoaded.current.data : undefined;
+  return { ...swr, data: swr.data ?? sameScopeData, isCurrent: swr.data !== undefined };
 }
 
 export function useInboxSummary(refreshInterval = 0) {

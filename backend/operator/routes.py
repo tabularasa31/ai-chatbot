@@ -111,6 +111,8 @@ def _row(row: InboxRow) -> InboxRowResponse:
         waiting_since=row.waiting_since,
         last_message_role=row.last_message_role,
         last_message_preview=row.last_message_preview,
+        last_message_author_id=row.last_message_author_id,
+        last_message_author_label=row.last_message_author_label,
         last_activity=row.last_activity,
         message_count=row.message_count,
         session_ids=row.session_ids,

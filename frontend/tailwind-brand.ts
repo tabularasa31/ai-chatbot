@@ -90,8 +90,8 @@ type Scheme = keyof typeof SCHEME_COLORS;
 const SCRIM_OPACITY = 0.6;
 const SCHEME_SELECTOR: Record<Scheme, string> = { light: ":root", dark: ".dark" };
 
-export const SANS_FALLBACK = ["system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"];
-export const MONO_FALLBACK = ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"];
+export const SYSTEM_SANS = ["system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"];
+export const SYSTEM_MONO = ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"];
 
 function hexToChannels(hex: string): [number, number, number] {
   const value = parseInt(hex.slice(1), 16);
@@ -148,10 +148,6 @@ export function brandTokensPlugin(schemes: readonly Scheme[]) {
 
 export const brandThemeExtend = {
   colors: brandColors,
-  fontFamily: {
-    sans: ["var(--font-geist-sans)", ...SANS_FALLBACK],
-    mono: ["var(--font-geist-mono)", ...MONO_FALLBACK],
-  },
   fontSize: {
     caption: ["0.75rem", { lineHeight: "1rem" }],
     ui: ["0.875rem", { lineHeight: "1.25rem" }],

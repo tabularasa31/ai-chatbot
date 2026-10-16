@@ -1,9 +1,9 @@
 import type { Config } from "tailwindcss";
 import typography from "@tailwindcss/typography";
 import {
-  MONO_FALLBACK,
   ND_BRAND_COLORS,
-  SANS_FALLBACK,
+  SYSTEM_MONO,
+  SYSTEM_SANS,
   brandThemeExtend,
   brandTokensPlugin,
 } from "../../tailwind-brand";
@@ -16,7 +16,7 @@ const config: Config = {
   theme: {
     extend: {
       ...brandThemeExtend,
-      fontFamily: { sans: SANS_FALLBACK, mono: MONO_FALLBACK },
+      fontFamily: { sans: SYSTEM_SANS, mono: SYSTEM_MONO },
       colors: {
         ...brandThemeExtend.colors,
         nd: ND_BRAND_COLORS,

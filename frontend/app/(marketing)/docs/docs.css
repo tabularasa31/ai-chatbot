@@ -4,7 +4,7 @@
    #E879F9 (nd-accent) pink for active items.
    ──────────────────────────────────────────────────────────────────────── */
 
-/* 1. Light content area (override the dark brand preset for the page body). */
+/* 1. Light content area for the page body. */
 :root {
   --fd-background:           220 14% 97% !important;   /* ≈ #F4F5F7 */
   --fd-foreground:           222 47% 11% !important;

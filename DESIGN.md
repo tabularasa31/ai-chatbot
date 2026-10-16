@@ -11,7 +11,7 @@ Contrast figures were computed by hand with the WCAG 2.x relative-luminance form
 - Sans: Geist Sans (variable, already in `frontend/app/fonts/GeistVF.woff`, self-hosted). Reason: neutral UI grotesque, readable at 12-14px, variable weights (one file), tabular figures, already shipped. Stack: `Geist, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`.
 - Mono: Geist Mono (already in repo) for code, IDs, keys, embed snippets only. Two families total; nothing else.
 - Widget: system font stack (no font download), decision 2026-10-16. Sans `system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`; mono `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`. Chat content arrives in any language, which the system stack covers.
-- Coverage measured with fontTools (2026-10-16) on `frontend/app/fonts`: `GeistVF.woff` has Cyrillic U+0410-044F 64/64, Latin Extended-A 117/127, Greek U+0391-03C9 only 4 of ~57 (effectively none); `GeistMonoVF.woff` has the same profile. Keep the bundled Geist files, no new dependency (the widget is a separate Vite build, so Inter would add a package there). Greek and any other uncovered script fall back to `system-ui` per character by design; this is accepted.
+- Coverage measured with fontTools (2026-10-16) on `frontend/app/fonts`: `GeistVF.woff` has Cyrillic U+0410-044F 64/64, Latin Extended-A 117/127, Greek U+0391-03C9 only 4 of ~57 (effectively none); `GeistMonoVF.woff` has the same profile. Keep the bundled Geist files, no new dependency. Greek and any other uncovered script fall back to `system-ui` per character by design; this is accepted.
 - `body` uses this stack; Arial and `font-['Inter']` are not used.
 
 ## 2. Type scale (6 sizes, 3 weights)

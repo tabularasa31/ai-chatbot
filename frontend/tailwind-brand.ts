@@ -90,8 +90,8 @@ type Scheme = keyof typeof SCHEME_COLORS;
 const SCRIM_OPACITY = 0.6;
 const SCHEME_SELECTOR: Record<Scheme, string> = { light: ":root", dark: ".dark" };
 
-const SANS_FALLBACK = ["system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"];
-const MONO_FALLBACK = ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"];
+export const SANS_FALLBACK = ["system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"];
+export const MONO_FALLBACK = ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"];
 
 function hexToChannels(hex: string): [number, number, number] {
   const value = parseInt(hex.slice(1), 16);

@@ -1,6 +1,12 @@
 import type { Config } from "tailwindcss";
 import typography from "@tailwindcss/typography";
-import { ND_BRAND_COLORS, brandThemeExtend, brandTokensPlugin } from "../../tailwind-brand";
+import {
+  MONO_FALLBACK,
+  ND_BRAND_COLORS,
+  SANS_FALLBACK,
+  brandThemeExtend,
+  brandTokensPlugin,
+} from "../../tailwind-brand";
 
 // Brand palette is shared with the dashboard via `frontend/tailwind-brand.ts`
 // so widget classes like `bg-nd-base-alt`, `from-nd-accent`, etc. resolve
@@ -10,6 +16,7 @@ const config: Config = {
   theme: {
     extend: {
       ...brandThemeExtend,
+      fontFamily: { sans: SANS_FALLBACK, mono: MONO_FALLBACK },
       colors: {
         ...brandThemeExtend.colors,
         nd: ND_BRAND_COLORS,

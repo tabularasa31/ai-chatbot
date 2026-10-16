@@ -11,28 +11,31 @@ type FieldProps = {
   label: string;
   hideLabel?: boolean;
   helper?: string;
+  error?: string;
 };
 
-type Control = { id: string; describedBy?: string };
+type Control = { id: string; describedBy?: string; invalid: boolean };
 
 function Field({
   label,
   hideLabel,
   helper,
+  error,
   className,
   children,
 }: FieldProps & { className?: string; children: (control: Control) => ReactNode }) {
   const id = useId();
   const hintId = `${id}-hint`;
+  const hint = error ?? helper;
   return (
     <div className={className}>
       <label htmlFor={id} className={hideLabel ? "sr-only" : "mb-1 block text-ui font-medium text-fg"}>
         {label}
       </label>
-      {children({ id, describedBy: helper ? hintId : undefined })}
-      {helper && (
-        <p id={hintId} className="mt-1 text-caption text-fg-muted">
-          {helper}
+      {children({ id, describedBy: hint ? hintId : undefined, invalid: Boolean(error) })}
+      {hint && (
+        <p id={hintId} className={cn("mt-1 text-caption", error ? "text-danger" : "text-fg-muted")}>
+          {hint}
         </p>
       )}
     </div>
@@ -43,16 +46,18 @@ export function Input({
   label,
   hideLabel,
   helper,
+  error,
   className,
   ...props
 }: FieldProps & InputHTMLAttributes<HTMLInputElement>) {
   return (
-    <Field label={label} hideLabel={hideLabel} helper={helper} className={className}>
-      {({ id, describedBy }) => (
+    <Field label={label} hideLabel={hideLabel} helper={helper} error={error} className={className}>
+      {({ id, describedBy, invalid }) => (
         <input
           id={id}
           aria-describedby={describedBy}
-          className={cn(CONTROL_CLASS, "h-11", "border-line-strong")}
+          aria-invalid={invalid || undefined}
+          className={cn(CONTROL_CLASS, "h-11", invalid ? "border-danger" : "border-line-strong")}
           {...props}
         />
       )}
@@ -64,18 +69,20 @@ export function Select({
   label,
   hideLabel,
   helper,
+  error,
   className,
   children,
   ...props
 }: FieldProps & SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <Field label={label} hideLabel={hideLabel} helper={helper} className={className}>
-      {({ id, describedBy }) => (
+    <Field label={label} hideLabel={hideLabel} helper={helper} error={error} className={className}>
+      {({ id, describedBy, invalid }) => (
         <div className="relative">
           <select
             id={id}
             aria-describedby={describedBy}
-              className={cn(CONTROL_CLASS, "h-11 appearance-none pr-10", "border-line-strong")}
+            aria-invalid={invalid || undefined}
+              className={cn(CONTROL_CLASS, "h-11 appearance-none pr-10", invalid ? "border-danger" : "border-line-strong")}
             {...props}
           >
             {children}
@@ -95,16 +102,18 @@ export function Textarea({
   label,
   hideLabel,
   helper,
+  error,
   className,
   ...props
 }: FieldProps & TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
-    <Field label={label} hideLabel={hideLabel} helper={helper} className={className}>
-      {({ id, describedBy }) => (
+    <Field label={label} hideLabel={hideLabel} helper={helper} error={error} className={className}>
+      {({ id, describedBy, invalid }) => (
         <textarea
           id={id}
           aria-describedby={describedBy}
-          className={cn(CONTROL_CLASS, "min-h-11 py-2", "border-line-strong")}
+          aria-invalid={invalid || undefined}
+          className={cn(CONTROL_CLASS, "min-h-11 py-2", invalid ? "border-danger" : "border-line-strong")}
           {...props}
         />
       )}

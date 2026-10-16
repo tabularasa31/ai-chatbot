@@ -2,296 +2,309 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { api, type GapDraftPayload } from "@/lib/api";
-import { formatDateTimeLocale } from "@/lib/format";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
+import { ApiError, api, type GapDraftPayload, type GapItem } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Input, Textarea } from "@/components/ui/field";
+import { FlashMessage, useFlash } from "@/components/ui/flash";
+import { InlineNotice } from "@/components/ui/inline-notice";
+import { LoadError } from "@/components/ui/load-error";
+import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
+import { DraftContext } from "./DraftContext";
 
-function StatusPill({ status }: { status: GapDraftPayload["status"] }) {
-  const styles: Record<string, string> = {
-    drafting: "bg-amber-100 text-amber-800",
-    in_review: "bg-indigo-100 text-indigo-800",
-    resolved: "bg-emerald-100 text-emerald-800",
-    active: "bg-violet-100 text-violet-800",
-  };
+type Busy = "save" | "rewrite" | null;
+type Confirm = "publish" | "discard" | "resolve";
+type LoadState = { status: "loading" } | { status: "failed" } | { status: "missing" } | { status: "ready"; draft: GapDraftPayload };
+
+const STATUS_LABELS: Partial<Record<GapDraftPayload["status"], string>> = {
+  drafting: "Drafting",
+  in_review: "In review",
+};
+const CONFLICT_STATUS = 409;
+const NOT_FOUND_STATUS = 404;
+
+function languageName(code: string): string {
+  try {
+    return new Intl.DisplayNames(undefined, { type: "language" }).of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+function BackLink() {
   return (
-    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${styles[status] ?? "bg-slate-100 text-slate-700"}`}>
-      {status.replace("_", " ")}
-    </span>
+    <Link href="/gap-analyzer" className={buttonClasses({ variant: "ghost" })}>
+      <ArrowLeft size={16} aria-hidden="true" />
+      Doc gaps
+    </Link>
   );
 }
 
-export default function ModeBDraftReviewPage() {
+function PageShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="max-w-6xl space-y-6">
+      <BackLink />
+      {children}
+    </div>
+  );
+}
+
+function FormSkeleton() {
+  return (
+    <SkeletonRegion>
+      <div className="max-w-3xl space-y-6">
+        <Skeleton className="h-8 w-1/3" />
+        <Skeleton className="h-11 w-full" />
+        <Skeleton className="h-11 w-full" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    </SkeletonRegion>
+  );
+}
+
+export default function VisitorQuestionDraftPage() {
   const router = useRouter();
   const params = useParams<{ gapId: string }>();
   const gapId = params?.gapId ?? "";
 
-  const [draft, setDraft] = useState<GapDraftPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
-  const [busy, setBusy] = useState<"" | "save" | "refine" | "publish" | "discard" | "resolve">("");
+  const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [cluster, setCluster] = useState<GapItem | null>(null);
   const [title, setTitle] = useState("");
   const [question, setQuestion] = useState("");
   const [markdown, setMarkdown] = useState("");
   const [guidance, setGuidance] = useState("");
+  const [busy, setBusy] = useState<Busy>(null);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [error, setError] = useState<{ message: string; conflict: boolean } | null>(null);
+  const [saved, flashSaved] = useFlash();
+
+  const applyDraft = useCallback((draft: GapDraftPayload) => {
+    setState({ status: "ready", draft });
+    setTitle(draft.title);
+    setQuestion(draft.question);
+    setMarkdown(draft.markdown);
+  }, []);
 
   const load = useCallback(async () => {
-    if (!gapId) return;
-    setLoading(true);
-    setError("");
+    setError(null);
     try {
-      const data = await api.gapAnalyzer.getModeBDraft(gapId);
-      setDraft(data);
-      setTitle(data.title);
-      setQuestion(data.question);
-      setMarkdown(data.markdown);
+      applyDraft(await api.gapAnalyzer.getModeBDraft(gapId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load draft");
-    } finally {
-      setLoading(false);
+      setState({ status: err instanceof ApiError && err.status === NOT_FOUND_STATUS ? "missing" : "failed" });
     }
-  }, [gapId]);
+  }, [applyDraft, gapId]);
 
   useEffect(() => {
+    setState({ status: "loading" });
     void load();
   }, [load]);
 
-  const handleSave = useCallback(async () => {
-    if (!draft) return;
-    setBusy("save");
-    setError("");
-    setInfo("");
-    try {
-      const updated = await api.gapAnalyzer.updateModeBDraft(gapId, {
-        title,
-        question,
-        markdown,
-        if_match: draft.draft_updated_at,
-      });
-      setDraft(updated);
-      setTitle(updated.title);
-      setQuestion(updated.question);
-      setMarkdown(updated.markdown);
-      setInfo("Draft saved.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save draft");
-    } finally {
-      setBusy("");
-    }
-  }, [draft, gapId, markdown, question, title]);
+  useEffect(() => {
+    let current = true;
+    api.gapAnalyzer
+      .get({ modeBStatus: "all" })
+      .then((response) => {
+        if (current) setCluster(response.mode_b_items.find((item) => item.id === gapId) ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [gapId]);
 
-  const handleRefine = useCallback(async () => {
-    if (!guidance.trim()) {
-      setError("Add guidance for the agent before clicking Ask agent.");
-      return;
-    }
-    setBusy("refine");
-    setError("");
-    setInfo("");
-    try {
-      const updated = await api.gapAnalyzer.refineModeBDraft(gapId, guidance.trim());
-      setDraft(updated);
-      setTitle(updated.title);
-      setQuestion(updated.question);
-      setMarkdown(updated.markdown);
-      setGuidance("");
-      setInfo("Draft refined by agent.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refine draft");
-    } finally {
-      setBusy("");
-    }
-  }, [gapId, guidance]);
-
-  const handlePublish = useCallback(async () => {
-    if (!window.confirm("Publish FAQ to your bot? It will start answering this question immediately.")) {
-      return;
-    }
-    setBusy("publish");
-    setError("");
-    setInfo("");
-    try {
-      await api.gapAnalyzer.publishModeBDraft(gapId);
-      router.push("/gap-analyzer");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to publish FAQ");
-      setBusy("");
-    }
-  }, [gapId, router]);
-
-  const handleDiscard = useCallback(async () => {
-    if (!window.confirm("Discard this draft? The gap will return to the active list.")) {
-      return;
-    }
-    setBusy("discard");
-    setError("");
-    try {
-      await api.gapAnalyzer.discardModeBDraft(gapId);
-      router.push("/gap-analyzer");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to discard draft");
-      setBusy("");
-    }
-  }, [gapId, router]);
-
-  const handleResolve = useCallback(async () => {
-    if (!window.confirm("Mark this gap as resolved without publishing? Use this if you'll publish the answer elsewhere.")) {
-      return;
-    }
-    setBusy("resolve");
-    setError("");
-    try {
-      await api.gapAnalyzer.resolveModeBGap(gapId);
-      router.push("/gap-analyzer");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to mark gap as resolved");
-      setBusy("");
-    }
-  }, [gapId, router]);
-
-  if (loading) {
-    return <div className="p-6 text-sm text-slate-500">Loading draft…</div>;
-  }
-  if (!draft && error) {
+  if (state.status === "loading") {
     return (
-      <div className="p-6 space-y-3">
-        <Link href="/gap-analyzer" className="text-sm text-slate-600 hover:underline">
-          ← Back to Gap Analyzer
-        </Link>
-        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
-      </div>
+      <PageShell>
+        <FormSkeleton />
+      </PageShell>
     );
   }
-  if (!draft) {
-    return <div className="p-6 text-sm text-slate-500">Draft not found.</div>;
+  if (state.status === "missing") {
+    return (
+      <PageShell>
+        <p className="text-ui text-fg-muted">This draft no longer exists.</p>
+      </PageShell>
+    );
+  }
+  if (state.status === "failed") {
+    return (
+      <PageShell>
+        <LoadError message="Couldn't load this draft." onRetry={load} />
+      </PageShell>
+    );
   }
 
-  const anyBusy = busy !== "";
+  const { draft } = state;
+  const locked = busy !== null;
+
+  async function save() {
+    setBusy("save");
+    setError(null);
+    try {
+      applyDraft(
+        await api.gapAnalyzer.updateModeBDraft(gapId, { title, question, markdown, if_match: draft.draft_updated_at }),
+      );
+      flashSaved("Draft saved");
+    } catch (err) {
+      const conflict = err instanceof ApiError && err.status === CONFLICT_STATUS;
+      setError({
+        message: conflict
+          ? "This draft was changed in another tab. Reload to see the latest."
+          : "Couldn't save the draft. Try again.",
+        conflict,
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function rewrite() {
+    setBusy("rewrite");
+    setError(null);
+    try {
+      applyDraft(await api.gapAnalyzer.refineModeBDraft(gapId, guidance.trim()));
+      setGuidance("");
+    } catch {
+      setError({ message: "Couldn't rewrite the answer. Try again.", conflict: false });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function finish(work: () => Promise<unknown>) {
+    await work();
+    router.push("/gap-analyzer");
+  }
 
   return (
-    <div className="space-y-6 p-2">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Link href="/gap-analyzer" className="text-sm text-slate-600 hover:underline">
-            ← Back to Gap Analyzer
-          </Link>
-          <StatusPill status={draft.status} />
-          <span className="text-xs text-slate-400">Language: {draft.language}</span>
+    <PageShell>
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+          <h1 className="text-h1 text-fg">Review FAQ answer</h1>
+          <p className="text-caption text-fg-muted">
+            {[
+              STATUS_LABELS[draft.status],
+              `Language: ${languageName(draft.language)}`,
+              `Saved ${formatDateTime(draft.draft_updated_at)}`,
+            ]
+              .filter(Boolean)
+              .join(" - ")}
+          </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={anyBusy}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            {busy === "save" ? "Saving…" : "Save"}
-          </button>
-          <button
-            type="button"
-            onClick={handleResolve}
-            disabled={anyBusy}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Mark as resolved
-          </button>
-          <button
-            type="button"
-            onClick={handleDiscard}
-            disabled={anyBusy}
-            className="rounded-lg border border-rose-200 px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-          >
-            Discard
-          </button>
-          <button
-            type="button"
-            onClick={handlePublish}
-            disabled={anyBusy}
-            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-          >
-            {busy === "publish" ? "Publishing…" : "Publish to bot"}
-          </button>
-        </div>
+        {cluster && <p className="break-words text-ui text-fg-muted">{cluster.label}</p>}
       </div>
 
-      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
-      {info && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{info}</div>}
+      <div className={cluster ? "grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]" : ""}>
+        <div className="max-w-3xl space-y-6">
+          <Input label="Title" value={title} onChange={(event) => setTitle(event.target.value)} />
+          <Input
+            label="Question visitors ask"
+            helper="The bot matches visitor questions to this."
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+          />
+          <Textarea
+            label="Answer (Markdown)"
+            mono
+            rows={16}
+            value={markdown}
+            onChange={(event) => setMarkdown(event.target.value)}
+          />
 
-      <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="space-y-3 self-start rounded-xl border border-slate-200 bg-white p-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Gap context</h2>
-          <p className="text-xs text-slate-500">
-            Draft language: {draft.language}<br />
-            Last updated: {formatDateTimeLocale(draft.draft_updated_at)}
-          </p>
-          <Link href={`/gap-analyzer`} className="block text-sm text-slate-600 hover:underline">
-            See the full cluster on the Gap Analyzer list
-          </Link>
-        </aside>
-
-        <div className="space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500" htmlFor="draft-title">
-              Title
-            </label>
-            <input
-              id="draft-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
-            />
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500" htmlFor="draft-question">
-              Canonical question
-            </label>
-            <input
-              id="draft-question"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
-            />
-            <p className="mt-2 text-xs text-slate-500">
-              Used by the bot&apos;s FAQ matcher to find this answer.
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500" htmlFor="draft-markdown">
-              Answer (Markdown)
-            </label>
-            <textarea
-              id="draft-markdown"
-              value={markdown}
-              onChange={(e) => setMarkdown(e.target.value)}
-              rows={16}
-              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-6 text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
-            />
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500" htmlFor="draft-guidance">
-              Ask agent
-            </label>
-            <textarea
-              id="draft-guidance"
-              value={guidance}
-              onChange={(e) => setGuidance(e.target.value)}
-              placeholder="e.g. Make it shorter, add a code example, write in a friendlier tone."
+          <section className="space-y-3">
+            <h2 className="text-body font-semibold text-fg">Rewrite the answer</h2>
+            <Textarea
+              label="How should it change?"
+              placeholder="For example: shorter, add an example, friendlier tone."
+              helper="Replaces the current answer; unsaved edits to it are lost."
               rows={3}
-              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
+              value={guidance}
+              onChange={(event) => setGuidance(event.target.value)}
             />
-            <div className="mt-3 flex justify-end">
-              <button
-                type="button"
-                onClick={handleRefine}
-                disabled={anyBusy || !guidance.trim()}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {busy === "refine" ? "Refining…" : "Ask agent"}
-              </button>
+            <Button
+              variant="secondary"
+              busy={busy === "rewrite"}
+              disabled={locked ? busy !== "rewrite" : !guidance.trim()}
+              onClick={() => void rewrite()}
+            >
+              Rewrite answer
+            </Button>
+          </section>
+
+          {error && (
+            <InlineNotice
+              tone="danger"
+              action={
+                error.conflict && (
+                  <Button variant="secondary" offset="surface" onClick={() => void load()}>
+                    Reload draft
+                  </Button>
+                )
+              }
+            >
+              {error.message}
+            </InlineNotice>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+            <div className="flex flex-wrap gap-3">
+              <Button variant="ghost" onClick={() => setConfirm("discard")} disabled={locked}>
+                Discard draft
+              </Button>
+              <Button variant="secondary" onClick={() => setConfirm("resolve")} disabled={locked}>
+                Mark as resolved
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <FlashMessage message={saved} />
+              <Button variant="secondary" busy={busy === "save"} onClick={() => void save()} disabled={locked && busy !== "save"}>
+                Save draft
+              </Button>
+              <Button variant="primary" onClick={() => setConfirm("publish")} disabled={locked}>
+                Publish to bot
+              </Button>
             </div>
           </div>
         </div>
+        {cluster && <DraftContext cluster={cluster} />}
       </div>
-    </div>
+
+      {confirm === "publish" && (
+        <ConfirmDialog
+          title="Publish this answer?"
+          body="The bot starts answering this question right away."
+          confirmLabel="Publish to bot"
+          tone="primary"
+          failureMessage="Couldn't publish the answer. Try again."
+          onConfirm={() => finish(() => api.gapAnalyzer.publishModeBDraft(gapId))}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+      {confirm === "discard" && (
+        <ConfirmDialog
+          title="Discard this draft?"
+          body="The draft is deleted and the gap returns to the list."
+          confirmLabel="Discard draft"
+          tone="destructive"
+          failureMessage="Couldn't discard the draft. Try again."
+          onConfirm={() => finish(() => api.gapAnalyzer.discardModeBDraft(gapId))}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+      {confirm === "resolve" && (
+        <ConfirmDialog
+          title="Mark as resolved?"
+          body="The gap leaves the open list without publishing an answer. Use this if you publish it elsewhere."
+          confirmLabel="Mark as resolved"
+          tone="primary"
+          failureMessage="Couldn't mark the gap as resolved. Try again."
+          onConfirm={() => finish(() => api.gapAnalyzer.resolveModeBGap(gapId))}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+    </PageShell>
   );
 }

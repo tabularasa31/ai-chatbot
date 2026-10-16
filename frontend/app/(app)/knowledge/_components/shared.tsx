@@ -1,4 +1,4 @@
-import { ApiError, type DocumentListItem, type UrlSource } from "@/lib/api";
+import type { DocumentListItem, UrlSource } from "@/lib/api";
 import { parseApiDate } from "@/lib/format";
 import type { SectionTab } from "@/components/ui/section-tabs";
 
@@ -29,10 +29,6 @@ export function parseExclusions(text: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-}
-
-export function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
 }
 
 function formatMonthDay(iso: string): string {

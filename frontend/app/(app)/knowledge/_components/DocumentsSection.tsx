@@ -10,7 +10,7 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { DocumentPreviewDrawer } from "./DocumentPreviewDrawer";
-import { FlashMessage } from "./flash";
+import { FlashMessage } from "@/components/ui/flash";
 import { SourceForm } from "./SourceForm";
 import { FileRow, UrlRow } from "./SourceRows";
 import { UrlSourcesSection, type DetailView } from "./UrlSourcesSection";

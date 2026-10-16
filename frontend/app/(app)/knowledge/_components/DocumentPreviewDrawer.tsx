@@ -7,7 +7,7 @@ import { Drawer } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/field";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
-import { FlashMessage, useFlash } from "./flash";
+import { FlashMessage, useFlash } from "@/components/ui/flash";
 
 const REFETCH_DELAY_MS = 5000;
 

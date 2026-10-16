@@ -7,10 +7,9 @@ import {
   type UrlSource,
   type UrlSourceDetail,
 } from "@/lib/api";
-import { useFlash } from "./flash";
+import { useFlash } from "@/components/ui/flash";
 import {
   POLLABLE_SOURCE_STATUSES,
-  errorMessage,
   parseExclusions,
   type SourceFormValues,
 } from "./shared";
@@ -110,8 +109,8 @@ export function useSources() {
         setDocuments((prev) => [doc as DocumentListItem, ...prev]);
         await api.embeddings.create(doc.id);
         await pollUntilEmbedded(doc.id);
-      } catch (err) {
-        errors.push(`${files[i].name}: ${errorMessage(err, "Upload failed")}`);
+      } catch {
+        errors.push(`${files[i].name}: Upload failed`);
       }
     }
     await load();
@@ -157,8 +156,8 @@ export function useSources() {
       const source = await api.documents.refreshSource(id);
       setSources((prev) => prev.map((item) => (item.id === id ? source : item)));
       if (expandedSourceId === id) await loadDetail(id);
-    } catch (err) {
-      setActionError(errorMessage(err, "Couldn't refresh this source. Try again."));
+    } catch {
+      setActionError("Couldn't refresh this source. Try again.");
     } finally {
       setRefreshingSourceId(null);
     }
@@ -190,8 +189,8 @@ export function useSources() {
     try {
       const health = await api.documents.runHealth(docId);
       setDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, health_status: health } : d)));
-    } catch (err) {
-      setActionError(errorMessage(err, "Couldn't re-check this file. Try again."));
+    } catch {
+      setActionError("Couldn't re-check this file. Try again.");
     } finally {
       setRecheckingId(null);
     }

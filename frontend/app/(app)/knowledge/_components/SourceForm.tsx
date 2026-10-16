@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
-import { SCHEDULE_OPTIONS, errorMessage, type SourceFormValues } from "./shared";
+import { SCHEDULE_OPTIONS, type SourceFormValues } from "./shared";
 
 type SourceFormProps = {
   initial: SourceFormValues;
@@ -36,8 +36,8 @@ export function SourceForm({
     setError("");
     try {
       await onSubmit({ ...values, url });
-    } catch (err) {
-      setError(errorMessage(err, failureFallback));
+    } catch {
+      setError(failureFallback);
       setBusy(false);
     }
   }

@@ -8,8 +8,8 @@ import { Input, Select, Textarea } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
-import { FlashMessage, useFlash } from "./flash";
-import { confidenceLevel, errorMessage } from "./shared";
+import { FlashMessage, useFlash } from "@/components/ui/flash";
+import { confidenceLevel } from "./shared";
 
 type FaqFilter = "all" | "pending" | "approved" | "docs" | "logs";
 type LoadState = "loading" | "ready" | "error";
@@ -101,8 +101,8 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
     try {
       await action();
       await load();
-    } catch (err) {
-      setActionError(errorMessage(err, fallback));
+    } catch {
+      setActionError(fallback);
       return false;
     } finally {
       setBusyId(null);

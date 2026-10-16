@@ -1,23 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import { flushSync } from "react-dom";
 import { api } from "@/lib/api";
-import {
-  AuthCard,
-  AuthFooter,
-  AuthHeading,
-  AuthLink,
-  AuthSubmit,
-  standaloneLinkClasses,
-} from "@/components/auth/AuthCard";
+import { AuthCard, AuthFooter, AuthHeading, AuthSubmit, StandaloneLink } from "@/components/auth/AuthCard";
 import { AuthField, EMAIL_INPUT_PROPS } from "@/components/auth/AuthField";
-import { emailError, focusFirstError, formErrorMessage } from "@/components/auth/auth-rules";
+import { applyFieldErrors, emailError, focusField, formErrorMessage, type FieldErrors } from "@/components/auth/auth-rules";
 import { Button } from "@/components/ui/button";
 import { LoadError } from "@/components/ui/load-error";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
-  const [fieldError, setFieldError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FieldErrors<"email">>({ email: null });
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -26,12 +20,9 @@ export default function ForgotPasswordPage() {
     e.preventDefault();
     if (submitting) return;
     setFormError(null);
-    const invalid = emailError(email);
-    setFieldError(invalid);
-    if (invalid) {
-      focusFirstError({ email: invalid });
-      return;
-    }
+    const next = { email: emailError(email) };
+    applyFieldErrors(setErrors, next);
+    if (next.email) return;
 
     setSubmitting(true);
     try {
@@ -44,6 +35,11 @@ export default function ForgotPasswordPage() {
     }
   }
 
+  function editEmail() {
+    flushSync(() => setSubmitted(false));
+    focusField("email");
+  }
+
   if (submitted) {
     return (
       <AuthCard centered>
@@ -52,13 +48,11 @@ export default function ForgotPasswordPage() {
           If an account exists for <span className="break-all font-medium text-fg">{email}</span>, we sent a link to
           reset the password.
         </p>
-        <Button variant="secondary" offset="surface" className="w-full" onClick={() => setSubmitted(false)}>
+        <Button variant="secondary" offset="surface" className="w-full" onClick={editEmail}>
           Use a different email
         </Button>
         <AuthFooter className="justify-center">
-          <AuthLink href="/login" className={standaloneLinkClasses}>
-            Back to sign in
-          </AuthLink>
+          <StandaloneLink href="/login">Back to sign in</StandaloneLink>
         </AuthFooter>
       </AuthCard>
     );
@@ -78,17 +72,15 @@ export default function ForgotPasswordPage() {
           value={email}
           onChange={(e) => {
             setEmail(e.target.value);
-            setFieldError(null);
+            setErrors({ email: null });
           }}
-          error={fieldError}
+          error={errors.email}
         />
         {formError && <LoadError message={formError} />}
         <AuthSubmit submitting={submitting} label="Send reset link" loadingLabel="Sending…" />
       </form>
       <AuthFooter>
-        <AuthLink href="/login" className={standaloneLinkClasses}>
-          Back to sign in
-        </AuthLink>
+        <StandaloneLink href="/login">Back to sign in</StandaloneLink>
       </AuthFooter>
     </AuthCard>
   );

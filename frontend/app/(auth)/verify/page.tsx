@@ -8,16 +8,15 @@ import { api, markSession } from "@/lib/api";
 import {
   AuthCard,
   AuthHeading,
-  AuthLink,
   AuthSkeleton,
-  fullWidthLinkButtonClasses,
-  standaloneLinkClasses,
+  StandaloneLink,
 } from "@/components/auth/AuthCard";
+import { fullWidthLinkButtonClasses } from "@/components/auth/link-classes";
 import { formErrorMessage, isApiStatus } from "@/components/auth/auth-rules";
 import { Button } from "@/components/ui/button";
 
 type VerifyState =
-  | { status: "verifying" }
+  | { status: "verifying"; retried: boolean }
   | { status: "success" }
   | { status: "rejected" }
   | { status: "failed"; message: string };
@@ -35,10 +34,10 @@ function BrokenLink({ explanation }: { explanation: string }) {
 }
 
 function TokenVerification({ token }: { token: string }) {
-  const [state, setState] = useState<VerifyState>({ status: "verifying" });
+  const [state, setState] = useState<VerifyState>({ status: "verifying", retried: false });
 
-  const verify = useCallback(async () => {
-    setState({ status: "verifying" });
+  const verify = useCallback(async (retried: boolean) => {
+    setState({ status: "verifying", retried });
     try {
       await api.auth.verifyEmail(token);
       markSession();
@@ -50,14 +49,14 @@ function TokenVerification({ token }: { token: string }) {
   }, [token]);
 
   useEffect(() => {
-    void verify();
+    void verify(false);
   }, [verify]);
 
   if (state.status === "verifying") {
     return (
-      <AuthCard centered role="status" aria-busy="true">
-        <AuthHeading>Verifying your email…</AuthHeading>
-        <Loader2 size={16} aria-hidden="true" className="mx-auto animate-spin text-fg-muted" />
+      <AuthCard centered role="status">
+        <AuthHeading moveFocus={state.retried}>Verifying your email…</AuthHeading>
+        <Loader2 size={16} aria-busy="true" aria-hidden="true" className="mx-auto animate-spin text-fg-muted" />
       </AuthCard>
     );
   }
@@ -81,13 +80,11 @@ function TokenVerification({ token }: { token: string }) {
     <AuthCard centered>
       <AuthHeading moveFocus>Couldn&apos;t verify your email</AuthHeading>
       <p className="mb-6 text-body text-fg-muted">{state.message}</p>
-      <Button variant="secondary" offset="surface" className="w-full" onClick={verify}>
+      <Button variant="secondary" offset="surface" className="w-full" onClick={() => verify(true)}>
         Try again
       </Button>
       <div className="mt-4 flex justify-center">
-        <AuthLink href="/login" className={standaloneLinkClasses}>
-          Sign in
-        </AuthLink>
+        <StandaloneLink href="/login">Sign in</StandaloneLink>
       </div>
     </AuthCard>
   );

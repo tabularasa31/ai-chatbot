@@ -1,4 +1,5 @@
 import type { InputHTMLAttributes } from "react";
+import { FOCUS_RING } from "@/components/ui/button";
 import { cn } from "@/components/ui/utils";
 
 export const EMAIL_INPUT_PROPS = {
@@ -29,7 +30,7 @@ export function AuthField({ id, label, helper, error, className, ...input }: Aut
         aria-describedby={describedBy}
         className={cn(
           "h-11 w-full rounded-control border bg-surface px-3 text-body text-fg placeholder:text-fg-faint",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
+          FOCUS_RING.surface,
           error ? "border-danger" : "border-line-strong",
           className,
         )}

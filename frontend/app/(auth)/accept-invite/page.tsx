@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { AuthFooter, AuthLink, AuthSkeleton, standaloneLinkClasses } from "@/components/auth/AuthCard";
+import { AuthFooter, AuthSkeleton, StandaloneLink } from "@/components/auth/AuthCard";
 import { SetPasswordForm } from "@/components/auth/SetPasswordForm";
 
 export const metadata: Metadata = { title: "Join your team - Chat9" };
@@ -20,9 +20,7 @@ export default function AcceptInvitePage() {
         footer={
           <AuthFooter>
             Already set a password?
-            <AuthLink href="/login" className={standaloneLinkClasses}>
-              Sign in
-            </AuthLink>
+            <StandaloneLink href="/login">Sign in</StandaloneLink>
           </AuthFooter>
         }
       />

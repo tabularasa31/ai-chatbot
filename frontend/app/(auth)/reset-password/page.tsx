@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { AuthFooter, AuthLink, AuthSkeleton, standaloneLinkClasses } from "@/components/auth/AuthCard";
+import { AuthFooter, AuthSkeleton, StandaloneLink } from "@/components/auth/AuthCard";
 import { SetPasswordForm } from "@/components/auth/SetPasswordForm";
 
 export const metadata: Metadata = { title: "Set a new password - Chat9" };
@@ -19,9 +19,7 @@ export default function ResetPasswordPage() {
         successTitle="Password updated"
         footer={
           <AuthFooter>
-            <AuthLink href="/login" className={standaloneLinkClasses}>
-              Back to sign in
-            </AuthLink>
+            <StandaloneLink href="/login">Back to sign in</StandaloneLink>
           </AuthFooter>
         }
       />

@@ -1,13 +1,21 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, Suspense, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, markSession, takeSignOutReason } from "@/lib/api";
-import { AuthCard, AuthFooter, AuthHeading, AuthLink, AuthSkeleton, AuthSubmit, standaloneLinkClasses } from "@/components/auth/AuthCard";
+import {
+  AuthCard,
+  AuthFooter,
+  AuthHeading,
+  AuthLink,
+  AuthSkeleton,
+  AuthSubmit,
+  StandaloneLink,
+} from "@/components/auth/AuthCard";
 import { AuthField, EMAIL_INPUT_PROPS } from "@/components/auth/AuthField";
 import {
+  applyFieldErrors,
   emailError,
-  focusFirstError,
   formErrorMessage,
   hasErrors,
   isApiStatus,
@@ -17,6 +25,7 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 
 const NO_ERRORS: FieldErrors<"email" | "password"> = { email: null, password: null };
+const NOT_VERIFIED_NOTICE = "Verify your email to sign in. Use the link we sent when you created your account.";
 
 function LoginForm() {
   const searchParams = useSearchParams();
@@ -29,12 +38,23 @@ function LoginForm() {
   const [workspaceDeleted, setWorkspaceDeleted] = useState(false);
 
   const sessionExpired = searchParams.get("error") === "session_expired";
-  const notVerified = unverified || searchParams.get("error") === "email_not_verified";
+  const urlNotVerified = searchParams.get("error") === "email_not_verified";
 
   // Reading the reason consumes it, so a reload does not repeat the message.
   useEffect(() => {
     if (takeSignOutReason() === "workspace_deleted") setWorkspaceDeleted(true);
   }, []);
+
+  let notice: ReactNode = null;
+  if (unverified) notice = NOT_VERIFIED_NOTICE;
+  else if (workspaceDeleted)
+    notice = (
+      <>
+        Your workspace and account were deleted. To start over, <AuthLink href="/signup">create an account</AuthLink>.
+      </>
+    );
+  else if (sessionExpired) notice = "Your session expired. Sign in again.";
+  else if (urlNotVerified) notice = NOT_VERIFIED_NOTICE;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -42,11 +62,8 @@ function LoginForm() {
     setFormError(null);
     setUnverified(false);
     const next = { email: emailError(email), password: password ? null : "Enter your password." };
-    setErrors(next);
-    if (hasErrors(next)) {
-      focusFirstError(next);
-      return;
-    }
+    applyFieldErrors(setErrors, next);
+    if (hasErrors(next)) return;
 
     setSubmitting(true);
     try {
@@ -65,25 +82,9 @@ function LoginForm() {
   return (
     <AuthCard>
       <AuthHeading>Sign in</AuthHeading>
-      {workspaceDeleted ? (
-        <div className="mb-4">
-          <InlineNotice>
-            Your workspace and account were deleted. To start over, <AuthLink href="/signup">create an account</AuthLink>.
-          </InlineNotice>
-        </div>
-      ) : sessionExpired ? (
-        <div className="mb-4">
-          <InlineNotice>Your session expired. Sign in again.</InlineNotice>
-        </div>
-      ) : (
-        notVerified && (
-          <div className="mb-4">
-            <InlineNotice>
-              Verify your email to sign in. Use the link we sent when you created your account.
-            </InlineNotice>
-          </div>
-        )
-      )}
+      <div aria-live="polite" className={notice ? "mb-4" : undefined}>
+        {notice && <InlineNotice>{notice}</InlineNotice>}
+      </div>
       <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
         <AuthField
           id="email"
@@ -113,17 +114,15 @@ function LoginForm() {
           }}
           error={errors.password}
         />
-        <AuthLink href="/forgot-password" className={`${standaloneLinkClasses} self-start`}>
+        <StandaloneLink href="/forgot-password" className="self-start">
           Forgot password?
-        </AuthLink>
+        </StandaloneLink>
         {formError && <LoadError message={formError} />}
         <AuthSubmit submitting={submitting} label="Sign in" loadingLabel="Signing in…" />
       </form>
       <AuthFooter>
         No account yet?
-        <AuthLink href="/signup" className="inline-flex min-h-11 items-center">
-          Create account
-        </AuthLink>
+        <StandaloneLink href="/signup">Create account</StandaloneLink>
       </AuthFooter>
     </AuthCard>
   );

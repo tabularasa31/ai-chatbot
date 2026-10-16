@@ -4,10 +4,11 @@ import { useEffect, useRef, type HTMLAttributes, type ReactNode } from "react";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { Logo } from "@/components/Logo";
-import { Button, FOCUS_RING, buttonClasses } from "@/components/ui/button";
+import { Button, FOCUS_RING } from "@/components/ui/button";
 import { ThemeSwitch } from "@/components/ui/theme-switch";
 import { cn } from "@/components/ui/utils";
 import { resolveScheme } from "@/lib/scheme";
+import { authLinkClasses, standaloneLinkClasses } from "./link-classes";
 
 type AuthCardProps = { centered?: boolean } & HTMLAttributes<HTMLDivElement>;
 
@@ -28,7 +29,7 @@ export function AuthCard({ centered, className, children, ...card }: AuthCardPro
             aria-label="Chat9 home"
             className={cn("inline-flex min-h-11 items-center rounded-tag", FOCUS_RING.canvas)}
           >
-            <Logo className="[&>span]:text-fg" />
+            <Logo textClassName="text-2xl text-fg" />
           </Link>
         </div>
         <div
@@ -68,18 +69,25 @@ export function AuthHeading({ children, moveFocus }: { children: string; moveFoc
   );
 }
 
-const authLinkClasses = cn(
-  "rounded-tag text-brand underline underline-offset-2 transition-colors hover:text-brand-hover",
-  FOCUS_RING.surface,
-);
-
-export const standaloneLinkClasses = cn(authLinkClasses, "inline-flex min-h-11 items-center");
-
-export const fullWidthLinkButtonClasses = cn(buttonClasses({ variant: "primary", offset: "surface" }), "w-full");
-
-export function AuthLink({ href, className, children }: { href: string; className?: string; children: ReactNode }) {
+export function AuthLink({ href, children }: { href: string; children: ReactNode }) {
   return (
-    <Link href={href} className={cn(authLinkClasses, className)}>
+    <Link href={href} className={authLinkClasses}>
+      {children}
+    </Link>
+  );
+}
+
+export function StandaloneLink({
+  href,
+  className,
+  children,
+}: {
+  href: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Link href={href} className={cn(standaloneLinkClasses, className)}>
       {children}
     </Link>
   );

@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import { ApiError } from "@/lib/api";
 
 const PASSWORD_PATTERN = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>\/?]).{8,}$/;
@@ -28,10 +29,15 @@ export function hasErrors(errors: Record<string, string | null>): boolean {
   return Object.values(errors).some(Boolean);
 }
 
-/** Field ids are the keys of `errors`, in form order. */
-export function focusFirstError(errors: Record<string, string | null>): void {
+export function focusField(id: string): void {
+  document.getElementById(id)?.focus();
+}
+
+/** Commits `errors` before moving focus, so the field is already marked invalid when it is announced. Field ids are the keys, in form order. */
+export function applyFieldErrors<E extends Record<string, string | null>>(setErrors: (errors: E) => void, errors: E): void {
+  flushSync(() => setErrors(errors));
   const id = Object.keys(errors).find((key) => errors[key]);
-  if (id) document.getElementById(id)?.focus();
+  if (id) focusField(id);
 }
 
 export function formErrorMessage(err: unknown): string {

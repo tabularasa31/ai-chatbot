@@ -1,14 +1,16 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
+import { flushSync } from "react-dom";
 import { api } from "@/lib/api";
-import { AuthCard, AuthFooter, AuthHeading, AuthLink, AuthSubmit } from "@/components/auth/AuthCard";
+import { AuthCard, AuthFooter, AuthHeading, AuthLink, AuthSubmit, StandaloneLink } from "@/components/auth/AuthCard";
 import { AuthField, EMAIL_INPUT_PROPS } from "@/components/auth/AuthField";
 import {
   PASSWORD_HELPER,
   PASSWORD_RULE_ERROR,
+  applyFieldErrors,
   emailError,
-  focusFirstError,
+  focusField,
   formErrorMessage,
   hasErrors,
   isApiStatus,
@@ -18,13 +20,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { LoadError } from "@/components/ui/load-error";
 
+type FormProblem = { kind: "duplicate" } | { kind: "message"; message: string } | null;
+
 const NO_ERRORS: FieldErrors<"email" | "password"> = { email: null, password: null };
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState(NO_ERRORS);
-  const [formError, setFormError] = useState<ReactNode>(null);
+  const [formError, setFormError] = useState<FormProblem>(null);
   const [submitting, setSubmitting] = useState(false);
   const [verificationSent, setVerificationSent] = useState(false);
 
@@ -33,11 +37,8 @@ export default function SignupPage() {
     if (submitting) return;
     setFormError(null);
     const next = { email: emailError(email), password: newPasswordError(password, "Enter a password.") };
-    setErrors(next);
-    if (hasErrors(next)) {
-      focusFirstError(next);
-      return;
-    }
+    applyFieldErrors(setErrors, next);
+    if (hasErrors(next)) return;
 
     setSubmitting(true);
     try {
@@ -45,16 +46,11 @@ export default function SignupPage() {
       setVerificationSent(true);
     } catch (err) {
       if (isApiStatus(err, 409)) {
-        setFormError(
-          <>
-            An account with this email already exists. <AuthLink href="/login">Sign in</AuthLink>
-          </>,
-        );
+        setFormError({ kind: "duplicate" });
       } else if (isApiStatus(err, 422)) {
-        setErrors({ email: null, password: PASSWORD_RULE_ERROR });
-        focusFirstError({ password: PASSWORD_RULE_ERROR });
+        applyFieldErrors(setErrors, { email: null, password: PASSWORD_RULE_ERROR });
       } else {
-        setFormError(formErrorMessage(err));
+        setFormError({ kind: "message", message: formErrorMessage(err) });
       }
     } finally {
       setSubmitting(false);
@@ -63,7 +59,8 @@ export default function SignupPage() {
 
   function editEmail() {
     setPassword("");
-    setVerificationSent(false);
+    flushSync(() => setVerificationSent(false));
+    focusField("email");
   }
 
   if (verificationSent) {
@@ -115,14 +112,24 @@ export default function SignupPage() {
           }}
           error={errors.password}
         />
-        {formError && <LoadError message={formError} />}
+        {formError && (
+          <LoadError
+            message={
+              formError.kind === "duplicate" ? (
+                <>
+                  An account with this email already exists. <AuthLink href="/login">Sign in</AuthLink>
+                </>
+              ) : (
+                formError.message
+              )
+            }
+          />
+        )}
         <AuthSubmit submitting={submitting} label="Create account" loadingLabel="Creating account…" />
       </form>
       <AuthFooter>
         Already have an account?
-        <AuthLink href="/login" className="inline-flex min-h-11 items-center">
-          Sign in
-        </AuthLink>
+        <StandaloneLink href="/login">Sign in</StandaloneLink>
       </AuthFooter>
     </AuthCard>
   );

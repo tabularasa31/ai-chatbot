@@ -74,7 +74,7 @@ function LandingJsonLd() {
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#0A0A0F] font-['Inter']" style={{ scrollBehavior: 'smooth' }}>
+    <div className="min-h-screen bg-[#0A0A0F]" style={{ scrollBehavior: 'smooth' }}>
       <LandingJsonLd />
       <Navigation />
       <main>

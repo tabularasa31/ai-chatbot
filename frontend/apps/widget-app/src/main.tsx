@@ -147,7 +147,7 @@ function App() {
 
   if (!botId || !apiBase) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4 font-['Inter']">
+      <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4">
         <div className="max-w-md rounded-[28px] border border-[#DCE5F2] bg-white px-6 py-7 text-center shadow-[0_24px_80px_rgba(15,23,42,0.12)]">
           <h1 className="text-xl font-semibold tracking-[-0.03em] text-[#0F172A]">{t(locale, "misconfigured_title")}</h1>
           <p className="mt-3 text-sm leading-6 text-[#64748B]">{t(locale, "misconfigured_body")}</p>
@@ -158,7 +158,7 @@ function App() {
 
   if (hints === undefined) {
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4 text-sm text-[#64748B] font-['Inter']">
+      <div className="flex h-screen w-full items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4 text-sm text-[#64748B]">
         {t(locale, "loading")}
       </div>
     );
@@ -171,7 +171,7 @@ function App() {
   const identityKey = hints?.user_id ?? hints?.email ?? "anon";
 
   return (
-    <div className="flex h-screen w-full font-['Inter']">
+    <div className="flex h-screen w-full">
       <ChatWidget
         key={identityKey}
         botId={botId}

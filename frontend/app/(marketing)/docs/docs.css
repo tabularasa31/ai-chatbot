@@ -29,8 +29,6 @@ body {
      the docs section needs the light dashboard content area instead. */
   background-color: #F4F5F7 !important;
   color: #111827;
-  /* Match the dashboard body font (set globally in app/globals.css). */
-  font-family: Arial, Helvetica, sans-serif !important;
 }
 
 /* 2. Sidebar — same column as the dashboard's <Sidebar />.
@@ -39,7 +37,6 @@ body {
 #nd-sidebar {
   background-color:   #0A0A0F !important;
   border-inline-end:  1px solid rgba(255, 255, 255, 0.07) !important;
-  font-family: Arial, Helvetica, sans-serif !important;
 
   --fd-background:             240 20% 5%   !important;
   --fd-foreground:             275 100% 98% !important;
@@ -95,7 +92,6 @@ header[class*='sticky'],
 header[class*='sticky'] a,
 header[class*='sticky'] button {
   color: #FAF5FF;
-  font-family: Arial, Helvetica, sans-serif !important;
 }
 
 /* 4. Match sidebar width to the dashboard (200 px). */

@@ -67,8 +67,7 @@ function FormSkeleton() {
 
 export default function VisitorQuestionDraftPage() {
   const router = useRouter();
-  const params = useParams<{ gapId: string }>();
-  const gapId = params?.gapId ?? "";
+  const { gapId } = useParams<{ gapId: string }>();
 
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [cluster, setCluster] = useState<GapItem | null>(null);
@@ -219,7 +218,7 @@ export default function VisitorQuestionDraftPage() {
             <Textarea
               label="How should it change?"
               placeholder="For example: shorter, add an example, friendlier tone."
-              helper="Replaces the current answer; unsaved edits to it are lost."
+              helper="Replaces the current draft; unsaved edits are lost."
               rows={3}
               value={guidance}
               onChange={(event) => setGuidance(event.target.value)}

@@ -17,7 +17,7 @@ import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { DraftPreviewDrawer } from "./_components/DraftPreviewDrawer";
 import { GapList } from "./_components/GapList";
 import type { RowAction, RowHandlers, RowPending } from "./_components/GapRow";
-import { GAP_PANEL_ID, SHOW_OPTIONS, gapTabs, isInDraftFlow, itemsFor, recalculateWaitMinutes, type GapShow, type GapTab } from "./_components/shared";
+import { GAP_PANEL_ID, SHOW_OPTIONS, gapTabs, isInDraftFlow, itemsFor, alreadyRunningNotice, type GapShow, type GapTab } from "./_components/shared";
 import { useGapData } from "./_components/useGapData";
 
 const KEY_NOTICE_ID = "gap-openai-key-notice";
@@ -55,14 +55,14 @@ export default function GapAnalyzerPage() {
   const [confirming, setConfirming] = useState<GapItem | null>(null);
   const [preview, setPreview] = useState<GapDraftResponse | null>(null);
   const [recalculating, setRecalculating] = useState(false);
-  const [waitMinutes, setWaitMinutes] = useState<number | null>(null);
+  const [recalcNotice, setRecalcNotice] = useState("");
   const [listFlash, flashList] = useFlash();
   const [recalcFlash, flashRecalc] = useFlash();
 
   function resetFeedback() {
     setActionError("");
     setDismissed(null);
-    setWaitMinutes(null);
+    setRecalcNotice("");
   }
 
   function changeTab(next: GapTab) {
@@ -78,6 +78,7 @@ export default function GapAnalyzerPage() {
   async function runRowAction(item: GapItem, action: RowAction, failure: string, work: () => Promise<void>) {
     setPending({ id: item.id, action });
     setActionError("");
+    setDismissed(null);
     try {
       await work();
     } catch {
@@ -107,7 +108,6 @@ export default function GapAnalyzerPage() {
         setConfirming(item);
         return;
       }
-      setDismissed(null);
       void runRowAction(item, "dismiss", "Couldn't dismiss this gap. Try again.", async () => {
         await dismissItem(item);
         setDismissed(item);
@@ -140,7 +140,7 @@ export default function GapAnalyzerPage() {
     resetFeedback();
     try {
       const result = await api.gapAnalyzer.recalculate("both");
-      if (result.status === "rate_limited") setWaitMinutes(recalculateWaitMinutes(result.retry_after_seconds));
+      if (result.status === "in_progress") setRecalcNotice(alreadyRunningNotice(result.retry_after_seconds));
       else flashRecalc(RECALCULATE_STARTED);
     } catch {
       setActionError("Couldn't start the recalculation. Try again.");
@@ -164,7 +164,7 @@ export default function GapAnalyzerPage() {
           )}
           <FlashMessage message={recalcFlash} />
           <Button variant="secondary" busy={recalculating} onClick={() => void recalculate()}>
-            {recalculating ? "Starting" : "Recalculate"}
+            Recalculate
           </Button>
         </div>
       </div>
@@ -185,7 +185,10 @@ export default function GapAnalyzerPage() {
             label="Show"
             hideLabel
             value={show}
-            onChange={(event) => changeShow(event.target.value as GapShow)}
+            onChange={(event) => {
+              const next = SHOW_OPTIONS.find((option) => option.value === event.target.value);
+              if (next) changeShow(next.value);
+            }}
             className="w-40"
           >
             {SHOW_OPTIONS.map((option) => (
@@ -215,7 +218,7 @@ export default function GapAnalyzerPage() {
             </InlineNotice>
           </div>
         )}
-        {waitMinutes !== null && <InlineNotice>Recalculated recently. Try again in {waitMinutes} min.</InlineNotice>}
+        {recalcNotice && <InlineNotice>{recalcNotice}</InlineNotice>}
         {actionError && (
           <InlineNotice tone="danger" onDismiss={() => setActionError("")}>
             {actionError}

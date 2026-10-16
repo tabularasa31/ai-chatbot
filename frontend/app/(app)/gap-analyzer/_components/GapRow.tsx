@@ -72,7 +72,7 @@ function RowActions({ item, context }: { item: GapItem; context: RowContext }) {
 
   if (item.status === "dismissed" || item.status === "inactive") {
     return (
-      <Button variant="secondary" busy={pendingAction === "reactivate"} onClick={() => handlers.onReactivate(item)}>
+      <Button variant="secondary" busy={pendingAction === "reactivate"} onClick={() => handlers.onReactivate(item)} disabled={locked && pendingAction !== "reactivate"}>
         Reactivate
       </Button>
     );
@@ -105,7 +105,7 @@ function RowActions({ item, context }: { item: GapItem; context: RowContext }) {
           disabled={!hasOpenAiKey || (locked && pendingAction !== "generate")}
           aria-describedby={hasOpenAiKey ? undefined : keyNoticeId}
         >
-          {pendingAction === "generate" ? "Drafting" : "Draft FAQ answer"}
+          Draft FAQ answer
         </Button>
         {dismiss}
       </>
@@ -121,11 +121,11 @@ function RowActions({ item, context }: { item: GapItem; context: RowContext }) {
   );
 }
 
-export function GapRow({ item, context }: { item: GapItem; context: RowContext }) {
+export function GapRow({ item, context, Heading }: { item: GapItem; context: RowContext; Heading: "h2" | "h3" }) {
   return (
     <li className="flex gap-6 border-b border-line py-4">
       <div className="min-w-0 flex-1 space-y-2">
-        <h3 className="break-words text-body font-semibold text-fg">{item.label}</h3>
+        <Heading className="break-words text-body font-semibold text-fg">{item.label}</Heading>
         <MetaLine item={item} />
         {item.example_questions.length > 0 && <QuestionList questions={item.example_questions} />}
         {item.linked_example_questions.length > 0 && (
@@ -135,7 +135,7 @@ export function GapRow({ item, context }: { item: GapItem; context: RowContext }
           </div>
         )}
         <p className="text-caption tabular-nums text-fg-muted">
-          {item.source === "mode_b" ? "Last asked" : "Last updated"} {formatDateTime(item.last_updated)}
+          Last updated {formatDateTime(item.last_updated)}
         </p>
       </div>
       <div className="flex w-56 shrink-0 flex-col items-stretch gap-1">

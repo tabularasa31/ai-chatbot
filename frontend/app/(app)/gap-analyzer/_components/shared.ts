@@ -83,6 +83,7 @@ export function archiveGroups(items: GapItem[]): ArchiveGroup[] {
   return groups.filter((group) => group.items.length > 0);
 }
 
-export function recalculateWaitMinutes(retryAfterSeconds: number | null): number {
-  return Math.max(1, Math.ceil((retryAfterSeconds ?? 0) / 60));
+export function alreadyRunningNotice(retryAfterSeconds: number | null): string {
+  if (retryAfterSeconds === null) return "A recalculation is already running.";
+  return `A recalculation is already running. Try again in ${Math.max(1, Math.ceil(retryAfterSeconds / 60))} min.`;
 }

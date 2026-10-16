@@ -411,7 +411,7 @@ function InboxPageContent() {
   }, []);
 
   const { data: me } = useClientMe();
-  const { data: inbox, error, isLoading, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
+  const { data: inbox, error, isCurrent, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(
@@ -467,14 +467,14 @@ function InboxPageContent() {
               placeholder="Search by name, e-mail or ticket number"
               className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
             />
-            {inbox && (search.trim() || query) && (isLoading || search.trim() !== query) && (
+            {inbox && (search.trim() || query) && (!isCurrent || search.trim() !== query) && (
               <p className="px-1 pt-1 text-xs text-slate-400">Searching…</p>
             )}
           </div>
           <div className="max-h-[calc(100vh-252px)] min-h-[368px] overflow-y-auto">
-            {isLoading ? (
-              <div className="p-4 text-slate-500 text-sm">Loading…</div>
-            ) : error ? null : rows.length === 0 ? (
+            {!isCurrent && (error || rows.length === 0) ? (
+              error ? null : <div className="p-4 text-slate-500 text-sm">Loading…</div>
+            ) : rows.length === 0 ? (
               <div className="p-4 text-slate-500 text-sm">
                 {query
                   ? `Nothing matches “${query}”${scope === "attention" ? " among conversations that need attention. Try All." : "."}`

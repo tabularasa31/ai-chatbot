@@ -36,3 +36,11 @@ textarea::placeholder {
     text-wrap: balance;
   }
 }
+
+html:has([data-scheme-surface]) {
+  color-scheme: light;
+}
+
+html.dark:has([data-scheme-surface]) {
+  color-scheme: dark;
+}

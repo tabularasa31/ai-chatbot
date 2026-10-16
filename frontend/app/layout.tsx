@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import localFont from "next/font/local";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { getMetadataBase } from "@/lib/site";
+import { SCHEME_BOOT_SCRIPT, SCHEME_COOKIE, parseScheme } from "@/lib/scheme";
 import { PostHogProvider } from "./providers/PostHogProvider";
 import "./globals.css";
 
@@ -29,8 +31,17 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const scheme = parseScheme(cookies().get(SCHEME_COOKIE)?.value);
+  const fontClasses = `${geistSans.variable} ${geistMono.variable}`;
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html
+      lang="en"
+      className={scheme === "dark" ? `${fontClasses} dark` : fontClasses}
+      suppressHydrationWarning
+    >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: SCHEME_BOOT_SCRIPT }} />
+      </head>
       <body className="antialiased">
         <PostHogProvider>{children}</PostHogProvider>
         <Analytics />

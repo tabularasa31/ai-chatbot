@@ -472,18 +472,16 @@ function InboxPageContent() {
             )}
           </div>
           <div className="max-h-[calc(100vh-252px)] min-h-[368px] overflow-y-auto">
-            {isLoading && !inbox ? (
+            {isLoading ? (
               <div className="p-4 text-slate-500 text-sm">Loading…</div>
-            ) : rows.length === 0 ? (
-              inbox && !error && (
-                <div className="p-4 text-slate-500 text-sm">
-                  {query
-                    ? `Nothing matches “${query}”${scope === "attention" ? " among conversations that need attention. Try All." : "."}`
-                    : scope === "attention"
-                      ? "Nobody is waiting. All conversations are with the bot."
-                      : "No conversations yet."}
-                </div>
-              )
+            ) : error ? null : rows.length === 0 ? (
+              <div className="p-4 text-slate-500 text-sm">
+                {query
+                  ? `Nothing matches “${query}”${scope === "attention" ? " among conversations that need attention. Try All." : "."}`
+                  : scope === "attention"
+                    ? "Nobody is waiting. All conversations are with the bot."
+                    : "No conversations yet."}
+              </div>
             ) : (
               <ul className="divide-y divide-slate-100">
                 {rows.map((row) => {

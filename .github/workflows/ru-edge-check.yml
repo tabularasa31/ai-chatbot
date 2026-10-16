@@ -1,0 +1,66 @@
+name: RU edge check
+
+# Probes the RU edge (widget-ru / api-ru, an nginx proxy in front of Vercel and
+# Railway, config in deploy/ru-edge/) the way a visitor's browser does. Vercel's
+# bot protection can answer proxied browser requests with a challenge page,
+# which never completes inside the cross-site widget iframe, so the widget
+# breaks while widget.getchat9.live itself stays healthy and Sentry sees
+# nothing. A failed scheduled run emails the user who last edited the cron.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ru-edge-check
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Widget and API reachable through the RU edge
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      EDGE: https://widget-ru.getchat9.live
+      API_HEALTH: https://api-ru.getchat9.live/health
+      UA: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+
+    steps:
+      - name: Probe with retries
+        run: |
+          probe() {
+            headers=$(curl -s -D - -o page.html --max-time 20 \
+              -A "$UA" \
+              -H "Referer: https://example.com/" \
+              -H "Sec-Fetch-Dest: iframe" \
+              -H "Sec-Fetch-Mode: navigate" \
+              -H "Sec-Fetch-Site: cross-site" \
+              "$EDGE/v1/?botId=probe&locale=ru_RU" | tr -d '\r')
+            status=$(echo "$headers" | awk 'NR==1{print $2}')
+            if echo "$headers" | grep -qi '^x-vercel-mitigated:'; then
+              echo "widget page: Vercel challenge ($(echo "$headers" | grep -i '^x-vercel-mitigated:'))"; return 1
+            fi
+            [ "$status" = "200" ] || { echo "widget page: HTTP $status"; return 1; }
+
+            asset=$(grep -oE '/v1/assets/[^"'\'' ]*\.js' page.html | head -n1)
+            [ -n "$asset" ] || { echo "widget page: no /v1/assets/*.js in body"; return 1; }
+            for path in "$asset" /widget.js; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -A "$UA" "$EDGE$path")
+              [ "$code" = "200" ] || { echo "$path: HTTP $code"; return 1; }
+            done
+
+            health=$(curl -s --max-time 20 "$API_HEALTH")
+            echo "$health" | grep -q '"status":"ok"' || { echo "api health: $health"; return 1; }
+          }
+
+          for attempt in 1 2 3; do
+            if probe; then echo "RU edge OK (attempt $attempt)"; exit 0; fi
+            [ "$attempt" = 3 ] || sleep 30
+          done
+          echo "::error::RU edge failed 3 attempts in a row"
+          exit 1

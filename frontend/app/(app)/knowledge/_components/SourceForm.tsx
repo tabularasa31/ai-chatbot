@@ -4,13 +4,12 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
-import { SCHEDULE_OPTIONS, type SourceFormValues } from "./shared";
+import { SCHEDULE_OPTIONS, errorMessage, type SourceFormValues } from "./shared";
 
 type SourceFormProps = {
   initial: SourceFormValues;
   withUrl: boolean;
   submitLabel: string;
-  busyLabel: string;
   failureFallback: string;
   onSubmit: (values: SourceFormValues & { url: string }) => Promise<void>;
   onCancel: () => void;
@@ -20,7 +19,6 @@ export function SourceForm({
   initial,
   withUrl,
   submitLabel,
-  busyLabel,
   failureFallback,
   onSubmit,
   onCancel,
@@ -36,8 +34,8 @@ export function SourceForm({
     setError("");
     try {
       await onSubmit({ ...values, url });
-    } catch {
-      setError(failureFallback);
+    } catch (err) {
+      setError(errorMessage(err, failureFallback));
       setBusy(false);
     }
   }
@@ -89,7 +87,7 @@ export function SourceForm({
           Cancel
         </Button>
         <Button type="submit" variant="primary" busy={busy} disabled={withUrl && !url.trim()}>
-          {busy ? busyLabel : submitLabel}
+          {submitLabel}
         </Button>
       </div>
     </form>

@@ -8,14 +8,12 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { SourceForm } from "./SourceForm";
-import { quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
-
-export const DETAIL_ID_PREFIX = "source-detail-";
+import { DETAIL_ID_PREFIX, NAME_BUTTON_ON_BAND_CLASS, quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
 
 export type DetailView =
   | { state: "loading" }
   | { state: "error"; onRetry: () => Promise<unknown> }
-  | { state: "ready"; detail: UrlSourceDetail };
+  | { state: "ready"; detail: UrlSourceDetail; onRetryRefresh: (() => Promise<unknown>) | null };
 
 type UrlSourcesSectionProps = {
   source: UrlSource;
@@ -45,13 +43,12 @@ function DetailBody({
       {isEditing && (
         <SourceForm
           initial={{
-            name: source.name ?? "",
+            name: source.name,
             schedule: detail.schedule,
             exclusions: detail.exclusion_patterns.join("\n"),
           }}
           withUrl={false}
           submitLabel="Save changes"
-          busyLabel="Saving"
           failureFallback="Couldn't save these changes. Try again."
           onSubmit={onSaveEdit}
           onCancel={onCancelEdit}
@@ -74,7 +71,7 @@ function DetailBody({
                     <button
                       type="button"
                       onClick={() => onPreviewPage(page.id)}
-                      className="block break-words text-left text-ui font-medium text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                      className={`block break-words ${NAME_BUTTON_ON_BAND_CLASS}`}
                     >
                       {page.title}
                     </button>
@@ -186,7 +183,12 @@ export function UrlSourcesSection({ view, ...rest }: UrlSourcesSectionProps) {
           </SkeletonRegion>
         )}
         {view.state === "error" && <LoadError message="Couldn't load this source." onRetry={view.onRetry} />}
-        {view.state === "ready" && <DetailBody {...rest} detail={view.detail} />}
+        {view.state === "ready" && (
+          <div className="space-y-4">
+            {view.onRetryRefresh && <LoadError message="Couldn't refresh this source." onRetry={view.onRetryRefresh} />}
+            <DetailBody {...rest} detail={view.detail} />
+          </div>
+        )}
       </td>
     </tr>
   );

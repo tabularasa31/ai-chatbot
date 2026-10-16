@@ -32,15 +32,19 @@ export function itemsFor(tab: GapTab, data: GapAnalyzerResponse): GapItem[] {
 
 export type CoverageText = { label: string; dot: "danger" | "warning" | "success" };
 
+const COVERAGE_STATES = {
+  uncovered: { label: "Not covered", dot: "danger" },
+  partial: { label: "Partly covered", dot: "warning" },
+  covered: { label: "Covered", dot: "success" },
+} as const;
+
 export function coverageText(item: GapItem): CoverageText | null {
-  const percent =
-    item.source === "mode_a" && item.coverage_score != null
-      ? ` (about ${Math.round(item.coverage_score * 100)}% covered)`
-      : "";
-  if (item.classification === "uncovered") return { label: `Not covered${percent}`, dot: "danger" };
-  if (item.classification === "partial") return { label: `Partly covered${percent}`, dot: "warning" };
-  if (item.classification === "covered") return { label: `Covered${percent}`, dot: "success" };
-  return null;
+  if (item.classification === "unknown") return null;
+  const { label, dot } = COVERAGE_STATES[item.classification];
+  if (item.source === "mode_a" && item.coverage_score != null) {
+    return { label: `About ${Math.round(item.coverage_score * 100)}% covered`, dot };
+  }
+  return { label, dot };
 }
 
 export function lifecycleWord(item: GapItem): string | null {

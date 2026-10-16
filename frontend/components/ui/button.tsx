@@ -41,7 +41,7 @@ export function buttonClasses({ variant, size = "default", offset = "canvas" }: 
   );
 }
 
-/** `busy` keeps the label, shows a spinner and ignores clicks without dropping focus. */
+/** `busy` overlays a spinner on the hidden content, so the width never changes; clicks are ignored and focus is kept. */
 export function Button({
   variant,
   size,
@@ -60,13 +60,13 @@ export function Button({
   return (
     <button
       type={type}
-      className={cn(buttonClasses({ variant, size, offset }), className)}
+      className={cn(buttonClasses({ variant, size, offset }), busy && "relative", className)}
       aria-busy={busy || undefined}
       onClick={handleClick}
       {...props}
     >
-      {busy && <Loader2 size={16} aria-hidden="true" className="animate-spin" />}
-      {children}
+      {busy && <Loader2 size={16} aria-hidden="true" className="absolute inset-0 m-auto animate-spin" />}
+      <span className={cn("inline-flex items-center gap-2", busy && "opacity-0")}>{children}</span>
     </button>
   );
 }

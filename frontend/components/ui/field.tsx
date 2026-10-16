@@ -7,6 +7,8 @@ const CONTROL_CLASS =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface " +
   "disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint";
 
+const borderClass = (invalid: boolean) => (invalid ? "border-danger" : "border-line-strong");
+
 type FieldProps = {
   label: string;
   hideLabel?: boolean;
@@ -40,10 +42,6 @@ function Field({
       )}
     </div>
   );
-}
-
-function borderClass(invalid: boolean) {
-  return invalid ? "border-danger" : "border-line-strong";
 }
 
 export function Input({

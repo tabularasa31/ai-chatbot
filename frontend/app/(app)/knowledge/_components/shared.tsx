@@ -1,4 +1,4 @@
-import type { DocumentListItem, UrlSource } from "@/lib/api";
+import { ApiError, type DocumentListItem, type UrlSource } from "@/lib/api";
 import { parseApiDate } from "@/lib/format";
 import type { SectionTab } from "@/components/ui/section-tabs";
 
@@ -7,6 +7,15 @@ export type MixedRow =
   | { kind: "url"; item: UrlSource };
 
 export const POLLABLE_SOURCE_STATUSES = new Set(["queued", "indexing"]);
+const INDEXING_STATUSES = new Set(["processing", "embedding", "indexing"]);
+
+export const DETAIL_ID_PREFIX = "source-detail-";
+
+const NAME_BUTTON_BASE_CLASS =
+  "min-h-11 max-w-full rounded-control text-left text-ui font-medium text-fg hover:underline " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2";
+export const NAME_BUTTON_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-canvas`;
+export const NAME_BUTTON_ON_BAND_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-surface-alt`;
 
 export type KnowledgeTab = "documents" | "profile" | "faq";
 
@@ -29,6 +38,11 @@ export function parseExclusions(text: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+/** Server text is shown only for 4xx responses, where it explains what the user got wrong. */
+export function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError && err.status >= 400 && err.status < 500 ? err.message : fallback;
 }
 
 function formatMonthDay(iso: string): string {
@@ -65,7 +79,7 @@ export function sourceStatus(status: string): { label: string; dot: StatusDot } 
 }
 
 export function isIndexing(status: string): boolean {
-  return sourceStatus(status).label === "Indexing";
+  return INDEXING_STATUSES.has(status);
 }
 
 export function quickAnswerLabel(key: string) {

@@ -1,17 +1,13 @@
 "use client";
 
 import { Fragment, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Loader2, Pencil, RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Pencil, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type { DocumentListItem, UrlSource } from "@/lib/api";
 import { formatDateTimeLocale } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FileStatus, UrlStatus } from "./HealthPanel";
-import { DETAIL_ID_PREFIX } from "./UrlSourcesSection";
-import { isIndexing, scheduleCaption } from "./shared";
+import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, isIndexing, scheduleCaption } from "./shared";
 
-const NAME_BUTTON_CLASS =
-  "inline-flex min-h-11 items-center gap-1 break-words rounded-control text-left text-ui font-medium text-fg hover:underline " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas";
 const CELL_CLASS = "px-4 py-3 align-top";
 const NUMERIC_CELL_CLASS = `${CELL_CLASS} text-right text-ui tabular-nums text-fg`;
 
@@ -35,10 +31,10 @@ function IconAction({
       aria-label={label}
       title={label}
       disabled={disabled}
-      aria-busy={busy || undefined}
-      onClick={() => !busy && onClick()}
+      busy={busy}
+      onClick={onClick}
     >
-      {busy ? <Loader2 size={20} aria-hidden="true" className="animate-spin" /> : icon}
+      {icon}
     </Button>
   );
 }
@@ -72,7 +68,7 @@ export function FileRow({
   return (
     <tr className="border-b border-line hover:bg-surface-alt">
       <td className={CELL_CLASS}>
-        <button type="button" onClick={onPreview} className={NAME_BUTTON_CLASS} title="View extracted text">
+        <button type="button" onClick={onPreview} className={`block break-words ${NAME_BUTTON_CLASS}`} title="View extracted text">
           {doc.filename}
         </button>
         <p className="text-caption text-fg-muted">File</p>
@@ -81,7 +77,7 @@ export function FileRow({
         <FileStatus doc={doc} />
       </td>
       <td className={`${CELL_CLASS} hidden xl:table-cell`} />
-      <td className={NUMERIC_CELL_CLASS}>{indexing ? "" : formatDateTimeLocale(doc.updated_at || doc.created_at)}</td>
+      <td className={NUMERIC_CELL_CLASS}>{indexing ? "" : formatDateTimeLocale(doc.updated_at)}</td>
       <Actions>
         <IconAction label="Re-check health" icon={<RotateCw size={20} aria-hidden="true" />} busy={rechecking} disabled={indexing} onClick={onRecheck} />
         <IconAction label="Delete file" icon={<Trash2 size={20} aria-hidden="true" />} onClick={onRequestDelete} />
@@ -123,10 +119,10 @@ export function UrlRow({
               event.stopPropagation();
               onToggle();
             }}
-            className={NAME_BUTTON_CLASS}
+            className={`inline-flex items-center gap-1 ${NAME_BUTTON_CLASS}`}
           >
             <Chevron size={16} aria-hidden="true" className="shrink-0" />
-            {source.name}
+            <span className="min-w-0 break-words">{source.name}</span>
           </button>
           <p className="truncate text-caption text-fg-muted" title={source.url}>
             {displayUrl(source.url)}

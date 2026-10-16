@@ -3,21 +3,24 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Trash2, X } from "lucide-react";
 import { api, type KnowledgeProfile } from "@/lib/api";
-import { formatDateTimeLocale } from "@/lib/format";
+import { formatDateTimeLocale, parseApiDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { FlashMessage, useFlash } from "@/components/ui/flash";
+import { LINK_CLASS } from "./link-class";
 import { confidenceLevel } from "./shared";
 
 const EXTRACTION_POLL_MS = 5000;
-const LINK_CLASS =
-  "rounded-tag underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 
 type EditableProfile = Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">;
-type LoadState = "loading" | "ready" | "error";
+type SourcesState = "checking" | "unknown" | "has" | "none";
+type ProfileState =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "ready"; profile: KnowledgeProfile; draft: EditableProfile };
 
 const GLOSSARY_SOURCES: Record<string, string> = {
   docs: "Documents",
@@ -34,7 +37,11 @@ function glossarySourceLabel(source?: string | null): string {
 
 function editable(profile: KnowledgeProfile): EditableProfile {
   const { product_name, topics, support_email, support_urls } = profile;
-  return { product_name, topics, support_email, support_urls };
+  return { product_name: product_name || null, topics, support_email: support_email || null, support_urls };
+}
+
+function isDirty(profile: KnowledgeProfile, draft: EditableProfile): boolean {
+  return JSON.stringify(editable(profile)) !== JSON.stringify(draft);
 }
 
 function AddRow({
@@ -78,21 +85,25 @@ function AddRow({
 
 function StatusLine({
   profile,
-  hasSources,
+  sources,
   onGoToDocuments,
   onCheckAgain,
 }: {
   profile: KnowledgeProfile;
-  hasSources: boolean;
+  sources: SourcesState;
   onGoToDocuments: () => void;
-  onCheckAgain: () => Promise<unknown>;
+  onCheckAgain: () => Promise<void>;
 }) {
   const [checking, setChecking] = useState(false);
+  const [checkFailed, setCheckFailed] = useState(false);
 
   async function checkAgain() {
     setChecking(true);
+    setCheckFailed(false);
     try {
       await onCheckAgain();
+    } catch {
+      setCheckFailed(true);
     } finally {
       setChecking(false);
     }
@@ -112,7 +123,8 @@ function StatusLine({
     );
   }
   if (profile.extraction_status === "pending") {
-    if (!hasSources) {
+    if (sources === "checking") return null;
+    if (sources === "none") {
       return (
         <p className="text-caption text-fg-muted">
           The profile is built from your documents. Add one in {documentsLink} first.
@@ -120,11 +132,14 @@ function StatusLine({
       );
     }
     return (
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="text-caption text-fg-muted">Reading your documents. This can take a few minutes.</p>
-        <Button variant="secondary" busy={checking} onClick={() => void checkAgain()}>
-          Check again
-        </Button>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-caption text-fg-muted">Reading your documents. This can take a few minutes.</p>
+          <Button variant="secondary" busy={checking} onClick={() => void checkAgain()}>
+            Check again
+          </Button>
+        </div>
+        {checkFailed && <InlineNotice tone="danger">Couldn&apos;t check the status. Try again.</InlineNotice>}
       </div>
     );
   }
@@ -170,53 +185,67 @@ function Glossary({ glossary }: { glossary: KnowledgeProfile["glossary"] }) {
 }
 
 export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => void }) {
-  const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [profile, setProfile] = useState<KnowledgeProfile | null>(null);
-  const [draft, setDraft] = useState<EditableProfile | null>(null);
-  const [hasSources, setHasSources] = useState(true);
+  const [state, setState] = useState<ProfileState>({ status: "loading" });
+  const [sources, setSources] = useState<SourcesState>("checking");
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const [emailError, setEmailError] = useState<string>();
   const [savedMessage, flashSaved] = useFlash();
+  const savingRef = useRef(false);
+  savingRef.current = saving;
+  const emailField = useRef<HTMLDivElement>(null);
+
+  const refreshProfile = useCallback(async () => {
+    const next = await api.knowledge.getProfile();
+    if (savingRef.current) return;
+    setState((prev) => {
+      if (prev.status !== "ready") return { status: "ready", profile: next, draft: editable(next) };
+      if (parseApiDate(next.updated_at) < parseApiDate(prev.profile.updated_at)) return prev;
+      return { ...prev, profile: next, draft: isDirty(prev.profile, prev.draft) ? prev.draft : editable(next) };
+    });
+  }, []);
 
   const loadProfile = useCallback(async () => {
     try {
-      const next = await api.knowledge.getProfile();
-      setProfile(next);
-      setDraft(editable(next));
-      setLoadState("ready");
+      await refreshProfile();
     } catch {
-      setLoadState("error");
+      setState({ status: "error" });
     }
-  }, []);
+  }, [refreshProfile]);
 
   useEffect(() => {
     void loadProfile();
   }, [loadProfile]);
 
-  const pending = profile?.extraction_status === "pending";
-  const dirty = profile !== null && draft !== null && JSON.stringify(editable(profile)) !== JSON.stringify(draft);
-  const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
+  const pending = state.status === "ready" && state.profile.extraction_status === "pending";
+  const noSources = sources === "none";
 
   useEffect(() => {
     if (!pending) return;
+    let cancelled = false;
+    setSources("checking");
     api.documents
       .listSources()
-      .then((data) => setHasSources(data.documents.length + data.url_sources.length > 0))
-      .catch(() => setHasSources(true));
-    const timer = window.setInterval(async () => {
-      try {
-        const next = await api.knowledge.getProfile();
-        setProfile(next);
-        if (!dirtyRef.current) setDraft(editable(next));
-      } catch {
-        // The next tick retries; the visible status stays as it was.
-      }
-    }, EXTRACTION_POLL_MS);
-    return () => window.clearInterval(timer);
+      .then((data) => {
+        if (!cancelled) setSources(data.documents.length + data.url_sources.length > 0 ? "has" : "none");
+      })
+      .catch(() => {
+        if (!cancelled) setSources("unknown");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [pending]);
 
-  if (loadState === "loading") {
+  useEffect(() => {
+    if (!pending || noSources) return;
+    const timer = window.setInterval(() => {
+      refreshProfile().catch(() => undefined);
+    }, EXTRACTION_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [pending, noSources, refreshProfile]);
+
+  if (state.status === "loading") {
     return (
       <SkeletonRegion>
         <div className="max-w-2xl space-y-4">
@@ -227,7 +256,7 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
       </SkeletonRegion>
     );
   }
-  if (loadState === "error" || !profile || !draft) {
+  if (state.status === "error") {
     return (
       <div className="max-w-2xl">
         <LoadError message="Couldn't load the profile." onRetry={loadProfile} />
@@ -235,18 +264,24 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
     );
   }
 
+  const { profile, draft } = state;
+  const dirty = isDirty(profile, draft);
+
   function update(patch: Partial<EditableProfile>) {
-    setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+    setState((prev) => (prev.status === "ready" ? { ...prev, draft: { ...prev.draft, ...patch } } : prev));
   }
 
   async function save() {
-    if (!draft) return;
-    setSaving(true);
     setSaveFailed(false);
+    if (emailField.current?.querySelector("input")?.validity.typeMismatch) {
+      setEmailError("Enter a valid email address.");
+      return;
+    }
+    setSaving(true);
+    setEmailError(undefined);
     try {
       const updated = await api.knowledge.patchProfile(draft);
-      setProfile(updated);
-      setDraft(editable(updated));
+      setState({ status: "ready", profile: updated, draft: editable(updated) });
       flashSaved("Profile saved");
     } catch {
       setSaveFailed(true);
@@ -259,9 +294,9 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
     <div className="max-w-2xl space-y-8">
       <StatusLine
         profile={profile}
-        hasSources={hasSources}
+        sources={sources}
         onGoToDocuments={onGoToDocuments}
-        onCheckAgain={loadProfile}
+        onCheckAgain={refreshProfile}
       />
 
       <div className="space-y-6">
@@ -280,7 +315,7 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
                   type="button"
                   aria-label={`Remove topic ${topic}`}
                   onClick={() => update({ topics: draft.topics.filter((item) => item !== topic) })}
-                  className="inline-flex h-11 items-center gap-2 break-all rounded-control bg-surface-alt px-3 text-ui text-fg hover:bg-line focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
+                  className="inline-flex min-h-11 items-center gap-2 py-2 break-all rounded-control bg-surface-alt px-3 text-ui text-fg hover:bg-line focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
                 >
                   {topic}
                   <X size={16} aria-hidden="true" className="shrink-0 text-fg-muted" />
@@ -295,12 +330,18 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
           />
         </fieldset>
 
-        <Input
-          label="Support email"
-          type="email"
-          value={draft.support_email ?? ""}
-          onChange={(e) => update({ support_email: e.target.value || null })}
-        />
+        <div ref={emailField}>
+          <Input
+            label="Support email"
+            type="email"
+            error={emailError}
+            value={draft.support_email ?? ""}
+            onChange={(e) => {
+              setEmailError(undefined);
+              update({ support_email: e.target.value || null });
+            }}
+          />
+        </div>
 
         <fieldset>
           <legend className="mb-1 text-ui font-medium text-fg">Support URLs</legend>
@@ -337,7 +378,7 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
           <Button variant="primary" busy={saving} disabled={!dirty} onClick={() => void save()}>
             Save changes
           </Button>
-          <Button variant="ghost" disabled={!dirty || saving} onClick={() => setDraft(editable(profile))}>
+          <Button variant="ghost" disabled={!dirty || saving} onClick={() => update(editable(profile))}>
             Discard changes
           </Button>
           <FlashMessage message={savedMessage} />

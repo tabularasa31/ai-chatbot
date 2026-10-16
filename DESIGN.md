@@ -202,6 +202,10 @@ Inline notice (`ui/inline-notice.tsx`, new, section 5 tier 3 and confirmations):
 
 Load error (`ui/load-error.tsx`): `danger-subtle` fill, no border, `TriangleAlert`, `fg` message, Secondary "Try again" (44px, spinner before the label while retrying), `role="alert"`; for a region whose data failed to load.
 
+SectionTabs (`components/ui/section-tabs.tsx`): the one tab strip, replacing the Knowledge pill group so Knowledge and Settings look and behave alike. Row of 44px tabs, `gap-1`, `text-ui` 500, `rounded-control`; selected `brand-subtle` fill + `brand` text, others `fg-muted` with `surface-alt` hover, `focus` ring. No bordered outer box and no solid `brand` fill, so a selected tab never competes with the page's primary button. Two modes: links (`href` per tab, `<nav aria-label>`, `aria-current="page"`) when each tab is a URL; buttons (`onChange`, `role="tablist"`, `aria-selected`, roving tabindex, Left/Right/Home/End) when tabs switch content in place. No icons on tabs.
+
+SettingsShell (`app/(app)/settings/_components/SettingsShell.tsx`): H1 "Settings" (`text-h1`), 16px below it the SectionTabs strip (Bot | Widget | Team | Seats), 24px below that the tab content, in a left-aligned `max-w-2xl` column. Needed because the four tabs live in two route trees (`/settings/**`, `/widget-settings`) that a single layout cannot cover, and so the strip and H1 stay on screen while a tab loads or fails. It also holds the owner gate: a non-owner sees the H1, "Only the account owner can open Settings." and a "Back to Inbox" link, with no tabs and without mounting the tab content (no owner-only requests fire). Tab content starts at `text-h2`; a tab name is never repeated as an H1.
+
 States for any data region (list, table, document list, inbox, analytics):
 - Loading: nothing for the first 200ms, then skeleton blocks of the final layout in `surface-alt`, no shimmer; `aria-busy`. A whole-page spinner is not used; inline `Loader2` only for buttons and refetch.
 - Empty: left-aligned statement of what is missing in plain words (`text-ui`, `fg-muted`) plus the one action that fixes it, if it exists. No illustration, no dashed box. Centering only when the empty region is the whole page body.
@@ -243,7 +247,7 @@ Sidebar (208px, follows the scheme). Row = 44px, 16px lucide icon + 8px gap + la
 
 Spacing groups: 1-4 daily work | 5-6 setup | 7 staff. Operators (invited colleagues) see 1-5. Badge (`CountBadge`, section 6): Inbox is tone `brand`, Doc gaps tone `quiet`; hidden at 0; the pill is `aria-hidden` and a visually hidden suffix reads ", 3 need attention" / ", 3 new"; the Inbox number must equal the "Needs attention" count on its page.
 
-Settings tab strip (shared with the Knowledge tabs: one component, `<a>` per tab, 44px high, selected = `brand-subtle` fill + `brand` text like a sidebar row, `aria-current="page"`): Bot (/settings) | Widget (/widget-settings) | Team (/settings/members) | Seats (/settings/seats). Every tab keeps its URL, all four pages have h1 "Settings", all four are owner-only; a non-owner opening them by URL gets today's behaviour. Page headings follow the menu labels: Knowledge, Doc gaps, Install widget, Platform metrics ("Per-tenant metrics" inside). "Dashboard" from now on means the whole app, never a page. Docs pages, the FAQ and the changelog use these menu terms.
+Settings tab strip (SectionTabs, shared with the Knowledge tabs; see 6): Bot (/settings) | Widget (/widget-settings) | Team (/settings/members) | Seats (/settings/seats). Every tab keeps its URL, all four pages have h1 "Settings", all four are owner-only; a non-owner opening them by URL gets the one-line state from SettingsShell. Page headings follow the menu labels: Knowledge, Doc gaps, Install widget, Platform metrics ("Per-tenant metrics" inside). "Dashboard" from now on means the whole app, never a page. Docs pages, the FAQ and the changelog use these menu terms.
 
 ## 10. Decisions
 

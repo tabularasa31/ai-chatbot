@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { api, type TenantMember, type TenantRole, type TenantRoleValue } from "@/lib/api";
-import { useClientMe, useMembers, useAuthUser } from "@/hooks/useApi";
+import { useMembers, useAuthUser } from "@/hooks/useApi";
+import { SettingsShell } from "../_components/SettingsShell";
 
 const ROLE_LABEL: Record<TenantRole, string> = {
   owner: "Owner",
@@ -24,8 +25,7 @@ function RoleBadge({ role }: { role: TenantRoleValue }) {
   );
 }
 
-export default function MembersPage() {
-  const { data: client } = useClientMe();
+function MembersPanel() {
   const { data, error: loadError, isLoading, mutate } = useMembers();
   const members = data?.items;
 
@@ -41,7 +41,6 @@ export default function MembersPage() {
   const { data: authUser } = useAuthUser();
   const selfId = authUser?.id ?? null;
 
-  const isOwner = client?.role === "owner";
 
   async function invite() {
     const address = email.trim();
@@ -85,22 +84,10 @@ export default function MembersPage() {
     }
   }
 
-  if (client && !isOwner) {
-    return (
-      <div className="max-w-3xl">
-        <h1 className="text-2xl font-semibold text-slate-800">Team</h1>
-        <p className="text-slate-500 text-sm mt-2">
-          Only an owner can manage team members.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-800">Team</h1>
-        <p className="text-slate-500 text-sm mt-1">
+        <p className="text-slate-500 text-sm">
           Invite colleagues to work the inbox with you. Everyone you invite is
           an operator: they answer conversations and read the knowledge base,
           while settings and publishing stay with you as the owner.
@@ -215,5 +202,13 @@ export default function MembersPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function MembersPage() {
+  return (
+    <SettingsShell active="team">
+      <MembersPanel />
+    </SettingsShell>
   );
 }

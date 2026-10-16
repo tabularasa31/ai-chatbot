@@ -1,9 +1,22 @@
 import type { HandoffState, InboxRow, InboxTicket, ThreadMessage } from "@/lib/api";
-import { formatDate, formatDateTime, parseApiDate } from "@/lib/format";
+import { parseApiDate } from "@/lib/format";
 
 const MS_PER_MINUTE = 60_000;
 const MINUTES_PER_HOUR = 60;
 const HOURS_PER_DAY = 24;
+
+export function formatWhen(iso: string | null): string {
+  if (!iso) return "—";
+  const date = parseApiDate(iso);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: sameYear ? undefined : "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export function waitingFor(since: string, now: number): string {
   const minutes = Math.max(0, Math.floor((now - parseApiDate(since).getTime()) / MS_PER_MINUTE));
@@ -51,7 +64,7 @@ export function operatorCaption(msg: ThreadMessage, viewerId: string | undefined
 
 export function answeredByEmail(ticket: InboxTicket | null): { from: string; at: string } | null {
   if (!ticket?.forwarded_reply_at || !ticket.forwarded_reply_from) return null;
-  return { from: ticket.forwarded_reply_from, at: formatDateTime(ticket.forwarded_reply_at) };
+  return { from: ticket.forwarded_reply_from, at: formatWhen(ticket.forwarded_reply_at) };
 }
 
 export function rowMeta(row: InboxRow, viewerId: string | undefined, now: number): string {
@@ -63,9 +76,9 @@ export function rowMeta(row: InboxRow, viewerId: string | undefined, now: number
     return [`Waiting ${waitingFor(row.waiting_since, now)}`, held].filter(Boolean).join(" · ");
   }
   if (row.handoff_state === "live" && held) return held;
-  if (ticket?.status === "resolved") return `Resolved · ${formatDateTime(ticket.resolved_at)}`;
-  if (ticket?.status === "auto_closed") return `Closed after inactivity · ${formatDate(ticket.resolved_at)}`;
-  return formatDateTime(row.last_activity);
+  if (ticket?.status === "resolved") return `Resolved · ${formatWhen(ticket.resolved_at)}`;
+  if (ticket?.status === "auto_closed") return `Closed after inactivity · ${formatWhen(ticket.resolved_at)}`;
+  return formatWhen(row.last_activity);
 }
 
 const TICKET_STATUS: Record<string, string> = {

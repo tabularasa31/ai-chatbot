@@ -187,7 +187,7 @@ function AnalyticsPageContent() {
         className="space-y-4"
       >
         {error && <LoadError message="Couldn't load analytics." onRetry={() => mutate()} />}
-        {isLoading && <MetricListSkeleton />}
+        {isLoading && !data && <MetricListSkeleton />}
         {data && (data.conversations === 0 ? <EmptyPeriod period={data.period} /> : <MetricList rows={metricRows(data)} />)}
       </div>
     </div>

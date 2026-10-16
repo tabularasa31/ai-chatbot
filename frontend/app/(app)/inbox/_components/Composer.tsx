@@ -51,7 +51,8 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
   const [note, setNote] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState<Action | null>(null);
-  const [error, setError] = useState("");
+  const [fieldError, setFieldError] = useState("");
+  const [notice, setNotice] = useState("");
   const chatId = thread.chat.chat_id;
   const { ticket } = thread;
   const isLive = thread.handoff_state === "live";
@@ -60,11 +61,14 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
   const run = useCallback(
     async (name: Action, action: () => Promise<unknown>) => {
       setBusy(name);
-      setError("");
+      setFieldError("");
+      setNotice("");
       try {
         await action();
       } catch (e) {
-        setError(e instanceof ApiError && e.status === HTTP_CONFLICT ? CONFLICT_MESSAGE : FAILURE_MESSAGE[name]);
+        if (e instanceof ApiError && e.status === HTTP_CONFLICT) setNotice(CONFLICT_MESSAGE);
+        else if (name === "send") setFieldError(FAILURE_MESSAGE.send);
+        else setNotice(FAILURE_MESSAGE[name]);
       }
       // A failed action can still have changed the chat (another operator took it): refresh either way.
       await onChanged();
@@ -84,6 +88,11 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
 
   return (
     <div className="shrink-0 space-y-2 border-t border-line p-4">
+      {notice && (
+        <p role="alert" className="text-ui text-danger">
+          {notice}
+        </p>
+      )}
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -96,16 +105,16 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
         }}
         rows={3}
         aria-label="Reply to the visitor"
-        aria-describedby={error ? `${ERROR_ID} ${HELPER_ID}` : HELPER_ID}
-        aria-invalid={error ? true : undefined}
+        aria-describedby={fieldError ? `${ERROR_ID} ${HELPER_ID}` : HELPER_ID}
+        aria-invalid={fieldError ? true : undefined}
         placeholder="Write a reply…"
         dir="auto"
         readOnly={busy !== null}
-        className={cn(FIELD_CLASS, "py-2", error ? "border-danger" : "border-line-strong", FOCUS_RING.surface)}
+        className={cn(FIELD_CLASS, "py-2", fieldError ? "border-danger" : "border-line-strong", FOCUS_RING.surface)}
       />
-      {error && (
+      {fieldError && (
         <p id={ERROR_ID} role="alert" className="text-ui text-danger">
-          {error}
+          {fieldError}
         </p>
       )}
       <p id={HELPER_ID} className="text-caption text-fg-muted">

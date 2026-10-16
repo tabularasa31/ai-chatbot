@@ -9,7 +9,7 @@ const keepSafeUrls: UrlTransform = (url) => (SAFE_URL.test(url) ? url : null);
 const COMPONENTS: Components = {
   a: ({ node: _node, children, href, ...props }) =>
     href ? (
-      <a {...props} href={href} target="_blank" rel="noopener noreferrer" className="text-brand underline">
+      <a {...props} href={href} target="_blank" rel="noopener noreferrer nofollow" className="text-brand underline">
         {children}
       </a>
     ) : (

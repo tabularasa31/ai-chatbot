@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { AdminMetricsSummary, AdminTenantMetricsItem } from "@/lib/api";
 import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
@@ -54,6 +54,7 @@ const COLUMNS: readonly Column[] = [
 const HEADER_CELL_CLASS = "px-4 py-2 align-bottom text-caption font-medium text-fg-muted";
 const CELL_CLASS = "px-4 py-2 text-ui text-fg-muted";
 const STICKY_CELL_CLASS = "sticky left-0 bg-canvas";
+const STICKY_EDGE_CLASS = "group-data-[scrolled]/scroll:shadow-[inset_-1px_0_0_rgb(var(--c-line))]";
 
 function isForbidden(error: unknown) {
   return error instanceof Error && (error.message.includes("403") || error.message.includes("Admin only"));
@@ -89,7 +90,7 @@ function TenantRow({ tenant }: { tenant: AdminTenantMetricsItem }) {
           className={cn(
             CELL_CLASS,
             column.numeric && "text-right tabular-nums",
-            column.sticky && cn(STICKY_CELL_CLASS, "group-hover:bg-surface-alt"),
+            column.sticky && cn(STICKY_CELL_CLASS, STICKY_EDGE_CLASS, "group-hover:bg-surface-alt"),
             column.cellClassName?.(tenant),
           )}
         >
@@ -101,12 +102,15 @@ function TenantRow({ tenant }: { tenant: AdminTenantMetricsItem }) {
 }
 
 function TenantsTable({ tenants }: { tenants: AdminTenantMetricsItem[] }) {
+  const [scrolled, setScrolled] = useState(false);
   return (
     <div
       role="region"
       aria-label="Per-tenant metrics"
       tabIndex={0}
-      className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
+      data-scrolled={scrolled || undefined}
+      onScroll={(e) => setScrolled(e.currentTarget.scrollLeft > 0)}
+      className="group/scroll overflow-x-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
     >
       <table className="min-w-full">
         <thead>
@@ -115,7 +119,7 @@ function TenantsTable({ tenants }: { tenants: AdminTenantMetricsItem[] }) {
               <th
                 key={column.header}
                 scope="col"
-                className={cn(HEADER_CELL_CLASS, column.numeric && "text-right", column.sticky && STICKY_CELL_CLASS)}
+                className={cn(HEADER_CELL_CLASS, column.numeric && "text-right", column.sticky && cn(STICKY_CELL_CLASS, STICKY_EDGE_CLASS))}
               >
                 {column.header}
               </th>

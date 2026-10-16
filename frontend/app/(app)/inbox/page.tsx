@@ -14,7 +14,7 @@ const INBOX_REFRESH_MS = 15_000;
 const SEARCH_DEBOUNCE_MS = 300;
 const NOW_TICK_MS = 30_000;
 const PANEL_ID = "inbox-list";
-const PANES_HEIGHT = "h-[calc(100vh-11rem)] min-h-[420px]";
+const PANES_MIN_HEIGHT = "min-h-[420px]";
 
 function inboxHref(scope: Scope, session: string | null): string {
   const params = new URLSearchParams();
@@ -50,7 +50,7 @@ function InboxPageContent() {
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const changeScope = useCallback(
-    (next: Scope) => router.replace(inboxHref(next, selected)),
+    (next: Scope) => router.push(inboxHref(next, selected)),
     [router, selected],
   );
   const select = useCallback(
@@ -74,48 +74,50 @@ function InboxPageContent() {
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-1 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-h1 text-fg">Inbox</h1>
         <SectionTabs label="Conversation scope" tabs={tabs} activeId={scope} onChange={changeScope} panelId={PANEL_ID} />
       </div>
 
-      <div className={cn("flex overflow-hidden rounded-surface border border-line bg-surface", PANES_HEIGHT)}>
-        <section
-          id={PANEL_ID}
-          role="tabpanel"
-          aria-labelledby={sectionTabId(PANEL_ID, scope)}
-          className="flex w-1/3 min-w-72 max-w-sm shrink-0 flex-col border-r border-line"
-        >
-          <InboxList
-            rows={rows}
-            error={error}
-            isCurrent={isCurrent}
-            scope={scope}
-            search={search}
-            query={query}
-            viewerId={authUser?.id}
-            selected={selected}
-            now={now}
-            onSearchChange={setSearch}
-            onSelect={select}
-            onShowAll={() => changeScope("all")}
-            onRetry={refresh}
-          />
-        </section>
-        <section aria-label="Conversation" className="min-w-0 flex-1">
-          {selected ? (
-            <ThreadView
-              key={selected}
-              sessionId={selected}
-              canOperate={canOperate}
+      <div className={cn("relative flex-1", PANES_MIN_HEIGHT)}>
+        <div className="absolute inset-0 flex overflow-hidden rounded-surface border border-line bg-surface">
+          <section
+            id={PANEL_ID}
+            role="tabpanel"
+            aria-labelledby={sectionTabId(PANEL_ID, scope)}
+            className="flex w-1/3 min-w-72 max-w-sm shrink-0 flex-col border-r border-line"
+          >
+            <InboxList
+              rows={rows}
+              error={error}
+              isCurrent={isCurrent}
+              scope={scope}
+              search={search}
+              query={query}
               viewerId={authUser?.id}
-              onChanged={refresh}
+              selected={selected}
+              now={now}
+              onSearchChange={setSearch}
+              onSelect={select}
+              onShowAll={() => changeScope("all")}
+              onRetry={refresh}
             />
-          ) : (
-            <p className="p-6 text-ui text-fg-muted">Select a conversation.</p>
-          )}
-        </section>
+          </section>
+          <section aria-label="Conversation" className="min-w-0 flex-1">
+            {selected ? (
+              <ThreadView
+                key={selected}
+                sessionId={selected}
+                canOperate={canOperate}
+                viewerId={authUser?.id}
+                onChanged={refresh}
+              />
+            ) : (
+              <p className="p-6 text-ui text-fg-muted">Select a conversation.</p>
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );

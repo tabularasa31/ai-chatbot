@@ -1,21 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "./button";
 
-/** `onRetry` must revalidate the failed request and resolve when it settles. */
+/** `onRetry` must revalidate the failed request and resolve when it settles; without it there is no retry button. */
 export function LoadError({
   message,
   onRetry,
 }: {
-  message: string;
-  onRetry: () => Promise<unknown>;
+  message: ReactNode;
+  onRetry?: () => Promise<unknown>;
 }) {
   const [retrying, setRetrying] = useState(false);
 
   async function retry() {
-    if (retrying) return;
+    if (retrying || !onRetry) return;
     setRetrying(true);
     try {
       await onRetry();
@@ -31,10 +31,12 @@ export function LoadError({
     >
       <TriangleAlert size={16} aria-hidden="true" className="shrink-0 text-danger" />
       <span className="min-w-0 flex-1 basis-48 text-ui text-fg">{message}</span>
-      <Button variant="secondary" offset="surface" onClick={retry} aria-busy={retrying}>
-        {retrying && <Loader2 size={16} aria-hidden="true" className="animate-spin" />}
-        Try again
-      </Button>
+      {onRetry && (
+        <Button variant="secondary" offset="surface" onClick={retry} aria-busy={retrying}>
+          {retrying && <Loader2 size={16} aria-hidden="true" className="animate-spin" />}
+          Try again
+        </Button>
+      )}
     </div>
   );
 }

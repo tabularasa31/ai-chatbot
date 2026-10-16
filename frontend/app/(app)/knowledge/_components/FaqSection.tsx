@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type KnowledgeFaqItem } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -9,10 +9,14 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { FlashMessage, useFlash } from "./flash";
-import { confidenceLevel, errorMessage } from "./shared";
+import { LINK_CLASS } from "./link-class";
+import { confidenceLevel } from "./shared";
 
 type FaqFilter = "all" | "pending" | "approved" | "docs" | "logs";
-type LoadState = "loading" | "ready" | "error";
+type FaqState =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "ready"; items: KnowledgeFaqItem[]; pendingCount: number };
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: FaqFilter; label: string }> = [
   { value: "all", label: "All" },
@@ -32,8 +36,6 @@ const QUERY_BY_FILTER = {
 
 const SOURCE_LABELS: Record<string, string> = { docs: "From documents", logs: "From chat history" };
 const SKELETON_ROWS = 4;
-const LINK_CLASS =
-  "rounded-tag underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 
 function answersCount(count: number): string {
   return count === 1 ? "1 answer" : `${count} answers`;
@@ -69,9 +71,8 @@ function ItemMeta({ item, showReviewState }: { item: KnowledgeFaqItem; showRevie
 
 export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void }) {
   const [filter, setFilter] = useState<FaqFilter>("all");
-  const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [items, setItems] = useState<KnowledgeFaqItem[]>([]);
-  const [pendingCount, setPendingCount] = useState(0);
+  const [state, setState] = useState<FaqState>({ status: "loading" });
+  const latestRequest = useRef(0);
   const [actionError, setActionError] = useState("");
   const [flashMessage, flash] = useFlash();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -80,20 +81,31 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
   const [rejecting, setRejecting] = useState<KnowledgeFaqItem | null>(null);
 
   const load = useCallback(async () => {
+    const request = ++latestRequest.current;
     try {
       const data = await api.knowledge.listFaq(QUERY_BY_FILTER[filter]);
-      setItems(data.items);
-      setPendingCount(data.pending_count);
-      setLoadState("ready");
+      if (request !== latestRequest.current) return;
+      setState({ status: "ready", items: data.items, pendingCount: data.pending_count });
     } catch {
-      setLoadState("error");
+      if (request !== latestRequest.current) return;
+      setState({ status: "error" });
     }
   }, [filter]);
 
   useEffect(() => {
-    setLoadState("loading");
+    setState({ status: "loading" });
     void load();
   }, [load]);
+
+  const items = state.status === "ready" ? state.items : [];
+  const pendingCount = state.status === "ready" ? state.pendingCount : 0;
+
+  function changeFilter(value: string) {
+    const next = FILTER_OPTIONS.find((option) => option.value === value);
+    if (!next) return;
+    setFilter(next.value);
+    setEditing(null);
+  }
 
   async function run(id: string, action: () => Promise<unknown>, fallback: string) {
     setBusyId(id);
@@ -101,8 +113,8 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
     try {
       await action();
       await load();
-    } catch (err) {
-      setActionError(errorMessage(err, fallback));
+    } catch {
+      setActionError(fallback);
       return false;
     } finally {
       setBusyId(null);
@@ -143,7 +155,7 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
         <Select
           label="Show"
           value={filter}
-          onChange={(e) => setFilter(e.target.value as FaqFilter)}
+          onChange={(e) => changeFilter(e.target.value)}
           className="w-56 max-w-full"
         >
           {FILTER_OPTIONS.map((option) => (
@@ -165,14 +177,14 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
         </div>
       </div>
 
-      {loadState === "error" && <LoadError message="Couldn't load the FAQ." onRetry={load} />}
+      {state.status === "error" && <LoadError message="Couldn't load the FAQ." onRetry={load} />}
       {actionError && (
         <InlineNotice tone="danger" onDismiss={() => setActionError("")}>
           {actionError}
         </InlineNotice>
       )}
 
-      {loadState === "loading" && (
+      {state.status === "loading" && (
         <SkeletonRegion>
           <div className="space-y-4">
             {Array.from({ length: SKELETON_ROWS }, (_, index) => (
@@ -182,9 +194,9 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
         </SkeletonRegion>
       )}
 
-      {loadState === "ready" && items.length === 0 && <EmptyMessage filter={filter} onGoToDocuments={onGoToDocuments} />}
+      {state.status === "ready" && items.length === 0 && <EmptyMessage filter={filter} onGoToDocuments={onGoToDocuments} />}
 
-      {loadState !== "loading" && items.length > 0 && (
+      {items.length > 0 && (
         <ul className="divide-y divide-line border-y border-line">
           {items.map((item) => {
             const busy = busyId === item.id;

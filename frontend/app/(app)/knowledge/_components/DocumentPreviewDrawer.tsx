@@ -5,6 +5,7 @@ import { api, type DocumentDetail } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/field";
+import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { FlashMessage, useFlash } from "./flash";
@@ -73,6 +74,7 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [search, setSearch] = useState("");
   const [copiedMessage, flashCopied] = useFlash();
   const refetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -110,6 +112,7 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
       refetchRef.current = null;
     }
     activeIdRef.current = documentId;
+    setCopyFailed(false);
     if (!documentId) {
       refetchedForIdRef.current = null;
       setDoc(null);
@@ -143,11 +146,12 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
 
   const handleCopy = useCallback(async () => {
     if (!doc?.parsed_text) return;
+    setCopyFailed(false);
     try {
       await navigator.clipboard.writeText(doc.parsed_text);
       flashCopied("Copied");
     } catch {
-      setError("Couldn't copy the text. Try again.");
+      setCopyFailed(true);
     }
   }, [doc, flashCopied]);
 
@@ -220,6 +224,13 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
       )}
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
+        {copyFailed && (
+          <div className="mb-4">
+            <InlineNotice tone="danger" onDismiss={() => setCopyFailed(false)}>
+              Couldn&apos;t copy the text. Try again.
+            </InlineNotice>
+          </div>
+        )}
         {loading && !doc && (
           <SkeletonRegion>
             <div className="space-y-2">

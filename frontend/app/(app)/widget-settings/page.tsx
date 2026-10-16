@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useActiveBot, useClientMe } from "@/hooks/useApi";
 import WidgetIdentityKeyCard from "./WidgetIdentityKeyCard";
+import { SettingsShell } from "../settings/_components/SettingsShell";
 
-export default function WidgetSettingsPage() {
+function WidgetSettingsPanel() {
   const {
     activeBot: defaultBot,
     isLoading: loading,
@@ -80,13 +81,6 @@ export default function WidgetSettingsPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-800">Widget</h1>
-        <p className="mt-1 text-slate-500 text-sm">
-          Bot ID and link-safety configuration for the embedded widget.
-        </p>
-      </div>
-
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 text-red-800 px-4 py-3 text-sm">
           {error}
@@ -180,5 +174,13 @@ export default function WidgetSettingsPage() {
         <WidgetIdentityKeyCard hasKey={client.has_widget_identity_secret} onKeyChange={() => mutateClient()} />
       )}
     </div>
+  );
+}
+
+export default function WidgetSettingsPage() {
+  return (
+    <SettingsShell active="widget">
+      <WidgetSettingsPanel />
+    </SettingsShell>
   );
 }

@@ -4,8 +4,9 @@ import { Fragment, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DocumentListItem, UrlSource, UrlSourceDetail } from "@/lib/api";
 import { formatDateTimeLocale } from "@/lib/format";
+import { SectionTabs } from "@/components/ui/section-tabs";
 import {
-  KnowledgeTabs,
+  KNOWLEDGE_TABS,
   TypeBadge,
   StatusBadge,
   MixedRow,
@@ -167,7 +168,7 @@ export function DocumentsSection({
           </button>
         </div>
       </div>
-      <KnowledgeTabs activeTab={activeTab} onChange={onTabChange} />
+      <SectionTabs label="Knowledge" tabs={KNOWLEDGE_TABS} activeId={activeTab} onChange={onTabChange} />
 
       {showUrlForm && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

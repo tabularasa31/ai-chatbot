@@ -11,7 +11,8 @@ import {
   type UrlSourceDetail,
 } from "@/lib/api";
 import { formatDateTimeLocale } from "@/lib/format";
-import { KnowledgeTabs, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_components/shared";
+import { SectionTabs } from "@/components/ui/section-tabs";
+import { KNOWLEDGE_TABS, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_components/shared";
 import { PageLoader } from "@/components/ui/page-loader";
 import { FaqSection } from "./_components/FaqSection";
 import { DocumentsSection } from "./_components/DocumentsSection";
@@ -421,7 +422,7 @@ export default function KnowledgePage() {
           <h1 className="text-2xl font-semibold text-slate-800">Knowledge Hub</h1>
           <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
         </div>
-        <KnowledgeTabs activeTab="profile" onChange={setTab} />
+        <SectionTabs label="Knowledge" tabs={KNOWLEDGE_TABS} activeId="profile" onChange={setTab} />
         {profileError && <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{profileError}</div>}
         {profileSaved && <div className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">Profile updated</div>}
         {profileLoading || !profileDraft ? (

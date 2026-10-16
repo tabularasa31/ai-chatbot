@@ -71,7 +71,7 @@ export default function AdminMetricsPage() {
 
   return (
     <div className="space-y-8">
-      <h1 className="text-2xl font-semibold text-slate-800">Admin metrics</h1>
+      <h1 className="text-2xl font-semibold text-slate-800">Platform metrics</h1>
 
       {/* Summary cards */}
       <section>

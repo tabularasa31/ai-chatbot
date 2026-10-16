@@ -176,7 +176,7 @@ Focus: `focus-visible` only, 2px `focus` ring with 2px offset in the underlying 
 Buttons (`ui/button.tsx`: `Button` for `<button>`, `buttonClasses` for links that look like buttons; one definition of height 44, radius, focus ring and the variants below, so no component copies the class strings; `offset` names the surface the ring offset matches). 14/20, 500, `px-4`, `rounded-control`, label is a verb describing the result: "Save widget settings", not "Submit":
 - Primary: `brand` fill, `brand-on` text. Link CTAs (`<a>`) look identical.
 - Secondary: `surface` fill, 1px `line-strong`, `fg` text; hover `surface-alt`. Cancel, Copy, Back.
-- Destructive: `danger` fill, `danger-on` text. Only in the confirm step of a destructive flow, with the consequence stated next to it. Never the default focus in a modal.
+- Destructive (added to `ui/button.tsx` with its first caller): `danger` fill, `danger-on` text. Only in the confirm step of a destructive flow, with the consequence stated next to it. Never the default focus in a modal.
 - Ghost (icon buttons only, `size="icon"` = 44x44): no fill, `fg-muted` glyph, hover `surface-alt`. Dismiss, close.
 - Loading: label stays, 16px spinner (lucide `Loader2`, only rotating element allowed) before it, width unchanged, `aria-busy`, clicks ignored.
 - Order in a row: secondary left, primary right; on the auth card the primary is full-width.

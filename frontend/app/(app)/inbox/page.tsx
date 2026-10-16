@@ -423,7 +423,7 @@ function InboxPageContent() {
   const { data: me } = useClientMe();
   const { data: authUser } = useAuthUser();
   const { data: inbox, error, isCurrent, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
-  const { data: inboxSummary } = useInboxSummary(INBOX_REFRESH_MS);
+  const { data: inboxSummary } = useInboxSummary();
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(

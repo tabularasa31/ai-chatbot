@@ -17,7 +17,9 @@ type PlacementChoiceProps = {
 export function PlacementChoice({ placement, onChange }: PlacementChoiceProps) {
   return (
     <fieldset className="space-y-3">
-      <legend className="mb-3 text-h2 text-fg">Placement</legend>
+      <legend className="mb-3">
+        <h2 className="text-h2 text-fg">Placement</h2>
+      </legend>
       <RadioOption name="placement" checked={placement === "bubble"} onSelect={() => onChange("bubble")}>
         <span className="font-medium">Chat bubble</span>
         <span className="text-fg-muted">Floating button in the corner. Opens on click.</span>

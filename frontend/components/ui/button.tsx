@@ -11,7 +11,6 @@ export const FOCUS_RING = {
 const VARIANTS = {
   primary: "bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active",
   secondary: "border border-line-strong bg-surface text-fg hover:bg-surface-alt active:bg-surface-alt",
-  destructive: "bg-danger text-danger-on hover:bg-danger-hover",
   ghost: "text-fg-muted hover:bg-surface-alt active:bg-surface-alt",
 } as const;
 

@@ -425,6 +425,45 @@ def test_the_thread_spans_the_session_and_signs_operator_turns(
     ]
 
 
+def test_an_author_from_another_tenant_is_not_shown_by_their_current_email(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="scope@example.com", name="Scope Co")
+    other = _workspace(tenant, db_session, email="elsewhere@example.com", name="Elsewhere Co")
+    colleague = _colleague(db_session, ws.tenant_id, email="ann@scope.example")
+    chat_of_stranger = _chat(
+        db_session,
+        ws.tenant_id,
+        operator_state=OperatorState.live,
+        assigned_operator_id=other.user_id,
+        operator_joined_at=_utcnow(),
+    )
+    _say(db_session, chat_of_stranger, MessageRole.operator, "Moved on", operator_user_id=other.user_id)
+    chat_of_colleague = _chat(
+        db_session,
+        ws.tenant_id,
+        operator_state=OperatorState.live,
+        assigned_operator_id=colleague.id,
+        operator_joined_at=_utcnow(),
+    )
+    _say(
+        db_session, chat_of_colleague, MessageRole.operator, "On it",
+        operator_user_id=colleague.id, operator_label="old@scope.example",
+    )
+
+    items = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()["items"]
+    row = {r["chat_id"]: r for r in items}
+    assert row[str(chat_of_stranger.id)]["last_message_author_label"] is None
+    assert row[str(chat_of_stranger.id)]["assigned_operator_email"] is None
+    assert row[str(chat_of_colleague.id)]["last_message_author_label"] == "ann@scope.example"
+    assert row[str(chat_of_colleague.id)]["assigned_operator_email"] == "ann@scope.example"
+
+    for chat, email in ((chat_of_stranger, None), (chat_of_colleague, "ann@scope.example")):
+        thread = tenant.get(f"/operator/sessions/{chat.session_id}", headers=ws.auth).json()
+        assert [m["author_label"] for m in thread["messages"]] == [email]
+        assert thread["chat"]["assigned_operator_email"] == email
+
+
 def test_a_reply_by_email_and_a_reply_from_the_console_look_the_same(
     tenant: TestClient, db_session: Session
 ) -> None:

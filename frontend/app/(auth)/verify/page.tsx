@@ -1,80 +1,107 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { api, markSession } from "@/lib/api";
-import { AuthCardCentered, authStyles } from "@/components/auth/AuthCard";
+import {
+  AuthCard,
+  AuthHeading,
+  AuthSkeleton,
+  StandaloneLink,
+} from "@/components/auth/AuthCard";
+import { fullWidthLinkButtonClasses } from "@/components/auth/link-classes";
+import { formErrorMessage, isApiStatus } from "@/components/auth/auth-rules";
+import { Button } from "@/components/ui/button";
 
-type Status = "idle" | "loading" | "success" | "error";
+type VerifyState =
+  | { status: "verifying"; retried: boolean }
+  | { status: "success" }
+  | { status: "rejected" }
+  | { status: "failed"; message: string };
 
-function VerifyContent() {
-  const searchParams = useSearchParams();
-  const token = searchParams.get("token");
-  const [status, setStatus] = useState<Status>("idle");
-  const [error, setError] = useState("");
+function BrokenLink({ explanation }: { explanation: string }) {
+  return (
+    <AuthCard centered>
+      <AuthHeading moveFocus>This link doesn&apos;t work</AuthHeading>
+      <p className="mb-6 text-body text-fg-muted">{explanation}</p>
+      <Link href="/login" className={fullWidthLinkButtonClasses}>
+        Sign in
+      </Link>
+    </AuthCard>
+  );
+}
 
-  useEffect(() => {
-    if (!token) {
-      setStatus("error");
-      setError("No verification token provided.");
-      return;
+function TokenVerification({ token }: { token: string }) {
+  const [state, setState] = useState<VerifyState>({ status: "verifying", retried: false });
+
+  const verify = useCallback(async (retried: boolean) => {
+    setState({ status: "verifying", retried });
+    try {
+      await api.auth.verifyEmail(token);
+      markSession();
+      setState({ status: "success" });
+      window.location.replace("/dashboard");
+    } catch (err) {
+      setState(isApiStatus(err, 400) ? { status: "rejected" } : { status: "failed", message: formErrorMessage(err) });
     }
-    setStatus("loading");
-    api.auth
-      .verifyEmail(token)
-      .then(() => {
-        markSession();
-        setStatus("success");
-        window.location.replace("/dashboard");
-      })
-      .catch((err) => {
-        setStatus("error");
-        setError(err instanceof Error ? err.message : "Verification failed");
-      });
   }, [token]);
 
-  if (status === "idle" || status === "loading") {
+  useEffect(() => {
+    void verify(false);
+  }, [verify]);
+
+  if (state.status === "verifying") {
     return (
-      <AuthCardCentered>
-        <h1 className={authStyles.headingSm}>Verify your email</h1>
-        <p className="text-[#FAF5FF]/80 text-sm mb-4">Confirming your link…</p>
-        <div className="animate-pulse text-[#FAF5FF]/60 text-sm">Please wait</div>
-      </AuthCardCentered>
+      <AuthCard centered role="status">
+        <AuthHeading moveFocus={state.retried}>Verifying your email…</AuthHeading>
+        <Loader2 size={16} aria-hidden="true" className="mx-auto animate-spin text-fg-muted" />
+      </AuthCard>
     );
   }
 
-  if (status === "success") {
+  if (state.status === "success") {
     return (
-      <AuthCardCentered>
-        <h1 className={`${authStyles.headingSm} text-[#4ADE80]`}>Email verified successfully</h1>
-        <p className="text-[#FAF5FF]/80 mb-6">
-          Redirecting to dashboard…
-        </p>
-      </AuthCardCentered>
+      <AuthCard centered>
+        <AuthHeading moveFocus>Email verified</AuthHeading>
+        <p className="text-body text-fg">Taking you to your dashboard…</p>
+      </AuthCard>
+    );
+  }
+
+  if (state.status === "rejected") {
+    return (
+      <BrokenLink explanation="It may have expired or already been used. If you already verified your email, sign in." />
     );
   }
 
   return (
-    <AuthCardCentered>
-      <h1 className={`${authStyles.headingSm} text-[#F87171]`}>Verification failed</h1>
-      <p className="text-[#FAF5FF]/80 mb-6">{error}</p>
-      <Link href="/login" className={authStyles.ctaLink}>
-        Go to Sign in
-      </Link>
-    </AuthCardCentered>
+    <AuthCard centered>
+      <AuthHeading moveFocus>Couldn&apos;t verify your email</AuthHeading>
+      <p className="mb-6 text-body text-fg-muted">{state.message}</p>
+      <Button variant="secondary" offset="surface" className="w-full" onClick={() => verify(true)}>
+        Try again
+      </Button>
+      <div className="mt-4 flex justify-center">
+        <StandaloneLink href="/login">Sign in</StandaloneLink>
+      </div>
+    </AuthCard>
+  );
+}
+
+function VerifyContent() {
+  const token = useSearchParams().get("token");
+  return token ? (
+    <TokenVerification token={token} />
+  ) : (
+    <BrokenLink explanation="This link is incomplete. Open it again from the email." />
   );
 }
 
 export default function VerifyPage() {
   return (
-    <Suspense
-      fallback={
-        <AuthCardCentered>
-          <div className="animate-pulse text-[#FAF5FF]/60">Loading...</div>
-        </AuthCardCentered>
-      }
-    >
+    <Suspense fallback={<AuthSkeleton />}>
       <VerifyContent />
     </Suspense>
   );

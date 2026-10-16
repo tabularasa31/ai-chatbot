@@ -139,6 +139,7 @@ export type ThreadMessage = {
   role: "user" | "assistant" | "operator" | (string & {});
   content: string;
   created_at: string;
+  author_id: string | null;
   author_label: string | null;
   author_id: string | null;
 };

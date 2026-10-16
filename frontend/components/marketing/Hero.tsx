@@ -7,7 +7,7 @@ import { Send } from 'lucide-react';
 export function Hero() {
   return (
     <section className="max-w-7xl mx-auto px-6 py-20 md:py-32">
-      <div className="grid md:grid-cols-2 gap-12 md:gap-16 items-center">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-12 md:gap-16 items-center">
         {/* Left Column - Text Content */}
         {/* Above-the-fold: animate transform only (no opacity gate) so the LCP
             heading paints immediately instead of waiting for hydration. */}

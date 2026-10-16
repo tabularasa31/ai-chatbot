@@ -1,17 +1,17 @@
 ---
 title: Dashboard Features
-description: What each section of the Chat9 dashboard does — Knowledge, Gap Analyzer, Inbox, and more.
+description: What each section of the Chat9 dashboard does — Knowledge, Doc gaps, Inbox, and more.
 ---
 
-The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **Admin** for platform admins). The top bar shows the Chat9 brand, your email, and **Logout**.
+The app uses a **left sidebar** for navigation (**Inbox**, **Doc gaps**, **Knowledge**, **Analytics**, **Install widget**, **Settings**, and **Platform metrics** for platform admins). The top bar shows the Chat9 brand, your email, and **Log out**.
 
-## Dashboard (`/dashboard`)
+## Install widget (`/dashboard`)
 
 - **Your Bot ID** — your bot's `public_id`, used in the widget embed snippet (the value of `data-bot-id`). Safe to expose in page HTML.
 - **Embed code** — HTML snippet that loads the widget loader (`widget.getchat9.live/widget.js`) with your bot's `public_id` via `data-bot-id`, then calls `Chat9Widget.start()` to mount the chat. Copy the block; code areas use an inline **copy** icon.
-- If the **OpenAI API key** is not set, an amber banner links to **Agents** (`/settings`) to configure it.
+- If the **OpenAI API key** is not set, an amber banner on every page links to **Settings → Bot** to configure it.
 
-## Knowledge hub (`/knowledge`)
+## Knowledge (`/knowledge`)
 
 Formerly `/documents` — **that route is removed**; use **Knowledge**.
 
@@ -46,9 +46,9 @@ Formerly `/documents` — **that route is removed**; use **Knowledge**.
 - **Indexed pages:** Inside a URL source, you can remove one indexed page without deleting the whole source. Removed pages stay excluded from future refreshes for that source.
 - **External sources:** Cards for future connectors (e.g. GitHub) plus a unified table of indexed sources.
 
-## Gap Analyzer (`/gap-analyzer`)
+## Doc gaps (`/gap-analyzer`)
 
-Gap Analyzer is the operator backlog for things your documentation may be missing and questions your users keep asking.
+Doc gaps is the operator backlog for things your documentation may be missing and questions your users keep asking.
 
 - **Mode A (docs-side):** looks at your indexed documentation and surfaces topics that appear under-covered.
 - **Mode B (user-side):** groups repeated low-confidence, fallback, rejected, or escalated question signals into actionable clusters.
@@ -57,7 +57,7 @@ Gap Analyzer is the operator backlog for things your documentation may be missin
 - **Archive view:** review dismissed docs-side topics separately from closed or dismissed user-question clusters.
 - **Recalculate:** manually trigger a fresh analysis pass from the UI when you want to refresh the backlog after updating docs.
 
-## Agents (`/settings`)
+## Settings → Bot (`/settings`)
 
 - **OpenAI API key** — per-client key, encrypted at rest; required for embeddings, chat, and document health checks. Save, update, or remove the key from this page.
 
@@ -89,13 +89,13 @@ Chat9 does not assign conversations. A held conversation shows who holds it, and
 
 ## Response controls
 
-Set the **response detail level** (Detailed / Standard / Corporate) from **Dashboard → Settings**. The three levels:
+Set the **response detail level** (Detailed / Standard / Corporate) from **Settings → Bot**. The three levels:
 
 - **Detailed** — full technical depth: paths, diagnostics, vendor/tool names.
 - **Standard** — plain language; avoids internal paths, stack traces, and vendor error names.
 - **Corporate** — polished, non-technical tone; no ETAs or deep technical detail; offers a support contact for ongoing issues.
 
-## Widget settings (`/widget-settings`)
+## Settings → Widget (`/widget-settings`)
 
 - **Widget identity verification** — optional owner-only card to generate, reveal/copy, and rotate the key used to verify a visitor's `user_id`. Without a key, user IDs are trusted as-is; with a key, only verified visitors restore conversations across devices. Rotating replaces the key immediately; requests still signed with the old key stop verifying.
 - See [Embedding the Widget → Identity verification](/docs/embedding-the-widget#identity-verification) for the full setup guide.
@@ -130,6 +130,6 @@ A ticket is created automatically whenever a conversation is escalated. Tickets 
 
 Priority is set from the `plan_tier` field in `userHints` (`enterprise` or `pro` → elevated priority). See [Embedding the Widget → userHints](/docs/embedding-the-widget#userhints).
 
-## Admin (`/admin/metrics`)
+## Platform metrics (`/admin/metrics`)
 
 - Visible only to users with **`is_admin`**. Platform-wide usage metrics.

@@ -1,79 +1,109 @@
 "use client";
 
-import { ReactNode } from "react";
+import { useEffect, useRef, type HTMLAttributes, type ReactNode } from "react";
 import Link from "next/link";
-import { strings } from "@/lib/strings";
+import { Loader2 } from "lucide-react";
 import { Logo } from "@/components/Logo";
+import { Button, FOCUS_RING, buttonClasses } from "@/components/ui/button";
+import { ThemeSwitch } from "@/components/ui/theme-switch";
+import { cn } from "@/components/ui/utils";
+import { resolveScheme } from "@/lib/scheme";
 
-const cardShell =
-  "bg-nd-surface border border-nd-border rounded-lg shadow-md p-8";
+type AuthCardProps = { centered?: boolean } & HTMLAttributes<HTMLDivElement>;
 
-function AuthShell({
-  children,
-  centered,
-}: {
-  children: ReactNode;
-  centered?: boolean;
-}) {
+export function AuthCard({ centered, className, children, ...card }: AuthCardProps) {
+  useEffect(() => {
+    resolveScheme();
+  }, []);
+
   return (
-    <div className="min-h-screen bg-nd-base flex items-center justify-center p-4">
+    <div
+      data-scheme-surface
+      className="flex min-h-dvh justify-center bg-canvas px-4 py-8 text-fg sm:items-center sm:p-4"
+    >
       <div className="w-full max-w-md">
-        <div className="flex justify-center mb-6">
-          <Link href="/" aria-label="Chat9 home" className="rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-nd-accent">
-            <Logo />
+        <div className="mb-6">
+          <Link
+            href="/"
+            aria-label="Chat9 home"
+            className={cn("inline-flex min-h-11 items-center rounded-tag", FOCUS_RING.canvas)}
+          >
+            <Logo className="[&>span]:text-fg" />
           </Link>
         </div>
-        <div className={centered ? `${cardShell} text-center` : cardShell}>{children}</div>
+        <div
+          className={cn(
+            "rounded-surface border border-line bg-surface p-6 sm:p-8",
+            centered && "text-center",
+            className,
+          )}
+          {...card}
+        >
+          {children}
+        </div>
+        <ThemeSwitch className="mt-6" />
       </div>
     </div>
   );
 }
 
-/** Neon Dusk dark theme — shared layout and form styles for auth pages */
-export function AuthCard({ children }: { children: ReactNode }) {
-  return <AuthShell>{children}</AuthShell>;
+export function AuthSkeleton() {
+  return (
+    <AuthCard aria-busy="true">
+      <div className="h-6 rounded-tag bg-surface-alt" />
+    </AuthCard>
+  );
 }
 
-/** Centered card for success/error states (e.g. forgot-password success, verify) */
-export function AuthCardCentered({ children }: { children: ReactNode }) {
-  return <AuthShell centered>{children}</AuthShell>;
+export function AuthHeading({ children, moveFocus }: { children: string; moveFocus?: boolean }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (moveFocus) heading.current?.focus();
+  }, [moveFocus, children]);
+
+  return (
+    <h1 ref={heading} tabIndex={-1} className="mb-6 text-h1 text-fg focus:outline-none">
+      {children}
+    </h1>
+  );
 }
 
-/** Validation messages use service UI language (see lib/strings.ts) */
-export const validationHandlers = {
-  email: {
-    onInvalid: (e: React.FormEvent<HTMLInputElement>) => {
-      const el = e.currentTarget;
-      if (el.validity.typeMismatch) el.setCustomValidity(strings.validation.emailInvalid);
-      else if (el.validity.valueMissing) el.setCustomValidity(strings.validation.emailRequired);
-      else el.setCustomValidity("");
-    },
-    onInput: (e: React.FormEvent<HTMLInputElement>) => e.currentTarget.setCustomValidity(""),
-  },
-  required: {
-    onInvalid: (e: React.FormEvent<HTMLInputElement>) => {
-      const el = e.currentTarget;
-      if (el.validity.valueMissing) el.setCustomValidity(strings.validation.fieldRequired);
-      else el.setCustomValidity("");
-    },
-    onInput: (e: React.FormEvent<HTMLInputElement>) => e.currentTarget.setCustomValidity(""),
-  },
-} as const;
+const authLinkClasses = cn(
+  "rounded-tag text-brand underline underline-offset-2 transition-colors hover:text-brand-hover",
+  FOCUS_RING.surface,
+);
 
-export const authStyles = {
-  heading: "text-2xl font-semibold text-nd-text mb-6",
-  headingSm: "text-2xl font-semibold text-nd-text mb-2",
-  subtext: "text-nd-text/80 text-sm mb-6",
-  label: "block text-sm font-medium text-nd-text/80 mb-1",
-  input:
-    "w-full px-3 py-2 bg-nd-base border border-nd-border rounded-md text-nd-text placeholder-nd-text/40 focus:outline-none focus:ring-2 focus:ring-nd-accent focus:ring-offset-2 focus:ring-offset-nd-base focus:border-transparent",
-  button:
-    "w-full py-2 px-4 bg-nd-accent text-nd-base font-medium rounded-md hover:bg-nd-accent-hover hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-nd-accent focus:ring-offset-2 focus:ring-offset-nd-base disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100",
-  /** Same visual as `button`, for `<Link>` CTAs (verify success/error, etc.) */
-  ctaLink:
-    "inline-block w-full py-2 px-4 bg-nd-accent text-nd-base font-medium rounded-md hover:bg-nd-accent-hover hover:scale-105 transition-all text-center no-underline focus:outline-none focus:ring-2 focus:ring-nd-accent focus:ring-offset-2 focus:ring-offset-nd-base",
-  error: "text-nd-danger text-sm bg-nd-danger/10 border border-nd-danger/30 px-3 py-2 rounded-md",
-  success: "text-nd-success text-sm bg-nd-success/10 border border-nd-success/30 px-3 py-2 rounded-md",
-  link: "text-nd-accent hover:underline",
-  footer: "mt-4 text-center text-nd-text/60 text-sm",
-} as const;
+export const standaloneLinkClasses = cn(authLinkClasses, "inline-flex min-h-11 items-center");
+
+export const fullWidthLinkButtonClasses = cn(buttonClasses({ variant: "primary", offset: "surface" }), "w-full");
+
+export function AuthLink({ href, className, children }: { href: string; className?: string; children: ReactNode }) {
+  return (
+    <Link href={href} className={cn(authLinkClasses, className)}>
+      {children}
+    </Link>
+  );
+}
+
+export function AuthFooter({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <p className={cn("mt-4 flex flex-wrap items-center gap-x-1 text-body text-fg-muted", className)}>{children}</p>
+  );
+}
+
+export function AuthSubmit({
+  submitting,
+  label,
+  loadingLabel,
+}: {
+  submitting: boolean;
+  label: string;
+  loadingLabel: string;
+}) {
+  return (
+    <Button type="submit" variant="primary" offset="surface" aria-busy={submitting} className="mt-2 w-full">
+      {submitting && <Loader2 size={16} aria-hidden="true" className="animate-spin" />}
+      {submitting ? loadingLabel : label}
+    </Button>
+  );
+}

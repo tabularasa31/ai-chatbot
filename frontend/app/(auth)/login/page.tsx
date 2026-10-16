@@ -1,130 +1,137 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
-import Link from "next/link";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, markSession, takeSignOutReason } from "@/lib/api";
-import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
-import { AuthTransition } from "@/components/AuthTransition";
+import { AuthCard, AuthFooter, AuthHeading, AuthLink, AuthSkeleton, AuthSubmit, standaloneLinkClasses } from "@/components/auth/AuthCard";
+import { AuthField, EMAIL_INPUT_PROPS } from "@/components/auth/AuthField";
+import {
+  emailError,
+  focusFirstError,
+  formErrorMessage,
+  hasErrors,
+  isApiStatus,
+  type FieldErrors,
+} from "@/components/auth/auth-rules";
+import { InlineNotice } from "@/components/ui/inline-notice";
+import { LoadError } from "@/components/ui/load-error";
+
+const NO_ERRORS: FieldErrors<"email" | "password"> = { email: null, password: null };
 
 function LoginForm() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [transitioning, setTransitioning] = useState(false);
-
-  const notVerified = searchParams.get("error") === "email_not_verified";
-  const sessionExpired = searchParams.get("error") === "session_expired";
-
-  // Set by the owner's own workspace deletion, which takes their account with
-  // it. Without this the sign-in screen is unexplained, and the sign-in they
-  // are about to attempt cannot work. Read once on mount because reading it
-  // consumes it — a reload should not repeat the message.
+  const [errors, setErrors] = useState(NO_ERRORS);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [unverified, setUnverified] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [workspaceDeleted, setWorkspaceDeleted] = useState(false);
+
+  const sessionExpired = searchParams.get("error") === "session_expired";
+  const notVerified = unverified || searchParams.get("error") === "email_not_verified";
+
+  // Reading the reason consumes it, so a reload does not repeat the message.
   useEffect(() => {
     if (takeSignOutReason() === "workspace_deleted") setWorkspaceDeleted(true);
   }, []);
 
-  // A full navigation, not `router.replace`: the app router may still hold
-  // `/dashboard` from a moment ago as the redirect back to `/login` it got
-  // without a session, and would replay that instead of asking the server.
-  const onAuthTransitionComplete = useCallback(() => {
-    window.location.replace("/dashboard");
-  }, []);
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
-    setLoading(true);
+    if (submitting) return;
+    setFormError(null);
+    setUnverified(false);
+    const next = { email: emailError(email), password: password ? null : "Enter your password." };
+    setErrors(next);
+    if (hasErrors(next)) {
+      focusFirstError(next);
+      return;
+    }
+
+    setSubmitting(true);
     try {
       await api.auth.login(email, password);
       markSession();
-      setTransitioning(true);
+      // A full navigation: the app router may replay a cached /dashboard redirect back to /login.
+      window.location.replace("/dashboard");
     } catch (err) {
-      const msg = (err as Error)?.message || (err as { detail?: string })?.detail || "An error occurred";
-      setError(typeof msg === "string" ? msg : "Login failed");
-    } finally {
-      setLoading(false);
+      setSubmitting(false);
+      if (isApiStatus(err, 403)) setUnverified(true);
+      else if (isApiStatus(err, 401)) setFormError("Email or password is incorrect.");
+      else setFormError(formErrorMessage(err));
     }
   }
 
   return (
     <AuthCard>
-      {transitioning && <AuthTransition onComplete={onAuthTransitionComplete} />}
-      <h1 className={authStyles.heading}>Sign in</h1>
-      {workspaceDeleted && (
-        <div className="bg-slate-500/10 border border-slate-500/30 text-slate-200 text-sm rounded-lg px-4 py-3 mb-2">
-          Your workspace was deleted, and your account with it. There is nothing
-          left to sign in to — register again to start a new workspace.
+      <AuthHeading>Sign in</AuthHeading>
+      {workspaceDeleted ? (
+        <div className="mb-4">
+          <InlineNotice>
+            Your workspace and account were deleted. To start over, <AuthLink href="/signup">create an account</AuthLink>.
+          </InlineNotice>
         </div>
-      )}
-      {sessionExpired && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-200 text-sm rounded-lg px-4 py-3 mb-2">
-          Your session expired. Please sign in again.
+      ) : sessionExpired ? (
+        <div className="mb-4">
+          <InlineNotice>Your session expired. Sign in again.</InlineNotice>
         </div>
-      )}
-      {notVerified && (
-        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm rounded-lg px-4 py-3 mb-2">
-          Please verify your email before signing in. Check your inbox for the verification link.
-        </div>
-      )}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="email" className={authStyles.label}>
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onInvalid={validationHandlers.email.onInvalid}
-            onInput={validationHandlers.email.onInput}
-            required
-            className={authStyles.input}
-            placeholder="you@example.com"
-          />
-        </div>
-        <div>
-          <label htmlFor="password" className={authStyles.label}>
-            Password
-          </label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onInvalid={validationHandlers.required.onInvalid}
-            onInput={validationHandlers.required.onInput}
-            required
-            className={authStyles.input}
-          />
-          <div className="text-right mt-1">
-            <Link href="/forgot-password" className={`text-sm ${authStyles.link}`}>
-              Forgot password?
-            </Link>
+      ) : (
+        notVerified && (
+          <div className="mb-4">
+            <InlineNotice>
+              Verify your email to sign in. Use the link we sent when you created your account.
+            </InlineNotice>
           </div>
-        </div>
-        {error && <div className={authStyles.error}>{error}</div>}
-        <button type="submit" disabled={loading} className={authStyles.button}>
-          {loading ? "Signing in..." : "Sign in"}
-        </button>
+        )
+      )}
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
+        <AuthField
+          id="email"
+          label="Email"
+          {...EMAIL_INPUT_PROPS}
+          autoComplete="username"
+          required
+          readOnly={submitting}
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            setErrors((prev) => ({ ...prev, email: null }));
+          }}
+          error={errors.email}
+        />
+        <AuthField
+          id="password"
+          label="Password"
+          type="password"
+          autoComplete="current-password"
+          required
+          readOnly={submitting}
+          value={password}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setErrors((prev) => ({ ...prev, password: null }));
+          }}
+          error={errors.password}
+        />
+        <AuthLink href="/forgot-password" className={`${standaloneLinkClasses} self-start`}>
+          Forgot password?
+        </AuthLink>
+        {formError && <LoadError message={formError} />}
+        <AuthSubmit submitting={submitting} label="Sign in" loadingLabel="Signing in…" />
       </form>
-      <p className={authStyles.footer}>
-        Don&apos;t have an account?{" "}
-        <Link href="/signup" className={authStyles.link}>
-          Sign up
-        </Link>
-      </p>
+      <AuthFooter>
+        No account yet?
+        <AuthLink href="/signup" className="inline-flex min-h-11 items-center">
+          Create account
+        </AuthLink>
+      </AuthFooter>
     </AuthCard>
   );
 }
 
 export default function LoginPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<AuthSkeleton />}>
       <LoginForm />
     </Suspense>
   );

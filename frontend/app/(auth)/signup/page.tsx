@@ -1,107 +1,129 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
+import { useState, type ReactNode } from "react";
 import { api } from "@/lib/api";
-import { AuthCard, AuthCardCentered, authStyles, validationHandlers } from "@/components/auth/AuthCard";
+import { AuthCard, AuthFooter, AuthHeading, AuthLink, AuthSubmit } from "@/components/auth/AuthCard";
+import { AuthField, EMAIL_INPUT_PROPS } from "@/components/auth/AuthField";
+import {
+  PASSWORD_HELPER,
+  PASSWORD_RULE_ERROR,
+  emailError,
+  focusFirstError,
+  formErrorMessage,
+  hasErrors,
+  isApiStatus,
+  newPasswordError,
+  type FieldErrors,
+} from "@/components/auth/auth-rules";
+import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/ui/load-error";
+
+const NO_ERRORS: FieldErrors<"email" | "password"> = { email: null, password: null };
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState(NO_ERRORS);
+  const [formError, setFormError] = useState<ReactNode>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [verificationSent, setVerificationSent] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
-    setLoading(true);
+    if (submitting) return;
+    setFormError(null);
+    const next = { email: emailError(email), password: newPasswordError(password, "Enter a password.") };
+    setErrors(next);
+    if (hasErrors(next)) {
+      focusFirstError(next);
+      return;
+    }
+
+    setSubmitting(true);
     try {
       await api.auth.register(email, password);
       setVerificationSent(true);
     } catch (err) {
-      const msg = (err as Error)?.message || (err as { detail?: string })?.detail || "An error occurred";
-      setError(typeof msg === "string" ? msg : "Registration failed");
+      if (isApiStatus(err, 409)) {
+        setFormError(
+          <>
+            An account with this email already exists. <AuthLink href="/login">Sign in</AuthLink>
+          </>,
+        );
+      } else if (isApiStatus(err, 422)) {
+        setErrors({ email: null, password: PASSWORD_RULE_ERROR });
+        focusFirstError({ password: PASSWORD_RULE_ERROR });
+      } else {
+        setFormError(formErrorMessage(err));
+      }
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
+  }
+
+  function editEmail() {
+    setPassword("");
+    setVerificationSent(false);
   }
 
   if (verificationSent) {
     return (
-      <AuthCardCentered>
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-14 h-14 rounded-full bg-[#E879F9]/10 flex items-center justify-center">
-            <svg className="w-7 h-7 text-[#E879F9]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25H4.5a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5H4.5a2.25 2.25 0 00-2.25 2.25m19.5 0-9.75 6.75L2.25 6.75" />
-            </svg>
-          </div>
-          <h1 className={authStyles.headingSm}>Check your inbox</h1>
-          <p className={authStyles.subtext}>
-            We sent a verification link to{" "}
-            <span className="text-[#E879F9] font-medium">{email}</span>.
-            Click the link to activate your account.
-          </p>
-          <p className="text-[#FAF5FF]/40 text-xs">
-            Didn&apos;t get the email? Check your spam folder.
-          </p>
-          <button
-            onClick={() => setVerificationSent(false)}
-            className={authStyles.ctaLink}
-          >
-            ← Back
-          </button>
-        </div>
-      </AuthCardCentered>
+      <AuthCard centered>
+        <AuthHeading moveFocus>Check your email</AuthHeading>
+        <p className="mb-4 text-body text-fg-muted">
+          We sent a verification link to <span className="break-all font-medium text-fg">{email}</span>. Open it to
+          activate your account.
+        </p>
+        <p className="mb-6 text-ui text-fg-muted">Can&apos;t find it? Check your spam folder.</p>
+        <Button variant="secondary" offset="surface" className="w-full" onClick={editEmail}>
+          Use a different email
+        </Button>
+      </AuthCard>
     );
   }
 
   return (
     <AuthCard>
-      <h1 className={authStyles.heading}>Create account</h1>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="email" className={authStyles.label}>
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onInvalid={validationHandlers.email.onInvalid}
-            onInput={validationHandlers.email.onInput}
-            required
-            className={authStyles.input}
-            placeholder="you@example.com"
-          />
-        </div>
-        <div>
-          <label htmlFor="password" className={authStyles.label}>
-            Password
-          </label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onInvalid={validationHandlers.required.onInvalid}
-            onInput={validationHandlers.required.onInput}
-            required
-            className={authStyles.input}
-          />
-        </div>
-        {error && <div className={authStyles.error}>{error}</div>}
-        <button type="submit" disabled={loading} className={authStyles.button}>
-          {loading ? "Creating account..." : "Sign up"}
-        </button>
+      <AuthHeading>Create account</AuthHeading>
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
+        <AuthField
+          id="email"
+          label="Email"
+          {...EMAIL_INPUT_PROPS}
+          autoComplete="email"
+          required
+          readOnly={submitting}
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            setErrors((prev) => ({ ...prev, email: null }));
+          }}
+          error={errors.email}
+        />
+        <AuthField
+          id="password"
+          label="Password"
+          type="password"
+          autoComplete="new-password"
+          required
+          readOnly={submitting}
+          value={password}
+          helper={PASSWORD_HELPER}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setErrors((prev) => ({ ...prev, password: null }));
+          }}
+          error={errors.password}
+        />
+        {formError && <LoadError message={formError} />}
+        <AuthSubmit submitting={submitting} label="Create account" loadingLabel="Creating account…" />
       </form>
-      <p className={authStyles.footer}>
-        Already have an account?{" "}
-        <Link href="/login" className={authStyles.link}>
+      <AuthFooter>
+        Already have an account?
+        <AuthLink href="/login" className="inline-flex min-h-11 items-center">
           Sign in
-        </Link>
-      </p>
+        </AuthLink>
+      </AuthFooter>
     </AuthCard>
   );
 }

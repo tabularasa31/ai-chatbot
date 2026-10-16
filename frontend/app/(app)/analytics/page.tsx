@@ -1,54 +1,139 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo } from "react";
+import { Suspense, useCallback, useEffect } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { AnalyticsPeriod } from "@/lib/api";
+import { ArrowRight, Loader2 } from "lucide-react";
+import type { AnalyticsPeriod, AnalyticsSummaryResponse } from "@/lib/api";
 import { useAnalyticsSummary } from "@/hooks/useApi";
-import { StatCard } from "@/components/ui/stat-card";
+import { buttonClasses } from "@/components/ui/button";
+import { LoadError } from "@/components/ui/load-error";
+import { SectionTabs, sectionTabId } from "@/components/ui/section-tabs";
 
-const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
-  { value: "90d", label: "90 days" },
+const PERIODS: { id: AnalyticsPeriod; label: string }[] = [
+  { id: "7d", label: "7 days" },
+  { id: "30d", label: "30 days" },
+  { id: "90d", label: "90 days" },
 ];
 
+const PERIOD_DAYS: Record<AnalyticsPeriod, number> = { "7d": 7, "30d": 30, "90d": 90 };
+
 const DEFAULT_PERIOD: AnalyticsPeriod = "30d";
+const PANEL_ID = "analytics-panel";
+const NO_VALUE = "—";
+const SKELETON_ROWS = 5;
+
+const TEXT_LINK_CLASS =
+  "mt-1 inline-flex items-center gap-1 rounded-tag text-ui text-brand hover:underline " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
+
+type MetricRow = {
+  label: string;
+  definition: string;
+  detail?: string;
+  value: string;
+  link?: { href: string; label: string };
+};
 
 function isAnalyticsPeriod(value: string | null): value is AnalyticsPeriod {
   return value === "7d" || value === "30d" || value === "90d";
 }
 
 function formatPercent(rate: number | null): string {
-  if (rate == null) return "—";
-  return `${Math.round(rate * 100)}%`;
+  return rate == null ? NO_VALUE : `${Math.round(rate * 100)}%`;
 }
 
-function formatCount(value: number | undefined): string {
-  return value == null ? "—" : value.toLocaleString();
+function metricRows(data: AnalyticsSummaryResponse): MetricRow[] {
+  const escalated =
+    data.deflection_rate == null ? null : Math.round(data.conversations * (1 - data.deflection_rate));
+  return [
+    {
+      label: "Deflection rate",
+      definition: "Conversations that did not create an escalation ticket.",
+      detail:
+        escalated == null
+          ? undefined
+          : `${escalated.toLocaleString()} of ${data.conversations.toLocaleString()} conversations were escalated.`,
+      value: formatPercent(data.deflection_rate),
+      link: { href: "/inbox?scope=all", label: "Open Inbox" },
+    },
+    {
+      label: "Answered rate",
+      definition: "Bot replies that used your documents, out of all replies except blocked and small-talk ones.",
+      detail: "Unanswered questions show up in Doc gaps.",
+      value: formatPercent(data.answered_rate),
+      link: { href: "/gap-analyzer", label: "Open Doc gaps" },
+    },
+    {
+      label: "Conversations",
+      definition: "Conversations with at least one message in this period.",
+      value: data.conversations.toLocaleString(),
+    },
+    {
+      label: "Messages",
+      definition: "Messages sent by visitors.",
+      value: data.messages.toLocaleString(),
+    },
+    {
+      label: "Filtered",
+      definition: "Messages stopped by the safety and relevance checks before the bot answered.",
+      value: data.filtered.toLocaleString(),
+    },
+  ];
 }
 
-function PeriodSwitcher({
-  period,
-  onChange,
-}: {
-  period: AnalyticsPeriod;
-  onChange: (period: AnalyticsPeriod) => void;
-}) {
+function MetricList({ rows }: { rows: MetricRow[] }) {
   return (
-    <div className="flex rounded-lg border border-slate-200 bg-white p-0.5 text-sm" role="group" aria-label="Period">
-      {PERIODS.map((p) => (
-        <button
-          key={p.value}
-          type="button"
-          onClick={() => onChange(p.value)}
-          aria-pressed={period === p.value}
-          className={`rounded-md px-3 py-1 ${
-            period === p.value ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-50"
-          }`}
+    <dl className="max-w-3xl">
+      {rows.map((row) => (
+        <div
+          key={row.label}
+          className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-line py-4 first:border-t-0"
         >
-          {p.label}
-        </button>
+          <dt className="w-48 shrink-0 text-ui font-medium text-fg">{row.label}</dt>
+          <dd className="min-w-0 flex-1 basis-64 text-ui text-fg-muted">
+            <p className="max-w-prose">{row.definition}</p>
+            {row.detail && <p className="max-w-prose">{row.detail}</p>}
+            {row.link && (
+              <Link href={row.link.href} className={TEXT_LINK_CLASS}>
+                {row.link.label}
+                <ArrowRight size={16} aria-hidden="true" />
+              </Link>
+            )}
+          </dd>
+          <dd
+            aria-label={row.value === NO_VALUE ? "No data" : undefined}
+            className="min-w-24 text-right text-h2 tabular-nums text-fg"
+          >
+            {row.value}
+          </dd>
+        </div>
       ))}
+    </dl>
+  );
+}
+
+function MetricListSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="max-w-3xl">
+      {Array.from({ length: SKELETON_ROWS }, (_, index) => (
+        <div key={index} className="flex items-center gap-4 border-t border-line py-4 first:border-t-0">
+          <div className="h-5 w-48 rounded-tag bg-surface-alt" />
+          <div className="h-5 flex-1 rounded-tag bg-surface-alt" />
+          <div className="h-7 w-24 rounded-tag bg-surface-alt" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EmptyPeriod({ period }: { period: AnalyticsPeriod }) {
+  return (
+    <div className="space-y-4">
+      <p className="text-ui text-fg-muted">No conversations in the last {PERIOD_DAYS[period]} days.</p>
+      <Link href="/dashboard" className={buttonClasses({ variant: "secondary" })}>
+        Install widget
+      </Link>
     </div>
   );
 }
@@ -59,7 +144,7 @@ function AnalyticsPageContent() {
   const periodParam = searchParams.get("period");
   const period: AnalyticsPeriod = isAnalyticsPeriod(periodParam) ? periodParam : DEFAULT_PERIOD;
 
-  const { data, error, isLoading } = useAnalyticsSummary(period);
+  const { data, error, isLoading, isValidating, mutate } = useAnalyticsSummary(period);
 
   useEffect(() => {
     if (periodParam !== null && !isAnalyticsPeriod(periodParam)) {
@@ -76,58 +161,39 @@ function AnalyticsPageContent() {
     [router]
   );
 
-  const cards = useMemo(
-    () => [
-      { label: "Messages", value: formatCount(data?.messages) },
-      { label: "Conversations", value: formatCount(data?.conversations) },
-      { label: "Deflection Rate", value: formatPercent(data?.deflection_rate ?? null) },
-      { label: "Answered Rate", value: formatPercent(data?.answered_rate ?? null) },
-      { label: "Filtered", value: formatCount(data?.filtered) },
-    ],
-    [data]
-  );
-
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Analytics</h1>
-          <p className="text-slate-500 text-sm mt-1">Traffic and outcome numbers for the selected period.</p>
-        </div>
+    <div className="space-y-8">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-h1 text-fg">Analytics</h1>
         <div className="flex items-center gap-2">
-          {isLoading && data && (
-            <span className="text-xs text-slate-400" role="status">
-              Updating…
+          {isValidating && data && (
+            <span role="status">
+              <Loader2 size={16} aria-hidden="true" className="animate-spin text-fg-muted" />
+              <span className="sr-only">Updating</span>
             </span>
           )}
-          <PeriodSwitcher period={period} onChange={setPeriod} />
+          <SectionTabs label="Period" tabs={PERIODS} activeId={period} onChange={setPeriod} panelId={PANEL_ID} />
         </div>
       </div>
 
-      {error && (
-        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
-          {error instanceof Error ? error.message : "Failed to load analytics"}
-        </div>
-      )}
-
-      {isLoading && !data ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
-          Loading analytics…
-        </div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          {cards.map((card) => (
-            <StatCard key={card.label} label={card.label} value={card.value} />
-          ))}
-        </div>
-      )}
+      <div
+        id={PANEL_ID}
+        role="tabpanel"
+        aria-labelledby={sectionTabId(PANEL_ID, period)}
+        aria-busy={isLoading}
+        className="space-y-4"
+      >
+        {error && <LoadError message="Couldn't load analytics." onRetry={() => mutate()} />}
+        {isLoading && <MetricListSkeleton />}
+        {data && (data.conversations === 0 ? <EmptyPeriod period={period} /> : <MetricList rows={metricRows(data)} />)}
+      </div>
     </div>
   );
 }
 
 export default function AnalyticsPage() {
   return (
-    <Suspense fallback={<div className="text-slate-500">Loading…</div>}>
+    <Suspense fallback={<MetricListSkeleton />}>
       <AnalyticsPageContent />
     </Suspense>
   );

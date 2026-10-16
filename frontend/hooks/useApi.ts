@@ -82,6 +82,17 @@ export function useAnalyticsSummary(period: AnalyticsPeriod) {
   });
 }
 
+export function useAdminMetrics(enabled: boolean) {
+  return useSWR(
+    enabled ? "admin/metrics" : null,
+    async () => {
+      const [summary, tenants] = await Promise.all([api.admin.getSummary(), api.admin.getTenants()]);
+      return { summary, tenants };
+    },
+    { shouldRetryOnError: false }
+  );
+}
+
 export function useThread(sessionId: string | null, refreshInterval = 0) {
   return useSWR<Thread>(
     sessionId ? `operator/sessions/${sessionId}` : null,

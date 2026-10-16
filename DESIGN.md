@@ -8,7 +8,7 @@ Contrast figures were computed by hand with the WCAG 2.x relative-luminance form
 
 ## 1. Typeface
 
-- Sans: Geist Sans (variable, already in `frontend/app/fonts/GeistVF.woff`, self-hosted, never applied today: `body` renders Arial and the widget asks for Inter, which is not loaded). Reason: neutral UI grotesque, readable at 12-14px, variable weights (one file), tabular figures, already shipped. Stack: `Geist, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`.
+- Sans: Geist Sans (variable, already in `frontend/app/fonts/GeistVF.woff`, self-hosted). Reason: neutral UI grotesque, readable at 12-14px, variable weights (one file), tabular figures, already shipped. Stack: `Geist, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`.
 - Mono: Geist Mono (already in repo) for code, IDs, keys, embed snippets only. Two families total; nothing else.
 - Widget uses the same stack (one visual language on tenant sites). Chat content arrives in any language, so the system-ui fallback must stay in the stack.
 - Coverage measured with fontTools (2026-10-16) on `frontend/app/fonts`: `GeistVF.woff` has Cyrillic U+0410-044F 64/64, Latin Extended-A 117/127, Greek U+0391-03C9 only 4 of ~57 (effectively none); `GeistMonoVF.woff` has the same profile. Keep the bundled Geist files, no new dependency (the widget is a separate Vite build, so Inter would add a package there). Greek and any other uncovered script fall back to `system-ui` per character by design; this is accepted.
@@ -136,7 +136,7 @@ Implementation shape: CSS variables (`--c-canvas` ... as space-separated RGB) on
 
 Fumadocs variable -> token: `background`=canvas, `foreground`=fg, `muted`=surface-alt, `muted-foreground`=fg-muted, `card`/`popover`=surface, `border`=line, `primary`=brand, `primary-foreground`=brand-on, `secondary`=surface-alt, `accent`=brand-subtle, `accent-foreground`=fg, `ring`=focus.
 
-Names: `bg-canvas`, `bg-surface`, `bg-surface-alt`, `border-line`, `border-line-strong`, `text-fg`, `text-fg-muted`, `text-fg-faint`, `bg-brand hover:bg-brand-hover active:bg-brand-active text-brand-on`, `bg-brand-subtle`, `ring-focus`, `text-success bg-success-subtle` (same for warning, danger, info), `bg-danger text-danger-on hover:bg-danger-hover`. Sizes: `text-caption|ui|body|h2|h1|display`. Also `shadow-pop`, `shadow-overlay`, `rounded-tag|control|surface|bubble`. Control height `h-11` (44px).
+Names: `bg-canvas`, `bg-surface`, `bg-surface-alt`, `border-line`, `border-line-strong`, `text-fg`, `text-fg-muted`, `text-fg-faint`, `bg-brand hover:bg-brand-hover active:bg-brand-active text-brand-on`, `bg-brand-subtle`, `ring-focus`, `text-success bg-success-subtle` (same for warning, danger, info), `bg-danger text-danger-on hover:bg-danger-hover`, `bg-scrim`. Sizes: `text-caption|ui|body|h2|h1|display`. Also `shadow-pop`, `shadow-overlay`, `rounded-tag|control|surface|bubble`. Control height `h-11` (44px).
 
 Old value -> token:
 

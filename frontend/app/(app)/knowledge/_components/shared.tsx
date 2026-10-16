@@ -1,6 +1,5 @@
-"use client";
-
-import type { DocumentListItem, UrlSource } from "@/lib/api";
+import { ApiError, type DocumentListItem, type UrlSource } from "@/lib/api";
+import { parseApiDate } from "@/lib/format";
 import type { SectionTab } from "@/components/ui/section-tabs";
 
 export type MixedRow =
@@ -8,36 +7,6 @@ export type MixedRow =
   | { kind: "url"; item: UrlSource };
 
 export const POLLABLE_SOURCE_STATUSES = new Set(["queued", "indexing"]);
-
-export function TypeBadge({ type }: { type: string }) {
-  const styles: Record<string, string> = {
-    file: "bg-indigo-400/10 text-indigo-500",
-    url: "bg-amber-400/15 text-amber-600",
-  };
-  return (
-    <span className={`rounded px-2 py-0.5 text-[10px] font-mono font-medium ${styles[type] ?? "bg-slate-100 text-slate-600"}`}>
-      {type}
-    </span>
-  );
-}
-
-export function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    processing: "bg-yellow-100 text-yellow-800",
-    embedding: "bg-blue-100 text-blue-800",
-    ready: "bg-green-100 text-green-800",
-    error: "bg-red-100 text-red-800",
-    queued: "bg-amber-100 text-amber-800",
-    indexing: "bg-sky-100 text-sky-800",
-    paused: "bg-orange-100 text-orange-800",
-    stale: "bg-yellow-100 text-yellow-800",
-  };
-  return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? "bg-slate-100 text-slate-800"}`}>
-      {status}
-    </span>
-  );
-}
 
 export type KnowledgeTab = "documents" | "profile" | "faq";
 
@@ -47,9 +16,60 @@ export const KNOWLEDGE_TABS: readonly SectionTab<KnowledgeTab>[] = [
   { id: "faq", label: "FAQ" },
 ];
 
-export function formatSchedule(value: string) {
-  if (value === "manual") return "Manual only";
-  return value.charAt(0).toUpperCase() + value.slice(1);
+export const SCHEDULE_OPTIONS = [
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "manual", label: "Manual updates only" },
+] as const;
+
+export type SourceFormValues = { name: string; schedule: string; exclusions: string };
+
+export function parseExclusions(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+export function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
+function formatMonthDay(iso: string): string {
+  return parseApiDate(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+export function scheduleCaption(source: UrlSource): string {
+  if (source.schedule === "manual") return "Manual updates only";
+  const cadence = source.schedule === "daily" ? "Updates daily" : "Updates weekly";
+  return source.next_crawl_at ? `${cadence}, next run ${formatMonthDay(source.next_crawl_at)}` : cadence;
+}
+
+export type StatusDot = "danger" | "warning" | null;
+
+export function sourceStatus(status: string): { label: string; dot: StatusDot } {
+  switch (status) {
+    case "processing":
+    case "embedding":
+    case "indexing":
+      return { label: "Indexing", dot: null };
+    case "queued":
+      return { label: "Queued", dot: null };
+    case "ready":
+      return { label: "Ready", dot: null };
+    case "error":
+      return { label: "Failed", dot: "danger" };
+    case "paused":
+      return { label: "Paused", dot: "warning" };
+    case "stale":
+      return { label: "Out of date", dot: "warning" };
+    default:
+      return { label: status, dot: null };
+  }
+}
+
+export function isIndexing(status: string): boolean {
+  return sourceStatus(status).label === "Indexing";
 }
 
 export function quickAnswerLabel(key: string) {
@@ -64,11 +84,7 @@ export function quickAnswerLabel(key: string) {
   return labels[key] ?? key;
 }
 
-export function stopRowClick(event: React.MouseEvent<HTMLElement>) {
-  event.stopPropagation();
-}
-
-export function confidenceBadge(value?: number | null): string {
+export function confidenceLevel(value?: number | null): "High" | "Medium" | "Low" {
   if (value == null) return "Low";
   if (value >= 0.85) return "High";
   if (value >= 0.6) return "Medium";

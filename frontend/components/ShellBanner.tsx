@@ -1,8 +1,7 @@
 "use client";
 
-import useSWR from "swr";
-import { api, type LlmAlertType } from "@/lib/api";
-import { useClientMe } from "@/hooks/useApi";
+import type { LlmAlertType } from "@/lib/api";
+import { useClientMe, useLlmAlert } from "@/hooks/useApi";
 import { PageBanner, type PageBannerAction } from "@/components/ui/page-banner";
 
 type BannerContent = {
@@ -12,7 +11,6 @@ type BannerContent = {
   action?: PageBannerAction;
 };
 
-const LLM_ALERT_POLL_MS = 60_000;
 const OPENAI_KEY_SETTINGS_HREF = "/settings#openai-key";
 
 const LLM_ALERT_BANNERS: Partial<Record<LlmAlertType, BannerContent>> = {
@@ -50,9 +48,7 @@ const EMAIL_NOT_VERIFIED_BANNER: BannerContent = {
 /** The one banner the page shows: blocking conditions first, then the email warning. */
 export function useShellBanner(): BannerContent | null {
   const { data: client } = useClientMe();
-  const { data: llmAlert } = useSWR("client/llm-alert", () => api.clients.getLlmAlert(), {
-    refreshInterval: LLM_ALERT_POLL_MS,
-  });
+  const { data: llmAlert } = useLlmAlert();
 
   if (!client) return null;
   const blocking =

@@ -1,10 +1,8 @@
+import { FOCUS_RING } from "@/components/ui/button";
 import { RadioOption } from "./radio-option";
 
 export type Placement = "bubble" | "inline";
 export type BubblePosition = "right" | "left";
-
-const FOCUS_RING =
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas";
 
 const POSITIONS: { value: BubblePosition; label: string }[] = [
   { value: "right", label: "Bottom right" },
@@ -52,7 +50,7 @@ export function BubbleOptions({ color, onColorChange, position, onPositionChange
             type="color"
             value={color}
             onChange={(e) => onColorChange(e.target.value)}
-            className={`h-11 w-16 cursor-pointer rounded-control border border-line-strong bg-surface p-1 ${FOCUS_RING}`}
+            className={`h-11 w-16 cursor-pointer rounded-control border border-line-strong bg-surface p-1 ${FOCUS_RING.canvas}`}
           />
           <code className="font-mono text-ui text-fg-muted">{color}</code>
         </div>
@@ -94,7 +92,7 @@ export function InlineOptions({ targetId, onTargetIdChange }: InlineOptionsProps
         value={targetId}
         onChange={(e) => onTargetIdChange(e.target.value.replace(/[^a-zA-Z0-9-_]/g, "-"))}
         aria-describedby="inline-target-id-help"
-        className={`h-11 w-64 rounded-control border border-line-strong bg-surface px-3 font-mono text-ui text-fg placeholder:text-fg-faint ${FOCUS_RING}`}
+        className={`h-11 w-64 rounded-control border border-line-strong bg-surface px-3 font-mono text-ui text-fg placeholder:text-fg-faint ${FOCUS_RING.canvas}`}
         placeholder="chat9-widget"
       />
       <p id="inline-target-id-help" className="mt-2 text-caption text-fg-muted">

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Loader2, TriangleAlert } from "lucide-react";
+import { Button } from "./button";
 
 /** `onRetry` must revalidate the failed request and resolve when it settles. */
 export function LoadError({
@@ -30,15 +31,10 @@ export function LoadError({
     >
       <TriangleAlert size={16} aria-hidden="true" className="shrink-0 text-danger" />
       <span className="min-w-0 flex-1 basis-48 text-ui text-fg">{message}</span>
-      <button
-        type="button"
-        onClick={retry}
-        aria-busy={retrying}
-        className="inline-flex h-11 shrink-0 items-center gap-2 rounded-control border border-line-strong bg-surface px-4 text-ui font-medium text-fg transition-colors hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-      >
+      <Button variant="secondary" offset="surface" onClick={retry} aria-busy={retrying}>
         {retrying && <Loader2 size={16} aria-hidden="true" className="animate-spin" />}
         Try again
-      </button>
+      </Button>
     </div>
   );
 }

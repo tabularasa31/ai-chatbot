@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { mutate as mutateGlobal } from "swr";
 import { api, type HandoffState, type InboxRow, type Thread, type ThreadMessage } from "@/lib/api";
-import { useAuthUser, useClientMe, useInbox, useThread } from "@/hooks/useApi";
+import { useAuthUser, useClientMe, useInbox, useInboxSummary, useThread } from "@/hooks/useApi";
 import { parseApiDate, formatDateTime, formatTime } from "@/lib/format";
 import { LoadError } from "@/components/ui/load-error";
 
@@ -423,6 +423,7 @@ function InboxPageContent() {
   const { data: me } = useClientMe();
   const { data: authUser } = useAuthUser();
   const { data: inbox, error, isCurrent, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
+  const { data: inboxSummary } = useInboxSummary(INBOX_REFRESH_MS);
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(
@@ -458,7 +459,7 @@ function InboxPageContent() {
                 scope === s ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-50"
               }`}
             >
-              {s === "attention" ? `Needs attention${inbox ? ` (${inbox.attention_count})` : ""}` : "All"}
+              {s === "attention" ? `Needs attention${inboxSummary ? ` (${inboxSummary.attention_count})` : ""}` : "All"}
             </button>
           ))}
         </div>

@@ -57,13 +57,13 @@ function InstallWidgetContent() {
 
   return (
     <div className="max-w-2xl space-y-8">
+      <h1 className="text-h1 text-fg">Install widget</h1>
       {showVerificationNotice && (
         <InlineNotice>
           We sent a verification link to your email. Please check your inbox and click the link to verify your account.
         </InlineNotice>
       )}
       <WidgetIdentityNotice />
-      <h1 className="text-h1 text-fg">Install widget</h1>
       {renderBody()}
     </div>
   );

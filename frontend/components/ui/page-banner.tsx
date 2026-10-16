@@ -1,4 +1,5 @@
 import { ExternalLink, TriangleAlert } from "lucide-react";
+import { buttonClasses } from "./button";
 import { cn } from "./utils";
 
 const TONES = {
@@ -48,7 +49,7 @@ export function PageBanner({
         <a
           href={action.href}
           {...(action.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-          className="inline-flex h-11 shrink-0 items-center gap-2 rounded-control border border-line-strong bg-surface px-4 text-ui font-medium text-fg transition-colors hover:bg-surface-alt active:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+          className={buttonClasses({ variant: "secondary", offset: "surface" })}
         >
           {action.label}
           {action.external && <ExternalLink size={16} aria-hidden="true" />}

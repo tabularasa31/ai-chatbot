@@ -98,6 +98,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 | `docs/04-features.md` | Feature specs and expected behaviour |
 | `docs/06-developer-test-runbook.md` | Test command groups reference |
 | `docs/docs-ru/` | Internal Russian-language project documentation |
+| `DESIGN.md` | Design system (tokens, type scale, light/dark schemes, component rules); UI changes follow it and update it in the same PR |
 | `frontend/content/docs/` | **Client-facing documentation** (MDX, rendered in the product UI) — update here when asked to update client docs |
 | `frontend/content/docs/changelog.mdx` | Public changelog for tenants (`/docs/changelog`) |
 

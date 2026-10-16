@@ -24,13 +24,17 @@ const ARROW_STEP: Record<string, number> = {
   ArrowUp: -1,
 };
 
+function getServerScheme(): Scheme {
+  return "system";
+}
+
 function subscribe(onChange: () => void) {
   window.addEventListener(SCHEME_CHANGE_EVENT, onChange);
   return () => window.removeEventListener(SCHEME_CHANGE_EVENT, onChange);
 }
 
 export function ThemeSwitch({ className }: { className?: string }) {
-  const selected = useSyncExternalStore(subscribe, readSchemeCookie, () => "system");
+  const selected = useSyncExternalStore(subscribe, readSchemeCookie, getServerScheme);
   const buttons = useRef<Record<Scheme, HTMLButtonElement | null>>({
     system: null,
     light: null,
@@ -42,7 +46,7 @@ export function ThemeSwitch({ className }: { className?: string }) {
     buttons.current[scheme]?.focus();
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  function onKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
     const step = ARROW_STEP[event.key];
     if (step === undefined) return;
     event.preventDefault();
@@ -53,7 +57,6 @@ export function ThemeSwitch({ className }: { className?: string }) {
     <div
       role="radiogroup"
       aria-label="Colour scheme"
-      onKeyDown={onKeyDown}
       className={cn("inline-flex rounded-control border border-line", className)}
     >
       {SCHEMES.map((scheme) => {
@@ -72,6 +75,7 @@ export function ThemeSwitch({ className }: { className?: string }) {
             title={label}
             tabIndex={checked ? 0 : -1}
             onClick={() => select(scheme)}
+            onKeyDown={onKeyDown}
             className={cn(
               "flex h-11 w-11 items-center justify-center first:rounded-l-control last:rounded-r-control",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",

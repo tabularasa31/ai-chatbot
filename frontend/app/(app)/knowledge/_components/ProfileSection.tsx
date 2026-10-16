@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Trash2, X } from "lucide-react";
-import { ApiError, api, type KnowledgeProfile } from "@/lib/api";
-import { formatDateTimeLocale } from "@/lib/format";
+import { api, type KnowledgeProfile } from "@/lib/api";
+import { formatDateTimeLocale, parseApiDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
@@ -14,7 +14,6 @@ import { LINK_CLASS } from "./link-class";
 import { confidenceLevel } from "./shared";
 
 const EXTRACTION_POLL_MS = 5000;
-const INVALID_EMAIL_MESSAGE = "Enter a valid email address.";
 
 type EditableProfile = Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">;
 type SourcesState = "checking" | "unknown" | "has" | "none";
@@ -192,14 +191,18 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
   const [saveFailed, setSaveFailed] = useState(false);
   const [emailError, setEmailError] = useState<string>();
   const [savedMessage, flashSaved] = useFlash();
+  const savingRef = useRef(false);
+  savingRef.current = saving;
+  const emailField = useRef<HTMLDivElement>(null);
 
   const refreshProfile = useCallback(async () => {
     const next = await api.knowledge.getProfile();
-    setState((prev) => ({
-      status: "ready",
-      profile: next,
-      draft: prev.status === "ready" && isDirty(prev.profile, prev.draft) ? prev.draft : editable(next),
-    }));
+    if (savingRef.current) return;
+    setState((prev) => {
+      if (prev.status !== "ready") return { status: "ready", profile: next, draft: editable(next) };
+      if (parseApiDate(next.updated_at) < parseApiDate(prev.profile.updated_at)) return prev;
+      return { ...prev, profile: next, draft: isDirty(prev.profile, prev.draft) ? prev.draft : editable(next) };
+    });
   }, []);
 
   const loadProfile = useCallback(async () => {
@@ -269,15 +272,18 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
   }
 
   async function save() {
-    setSaving(true);
     setSaveFailed(false);
+    if (emailField.current?.querySelector("input")?.validity.typeMismatch) {
+      setEmailError("Enter a valid email address.");
+      return;
+    }
+    setSaving(true);
     setEmailError(undefined);
     try {
       const updated = await api.knowledge.patchProfile(draft);
       setState({ status: "ready", profile: updated, draft: editable(updated) });
       flashSaved("Profile saved");
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 422 && draft.support_email) setEmailError(INVALID_EMAIL_MESSAGE);
+    } catch {
       setSaveFailed(true);
     } finally {
       setSaving(false);
@@ -324,16 +330,18 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
           />
         </fieldset>
 
-        <Input
-          label="Support email"
-          type="email"
-          error={emailError}
-          value={draft.support_email ?? ""}
-          onChange={(e) => {
-            setEmailError(undefined);
-            update({ support_email: e.target.value || null });
-          }}
-        />
+        <div ref={emailField}>
+          <Input
+            label="Support email"
+            type="email"
+            error={emailError}
+            value={draft.support_email ?? ""}
+            onChange={(e) => {
+              setEmailError(undefined);
+              update({ support_email: e.target.value || null });
+            }}
+          />
+        </div>
 
         <fieldset>
           <legend className="mb-1 text-ui font-medium text-fg">Support URLs</legend>

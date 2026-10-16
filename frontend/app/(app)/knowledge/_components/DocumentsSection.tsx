@@ -22,7 +22,7 @@ const ADD_URL_FORM_ID = "add-url-form";
 const SKELETON_ROWS = 5;
 const SOURCES_TABLE_ID = "sources-table";
 
-function focusSourcesTable() {
+function sourcesTable() {
   return document.getElementById(SOURCES_TABLE_ID);
 }
 
@@ -67,10 +67,11 @@ function deleteDialogProps(pending: PendingDelete, sources: Sources) {
 }
 
 function detailView(sources: Sources, source: UrlSource): DetailView {
-  if (sources.detail?.id === source.id) return { state: "ready", detail: sources.detail };
-  if (sources.detailState === "error") {
-    return { state: "error", onRetry: () => sources.loadDetail(source.id) };
+  const onRetry = () => sources.loadDetail(source.id);
+  if (sources.detail?.id === source.id) {
+    return { state: "ready", detail: sources.detail, onRetryRefresh: sources.detailState === "error" ? onRetry : null };
   }
+  if (sources.detailState === "error") return { state: "error", onRetry };
   return { state: "loading" };
 }
 
@@ -148,11 +149,9 @@ export function DocumentsSection() {
           className="w-72 max-w-full"
         />
         <div className="flex flex-wrap items-center gap-3">
-          {sources.uploadProgress && (
-            <p role="status" className="text-ui tabular-nums text-fg-muted">
-              {`Uploading ${sources.uploadProgress.current} of ${sources.uploadProgress.total}`}
-            </p>
-          )}
+          <p role="status" className="w-40 text-right text-ui tabular-nums text-fg-muted empty:hidden sm:empty:block">
+            {sources.uploadProgress && `Uploading ${sources.uploadProgress.current} of ${sources.uploadProgress.total}`}
+          </p>
           <FlashMessage message={sources.uploadedMessage} />
           <Button
             variant="secondary"
@@ -278,7 +277,7 @@ export function DocumentsSection() {
         <ConfirmDialog
           {...dialog}
           tone="destructive"
-          fallbackFocus={focusSourcesTable}
+          fallbackFocus={sourcesTable}
           onClose={() => setPendingDelete(null)}
         />
       )}

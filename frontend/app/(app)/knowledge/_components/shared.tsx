@@ -11,9 +11,11 @@ const INDEXING_STATUSES = new Set(["processing", "embedding", "indexing"]);
 
 export const DETAIL_ID_PREFIX = "source-detail-";
 
-export const NAME_BUTTON_CLASS =
+const NAME_BUTTON_BASE_CLASS =
   "min-h-11 max-w-full rounded-control text-left text-ui font-medium text-fg hover:underline " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas";
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2";
+export const NAME_BUTTON_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-canvas`;
+export const NAME_BUTTON_ON_BAND_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-surface-alt`;
 
 export type KnowledgeTab = "documents" | "profile" | "faq";
 

@@ -16,7 +16,7 @@ type FaqFilter = "all" | "pending" | "approved" | "docs" | "logs";
 type FaqState =
   | { status: "loading" }
   | { status: "error" }
-  | { status: "ready"; items: KnowledgeFaqItem[]; pendingCount: number };
+  | { status: "ready"; items: KnowledgeFaqItem[]; pendingCount: number; refreshFailed: boolean };
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: FaqFilter; label: string }> = [
   { value: "all", label: "All" },
@@ -85,10 +85,10 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
     try {
       const data = await api.knowledge.listFaq(QUERY_BY_FILTER[filter]);
       if (request !== latestRequest.current) return;
-      setState({ status: "ready", items: data.items, pendingCount: data.pending_count });
+      setState({ status: "ready", items: data.items, pendingCount: data.pending_count, refreshFailed: false });
     } catch {
       if (request !== latestRequest.current) return;
-      setState({ status: "error" });
+      setState((prev) => (prev.status === "ready" ? { ...prev, refreshFailed: true } : { status: "error" }));
     }
   }, [filter]);
 
@@ -177,7 +177,7 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
         </div>
       </div>
 
-      {state.status === "error" && <LoadError message="Couldn't load the FAQ." onRetry={load} />}
+      {(state.status === "error" || (state.status === "ready" && state.refreshFailed)) && <LoadError message="Couldn't load the FAQ." onRetry={load} />}
       {actionError && (
         <InlineNotice tone="danger" onDismiss={() => setActionError("")}>
           {actionError}

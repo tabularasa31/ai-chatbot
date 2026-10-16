@@ -7,6 +7,8 @@ const CONTROL_CLASS =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-surface " +
   "disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint";
 
+const borderClass = (invalid: boolean) => (invalid ? "border-danger" : "border-line-strong");
+
 type FieldProps = {
   label: string;
   hideLabel?: boolean;
@@ -57,7 +59,7 @@ export function Input({
           id={id}
           aria-describedby={describedBy}
           aria-invalid={invalid || undefined}
-          className={cn(CONTROL_CLASS, "h-11", invalid ? "border-danger" : "border-line-strong")}
+          className={cn(CONTROL_CLASS, "h-11", borderClass(invalid))}
           {...props}
         />
       )}
@@ -82,7 +84,7 @@ export function Select({
             id={id}
             aria-describedby={describedBy}
             aria-invalid={invalid || undefined}
-              className={cn(CONTROL_CLASS, "h-11 appearance-none pr-10", invalid ? "border-danger" : "border-line-strong")}
+            className={cn(CONTROL_CLASS, "h-11 appearance-none pr-10", borderClass(invalid))}
             {...props}
           >
             {children}
@@ -113,7 +115,7 @@ export function Textarea({
           id={id}
           aria-describedby={describedBy}
           aria-invalid={invalid || undefined}
-          className={cn(CONTROL_CLASS, "min-h-11 py-2", invalid ? "border-danger" : "border-line-strong")}
+          className={cn(CONTROL_CLASS, "min-h-11 py-2", borderClass(invalid))}
           {...props}
         />
       )}

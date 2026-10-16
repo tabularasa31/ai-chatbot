@@ -1,22 +1,9 @@
 import type { HandoffState, InboxRow, InboxTicket, ThreadMessage } from "@/lib/api";
-import { parseApiDate } from "@/lib/format";
+import { formatWhen, parseApiDate } from "@/lib/format";
 
 const MS_PER_MINUTE = 60_000;
 const MINUTES_PER_HOUR = 60;
 const HOURS_PER_DAY = 24;
-
-export function formatWhen(iso: string | null): string {
-  if (!iso) return "—";
-  const date = parseApiDate(iso);
-  const sameYear = date.getFullYear() === new Date().getFullYear();
-  return date.toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: sameYear ? undefined : "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export function waitingFor(since: string, now: number): string {
   const minutes = Math.max(0, Math.floor((now - parseApiDate(since).getTime()) / MS_PER_MINUTE));

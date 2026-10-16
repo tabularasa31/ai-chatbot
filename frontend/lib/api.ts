@@ -433,7 +433,7 @@ export type GapDiscardDraftResponse = {
 export type GapRecalculateResponse = {
   tenant_id: string;
   mode: GapRunMode;
-  status: "accepted" | "in_progress" | "rate_limited";
+  status: "accepted" | "in_progress";
   command_kind: "orchestration";
   http_status_code: 202;
   accepted_at: string | null;

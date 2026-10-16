@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Button } from "./button";
+import { useModalDialog } from "./use-modal-dialog";
 
 /** Right-hand modal panel. Mount it only while open; focus is trapped and returned by the native dialog. */
 export function Drawer({
@@ -18,34 +19,14 @@ export function Drawer({
   onClose: () => void;
   children: ReactNode;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    const closeOnScrimClick = (event: MouseEvent) => {
-      if (event.target === dialog) onCloseRef.current();
-    };
-    dialog.showModal();
-    dialog.addEventListener("click", closeOnScrimClick);
-    return () => {
-      dialog.removeEventListener("click", closeOnScrimClick);
-      dialog.close();
-    };
-  }, []);
+  const ref = useModalDialog({ onClose });
 
   return (
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      className="m-0 ml-auto h-full max-h-full w-full max-w-xl border-l border-line bg-surface p-0 text-fg shadow-overlay backdrop:bg-scrim/60 dark:bg-surface-alt"
+      className="m-0 ml-auto h-full max-h-full w-full max-w-xl border-l border-line bg-surface p-0 text-fg shadow-overlay backdrop:bg-scrim dark:bg-surface-alt"
     >
       <div className="flex h-full flex-col">
         <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-4">

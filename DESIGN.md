@@ -208,7 +208,7 @@ Confirm dialog (`ui/confirm-dialog.tsx`, new): the Modal rule above, built on na
 
 Drawer (`ui/drawer.tsx`, new): the Drawer rule above as a component: native `<dialog>` aligned right, header with wrapping title, optional meta and actions, and a 44px close button; body is the caller's. Reason: the document preview and the Doc gaps draft preview share chrome, focus handling and scrim, and it removes the blur and heavy shadow of the old drawer.
 
-Fields (`ui/field.tsx`, new): `Input`, `Select`, `Textarea` implementing the Text input rule: visible label above (`hideLabel` makes it screen-reader-only for toolbar filters), optional helper, optional error (border `danger`, message linked with `aria-describedby`, `aria-invalid`). Reason: about fourteen fields on Knowledge and Doc gaps; one definition keeps height, border and focus ring identical.
+Fields (`ui/field.tsx`, new): `Input`, `Select`, `Textarea` implementing the Text input rule: visible label above (`hideLabel` makes it screen-reader-only for toolbar filters), optional helper (linked with `aria-describedby`); the error state of the Text input rule is added with the first caller that needs it. Reason: about fourteen fields on Knowledge and Doc gaps; one definition keeps height, border and focus ring identical.
 
 Skeleton (`ui/skeleton.tsx`, new): `Skeleton` is a `surface-alt` block with no shimmer; `SkeletonRegion` wraps a set of them, renders nothing for 200ms, then reveals them with `role="status"` and `aria-busy`. Reason: the Loading rule needs the delay in one place; replaces `PageLoader` and "Loading..." lines on these pages.
 

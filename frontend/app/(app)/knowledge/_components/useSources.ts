@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   type DocumentListItem,
@@ -10,7 +10,6 @@ import {
 import { useFlash } from "./flash";
 import {
   POLLABLE_SOURCE_STATUSES,
-  errorMessage,
   parseExclusions,
   type SourceFormValues,
 } from "./shared";
@@ -35,6 +34,12 @@ export function useSources() {
   const [detailState, setDetailState] = useState<RequestState>("idle");
   const [isEditing, setIsEditing] = useState(false);
   const [uploadedMessage, flashUploaded] = useFlash();
+  const expandedRef = useRef<string | null>(null);
+
+  function expand(sourceId: string | null) {
+    expandedRef.current = sourceId;
+    setExpandedSourceId(sourceId);
+  }
 
   const load = useCallback(async () => {
     try {
@@ -50,10 +55,12 @@ export function useSources() {
   const loadDetail = useCallback(async (sourceId: string) => {
     setDetailState("loading");
     try {
-      setDetail(await api.documents.getSourceById(sourceId));
+      const next = await api.documents.getSourceById(sourceId);
+      if (expandedRef.current !== sourceId) return;
+      setDetail(next);
       setDetailState("ready");
     } catch {
-      setDetailState("error");
+      if (expandedRef.current === sourceId) setDetailState("error");
     }
   }, []);
 
@@ -73,7 +80,7 @@ export function useSources() {
   }, [sources, expandedSourceId, detail, isEditing, load, loadDetail]);
 
   function collapseDetail() {
-    setExpandedSourceId(null);
+    expand(null);
     setDetail(null);
     setIsEditing(false);
   }
@@ -83,7 +90,7 @@ export function useSources() {
       collapseDetail();
       return;
     }
-    setExpandedSourceId(sourceId);
+    expand(sourceId);
     setIsEditing(false);
     await loadDetail(sourceId);
   }
@@ -107,11 +114,11 @@ export function useSources() {
       setUploadProgress({ current: i + 1, total: files.length });
       try {
         const doc = await api.documents.upload(files[i]);
-        setDocuments((prev) => [doc as DocumentListItem, ...prev]);
+        setDocuments((prev) => [{ ...doc, updated_at: doc.created_at }, ...prev]);
         await api.embeddings.create(doc.id);
         await pollUntilEmbedded(doc.id);
-      } catch (err) {
-        errors.push(`${files[i].name}: ${errorMessage(err, "Upload failed")}`);
+      } catch {
+        errors.push(`${files[i].name}: couldn't be uploaded`);
       }
     }
     await load();
@@ -129,7 +136,7 @@ export function useSources() {
       exclusions: parseExclusions(values.exclusions),
     });
     setSources((prev) => [source, ...prev]);
-    setExpandedSourceId(source.id);
+    expand(source.id);
     await loadDetail(source.id);
   }
 
@@ -157,8 +164,8 @@ export function useSources() {
       const source = await api.documents.refreshSource(id);
       setSources((prev) => prev.map((item) => (item.id === id ? source : item)));
       if (expandedSourceId === id) await loadDetail(id);
-    } catch (err) {
-      setActionError(errorMessage(err, "Couldn't refresh this source. Try again."));
+    } catch {
+      setActionError("Couldn't refresh this source. Try again.");
     } finally {
       setRefreshingSourceId(null);
     }
@@ -168,7 +175,7 @@ export function useSources() {
     setActionError("");
     setIsEditing(true);
     if (expandedSourceId !== sourceId) {
-      setExpandedSourceId(sourceId);
+      expand(sourceId);
       await loadDetail(sourceId);
     }
   }
@@ -190,8 +197,8 @@ export function useSources() {
     try {
       const health = await api.documents.runHealth(docId);
       setDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, health_status: health } : d)));
-    } catch (err) {
-      setActionError(errorMessage(err, "Couldn't re-check this file. Try again."));
+    } catch {
+      setActionError("Couldn't re-check this file. Try again.");
     } finally {
       setRecheckingId(null);
     }

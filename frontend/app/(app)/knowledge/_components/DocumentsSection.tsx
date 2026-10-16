@@ -20,11 +20,22 @@ import type { MixedRow } from "./shared";
 const ACCEPTED_FILE_TYPES = ".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt,.html,.htm";
 const ADD_URL_FORM_ID = "add-url-form";
 const SKELETON_ROWS = 5;
+const SOURCES_TABLE_ID = "sources-table";
+
+function focusSourcesTable() {
+  return document.getElementById(SOURCES_TABLE_ID);
+}
 
 type PendingDelete =
   | { kind: "file"; id: string; name: string }
   | { kind: "source"; id: string; name: string; pages: number }
   | { kind: "page"; sourceId: string; pageId: string };
+
+function sourceDeleteBody(pages: number): string {
+  if (pages === 0) return "The source is removed. No pages are indexed yet.";
+  if (pages === 1) return "The 1 indexed page is removed and the bot stops using it.";
+  return `All ${pages} indexed pages are removed and the bot stops using them.`;
+}
 
 function deleteDialogProps(pending: PendingDelete, sources: Sources) {
   switch (pending.kind) {
@@ -39,7 +50,7 @@ function deleteDialogProps(pending: PendingDelete, sources: Sources) {
     case "source":
       return {
         title: `Delete "${pending.name}"?`,
-        body: `All ${pending.pages} indexed pages are removed and the bot stops using them.`,
+        body: sourceDeleteBody(pending.pages),
         confirmLabel: "Delete source",
         failureMessage: "Couldn't delete this source. Try again.",
         onConfirm: () => sources.deleteSource(pending.id),
@@ -56,9 +67,7 @@ function deleteDialogProps(pending: PendingDelete, sources: Sources) {
 }
 
 function detailView(sources: Sources, source: UrlSource): DetailView {
-  if (sources.detail?.id === source.id && sources.detailState !== "loading") {
-    return { state: "ready", detail: sources.detail };
-  }
+  if (sources.detail?.id === source.id) return { state: "ready", detail: sources.detail };
   if (sources.detailState === "error") {
     return { state: "error", onRetry: () => sources.loadDetail(source.id) };
   }
@@ -83,7 +92,7 @@ export function DocumentsSection() {
     return mixed.filter((row) =>
       row.kind === "file"
         ? row.item.filename.toLowerCase().includes(text)
-        : (row.item.name?.toLowerCase().includes(text) ?? false) || row.item.url.toLowerCase().includes(text),
+        : row.item.name.toLowerCase().includes(text) || row.item.url.toLowerCase().includes(text),
     );
   }, [sources.documents, sources.sources, filter]);
 
@@ -139,6 +148,11 @@ export function DocumentsSection() {
           className="w-72 max-w-full"
         />
         <div className="flex flex-wrap items-center gap-3">
+          {sources.uploadProgress && (
+            <p role="status" className="text-ui tabular-nums text-fg-muted">
+              {`Uploading ${sources.uploadProgress.current} of ${sources.uploadProgress.total}`}
+            </p>
+          )}
           <FlashMessage message={sources.uploadedMessage} />
           <Button
             variant="secondary"
@@ -158,9 +172,7 @@ export function DocumentsSection() {
             onChange={(event) => void handleFilesChosen(event)}
           />
           <Button variant="primary" busy={uploading} onClick={() => fileInput.current?.click()}>
-            {sources.uploadProgress
-              ? `Uploading ${sources.uploadProgress.current} of ${sources.uploadProgress.total}`
-              : "Upload files"}
+            Upload files
           </Button>
         </div>
       </div>
@@ -171,7 +183,6 @@ export function DocumentsSection() {
             initial={{ name: "", schedule: "weekly", exclusions: "" }}
             withUrl
             submitLabel="Add and start indexing"
-            busyLabel="Checking and starting"
             failureFallback="Couldn't add this source. Try again."
             onSubmit={async (values) => {
               await sources.createUrlSource(values);
@@ -200,7 +211,7 @@ export function DocumentsSection() {
         </InlineNotice>
       )}
 
-      <table className="w-full table-fixed border-collapse" aria-busy={sources.loadState === "loading"}>
+      <table id={SOURCES_TABLE_ID} tabIndex={-1} className="w-full table-fixed border-collapse focus:outline-none" aria-busy={sources.loadState === "loading"}>
         <thead>
           <tr className="border-b border-line text-left text-caption font-medium text-fg-muted">
             <th scope="col" className="px-4 py-3 font-medium">Source</th>
@@ -267,6 +278,7 @@ export function DocumentsSection() {
         <ConfirmDialog
           {...dialog}
           tone="destructive"
+          fallbackFocus={focusSourcesTable}
           onClose={() => setPendingDelete(null)}
         />
       )}

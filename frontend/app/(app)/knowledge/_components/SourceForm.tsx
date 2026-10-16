@@ -10,7 +10,6 @@ type SourceFormProps = {
   initial: SourceFormValues;
   withUrl: boolean;
   submitLabel: string;
-  busyLabel: string;
   failureFallback: string;
   onSubmit: (values: SourceFormValues & { url: string }) => Promise<void>;
   onCancel: () => void;
@@ -20,7 +19,6 @@ export function SourceForm({
   initial,
   withUrl,
   submitLabel,
-  busyLabel,
   failureFallback,
   onSubmit,
   onCancel,
@@ -89,7 +87,7 @@ export function SourceForm({
           Cancel
         </Button>
         <Button type="submit" variant="primary" busy={busy} disabled={withUrl && !url.trim()}>
-          {busy ? busyLabel : submitLabel}
+          {submitLabel}
         </Button>
       </div>
     </form>

@@ -1,5 +1,5 @@
 import type { DocumentHealthStatus, DocumentListItem, UrlSource } from "@/lib/api";
-import { formatDateTimeLocale } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { sourceStatus, type StatusDot } from "./shared";
 
 const GOOD_SCORE = 80;
@@ -34,7 +34,7 @@ function HealthLines({ health }: { health: DocumentHealthStatus | null | undefin
       {health.warnings.map((warning) => (
         <Caption key={warning.message}>{warning.message}</Caption>
       ))}
-      <Caption>{`Checked ${formatDateTimeLocale(health.checked_at)}`}</Caption>
+      <Caption>{`Checked ${formatDateTime(health.checked_at)}`}</Caption>
     </div>
   );
 }

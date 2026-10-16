@@ -24,20 +24,23 @@ export function useModalDialog({ onClose, canClose = true, fallbackFocus }: Moda
     if (!dialog) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
-    const requestClose = () => {
-      if (latest.current.canClose) latest.current.onClose();
-      else if (!dialog.open) dialog.showModal();
-    };
     const closeOnScrimClick = (event: MouseEvent) => {
-      if (event.target === dialog) requestClose();
+      if (event.target === dialog && latest.current.canClose) latest.current.onClose();
+    };
+    // A "close" event queued by an earlier effect run's cleanup (StrictMode) arrives
+    // after the dialog was re-opened; only a close that left it closed is a real one.
+    const handleClose = () => {
+      if (dialog.open) return;
+      if (latest.current.canClose) latest.current.onClose();
+      else dialog.showModal();
     };
 
     dialog.showModal();
     dialog.addEventListener("click", closeOnScrimClick);
-    dialog.addEventListener("close", requestClose);
+    dialog.addEventListener("close", handleClose);
     return () => {
       dialog.removeEventListener("click", closeOnScrimClick);
-      dialog.removeEventListener("close", requestClose);
+      dialog.removeEventListener("close", handleClose);
       dialog.close();
       const target = opener?.isConnected ? opener : latest.current.fallbackFocus?.();
       target?.focus();

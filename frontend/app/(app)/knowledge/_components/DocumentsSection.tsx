@@ -203,8 +203,8 @@ export function DocumentsSection() {
       {sources.uploadErrors.length > 0 && (
         <InlineNotice tone="danger" onDismiss={sources.clearUploadErrors}>
           <ul>
-            {sources.uploadErrors.map((message) => (
-              <li key={message}>{message}</li>
+            {sources.uploadErrors.map(({ filename, message }) => (
+              <li key={filename} className="break-words">{`${filename}: ${message}`}</li>
             ))}
           </ul>
         </InlineNotice>

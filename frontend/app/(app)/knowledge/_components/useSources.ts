@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
+  ApiError,
   type DocumentListItem,
   type UrlSource,
   type UrlSourceDetail,
@@ -19,13 +20,14 @@ const EMBED_POLL_MS = 2_000;
 const EMBED_TIMEOUT_MS = 120_000;
 
 type RequestState = "idle" | "loading" | "ready" | "error";
+export type UploadError = { filename: string; message: string };
 
 export function useSources() {
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [sources, setSources] = useState<UrlSource[]>([]);
   const [loadState, setLoadState] = useState<RequestState>("loading");
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
-  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [uploadErrors, setUploadErrors] = useState<UploadError[]>([]);
   const [actionError, setActionError] = useState("");
   const [recheckingId, setRecheckingId] = useState<string | null>(null);
   const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
@@ -109,7 +111,7 @@ export function useSources() {
 
   async function uploadFiles(files: File[]) {
     setUploadErrors([]);
-    const errors: string[] = [];
+    const errors: UploadError[] = [];
     for (let i = 0; i < files.length; i++) {
       setUploadProgress({ current: i + 1, total: files.length });
       try {
@@ -117,8 +119,9 @@ export function useSources() {
         setDocuments((prev) => [{ ...doc, updated_at: doc.created_at }, ...prev]);
         await api.embeddings.create(doc.id);
         await pollUntilEmbedded(doc.id);
-      } catch {
-        errors.push(`${files[i].name}: couldn't be uploaded`);
+      } catch (err) {
+        const duplicate = err instanceof ApiError && err.status === 409;
+        errors.push({ filename: files[i].name, message: duplicate ? "already uploaded" : "couldn't be uploaded" });
       }
     }
     await load();
@@ -141,7 +144,9 @@ export function useSources() {
   }
 
   async function deleteFile(id: string) {
+    const filename = documents.find((d) => d.id === id)?.filename;
     await api.documents.delete(id);
+    setUploadErrors((prev) => prev.filter((error) => error.filename !== filename));
     setDocuments((prev) => prev.filter((d) => d.id !== id));
   }
 
@@ -154,7 +159,7 @@ export function useSources() {
   async function deleteSourcePage(sourceId: string, documentId: string) {
     await api.documents.deleteSourcePage(sourceId, documentId);
     await load();
-    if (expandedSourceId === sourceId) await loadDetail(sourceId);
+    if (expandedRef.current === sourceId) await loadDetail(sourceId);
   }
 
   async function refreshSource(id: string) {

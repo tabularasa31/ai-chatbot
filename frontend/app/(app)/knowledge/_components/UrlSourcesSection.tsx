@@ -2,7 +2,7 @@
 
 import { Trash2 } from "lucide-react";
 import type { UrlSource, UrlSourceDetail } from "@/lib/api";
-import { formatDateTimeLocale } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
@@ -108,7 +108,7 @@ function DetailBody({
                     <li key={run.id} className="py-2 text-ui">
                       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
                         <span className="font-medium text-fg">{label}</span>
-                        <span className="text-caption tabular-nums text-fg-muted">{formatDateTimeLocale(run.created_at)}</span>
+                        <span className="text-caption tabular-nums text-fg-muted">{formatDateTime(run.created_at)}</span>
                       </div>
                       <p className="text-caption tabular-nums text-fg-muted">
                         {run.pages_found ? `${run.pages_indexed} of ${run.pages_found} pages` : `${run.pages_indexed} pages`}

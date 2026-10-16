@@ -137,6 +137,7 @@ def _thread(thread: Thread) -> ThreadResponse:
                 content=m.message.content,
                 created_at=m.message.created_at,
                 author_label=m.author_label,
+                author_id=m.author_id,
             )
             for m in thread.messages
         ],

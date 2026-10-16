@@ -43,10 +43,10 @@ function InstallWidgetContent() {
 
   function renderBody() {
     if (clientError && !isEmailNotVerified(clientError)) {
-      return <LoadError message="Could not load your account." onRetry={() => mutateClient()} />;
+      return <LoadError message="Couldn't load your account." onRetry={() => mutateClient()} />;
     }
     if (botsError) {
-      return <LoadError message="Could not load your bot." onRetry={() => mutateBots()} />;
+      return <LoadError message="Couldn't load your bot." onRetry={() => mutateBots()} />;
     }
     if (botsLoading) return <InstallWidgetSkeleton />;
     if (!activeBot) {

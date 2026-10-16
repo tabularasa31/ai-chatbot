@@ -19,6 +19,7 @@ type CopyButtonProps = {
 
 export function CopyButton({ text, label, variant }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     if (!copied) return;
@@ -27,13 +28,20 @@ export function CopyButton({ text, label, variant }: CopyButtonProps) {
   }, [copied]);
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
+    try {
+      await navigator.clipboard.writeText(text);
+      setFailed(false);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+      setFailed(true);
+    }
   }
 
   const Icon = copied ? Check : Copy;
 
   return (
+    <>
     <button
       type="button"
       onClick={handleCopy}
@@ -46,5 +54,11 @@ export function CopyButton({ text, label, variant }: CopyButtonProps) {
       <Icon size={16} aria-hidden />
       <span aria-live="polite">{copied ? "Copied" : label}</span>
     </button>
+    {failed && (
+      <span role="alert" className="text-ui text-danger">
+        Copy failed. Select the text and copy it manually.
+      </span>
+    )}
+    </>
   );
 }

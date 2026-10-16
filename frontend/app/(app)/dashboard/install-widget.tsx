@@ -27,6 +27,8 @@ export function InstallWidget({ botId }: { botId: string }) {
   const [position, setPosition] = useState<BubblePosition>(DEFAULT_POSITION);
   const [targetId, setTargetId] = useState(DEFAULT_TARGET_ID);
 
+  const containerId = targetId || DEFAULT_TARGET_ID;
+
   const snippet =
     placement === "bubble"
       ? buildEmbedSnippet({
@@ -38,8 +40,8 @@ export function InstallWidget({ botId }: { botId: string }) {
         })
       : buildEmbedSnippet({
           botId,
-          extraConfig: { mode: "inline", target: targetId },
-          extraHtml: `<div id="${targetId}"></div>`,
+          extraConfig: { mode: "inline", target: containerId },
+          extraHtml: `<div id="${containerId}"></div>`,
         });
 
   return (

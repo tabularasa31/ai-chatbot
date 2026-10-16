@@ -12,8 +12,12 @@ type SectionTabsProps<T extends string> = {
   activeId: T;
 } & (
   | { tabs: readonly SectionLinkTab<T>[]; onChange?: undefined }
-  | { tabs: readonly SectionTab<T>[]; onChange: (id: T) => void }
+  | { tabs: readonly SectionTab<T>[]; onChange: (id: T) => void; panelId: string }
 );
+
+export function sectionTabId(panelId: string, id: string) {
+  return `${panelId}-tab-${id}`;
+}
 
 const TAB_CLASS =
   "inline-flex h-11 items-center rounded-control px-4 text-ui font-medium " +
@@ -38,6 +42,7 @@ export function SectionTabs<T extends string>(props: SectionTabsProps<T>) {
       activeId={props.activeId}
       tabs={props.tabs}
       onChange={props.onChange}
+      panelId={props.panelId}
     />
   );
 }
@@ -75,11 +80,13 @@ function ButtonTabs<T extends string>({
   activeId,
   tabs,
   onChange,
+  panelId,
 }: {
   label: string;
   activeId: T;
   tabs: readonly SectionTab<T>[];
   onChange: (id: T) => void;
+  panelId: string;
 }) {
   const buttons = useRef<Partial<Record<T, HTMLButtonElement | null>>>({});
 
@@ -107,9 +114,11 @@ function ButtonTabs<T extends string>({
             ref={(node) => {
               buttons.current[tab.id] = node;
             }}
+            id={sectionTabId(panelId, tab.id)}
             type="button"
             role="tab"
             aria-selected={selected}
+            aria-controls={panelId}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
             onKeyDown={onKeyDown}

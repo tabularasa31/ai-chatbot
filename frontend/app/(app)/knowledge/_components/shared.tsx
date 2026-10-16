@@ -39,7 +39,9 @@ export function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export const KNOWLEDGE_TABS: readonly SectionTab<"documents" | "profile" | "faq">[] = [
+export type KnowledgeTab = "documents" | "profile" | "faq";
+
+export const KNOWLEDGE_TABS: readonly SectionTab<KnowledgeTab>[] = [
   { id: "documents", label: "Documents" },
   { id: "profile", label: "Profile" },
   { id: "faq", label: "FAQ" },

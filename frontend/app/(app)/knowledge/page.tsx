@@ -11,13 +11,11 @@ import {
   type UrlSourceDetail,
 } from "@/lib/api";
 import { formatDateTimeLocale } from "@/lib/format";
-import { SectionTabs } from "@/components/ui/section-tabs";
-import { KNOWLEDGE_TABS, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_components/shared";
+import { type KnowledgeTab, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_components/shared";
+import { KnowledgeFrame } from "./_components/KnowledgeFrame";
 import { PageLoader } from "@/components/ui/page-loader";
 import { FaqSection } from "./_components/FaqSection";
 import { DocumentsSection } from "./_components/DocumentsSection";
-
-type KnowledgeTab = "documents" | "profile" | "faq";
 
 function parseTab(value: string | null): KnowledgeTab {
   return value === "faq" || value === "profile" ? value : "documents";
@@ -352,7 +350,7 @@ export default function KnowledgePage() {
   }
 
   async function handleDeleteSourcePage(sourceId: string, documentId: string) {
-    if (!confirm("Delete this indexed page from Knowledge Hub and exclude it from future refreshes?")) return;
+    if (!confirm("Delete this indexed page from Knowledge and exclude it from future refreshes?")) return;
     setDeletingPageId(documentId);
     try {
       await api.documents.deleteSourcePage(sourceId, documentId);
@@ -411,18 +409,16 @@ export default function KnowledgePage() {
 
   if (loading) {
     return (
-      <PageLoader />
+      <KnowledgeFrame activeTab={activeTab} onTabChange={setTab}>
+        <PageLoader />
+      </KnowledgeFrame>
     );
   }
 
   if (activeTab === "profile") {
     return (
-      <div className="max-w-7xl space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Knowledge Hub</h1>
-          <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
-        </div>
-        <SectionTabs label="Knowledge" tabs={KNOWLEDGE_TABS} activeId="profile" onChange={setTab} />
+      <KnowledgeFrame activeTab={activeTab} onTabChange={setTab}>
+      <div className="space-y-6">
         {profileError && <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{profileError}</div>}
         {profileSaved && <div className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">Profile updated</div>}
         {profileLoading || !profileDraft ? (
@@ -627,14 +623,14 @@ export default function KnowledgePage() {
           </>
         )}
       </div>
+      </KnowledgeFrame>
     );
   }
 
   if (activeTab === "faq") {
     return (
+      <KnowledgeFrame activeTab={activeTab} onTabChange={setTab}>
       <FaqSection
-        activeTab={activeTab}
-        onTabChange={setTab}
         faqLoading={faqLoading}
         faqItems={faqItems}
         setFaqItems={setFaqItems}
@@ -659,13 +655,13 @@ export default function KnowledgePage() {
         setRemovingFaqIds={setRemovingFaqIds}
         loadFaq={loadFaq}
       />
+      </KnowledgeFrame>
     );
   }
 
   return (
+    <KnowledgeFrame activeTab={activeTab} onTabChange={setTab}>
     <DocumentsSection
-      activeTab={activeTab}
-      onTabChange={setTab}
       documents={documents}
       sources={sources}
       filter={filter}
@@ -711,5 +707,6 @@ export default function KnowledgePage() {
       onRecheckHealth={handleRecheckHealth}
       onToggleDetail={toggleDetail}
     />
+    </KnowledgeFrame>
   );
 }

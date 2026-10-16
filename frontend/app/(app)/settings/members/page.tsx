@@ -41,7 +41,6 @@ function MembersPanel() {
   const { data: authUser } = useAuthUser();
   const selfId = authUser?.id ?? null;
 
-
   async function invite() {
     const address = email.trim();
     if (!address) return;

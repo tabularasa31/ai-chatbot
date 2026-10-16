@@ -45,7 +45,7 @@ const NAV_GROUPS: NavItem[][] = [
     { href: "/analytics", activeOn: ["/analytics"], label: "Analytics", Icon: ChartColumn },
   ],
   [
-    { href: "/dashboard", activeOn: ["/dashboard", "/embed"], label: "Install widget", Icon: CodeXml },
+    { href: "/dashboard", activeOn: ["/dashboard"], label: "Install widget", Icon: CodeXml },
     { href: "/settings", activeOn: ["/settings", "/widget-settings"], label: "Settings", Icon: Settings, ownerOnly: true },
   ],
   [

@@ -538,9 +538,7 @@ function BotSettingsPanel() {
         )}
       </div>
 
-      {/* Danger zone. Owner-gated here as well as in the sidebar, because a
-          direct URL does not go through the sidebar. */}
-      {client?.role === "owner" && client.name && (
+      {client?.name && (
         <DeleteWorkspaceCard workspaceName={client.name} workspaceId={client.id} />
       )}
     </div>

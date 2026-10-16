@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useClientMe, useInboxSummary } from "@/hooks/useApi";
+import { FOCUS_RING } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/count-badge";
 import { cn } from "@/components/ui/utils";
 
@@ -69,9 +70,10 @@ function NavLink({
       aria-current={active ? "page" : undefined}
       className={cn(
         "flex h-11 items-center gap-3 rounded-control px-3 text-ui font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-chrome-accent",
+        FOCUS_RING.chrome,
+        "focus-visible:ring-inset focus-visible:ring-offset-0",
         active
-          ? "bg-chrome-active text-chrome-accent shadow-[inset_2px_0_0_rgb(var(--c-chrome-accent))]"
+          ? "bg-chrome-active text-chrome-accent shadow-chrome-selected"
           : "text-chrome-fg-muted hover:bg-chrome-hover hover:text-chrome-fg",
       )}
     >

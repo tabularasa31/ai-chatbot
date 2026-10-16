@@ -151,16 +151,16 @@ Contrast (text >= 4.5, UI >= 3):
 - `chrome-fg-muted` on chrome 8.12, hover 6.74.
 - `chrome-accent` on chrome 7.26, hover 6.03, active 5.48 (lowest chrome text pair); `chrome-accent-fg` on `chrome-accent` 7.26.
 - `chrome-line-strong` on chrome 4.62, hover 3.84, active 3.49 (lowest chrome UI pair).
-- Selection does not rely on the fill (active vs chrome 1.32): text and icon colour, the 2px `chrome-accent` leading bar (7.26) and `aria-current`. There is no `chrome-focus`: the light `focus` is 3.27 on chrome, so chrome uses `chrome-accent`.
+- Selection does not rely on the fill (active vs chrome 1.32): text and icon colour, the 2px `chrome-accent` leading bar (7.26) and `aria-current`. There is no `chrome-focus`: the light `focus` is 2.88 on `chrome-hover` and 2.62 on `chrome-active` (fails 3:1), so chrome uses `chrome-accent`.
 - The logo mark keeps its original colours on chrome (`#E879F9` 8.03, `#38BDF8` 9.22); the wordmark is `chrome-fg`.
 
 ## 5. Tailwind mapping
 
-Implementation shape: CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (not in the widget build); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The nine chrome keys are in both `SCHEME_COLORS` entries with the same hex; the widget build does not use them. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). The `nd-*` palette is not used.
+Implementation shape: CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (not in the widget build); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The nine chrome keys are one scheme-independent table (`CHROME_COLORS`) emitted on `:root` by `chromeTokensPlugin`, which only the dashboard config registers; the widget build does not emit them. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). The `nd-*` palette is not used.
 
 Fumadocs variable -> token: `background`=canvas, `foreground`=fg, `muted`=surface-alt, `muted-foreground`=fg-muted, `card`/`popover`=surface, `border`=line, `primary`=brand, `primary-foreground`=brand-on, `secondary`=surface-alt, `accent`=brand-subtle, `accent-foreground`=fg, `ring`=focus.
 
-Names: `bg-canvas`, `bg-surface`, `bg-surface-alt`, `border-line`, `border-line-strong`, `text-fg`, `text-fg-muted`, `text-fg-faint`, `bg-brand hover:bg-brand-hover active:bg-brand-active text-brand-on`, `bg-brand-subtle`, `ring-focus`, `text-success bg-success-subtle` (same for warning, danger, info), `bg-danger text-danger-on hover:bg-danger-hover`, `bg-scrim`; chrome: `bg-chrome border-chrome-line text-chrome-fg text-chrome-fg-muted hover:bg-chrome-hover bg-chrome-active text-chrome-accent bg-chrome-accent text-chrome-accent-fg border-chrome-line-strong ring-chrome-accent ring-offset-chrome`. Sizes: `text-caption|ui|body|h2|h1|display`. Also `shadow-pop`, `shadow-overlay`, `rounded-tag|control|surface|bubble`. Control height `h-11` (44px).
+Names: `bg-canvas`, `bg-surface`, `bg-surface-alt`, `border-line`, `border-line-strong`, `text-fg`, `text-fg-muted`, `text-fg-faint`, `bg-brand hover:bg-brand-hover active:bg-brand-active text-brand-on`, `bg-brand-subtle`, `ring-focus`, `text-success bg-success-subtle` (same for warning, danger, info), `bg-danger text-danger-on hover:bg-danger-hover`, `bg-scrim`; chrome: `bg-chrome border-chrome-line text-chrome-fg text-chrome-fg-muted hover:bg-chrome-hover bg-chrome-active text-chrome-accent bg-chrome-accent text-chrome-accent-fg border-chrome-line-strong ring-chrome-accent ring-offset-chrome shadow-chrome-selected` (2px inset leading bar). Sizes: `text-caption|ui|body|h2|h1|display`. Also `shadow-pop`, `shadow-overlay`, `rounded-tag|control|surface|bubble`. Control height `h-11` (44px).
 
 Old value -> token:
 
@@ -196,7 +196,7 @@ Old value -> token:
 
 General: every interactive element has hover, active, focus-visible, disabled; hit area at least 44x44 (`h-11`; icon buttons `h-11 w-11`, glyph 20px). Inline text links inside prose are exempt. No action is available only on hover; row actions are always visible. One primary action per screen (or per modal/form section).
 
-Focus: `focus-visible` only, 2px `focus` ring with 2px offset in the underlying surface colour; never `outline-none` without this ring. On chrome: `chrome-accent` ring, offset `chrome`. Hover: one colour step (never scale/translate). Active: `brand-active`. Disabled: see 4.
+Focus: `focus-visible` only, 2px `focus` ring with 2px offset in the underlying surface colour; never `outline-none` without this ring. On chrome (`offset="chrome"`, `FOCUS_RING.chrome`): `chrome-accent` ring, offset `chrome`. Hover: one colour step (never scale/translate). Active: `brand-active`. Disabled: see 4.
 
 Buttons (`ui/button.tsx`: `Button` for `<button>`, `buttonClasses` for links that look like buttons; one definition of height 44, radius, focus ring and the variants below, so no component copies the class strings; `offset` names the surface the ring offset matches). 14/20, 500, `px-4`, `rounded-control`, label is a verb describing the result: "Save widget settings", not "Submit":
 - Primary: `brand` fill, `brand-on` text. Link CTAs (`<a>`) look identical.
@@ -287,7 +287,7 @@ Settings tab strip (SectionTabs, shared with the Knowledge tabs; see 6): Bot (/s
 5. Logo: the mark is unchanged (`#E879F9`/`#38BDF8`). Asset requirement: a variant for light backgrounds (same shapes; mark colours darkened until each part reaches 3:1 on `canvas` and `surface`, wordmark in `fg`), selected by scheme in marketing header, auth and docs; the dashboard sidebar and top bar are always dark chrome and use the original mark (8.03 / 9.22). Not drawn yet.
 6. Targets: 44px minimum everywhere, including the dashboard; density comes from 14px type and spacing, not from smaller controls.
 7. Typeface: keep the bundled Geist Sans + Geist Mono for site, auth, dashboard and docs; the widget uses the system font stack (section 1).
-8. 2026-10-17 chrome is dark in the light scheme: dashboard sidebar and top bar are one dark set (`chrome`, 4.2) in both schemes; in dark the working area is lifted one step above it (canvas, surface, surface-alt, line, line-strong, fg-faint; section 4) and the dark `*-subtle` fills sit above `surface`. Supersedes "the sidebar follows the scheme".
+8. 2026-10-16 chrome is dark in the light scheme: dashboard sidebar and top bar are one dark set (`chrome`, 4.2) in both schemes; in dark the working area is lifted one step above it (canvas, surface, surface-alt, line, line-strong, fg-faint; section 4) and the dark `*-subtle` fills sit above `surface`. Supersedes "the sidebar follows the scheme".
 
 ## 11. Known product-wide fixes (token-level, for implementers)
 

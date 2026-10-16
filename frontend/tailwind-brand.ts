@@ -56,7 +56,6 @@ const SCHEME_COLORS = {
     info: "#0369A1",
     "info-subtle": "#F0F9FF",
     scrim: "#0A0A0F",
-    ...CHROME_COLORS,
   },
   dark: {
     canvas: "#1A1A26",
@@ -84,7 +83,6 @@ const SCHEME_COLORS = {
     info: "#38BDF8",
     "info-subtle": "#183246",
     scrim: "#0A0A0F",
-    ...CHROME_COLORS,
   },
 } as const;
 
@@ -139,7 +137,9 @@ function schemeVariables(scheme: Scheme): Record<string, string> {
   return variables;
 }
 
-const colorTokens = Object.keys(SCHEME_COLORS.light).filter((token) => token !== "scrim");
+const colorTokens = [...Object.keys(SCHEME_COLORS.light), ...Object.keys(CHROME_COLORS)].filter(
+  (token) => token !== "scrim",
+);
 
 const brandColors = {
   ...Object.fromEntries(
@@ -156,6 +156,16 @@ export function brandTokensPlugin(schemes: readonly Scheme[]) {
       [`@media (min-width: ${theme("screens.md")})`]: {
         ".text-display": { fontSize: "2.25rem", lineHeight: "2.75rem" },
       },
+    });
+  });
+}
+
+export function chromeTokensPlugin() {
+  return plugin(({ addBase }) => {
+    addBase({
+      ":root": Object.fromEntries(
+        Object.entries(CHROME_COLORS).map(([token, hex]) => [`--c-${token}`, hexToChannels(hex).join(" ")]),
+      ),
     });
   });
 }
@@ -178,6 +188,7 @@ export const brandThemeExtend = {
   boxShadow: {
     pop: "var(--shadow-pop)",
     overlay: "var(--shadow-overlay)",
+    "chrome-selected": "inset 2px 0 0 rgb(var(--c-chrome-accent))",
   },
 } satisfies NonNullable<Config["theme"]>;
 

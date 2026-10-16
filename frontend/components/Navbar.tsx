@@ -5,16 +5,11 @@ import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { api, clearSession } from "@/lib/api";
 import { LogoMark } from "@/components/Logo";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/components/ui/utils";
+import { Button, FOCUS_RING } from "@/components/ui/button";
 import { useAuthUser } from "@/hooks/useApi";
 
-const CHROME_FOCUS_RING =
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-accent focus-visible:ring-offset-2 focus-visible:ring-offset-chrome";
-const LOGOUT_CLASSES = cn(
-  "border-chrome-line-strong bg-transparent text-chrome-fg hover:bg-chrome-hover active:bg-chrome-hover",
-  CHROME_FOCUS_RING,
-);
+const LOGOUT_CLASSES =
+  "border-chrome-line-strong bg-transparent text-chrome-fg hover:bg-chrome-hover active:bg-chrome-hover";
 
 export function Navbar({
   initialEmail = null,
@@ -37,7 +32,7 @@ export function Navbar({
       <Link
         href="/dashboard"
         aria-label="Chat9 home"
-        className={`flex h-11 items-center gap-2 rounded-control ${CHROME_FOCUS_RING}`}
+        className={`flex h-11 items-center gap-2 rounded-control ${FOCUS_RING.chrome}`}
       >
         <LogoMark size={18} tile={false} />
         <span className="text-body font-semibold leading-none text-chrome-fg">Chat9</span>
@@ -48,7 +43,7 @@ export function Navbar({
             {userEmail}
           </span>
         )}
-        <Button variant="secondary" offset="surface" className={LOGOUT_CLASSES} onClick={handleLogout}>
+        <Button variant="secondary" offset="chrome" className={LOGOUT_CLASSES} onClick={handleLogout}>
           <LogOut size={16} aria-hidden="true" />
           Log out
         </Button>

@@ -67,7 +67,7 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
         setError(e instanceof ApiError && e.status === HTTP_CONFLICT ? CONFLICT_MESSAGE : FAILURE_MESSAGE[name]);
       }
       // A failed action can still have changed the chat (another operator took it): refresh either way.
-      await onChanged().catch(() => undefined);
+      await onChanged();
       setBusy(null);
     },
     [onChanged],

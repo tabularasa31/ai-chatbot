@@ -17,7 +17,7 @@ const OPTIONS: Record<Scheme, { label: string; Icon: LucideIcon }> = {
   dark: { label: "Dark", Icon: Moon },
 };
 
-const ARROW_STEP: Record<string, number> = {
+const ARROW_STEP: Partial<Record<string, 1 | -1>> = {
   ArrowRight: 1,
   ArrowDown: 1,
   ArrowLeft: -1,

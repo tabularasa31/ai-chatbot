@@ -8,6 +8,7 @@ import './docs.css';
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {
   return (
     <RootProvider theme={{ defaultTheme: 'light', forcedTheme: 'light' }}>
+      <span hidden data-scheme-forced />
       <DocsLayout
         tree={source.pageTree}
         nav={{

@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, type KeyboardEvent } from "react";
+import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "./utils";
 
-export type SectionTab<T extends string> = { id: T; label: string };
+export type SectionTab<T extends string> = { id: T; label: string; suffix?: ReactNode };
 export type SectionLinkTab<T extends string> = SectionTab<T> & { href: string };
 
 type SectionTabsProps<T extends string> = {
@@ -20,7 +20,7 @@ export function sectionTabId(panelId: string, id: string) {
 }
 
 const TAB_CLASS =
-  "inline-flex h-11 items-center rounded-control px-4 text-ui font-medium " +
+  "inline-flex h-11 items-center gap-2 rounded-control px-4 text-ui font-medium " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 const SELECTED_CLASS = "bg-brand-subtle text-brand";
 const IDLE_CLASS = "text-fg-muted hover:bg-surface-alt active:bg-surface-alt";
@@ -68,6 +68,7 @@ function LinkTabs<T extends string>({
             className={tabClass(selected)}
           >
             {tab.label}
+            {tab.suffix}
           </Link>
         );
       })}
@@ -125,6 +126,7 @@ function ButtonTabs<T extends string>({
             className={tabClass(selected)}
           >
             {tab.label}
+            {tab.suffix}
           </button>
         );
       })}

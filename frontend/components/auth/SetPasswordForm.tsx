@@ -1,139 +1,171 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
-import { AuthCard, AuthCardCentered, authStyles, validationHandlers } from "./AuthCard";
+import { AuthCard, AuthHeading, AuthSubmit } from "./AuthCard";
+import { AuthField } from "./AuthField";
+import {
+  PASSWORD_HELPER,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_RULE_ERROR,
+  applyFieldErrors,
+  formErrorMessage,
+  hasErrors,
+  isApiStatus,
+  newPasswordError,
+  type FieldErrors,
+} from "./auth-rules";
+import { fullWidthLinkButtonClasses } from "./link-classes";
+import { LoadError } from "@/components/ui/load-error";
 
-/**
- * Shared by /reset-password and /accept-invite: same token, same validation,
- * same API call and redirect — only copy (title, labels, fallback error) differs.
- */
-export function SetPasswordForm({
-  invalidTokenTitle,
-  invalidTokenBody,
-  heading,
-  subtext,
-  passwordLabel,
-  submitLabel,
-  loadingLabel,
-  successTitle,
-  fallbackError,
-  footer,
-}: {
-  invalidTokenTitle: string;
-  invalidTokenBody: ReactNode;
+const REDIRECT_DELAY_MS = 2000;
+const NO_ERRORS: FieldErrors<"password" | "confirm"> = { password: null, confirm: null };
+
+type View = "form" | "invalid" | "success";
+
+type SetPasswordCopy = {
   heading: string;
-  subtext: ReactNode;
+  invalidTitle: string;
+  invalidBody: string;
   passwordLabel: string;
+  emptyPasswordMessage: string;
   submitLabel: string;
   loadingLabel: string;
   successTitle: string;
-  fallbackError: string;
-  footer?: ReactNode;
-}) {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const token = searchParams.get("token");
+  footer: ReactNode;
+};
 
+function InvalidLink({
+  copy,
+  moveFocus,
+}: {
+  copy: Pick<SetPasswordCopy, "invalidTitle" | "invalidBody" | "footer">;
+  moveFocus: boolean;
+}) {
+  return (
+    <AuthCard>
+      <AuthHeading moveFocus={moveFocus}>{copy.invalidTitle}</AuthHeading>
+      <p className="mb-6 text-body text-fg-muted">{copy.invalidBody}</p>
+      <Link href="/forgot-password" className={fullWidthLinkButtonClasses}>
+        Request a new link
+      </Link>
+      {copy.footer}
+    </AuthCard>
+  );
+}
+
+function PasswordEntry({ token, copy }: { token: string; copy: SetPasswordCopy }) {
+  const router = useRouter();
+  const [view, setView] = useState<View>("form");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
+  const [errors, setErrors] = useState(NO_ERRORS);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  if (!token) {
-    return (
-      <AuthCardCentered>
-        <p className={`mb-4 ${authStyles.error}`}>{invalidTokenTitle}</p>
-        {invalidTokenBody}
-      </AuthCardCentered>
-    );
-  }
+  useEffect(() => {
+    if (view !== "success") return;
+    const timer = setTimeout(() => router.push("/login"), REDIRECT_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [view, router]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
+    if (submitting) return;
+    setFormError(null);
+    const passwordProblem = newPasswordError(password, copy.emptyPasswordMessage);
+    const next = {
+      password: passwordProblem,
+      confirm: !confirm
+        ? "Repeat your new password."
+        : !passwordProblem && confirm !== password
+          ? "Passwords don't match."
+          : null,
+    };
+    applyFieldErrors(setErrors, next);
+    if (hasErrors(next)) return;
 
-    if (password !== confirm) {
-      setError("Passwords do not match");
-      return;
-    }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters");
-      return;
-    }
-
-    setLoading(true);
+    setSubmitting(true);
     try {
       await api.auth.resetPassword(token, password);
-      setSuccess(true);
-      setTimeout(() => router.push("/login"), 2000);
+      setView("success");
     } catch (err) {
-      const msg = (err as Error)?.message || fallbackError;
-      setError(typeof msg === "string" ? msg : "Something went wrong");
+      if (isApiStatus(err, 400)) {
+        setView("invalid");
+      } else if (isApiStatus(err, 422)) {
+        applyFieldErrors(setErrors, { password: PASSWORD_RULE_ERROR, confirm: null });
+      } else {
+        setFormError(formErrorMessage(err));
+      }
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
-  };
+  }
 
-  if (success) {
+  if (view === "success") {
     return (
-      <AuthCardCentered>
-        <h1 className={`${authStyles.headingSm} text-[#4ADE80]`}>{successTitle}</h1>
-        <p className="text-[#FAF5FF]/80">Redirecting to sign in...</p>
-      </AuthCardCentered>
+      <AuthCard>
+        <AuthHeading moveFocus>{copy.successTitle}</AuthHeading>
+        <p className="mb-6 text-body text-fg-muted">Taking you to sign in…</p>
+        <Link href="/login" className={fullWidthLinkButtonClasses}>
+          Sign in
+        </Link>
+      </AuthCard>
     );
   }
+
+  if (view === "invalid") return <InvalidLink copy={copy} moveFocus />;
 
   return (
     <AuthCard>
-      <h1 className={authStyles.headingSm}>{heading}</h1>
-      <p className={authStyles.subtext}>{subtext}</p>
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="password" className={authStyles.label}>
-            {passwordLabel}
-          </label>
-          <input
-            id="password"
-            type="password"
-            placeholder="Min. 8 characters"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onInvalid={validationHandlers.required.onInvalid}
-            onInput={validationHandlers.required.onInput}
-            required
-            className={authStyles.input}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="confirm" className={authStyles.label}>
-            Confirm password
-          </label>
-          <input
-            id="confirm"
-            type="password"
-            placeholder="Repeat password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            onInvalid={validationHandlers.required.onInvalid}
-            onInput={validationHandlers.required.onInput}
-            required
-            className={authStyles.input}
-          />
-        </div>
-
-        {error && <div className={authStyles.error}>{error}</div>}
-
-        <button type="submit" disabled={loading} className={authStyles.button}>
-          {loading ? loadingLabel : submitLabel}
-        </button>
+      <AuthHeading>{copy.heading}</AuthHeading>
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
+        <AuthField
+          id="password"
+          label={copy.passwordLabel}
+          type="password"
+          autoComplete="new-password"
+          maxLength={PASSWORD_MAX_LENGTH}
+          required
+          readOnly={submitting}
+          value={password}
+          helper={PASSWORD_HELPER}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setErrors((prev) => ({ ...prev, password: null }));
+          }}
+          error={errors.password}
+        />
+        <AuthField
+          id="confirm"
+          label="Confirm password"
+          type="password"
+          autoComplete="new-password"
+          maxLength={PASSWORD_MAX_LENGTH}
+          required
+          readOnly={submitting}
+          value={confirm}
+          onChange={(e) => {
+            setConfirm(e.target.value);
+            setErrors((prev) => ({ ...prev, confirm: null }));
+          }}
+          error={errors.confirm}
+        />
+        {formError && <LoadError message={formError} />}
+        <AuthSubmit submitting={submitting} label={copy.submitLabel} loadingLabel={copy.loadingLabel} />
       </form>
-
-      {footer}
+      {copy.footer}
     </AuthCard>
   );
+}
+
+/**
+ * Shared by /reset-password and /accept-invite: same token, same endpoint and
+ * validation — only copy differs.
+ */
+export function SetPasswordForm(copy: SetPasswordCopy) {
+  const token = useSearchParams().get("token");
+  return token ? <PasswordEntry token={token} copy={copy} /> : <InvalidLink copy={copy} moveFocus={false} />;
 }

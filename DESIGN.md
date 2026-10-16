@@ -1,11 +1,11 @@
-# DESIGN.md — Chat9 design system (v2, 2026-10-16, Customer decisions applied)
+# DESIGN.md — Chat9 design system (v2, 2026-10-16)
 
 Scope: marketing site + blog, auth pages, tenant dashboard, embeddable chat widget, client docs (fumadocs).
 Governed by the Design Code of Conduct. Every screen uses only the values below; no value is invented per screen.
 Status: the repo had no design system (only the `nd-*` dark palette in `frontend/tailwind-brand.ts`, Tailwind slate/violet utilities in the dashboard and widget, a `#F8F9FA` page background, and no light/dark switching anywhere).
 Site, auth, dashboard and docs support two colour schemes (light, dark), chosen as in 4.1. The widget is light only. Tokens below are scheme-independent names; each has a light and a dark value (the widget uses the light value).
 
-Contrast figures were computed by hand with the WCAG 2.x relative-luminance formula. Re-verify with a tool when the tokens are implemented (stage 2).
+Contrast figures were computed by hand with the WCAG 2.x relative-luminance formula. Re-verify with a tool when the tokens are implemented (implementation).
 
 ## 1. Typeface
 
@@ -13,7 +13,7 @@ Contrast figures were computed by hand with the WCAG 2.x relative-luminance form
 - Mono: Geist Mono (already in repo) for code, IDs, keys, embed snippets only. Two families total; nothing else.
 - Widget uses the same stack (one visual language on tenant sites). Chat content arrives in any language, so the system-ui fallback must stay in the stack.
 - Coverage measured with fontTools (2026-10-16) on `frontend/app/fonts`: `GeistVF.woff` has Cyrillic U+0410-044F 64/64, Latin Extended-A 117/127, Greek U+0391-03C9 only 4 of ~57 (effectively none); `GeistMonoVF.woff` has the same profile. Decision (2026-10-16): keep the bundled Geist files, no new dependency (the widget is a separate Vite build, so Inter would add a package there). Greek and any other uncovered script fall back to `system-ui` per character by design; this is accepted.
-- Stage-2 code task (not specified here): apply the font to `body`, remove Arial and the `font-['Inter']` references.
+- Implementation code task (not specified here): apply the font to `body`, remove Arial and the `font-['Inter']` references.
 
 ## 2. Type scale (6 sizes, 3 weights)
 
@@ -130,7 +130,7 @@ Contrast changes made to the existing look:
 
 ## 5. Tailwind mapping
 
-Implementation shape (stage 2): CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (not in the widget build); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). `nd-*` is removed once migrated.
+Implementation shape (implementation): CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (not in the widget build); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). `nd-*` is removed once migrated.
 
 Fumadocs variable -> token: `background`=canvas, `foreground`=fg, `muted`=surface-alt, `muted-foreground`=fg-muted, `card`/`popover`=surface, `border`=line, `primary`=brand, `primary-foreground`=brand-on, `secondary`=surface-alt, `accent`=brand-subtle, `accent-foreground`=fg, `ring`=focus.
 
@@ -235,7 +235,7 @@ Spacing groups: 1-4 daily work | 5-6 setup | 7 staff. Operators (invited colleag
 
 Settings tab strip (shared with the Knowledge tabs: one component, `<a>` per tab, 44px high, selected = `brand` text + 2px `brand` underline, `aria-current="page"`): Bot (/settings) | Widget (/widget-settings) | Team (/settings/members) | Seats (/settings/seats). Every tab keeps its URL, all four pages have h1 "Settings", all four are owner-only; a non-owner opening them by URL gets today's behaviour. Page headings follow the menu labels: Knowledge, Doc gaps, Install widget, Platform metrics ("Per-tenant metrics" inside). "Dashboard" from now on means the whole app, never a page. Docs, FAQ and changelog follow-ups are listed in `nav-proposal.md` section 4.
 
-## 10. Decisions (Customer, 2026-10-16)
+## 10. Decisions (2026-10-16)
 
 1. Colour scheme: System by default plus manual System / Light / Dark switch, remembered in a cookie, one setting for site, auth, dashboard and docs (4.1).
 2. Widget: always light; no dark tokens, no snippet option.

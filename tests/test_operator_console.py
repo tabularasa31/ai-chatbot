@@ -404,6 +404,7 @@ def test_the_thread_spans_the_session_and_signs_operator_turns(
     _say(db_session, second, MessageRole.operator, "Ann here", operator_user_id=colleague.id)
     _say(db_session, second, MessageRole.operator, "Bob was here", operator_label="bob@gone.example")
     _say(db_session, second, MessageRole.operator, "from an unknown mailbox")
+    _say(db_session, second, MessageRole.operator, "Mine", operator_user_id=ws.user_id)
 
     resp = tenant.get(f"/operator/sessions/{session_id}", headers=ws.auth)
 
@@ -414,14 +415,18 @@ def test_the_thread_spans_the_session_and_signs_operator_turns(
     assert body["chat"]["assigned_operator_email"] == "ann@thread.example"
     assert body["ticket"]["ticket_number"] == ticket.ticket_number
     assert body["visitor_email"] == ticket.user_email
-    assert [m["chat_id"] for m in body["messages"]] == [str(first.id)] * 2 + [str(second.id)] * 4
+    assert [m["chat_id"] for m in body["messages"]] == [str(first.id)] * 2 + [str(second.id)] * 5
     assert [m["role"] for m in body["messages"]] == [
-        "user", "assistant", "user", "operator", "operator", "operator"
+        "user", "assistant", "user", "operator", "operator", "operator", "operator"
     ]
     assert [m["author_label"] for m in body["messages"][3:]] == [
         "ann@thread.example",
         "bob@gone.example",
         None,
+        "thread@example.com",
+    ]
+    assert [m["author_id"] for m in body["messages"]] == [
+        None, None, None, str(colleague.id), None, None, str(ws.user_id)
     ]
 
 
@@ -461,6 +466,9 @@ def test_an_author_from_another_tenant_is_not_shown_by_their_current_email(
     for chat, email in ((chat_of_stranger, None), (chat_of_colleague, "ann@scope.example")):
         thread = tenant.get(f"/operator/sessions/{chat.session_id}", headers=ws.auth).json()
         assert [m["author_label"] for m in thread["messages"]] == [email]
+        assert [m["author_id"] for m in thread["messages"]] == [
+            str(colleague.id) if email else None
+        ]
         assert thread["chat"]["assigned_operator_email"] == email
 
 

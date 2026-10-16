@@ -89,6 +89,7 @@ class InboxCounts:
 @dataclass(frozen=True)
 class ThreadMessage:
     message: Message
+    author_id: uuid.UUID | None
     author_label: str | None
 
 
@@ -657,7 +658,7 @@ def load_thread(
     )
 
     rows = (
-        db.query(Message, User.email)
+        db.query(Message, User.id, User.email)
         .outerjoin(
             User, and_(User.id == Message.operator_user_id, User.tenant_id == tenant_id)
         )
@@ -666,8 +667,8 @@ def load_thread(
         .all()
     )
     messages = [
-        ThreadMessage(message=m, author_label=email or m.operator_label)
-        for m, email in rows
+        ThreadMessage(message=m, author_id=author_id, author_label=email or m.operator_label)
+        for m, author_id, email in rows
     ]
 
     emails = _emails_by_user(

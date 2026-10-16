@@ -106,6 +106,7 @@ class ThreadMessageResponse(BaseModel):
     # account exists, the copy kept on the row once it is gone, and nothing
     # for an unattributed reply. Never sent to the visitor.
     author_label: str | None = None
+    author_id: uuid.UUID | None = None
 
 
 class ThreadResponse(BaseModel):

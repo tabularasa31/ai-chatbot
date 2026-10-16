@@ -140,6 +140,7 @@ export type ThreadMessage = {
   content: string;
   created_at: string;
   author_label: string | null;
+  author_id: string | null;
 };
 
 export type Thread = {

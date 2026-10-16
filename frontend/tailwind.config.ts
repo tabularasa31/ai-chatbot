@@ -2,6 +2,8 @@ import type { Config } from "tailwindcss";
 import { createPreset } from "fumadocs-ui/tailwind-plugin";
 import {
   ND_BRAND_COLORS,
+  SYSTEM_MONO,
+  SYSTEM_SANS,
   brandThemeExtend,
   brandTokensPlugin,
   fumadocsPreset,
@@ -26,6 +28,10 @@ const config: Config = {
   theme: {
     extend: {
       ...brandThemeExtend,
+      fontFamily: {
+        sans: ["var(--font-geist-sans)", ...SYSTEM_SANS],
+        mono: ["var(--font-geist-mono)", ...SYSTEM_MONO],
+      },
       colors: {
         ...brandThemeExtend.colors,
         nd: ND_BRAND_COLORS,

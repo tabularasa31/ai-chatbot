@@ -6,6 +6,7 @@ import { clearSession, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 import { buildEmbedSnippet } from "@/lib/widget-embed";
 import { PageLoader } from "@/components/ui/page-loader";
+import { LoadError } from "@/components/ui/load-error";
 import { useClientMe, useActiveBot } from "@/hooks/useApi";
 
 function DashboardContent() {
@@ -14,7 +15,7 @@ function DashboardContent() {
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
 
   const { data: client, error: clientError, isLoading: clientLoading } = useClientMe();
-  const { activeBot: firstActiveBot, isLoading: botsLoading } = useActiveBot({ fallbackToFirst: true });
+  const { activeBot: firstActiveBot, isLoading: botsLoading, error: botsError, mutate: mutateBots } = useActiveBot({ fallbackToFirst: true });
 
   const botPublicId = firstActiveBot?.public_id ?? null;
 
@@ -28,11 +29,7 @@ function DashboardContent() {
     }
   }, [clientError, router]);
 
-  function getEmbedSnippet() {
-    return buildEmbedSnippet({ botId: botPublicId ?? "", configFormat: "inline" });
-  }
-
-  if (clientLoading || botsLoading) {
+  if (clientLoading || (botsLoading && !botsError)) {
     return (
       <PageLoader />
     );
@@ -79,6 +76,7 @@ function DashboardContent() {
         </div>
       )}
 
+      {botPublicId ? (
       <div className="bg-white rounded-xl border border-slate-200 p-6">
         <div className="flex items-start justify-between gap-4 mb-3">
           <div>
@@ -95,7 +93,7 @@ function DashboardContent() {
           </a>
         </div>
         <CodeBlockWithCopy
-          code={getEmbedSnippet()}
+          code={buildEmbedSnippet({ botId: botPublicId, configFormat: "inline" })}
           copyLabel="Copy embed code"
           tone="light"
           preClassName="text-sm mb-3"
@@ -105,6 +103,9 @@ function DashboardContent() {
           <a href="/embed" className="underline hover:text-slate-500">Embed page</a>.
         </p>
       </div>
+      ) : botsError ? (
+        <LoadError message="Couldn't load your bot. Try again." onRetry={() => mutateBots()} />
+      ) : null}
 
     </div>
   );

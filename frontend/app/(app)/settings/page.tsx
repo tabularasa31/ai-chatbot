@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type DisclosureLevel } from "@/lib/api";
 import { useClientMe, useActiveBot, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
 import DeleteWorkspaceCard from "./DeleteWorkspaceCard";
-import { PageLoader } from "@/components/ui/page-loader";
+import { LoadError } from "@/components/ui/load-error";
+import { EmptyState } from "@/components/ui/empty-state";
 
 const DISCLOSURE_OPTIONS: {
   value: DisclosureLevel;
@@ -33,6 +34,22 @@ const DISCLOSURE_OPTIONS: {
 
 const MAX_INSTRUCTIONS_LENGTH = 3000;
 
+function CardFallback({
+  failed,
+  empty = false,
+  what,
+  onRetry,
+}: {
+  failed: boolean;
+  empty?: boolean;
+  what: string;
+  onRetry: () => Promise<unknown>;
+}) {
+  if (failed) return <LoadError message={`Couldn't load ${what}. Try again.`} onRetry={onRetry} />;
+  if (empty) return <EmptyState message="No active bot." />;
+  return <p className="text-sm text-slate-500 animate-pulse">Loading…</p>;
+}
+
 export default function SettingsPage() {
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
   const [supportEmailInput, setSupportEmailInput] = useState("");
@@ -46,36 +63,52 @@ export default function SettingsPage() {
   const [disclosureSaving, setDisclosureSaving] = useState(false);
   const [instructionsSaving, setInstructionsSaving] = useState(false);
   const [instructionsSavedOk, setInstructionsSavedOk] = useState(false);
-  const [error, setError] = useState("");
+  const [supportError, setSupportError] = useState("");
+  const [instructionsError, setInstructionsError] = useState("");
+  const [disclosureError, setDisclosureError] = useState("");
+  const [keyError, setKeyError] = useState("");
+  const [supportReady, setSupportReady] = useState(false);
+  const [instructionsBotId, setInstructionsBotId] = useState<string | null>(null);
+  const [disclosureBotId, setDisclosureBotId] = useState<string | null>(null);
   const [keySavedOk, setKeySavedOk] = useState(false);
   const [supportSavedOk, setSupportSavedOk] = useState(false);
   const [disclosureSavedOk, setDisclosureSavedOk] = useState(false);
 
-  const { data: client, error: clientError, isLoading: clientLoading, mutate: mutateClient } = useClientMe();
-  const { bots, activeBot: defaultBot, isLoading: botsLoading, mutate: mutateBots } = useActiveBot();
-  const { data: support, isLoading: supportLoading, mutate: mutateSupport } = useSupportSettings();
-
-  const { data: disclosure, isLoading: disclosureLoading, mutate: mutateDisclosure } = useBotDisclosure(defaultBot?.id);
-
-  const initialized = useRef(false);
+  const { data: client, error: clientError, mutate: mutateClient } = useClientMe();
+  const { bots, activeBot: defaultBot, error: botsError, mutate: mutateBots } = useActiveBot();
+  const { data: support, error: supportLoadError, mutate: mutateSupport } = useSupportSettings();
+  const { data: disclosure, error: disclosureLoadError, mutate: mutateDisclosure } = useBotDisclosure(defaultBot?.id);
 
   useEffect(() => {
-    if (initialized.current) return;
-    if (!client || !support || !defaultBot || !disclosure) return;
-    initialized.current = true;
+    if (supportReady || !support) return;
     setSupportEmailInput(support.l2_email ?? "");
     setEscalationLanguageInput(support.escalation_language ?? "");
+    setSupportReady(true);
+  }, [supportReady, support]);
+
+  useEffect(() => {
+    if (!defaultBot || instructionsBotId === defaultBot.id) return;
     setCustomInstructionsInput(defaultBot.custom_instructions ?? "");
     setOwnPromptOnly(defaultBot.preset === null);
     setPresetText(defaultBot.preset_text);
-    setLevel(disclosure.level);
-  }, [client, support, defaultBot, disclosure]);
+    setInstructionsBotId(defaultBot.id);
+  }, [instructionsBotId, defaultBot]);
 
-  const loading = clientLoading || botsLoading || supportLoading || disclosureLoading;
+  useEffect(() => {
+    if (!defaultBot || !disclosure || disclosureBotId === defaultBot.id) return;
+    setLevel(disclosure.level);
+    setDisclosureBotId(defaultBot.id);
+  }, [disclosureBotId, defaultBot, disclosure]);
+
+  const instructionsReady = Boolean(defaultBot) && instructionsBotId === defaultBot?.id;
+  const disclosureReady = Boolean(defaultBot) && disclosureBotId === defaultBot?.id;
+  const botsFailed = !bots && Boolean(botsError);
+  const noActiveBot = bots !== undefined && !defaultBot;
+  const retryBots = () => mutateBots();
 
   async function saveOwnInstructions() {
     if (!defaultBot) return;
-    setError("");
+    setInstructionsError("");
     setInstructionsSaving(true);
     setInstructionsSavedOk(false);
     try {
@@ -90,18 +123,18 @@ export default function SettingsPage() {
       setInstructionsSavedOk(true);
       setTimeout(() => setInstructionsSavedOk(false), 2500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setInstructionsError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setInstructionsSaving(false);
     }
   }
 
   async function saveOpenaiKey() {
-    setError("");
+    setKeyError("");
     const key = openaiKeyInput.trim();
     if (!key) return;
     if (!key.startsWith("sk-")) {
-      setError("OpenAI API key must start with 'sk-'");
+      setKeyError("OpenAI API key must start with 'sk-'");
       return;
     }
     setKeySaving(true);
@@ -112,28 +145,28 @@ export default function SettingsPage() {
       setKeySavedOk(true);
       setTimeout(() => setKeySavedOk(false), 2500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setKeyError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setKeySaving(false);
     }
   }
 
   async function removeOpenaiKey() {
-    setError("");
+    setKeyError("");
     setKeySaving(true);
     try {
       await api.clients.update({ openai_api_key: null });
       await mutateClient();
       setOpenaiKeyInput("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to remove");
+      setKeyError(err instanceof Error ? err.message : "Failed to remove");
     } finally {
       setKeySaving(false);
     }
   }
 
   async function saveSupportEmail() {
-    setError("");
+    setSupportError("");
     setSupportSaving(true);
     setSupportSavedOk(false);
     try {
@@ -147,14 +180,14 @@ export default function SettingsPage() {
       setSupportSavedOk(true);
       setTimeout(() => setSupportSavedOk(false), 2500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setSupportError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setSupportSaving(false);
     }
   }
 
   async function clearSupportEmail() {
-    setError("");
+    setSupportError("");
     setSupportSaving(true);
     setSupportSavedOk(false);
     try {
@@ -168,7 +201,7 @@ export default function SettingsPage() {
       setSupportSavedOk(true);
       setTimeout(() => setSupportSavedOk(false), 2500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to clear");
+      setSupportError(err instanceof Error ? err.message : "Failed to clear");
     } finally {
       setSupportSaving(false);
     }
@@ -176,7 +209,7 @@ export default function SettingsPage() {
 
   async function saveDisclosure() {
     if (!defaultBot) return;
-    setError("");
+    setDisclosureError("");
     setDisclosureSaving(true);
     setDisclosureSavedOk(false);
     try {
@@ -185,16 +218,10 @@ export default function SettingsPage() {
       setDisclosureSavedOk(true);
       setTimeout(() => setDisclosureSavedOk(false), 2500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setDisclosureError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setDisclosureSaving(false);
     }
-  }
-
-  if (loading) {
-    return (
-      <PageLoader />
-    );
   }
 
   return (
@@ -206,12 +233,6 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {(error || clientError) && (
-        <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
-          {error || (clientError instanceof Error ? clientError.message : "Failed to load settings")}
-        </div>
-      )}
-
       {/* Support inbox */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         <div>
@@ -221,6 +242,8 @@ export default function SettingsPage() {
           </p>
         </div>
 
+        {supportReady ? (
+        <>
         {supportSavedOk && (
           <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             Support inbox saved.
@@ -252,6 +275,7 @@ export default function SettingsPage() {
           <p className="text-xs text-slate-500">
             Used for escalation-only chat copy. Leave empty to fall back to English.
           </p>
+          {supportError && <p role="alert" className="text-red-600 text-sm">{supportError}</p>}
           <div className="flex gap-2">
             <button
               type="button"
@@ -271,6 +295,10 @@ export default function SettingsPage() {
             </button>
           </div>
         </div>
+        </>
+        ) : (
+          <CardFallback failed={Boolean(supportLoadError)} what="support inbox settings" onRetry={() => mutateSupport()} />
+        )}
       </div>
 
       {/* Agent instructions */}
@@ -282,6 +310,8 @@ export default function SettingsPage() {
           </p>
         </div>
 
+        {instructionsReady ? (
+        <>
         {instructionsSavedOk && (
           <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             Saved.
@@ -357,6 +387,7 @@ export default function SettingsPage() {
               </div>
             )}
 
+            {instructionsError && <p role="alert" className="text-red-600 text-sm">{instructionsError}</p>}
             <button
               type="button"
               onClick={saveOwnInstructions}
@@ -370,6 +401,10 @@ export default function SettingsPage() {
               {instructionsSaving ? "Saving…" : "Save instructions"}
             </button>
           </>
+        </>
+        ) : (
+          <CardFallback failed={botsFailed} empty={noActiveBot} what="agent instructions" onRetry={retryBots} />
+        )}
       </div>
 
       {/* Response controls */}
@@ -381,6 +416,8 @@ export default function SettingsPage() {
           </p>
         </div>
 
+        {disclosureReady ? (
+        <>
         {disclosureSavedOk && (
           <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             Response controls saved.
@@ -415,6 +452,7 @@ export default function SettingsPage() {
           ))}
         </fieldset>
 
+        {disclosureError && <p role="alert" className="text-red-600 text-sm">{disclosureError}</p>}
         <button
           type="button"
           onClick={saveDisclosure}
@@ -423,6 +461,10 @@ export default function SettingsPage() {
         >
           {disclosureSaving ? "Saving…" : "Save response controls"}
         </button>
+        </>
+        ) : (
+          <CardFallback failed={botsFailed || Boolean(disclosureLoadError)} empty={noActiveBot} what="response controls" onRetry={() => Promise.all([mutateBots(), mutateDisclosure()])} />
+        )}
       </div>
 
       {/* AI / Providers */}
@@ -442,14 +484,16 @@ export default function SettingsPage() {
           </p>
         </div>
 
-        {client?.has_openai_key && (
+        {client ? (
+        <>
+        {client.has_openai_key && (
           <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
             API key configured
           </div>
         )}
 
-        {!client?.has_openai_key && (
+        {!client.has_openai_key && (
           <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
             <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
             No API key — chat and embeddings are disabled
@@ -472,7 +516,7 @@ export default function SettingsPage() {
             onKeyDown={(e) => e.key === "Enter" && saveOpenaiKey()}
             className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:border-slate-400 placeholder:text-slate-400"
           />
-          {error && <p className="text-red-600 text-sm">{error}</p>}
+          {keyError && <p role="alert" className="text-red-600 text-sm">{keyError}</p>}
           <div className="flex gap-2">
             <button
               type="button"
@@ -480,9 +524,9 @@ export default function SettingsPage() {
               disabled={keySaving || !openaiKeyInput.trim()}
               className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg disabled:opacity-40 transition-colors"
             >
-              {keySaving ? "Saving…" : client?.has_openai_key ? "Update key" : "Save key"}
+              {keySaving ? "Saving…" : client.has_openai_key ? "Update key" : "Save key"}
             </button>
-            {client?.has_openai_key && (
+            {client.has_openai_key && (
               <button
                 type="button"
                 onClick={removeOpenaiKey}
@@ -494,6 +538,10 @@ export default function SettingsPage() {
             )}
           </div>
         </div>
+        </>
+        ) : (
+          <CardFallback failed={Boolean(clientError)} what="provider settings" onRetry={() => mutateClient()} />
+        )}
       </div>
 
       {/* Danger zone. Owner-gated here as well as in the sidebar, because a

@@ -6,6 +6,7 @@ import { mutate as mutateGlobal } from "swr";
 import { api, type HandoffState, type InboxRow, type Thread, type ThreadMessage } from "@/lib/api";
 import { useAuthUser, useClientMe, useInbox, useThread } from "@/hooks/useApi";
 import { parseApiDate, formatDateTime, formatTime } from "@/lib/format";
+import { LoadError } from "@/components/ui/load-error";
 
 type Scope = "attention" | "all";
 
@@ -421,7 +422,7 @@ function InboxPageContent() {
 
   const { data: me } = useClientMe();
   const { data: authUser } = useAuthUser();
-  const { data: inbox, error, isLoading, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
+  const { data: inbox, error, isCurrent, mutate } = useInbox(scope, query, INBOX_REFRESH_MS);
   const canOperate = me ? Boolean(me.has_seat) : undefined;
 
   const select = useCallback(
@@ -463,11 +464,7 @@ function InboxPageContent() {
         </div>
       </div>
 
-      {error && (
-        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
-          {error instanceof Error ? error.message : "Failed to load the inbox"}
-        </div>
-      )}
+      {error && <LoadError message="Couldn't load the inbox. Try again." onRetry={refresh} />}
 
       <div className="flex flex-col md:flex-row gap-4">
         <div className="w-full md:w-1/3 bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -481,13 +478,13 @@ function InboxPageContent() {
               placeholder="Search by name, e-mail or ticket number"
               className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300"
             />
-            {inbox && (search.trim() || query) && (isLoading || search.trim() !== query) && (
+            {inbox && (search.trim() || query) && (!isCurrent || search.trim() !== query) && (
               <p className="px-1 pt-1 text-xs text-slate-400">Searching…</p>
             )}
           </div>
           <div className="max-h-[calc(100vh-252px)] min-h-[368px] overflow-y-auto">
-            {isLoading && !inbox ? (
-              <div className="p-4 text-slate-500 text-sm">Loading…</div>
+            {!isCurrent && (error || rows.length === 0) ? (
+              error ? null : <div className="p-4 text-slate-500 text-sm">Loading…</div>
             ) : rows.length === 0 ? (
               <div className="p-4 text-slate-500 text-sm">
                 {query

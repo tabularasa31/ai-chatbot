@@ -6,6 +6,7 @@ import { clearSession, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 import { buildEmbedSnippet } from "@/lib/widget-embed";
 import { PageLoader } from "@/components/ui/page-loader";
+import { LoadError } from "@/components/ui/load-error";
 import { useClientMe, useActiveBot } from "@/hooks/useApi";
 
 function DashboardContent() {
@@ -13,8 +14,8 @@ function DashboardContent() {
   const router = useRouter();
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
 
-  const { data: client, error: clientError, isLoading: clientLoading } = useClientMe();
-  const { activeBot: firstActiveBot, isLoading: botsLoading } = useActiveBot({ fallbackToFirst: true });
+  const { data: client, error: clientError, isLoading: clientLoading, mutate: mutateClient } = useClientMe();
+  const { activeBot: firstActiveBot, isLoading: botsLoading, error: botsError, mutate: mutateBots } = useActiveBot({ fallbackToFirst: true });
 
   const botPublicId = firstActiveBot?.public_id ?? null;
 
@@ -28,11 +29,7 @@ function DashboardContent() {
     }
   }, [clientError, router]);
 
-  function getEmbedSnippet() {
-    return buildEmbedSnippet({ botId: botPublicId ?? "", configFormat: "inline" });
-  }
-
-  if (clientLoading || botsLoading) {
+  if (clientLoading || (botsLoading && !botsError)) {
     return (
       <PageLoader />
     );
@@ -40,9 +37,7 @@ function DashboardContent() {
 
   if (clientError && !(clientError instanceof Error && clientError.message.toLowerCase().includes("email not verified"))) {
     return (
-      <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
-        {clientError instanceof Error ? clientError.message : "Failed to load"}
-      </div>
+      <LoadError message="Couldn't load your account. Try again." onRetry={() => mutateClient()} />
     );
   }
 
@@ -57,8 +52,8 @@ function DashboardContent() {
         <h1 className="text-2xl font-semibold text-slate-800">Dashboard</h1>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-6">
-        {botPublicId && (
+      {botPublicId && (
+        <div className="bg-white rounded-xl border border-slate-200 p-6">
           <div className="mb-6">
             <h2 className="text-base font-semibold text-slate-800 mb-1">Your Bot ID</h2>
             <p className="mb-2 text-sm text-slate-500">
@@ -68,8 +63,8 @@ function DashboardContent() {
               {botPublicId}
             </code>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {!client?.has_openai_key && (
         <div className="bg-amber-50 border border-amber-100 text-amber-700 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
@@ -79,6 +74,7 @@ function DashboardContent() {
         </div>
       )}
 
+      {botPublicId ? (
       <div className="bg-white rounded-xl border border-slate-200 p-6">
         <div className="flex items-start justify-between gap-4 mb-3">
           <div>
@@ -95,7 +91,7 @@ function DashboardContent() {
           </a>
         </div>
         <CodeBlockWithCopy
-          code={getEmbedSnippet()}
+          code={buildEmbedSnippet({ botId: botPublicId, configFormat: "inline" })}
           copyLabel="Copy embed code"
           tone="light"
           preClassName="text-sm mb-3"
@@ -105,6 +101,9 @@ function DashboardContent() {
           <a href="/embed" className="underline hover:text-slate-500">Embed page</a>.
         </p>
       </div>
+      ) : botsError ? (
+        <LoadError message="Couldn't load your bot. Try again." onRetry={() => mutateBots()} />
+      ) : null}
 
     </div>
   );

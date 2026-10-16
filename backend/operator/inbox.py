@@ -247,10 +247,16 @@ def _tickets_by_session(
     return {session_id: ticket for ticket, session_id in rows}
 
 
-def _emails_by_user(db: Session, user_ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
+def _emails_by_user(
+    db: Session, *, tenant_id: uuid.UUID, user_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, str]:
     if not user_ids:
         return {}
-    return dict(db.query(User.id, User.email).filter(User.id.in_(user_ids)).all())
+    return dict(
+        db.query(User.id, User.email)
+        .filter(User.tenant_id == tenant_id, User.id.in_(user_ids))
+        .all()
+    )
 
 
 def _last_messages(
@@ -569,7 +575,8 @@ def list_inbox(
     last = _last_messages(db, [s.chat.id for v in visitors for s in v.sessions])
     emails = _emails_by_user(
         db,
-        {v.current.assigned_operator_id for v in visitors if v.current.assigned_operator_id}
+        tenant_id=tenant_id,
+        user_ids={v.current.assigned_operator_id for v in visitors if v.current.assigned_operator_id}
         | {m.operator_user_id for m, _ in last.values() if m.operator_user_id},
     )
 
@@ -651,7 +658,9 @@ def load_thread(
 
     rows = (
         db.query(Message, User.email)
-        .outerjoin(User, User.id == Message.operator_user_id)
+        .outerjoin(
+            User, and_(User.id == Message.operator_user_id, User.tenant_id == tenant_id)
+        )
         .filter(Message.chat_id.in_(chat_ids))
         .order_by(Message.created_at.asc(), Message.id.asc())
         .all()
@@ -662,7 +671,9 @@ def load_thread(
     ]
 
     emails = _emails_by_user(
-        db, {current.assigned_operator_id} if current.assigned_operator_id else set()
+        db,
+        tenant_id=tenant_id,
+        user_ids={current.assigned_operator_id} if current.assigned_operator_id else set(),
     )
     return Thread(
         session_id=session_id,

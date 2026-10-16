@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { AuthFooter, AuthSkeleton, StandaloneLink } from "@/components/auth/AuthCard";
 import { SetPasswordForm } from "@/components/auth/SetPasswordForm";
 
-export const metadata: Metadata = { title: "Set a new password - Chat9" };
+export const metadata: Metadata = { title: "Choose a new password - Chat9" };
 
 export default function ResetPasswordPage() {
   return (

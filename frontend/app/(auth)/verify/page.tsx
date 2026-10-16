@@ -56,7 +56,7 @@ function TokenVerification({ token }: { token: string }) {
     return (
       <AuthCard centered role="status">
         <AuthHeading moveFocus={state.retried}>Verifying your email…</AuthHeading>
-        <Loader2 size={16} aria-busy="true" aria-hidden="true" className="mx-auto animate-spin text-fg-muted" />
+        <Loader2 size={16} aria-hidden="true" className="mx-auto animate-spin text-fg-muted" />
       </AuthCard>
     );
   }
@@ -65,7 +65,7 @@ function TokenVerification({ token }: { token: string }) {
     return (
       <AuthCard centered>
         <AuthHeading moveFocus>Email verified</AuthHeading>
-        <p className="text-body text-fg-muted">Taking you to your dashboard…</p>
+        <p className="text-body text-fg">Taking you to your dashboard…</p>
       </AuthCard>
     );
   }

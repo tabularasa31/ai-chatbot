@@ -75,6 +75,9 @@ export default function SignupPage() {
         <Button variant="secondary" offset="surface" className="w-full" onClick={editEmail}>
           Use a different email
         </Button>
+        <AuthFooter className="justify-center">
+          <StandaloneLink href="/login">Back to sign in</StandaloneLink>
+        </AuthFooter>
       </AuthCard>
     );
   }

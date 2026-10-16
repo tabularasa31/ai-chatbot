@@ -3,13 +3,13 @@ title: Dashboard Features
 description: What each section of the Chat9 dashboard does — Knowledge, Doc gaps, Inbox, and more.
 ---
 
-The app uses a **left sidebar** for navigation (**Inbox**, **Doc gaps**, **Knowledge**, **Analytics**, **Install widget**, **Settings**, and **Platform metrics** for platform admins). The top bar shows the Chat9 brand, your email, and **Log out**.
+The app uses a **left sidebar** for navigation (**Inbox**, **Doc gaps**, **Knowledge**, **Analytics**, **Install widget**, **Settings** (owners), and **Platform metrics** for platform admins). The top bar shows the Chat9 brand, your email, and **Log out**.
 
 ## Install widget (`/dashboard`)
 
 - **Your Bot ID** — your bot's `public_id`, used in the widget embed snippet (the value of `data-bot-id`). Safe to expose in page HTML.
 - **Embed code** — HTML snippet that loads the widget loader (`widget.getchat9.live/widget.js`) with your bot's `public_id` via `data-bot-id`, then calls `Chat9Widget.start()` to mount the chat. Copy the block; code areas use an inline **copy** icon.
-- If the **OpenAI API key** is not set, an amber banner on every page links to **Settings → Bot** to configure it.
+- If the **OpenAI API key** is not set, a red banner at the top of every page (with an Add key button for owners) points to Settings → Bot to configure it.
 
 ## Knowledge (`/knowledge`)
 
@@ -68,7 +68,7 @@ Doc gaps is the operator backlog for things your documentation may be missing an
 
 - **Response detail level** — Detailed / Standard / Corporate. Controls how much technical depth the bot includes in answers. This setting also lives on this page; see the description of each level when selecting it.
 
-- **Escalation settings** — support email address that receives L2 escalation tickets, and an optional escalation language override (pins the language of tenant-side ticket artifacts independently of what language end users write in — see [Language Support](/docs/language) for the full picture).
+- **Support inbox** — support email address that receives L2 escalation tickets, and an optional escalation language override (pins the language of tenant-side ticket artifacts independently of what language end users write in — see [Language Support](/docs/language) for the full picture).
 
 ## Inbox (`/inbox`)
 
@@ -116,7 +116,7 @@ A ticket is created automatically whenever a conversation is escalated. Tickets 
 **What happens when a ticket is created:**
 
 - The visitor's chat stays open — they can keep talking to the bot while your team works the ticket. Nothing closes it, not even the visitor saying they need nothing further; the conversation only rolls over into a new one after a week of silence.
-- An email notification is sent to the support email configured in Settings. When the workspace holds a seat, the e-mail also links straight to the conversation in the Inbox, and replying to it from a seat holder's mailbox lands the reply in the thread.
+- An email notification is sent to the support email configured in Settings → Bot. When the workspace holds a seat, the e-mail also links straight to the conversation in the Inbox, and replying to it from a seat holder's mailbox lands the reply in the thread.
 - The conversation appears under **Inbox → Needs attention** with a sequential ticket number (e.g. `ESC-42`).
 - Tickets whose conversation has gone quiet are closed automatically. That only clears the queue; it does not mean anyone answered.
 

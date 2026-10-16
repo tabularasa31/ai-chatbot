@@ -5,7 +5,7 @@ description: What's changed in Chat9, most recent first.
 
 ## 2026-10-16 — New dashboard menu
 
-The dashboard sidebar is regrouped and lighter, and every page now uses the same layout.
+The dashboard sidebar is regrouped into fewer items.
 
 - **Install widget** replaces **Dashboard** and **Embed**: your bot ID, embed snippet and options are on one page.
 - **Settings** is one menu item with four tabs: **Bot**, **Widget**, **Team** and **Seats**. These used to be separate items.
@@ -13,7 +13,7 @@ The dashboard sidebar is regrouped and lighter, and every page now uses the same
 - **Knowledge** is the new name of **Knowledge Hub**.
 - **Platform metrics** is the new name of **Admin** (visible to platform admins only).
 
-Notices are now ranked by urgency. A problem with your OpenAI key is shown on every page with a button that opens **Settings → Bot**. Product announcements appear as a quiet note on **Install widget**.
+Notices are now ranked by urgency. An OpenAI key problem (missing, rejected or out of credits) is shown at the top of every page; for owners the button goes to Settings → Bot or to your OpenAI billing. Product announcements appear as a quiet note on **Install widget**.
 
 URLs are unchanged, and `/embed` now redirects to the **Install widget** page.
 
@@ -47,7 +47,7 @@ See [Dashboard features](/docs/dashboard-features) for the Settings and Inbox pa
 
 You can now verify that a `user_id` passed to the widget really belongs to the visitor.
 
-**What's new:** generate a signing key in **Dashboard → Widget settings → Widget identity verification**. Your server computes a `user_hash` from the key and the visitor's `user_id`, and passes it alongside `user_id` in `userHints`.
+**What's new:** generate a signing key in **Dashboard → Widget settings → Widget identity verification** (now Settings → Widget). Your server computes a `user_hash` from the key and the visitor's `user_id`, and passes it alongside `user_id` in `userHints`.
 
 **Why you might want it:** without a key, user IDs are trusted as-is, so anyone who knows or guesses a visitor's ID can open their conversation. With a key, only visitors with a valid `user_hash` restore conversations across devices and are grouped in the Inbox; unsigned IDs only personalize the chat and keep it in the same browser.
 

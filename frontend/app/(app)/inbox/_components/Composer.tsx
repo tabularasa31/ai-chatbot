@@ -15,7 +15,6 @@ const FAILURE_MESSAGE: Record<Action, string> = {
   resolve: "Couldn't resolve the ticket. Try again.",
 };
 
-const DISABLED_CLASS = "disabled:border-transparent disabled:bg-surface-alt disabled:text-fg-faint";
 const FIELD_CLASS = "w-full rounded-control border bg-surface px-3 text-ui text-fg placeholder:text-fg-faint";
 const HELPER_ID = "composer-helper";
 const ERROR_ID = "composer-error";
@@ -35,7 +34,7 @@ function ActionButton({
       variant={variant}
       offset="surface"
       aria-busy={loading}
-      className={cn(DISABLED_CLASS, className)}
+      className={className}
       {...props}
     >
       {loading && <Loader2 size={16} aria-hidden="true" className="animate-spin" />}
@@ -62,8 +61,8 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
       try {
         await action();
         await onChanged();
-      } catch (e) {
-        setError(e instanceof Error && e.message ? e.message : FAILURE_MESSAGE[name]);
+      } catch {
+        setError(FAILURE_MESSAGE[name]);
       } finally {
         setBusy(null);
       }

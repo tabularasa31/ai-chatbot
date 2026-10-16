@@ -43,6 +43,7 @@ export function previewPrefix(row: InboxRow, viewerId: string | undefined): Attr
 }
 
 export function operatorCaption(msg: ThreadMessage, viewerId: string | undefined): Attribution {
+  if (viewerId === undefined) return { text: "Operator" };
   if (msg.author_id !== null && msg.author_id === viewerId) return { text: "You" };
   const author = msg.author_label;
   return author ? { text: localPart(author), title: author } : { text: "Operator" };

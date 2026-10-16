@@ -1,19 +1,18 @@
 # DESIGN.md — Chat9 design system (v2, 2026-10-16)
 
 Scope: marketing site + blog, auth pages, tenant dashboard, embeddable chat widget, client docs (fumadocs).
-Governed by the Design Code of Conduct. Every screen uses only the values below; no value is invented per screen.
-Status: the repo had no design system (only the `nd-*` dark palette in `frontend/tailwind-brand.ts`, Tailwind slate/violet utilities in the dashboard and widget, a `#F8F9FA` page background, and no light/dark switching anywhere).
+Every screen uses only the values below; no value is invented per screen.
 Site, auth, dashboard and docs support two colour schemes (light, dark), chosen as in 4.1. The widget is light only. Tokens below are scheme-independent names; each has a light and a dark value (the widget uses the light value).
 
-Contrast figures were computed by hand with the WCAG 2.x relative-luminance formula. Re-verify with a tool when the tokens are implemented (implementation).
+Contrast figures were computed by hand with the WCAG 2.x relative-luminance formula. Re-verify with a tool when a token changes.
 
 ## 1. Typeface
 
 - Sans: Geist Sans (variable, already in `frontend/app/fonts/GeistVF.woff`, self-hosted, never applied today: `body` renders Arial and the widget asks for Inter, which is not loaded). Reason: neutral UI grotesque, readable at 12-14px, variable weights (one file), tabular figures, already shipped. Stack: `Geist, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`.
 - Mono: Geist Mono (already in repo) for code, IDs, keys, embed snippets only. Two families total; nothing else.
 - Widget uses the same stack (one visual language on tenant sites). Chat content arrives in any language, so the system-ui fallback must stay in the stack.
-- Coverage measured with fontTools (2026-10-16) on `frontend/app/fonts`: `GeistVF.woff` has Cyrillic U+0410-044F 64/64, Latin Extended-A 117/127, Greek U+0391-03C9 only 4 of ~57 (effectively none); `GeistMonoVF.woff` has the same profile. Decision (2026-10-16): keep the bundled Geist files, no new dependency (the widget is a separate Vite build, so Inter would add a package there). Greek and any other uncovered script fall back to `system-ui` per character by design; this is accepted.
-- Implementation code task (not specified here): apply the font to `body`, remove Arial and the `font-['Inter']` references.
+- Coverage measured with fontTools (2026-10-16) on `frontend/app/fonts`: `GeistVF.woff` has Cyrillic U+0410-044F 64/64, Latin Extended-A 117/127, Greek U+0391-03C9 only 4 of ~57 (effectively none); `GeistMonoVF.woff` has the same profile. Keep the bundled Geist files, no new dependency (the widget is a separate Vite build, so Inter would add a package there). Greek and any other uncovered script fall back to `system-ui` per character by design; this is accepted.
+- `body` uses this stack; Arial and `font-['Inter']` are not used.
 
 ## 2. Type scale (6 sizes, 3 weights)
 
@@ -23,7 +22,7 @@ Weights: 400 regular (body), 500 medium (labels, buttons, nav, table headers), 6
 |---|---|---|
 | `text-caption` | 12 / 16 | meta, table headers, helper text, timestamps, badges |
 | `text-ui` | 14 / 20 | default in dashboard and widget: controls, tables, nav, messages |
-| `text-body` | 16 / 24 | default on marketing, blog, docs, auth; inputs on auth/widget/mobile (prevents iOS zoom) |
+| `text-body` | 16 / 24 | default on marketing, blog, docs, auth; inputs use `text-body` everywhere except the dashboard (desktop only), which uses `text-ui` (14 / 20) |
 | `text-h2` | 20 / 28, 600 | section heading, modal title |
 | `text-h1` | 24 / 32, 600 | page title (dashboard, auth, docs page title) |
 | `text-display` | 36 / 44, 600, from 768px (24/32 below) | marketing/blog page title only |
@@ -49,12 +48,13 @@ Radius (override Tailwind `borderRadius`, semantic names so existing `rounded-*`
 
 Elevation: shadows only for things that float. Cards, sections, banners, auth card, header: no shadow.
 
-| Token | Value (light) | Use |
-|---|---|---|
-| `shadow-pop` | `0 4px 12px rgb(15 23 42 / 0.12)` | dropdown, popover, tooltip |
-| `shadow-overlay` | `0 16px 40px rgb(15 23 42 / 0.16)` | modal, drawer |
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `shadow-pop` | `0 4px 12px rgb(15 23 42 / 0.12)` | `0 4px 12px rgb(0 0 0 / 0.5)` | dropdown, popover, tooltip |
+| `shadow-overlay` | `0 16px 40px rgb(15 23 42 / 0.16)` | `0 16px 40px rgb(0 0 0 / 0.5)` | modal, drawer |
+| `scrim` | `#0A0A0F` at 60% | `#0A0A0F` at 60% | behind modal, drawer |
 
-In dark, shadows are nearly invisible: floating layers use `surface-alt` + 1px `line`, shadow `rgb(0 0 0 / 0.5)`. Scrim behind modal/drawer: `#0A0A0F` at 60%, both schemes.
+In dark, shadows are nearly invisible: floating layers also use `surface-alt` + 1px `line`.
 Motion: 120ms ease-out for colour/opacity state changes; 200ms for modal/drawer enter. Nothing scales, bounces or loops decoratively (remove `hover:scale-105`). Honour `prefers-reduced-motion` (no transition).
 
 ## 4. Colour roles
@@ -80,8 +80,8 @@ Token names avoid `accent`, `primary`, `foreground`, `card` because the fumadocs
 | `brand-on` text on brand | `#FFFFFF` | 5.70 on brand |
 | `brand-subtle` selected row/nav bg | `#F5F3FF` | brand text on it 5.20 |
 | `focus` ring | `#7C3AED` (= brand) | 5.70 surface, 5.41 canvas (needs 3.0) |
-| `success` / `success-subtle` | `#15803D` / `#F0FDF4` | 5.02 surface, 4.76 canvas, 4.79 on subtle |
-| `warning` / `warning-subtle` | `#B45309` / `#FFFBEB` | 5.02 surface, 4.77 canvas, 4.84 on subtle |
+| `success` / `success-subtle` | `#15803D` / `#F0FDF4` | 5.02 surface, 4.76 canvas, 4.58 surface-alt, 4.79 on subtle |
+| `warning` / `warning-subtle` | `#B45309` / `#FFFBEB` | 5.02 surface, 4.77 canvas, 4.58 surface-alt, 4.84 on subtle |
 | `danger` / `danger-subtle` | `#B91C1C` / `#FEF2F2` | 6.47 surface, 6.14 canvas, 5.91 on subtle |
 | `danger-hover` | `#991B1B` | white on it 8.31 |
 | `danger-on` | `#FFFFFF` | 6.47 on danger |
@@ -112,6 +112,8 @@ Token names avoid `accent`, `primary`, `foreground`, `card` because the fumadocs
 | `danger-on` | `#0A0A0F` | 7.15 on danger |
 | `info` / `info-subtle` | `#38BDF8` / `#10222F` | 8.70 surface, 9.22 canvas, 7.59 on subtle |
 
+In dark, `fg-faint` is not used on `brand-subtle` (4.48:1); use `fg-muted` (6.59:1).
+
 Contrast changes made to the existing look:
 - Accent: the product used magenta `#E879F9` (marketing, auth, sidebar) and violet-500/600 (dashboard, widget). Magenta on a light background is ~2.4:1 and fails. The single accent is violet: `#7C3AED` light, `#A78BFA` dark. The logo asset keeps its own `#E879F9`/`#38BDF8` (brand mark, not UI); see Decisions.
 - Cyan (`#67E8F9`, `#5EC8FF`) link/tag colours on blog/docs are retired: links use `brand`; one accent only.
@@ -130,7 +132,7 @@ Contrast changes made to the existing look:
 
 ## 5. Tailwind mapping
 
-Implementation shape (implementation): CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (not in the widget build); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). `nd-*` is removed once migrated.
+Implementation shape: CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (not in the widget build); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). The `nd-*` palette is not used.
 
 Fumadocs variable -> token: `background`=canvas, `foreground`=fg, `muted`=surface-alt, `muted-foreground`=fg-muted, `card`/`popover`=surface, `border`=line, `primary`=brand, `primary-foreground`=brand-on, `secondary`=surface-alt, `accent`=brand-subtle, `accent-foreground`=fg, `ring`=focus.
 
@@ -178,16 +180,16 @@ Buttons (14/20, 500, `px-4`, `rounded-control`, label is a verb describing the r
 - Loading: label stays, 16px spinner (lucide `Loader2`, only rotating element allowed) before it, width unchanged, `aria-busy`, clicks ignored.
 - Order in a row: secondary left, primary right; on the auth card the primary is full-width.
 
-Text input and select: 44px high, `px-3`, `surface` fill, 1px `line-strong`, `rounded-control`, `fg` text, `fg-faint` placeholder. Label above (14/20, 500, `fg`), never placeholder-as-label. Font 14/20 in the dashboard, 16/24 on auth, marketing, widget. Select is the native `<select>` with a 16px lucide chevron. Textarea same. Error: border `danger`, message below in `danger` 14/20 linked by `aria-describedby`; the user's input is kept. Helper text (12/16 `fg-muted`) only for a format, limit or non-obvious rule. Checkbox/toggle: 20px control, whole label row is the 44px target, `brand` when on.
+Text input and select: 44px high, `px-3`, `surface` fill, 1px `line-strong`, `rounded-control`, `fg` text, `fg-faint` placeholder. Label above (14/20, 500, `fg`), never placeholder-as-label. Inputs use `text-body` (16/24) everywhere except the dashboard (desktop only), which uses `text-ui` (14/20). Select is the native `<select>` with a 16px lucide chevron. Textarea same. Error: border `danger`, message below in `danger` 14/20 linked by `aria-describedby`; the user's input is kept. Helper text (12/16 `fg-muted`) only for a format, limit or non-obvious rule. Checkbox/toggle: 20px control, whole label row is the 44px target, `brand` when on.
 
 Card: only for a standalone, actionable object (a source, a document, an inbox conversation): `surface` + 1px `line`, `rounded-surface`, `p-4`, no shadow. Never inside another card. Page sections (settings, forms) are not cards: heading, spacing, `line` divider. The auth form container is the one allowed container. StatCard-style metric tiles exist today; use only where a number is the object the user acts on, otherwise a plain labelled value.
 
-Modal and drawer: `surface`, `rounded-surface`, `shadow-overlay`, scrim per section 3. Modal `max-w-md`, `p-6`, title `text-h2`, only for a decision or a consequence that must be confirmed (link-safety confirm, destructive confirm). Drawer (document preview) from the right, `max-w-xl`, full height, same chrome. Both: focus moves in, is trapped, returns to the trigger on close; Escape and a visible close control (lucide `X`, 44px) close; the scrim click closes unless there is unsaved input. Buttons bottom-right per button order.
+Modal and drawer: `surface`, `rounded-surface`, `shadow-overlay`, `scrim`. Modal `max-w-md`, `p-6`, title `text-h2`, only for a decision or a consequence that must be confirmed (link-safety confirm, destructive confirm). Drawer (document preview) from the right, `max-w-xl`, full height, same chrome. Both: focus moves in, is trapped, returns to the trigger on close; Escape and a visible close control (lucide `X`, 44px) close; the scrim click closes unless there is unsaved input. Buttons bottom-right per button order.
 
 Table: header `text-caption` 500 `fg-muted`, sentence case, 1px `line` below; rows separated by 1px `line`, no zebra, no per-cell borders; hover `surface-alt`; row height 44 when the row has controls, 40 otherwise; cell padding `px-4`. Numbers and dates `tabular-nums`, right-aligned with their header. Long text wraps in the first column; IDs/keys in Geist Mono and truncated with the full value in a tooltip. Empty, loading, error render inside the table region (below).
 
 Banners and notices, by urgency (only the highest tier gets a prominent treatment):
-1. Page banner (top of `<main>`): only for a condition that blocks the product and that the tenant can fix (e.g. their own key invalid). `danger-subtle` or `warning-subtle` bg, 16px lucide icon in the semantic colour, `fg` text (14/20), one action link/button, `role="alert"`, 1px semantic border. At most one visible; highest severity wins. No banners for our own infrastructure degradation (project rule: monitoring stays internal).
+1. Page banner (top of `<main>`): only for a condition that blocks the product and that the tenant can fix (e.g. their own key invalid). `danger-subtle` or `warning-subtle` bg, 16px lucide icon in the semantic colour, `fg` text (14/20), one action link/button, `role="alert"`, 1px semantic border. At most one visible; highest severity wins. No banners for our own infrastructure degradation (infrastructure monitoring stays internal).
 2. Inline notice (in a form/section): `*-subtle` bg, icon, `fg` text, no border, `role="status"`. Info and success use this tier.
 3. Confirmation of a completed action ("Saved"): plain `success` text with a check icon next to the button, `aria-live="polite"`, disappears after 4s. No toast component exists; none is added.
 Field errors: see input.
@@ -233,13 +235,13 @@ Sidebar (208px, follows the scheme). Row = 44px, 16px lucide icon + 8px gap + la
 
 Spacing groups: 1-4 daily work | 5-6 setup | 7 staff. Operators (invited colleagues) see 1-5. Badge: `rounded-full`, `brand` fill, `brand-on` text, `text-caption`, hidden at 0, `aria-label` "3 visitors waiting" / "3 new gaps"; the number must equal the count shown on its page.
 
-Settings tab strip (shared with the Knowledge tabs: one component, `<a>` per tab, 44px high, selected = `brand` text + 2px `brand` underline, `aria-current="page"`): Bot (/settings) | Widget (/widget-settings) | Team (/settings/members) | Seats (/settings/seats). Every tab keeps its URL, all four pages have h1 "Settings", all four are owner-only; a non-owner opening them by URL gets today's behaviour. Page headings follow the menu labels: Knowledge, Doc gaps, Install widget, Platform metrics ("Per-tenant metrics" inside). "Dashboard" from now on means the whole app, never a page. Docs, FAQ and changelog follow-ups are listed in `nav-proposal.md` section 4.
+Settings tab strip (shared with the Knowledge tabs: one component, `<a>` per tab, 44px high, selected = `brand` text + 2px `brand` underline, `aria-current="page"`): Bot (/settings) | Widget (/widget-settings) | Team (/settings/members) | Seats (/settings/seats). Every tab keeps its URL, all four pages have h1 "Settings", all four are owner-only; a non-owner opening them by URL gets today's behaviour. Page headings follow the menu labels: Knowledge, Doc gaps, Install widget, Platform metrics ("Per-tenant metrics" inside). "Dashboard" from now on means the whole app, never a page. Docs pages, the FAQ and the changelog use these menu terms.
 
-## 10. Decisions (2026-10-16)
+## 10. Decisions
 
 1. Colour scheme: System by default plus manual System / Light / Dark switch, remembered in a cookie, one setting for site, auth, dashboard and docs (4.1).
 2. Widget: always light; no dark tokens, no snippet option.
-3. Dashboard navigation: option B of the nav proposal with "Gap Analyzer" renamed "Doc gaps" (section 9).
+3. Dashboard navigation: the grouped menu of section 9, with "Gap Analyzer" named "Doc gaps".
 4. No tenant brand colour: the accent is the fixed violet everywhere, including the widget; nothing is built for an override. The sidebar follows the scheme (no always-dark block).
 5. Logo: the mark is unchanged (`#E879F9`/`#38BDF8`). Asset requirement: a variant for light backgrounds (same shapes; mark colours darkened until each part reaches 3:1 on `canvas` and `surface`, wordmark in `fg`), selected by scheme in header, auth, docs and sidebar. Not drawn yet.
 6. Targets: 44px minimum everywhere, including the dashboard; density comes from 14px type and spacing, not from smaller controls.

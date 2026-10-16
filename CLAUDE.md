@@ -96,6 +96,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 | `backend/tenant_knowledge/` | FAQ/tenant-profile service helpers |
 | `tests/conftest.py` | Pytest fixtures (DB session, test client) |
 | `docs/04-features.md` | Feature specs and expected behaviour |
+| `DESIGN.md` | Design system (tokens, type scale, light/dark schemes, component rules); UI changes follow it and update it in the same PR |
 | `docs/06-developer-test-runbook.md` | Test command groups reference |
 | `docs/docs-ru/` | Internal Russian-language project documentation |
 | `frontend/content/docs/` | **Client-facing documentation** (MDX, rendered in the product UI) — update here when asked to update client docs |

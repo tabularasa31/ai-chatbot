@@ -314,6 +314,7 @@ ai-chatbot/
 │   │   └── widget-shared/    # types/helpers shared between dashboard and widget-app
 │   └── middleware.ts         # CORS for /widget/* and /api/widget-* (allowlist via WIDGET_ALLOWED_ORIGINS)
 ├── docs/                     # product and technical docs (no need to copy the full stack here)
+├── DESIGN.md                 # design system (tokens, type scale, light/dark schemes, component rules); UI changes follow it and update it in the same PR
 └── …
 ```
 

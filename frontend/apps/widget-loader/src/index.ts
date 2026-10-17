@@ -38,11 +38,7 @@
 // of widget.getchat9.live, and the loader infers the matching API origin
 // (api-ru.getchat9.live) from its own scriptOrigin. No flag needed.
 
-// Marks this file as a module so `declare global` is allowed under TS's
-// stricter rules; the IIFE wrapper still produces a side-effect-only bundle.
 import { sharedChromeString, type SharedChromeKey } from "../../../packages/widget-shared/src/chromeStrings";
-
-export {};
 
 type UserHints = {
   user_id?: string;
@@ -289,7 +285,7 @@ declare global {
       null;
 
     function chromeString(key: SharedChromeKey): string {
-      return sharedChromeString(browserLocale, key);
+      return sharedChromeString(key);
     }
 
     function buildIframeSrc(): string {
@@ -501,19 +497,17 @@ declare global {
       fab.innerHTML = isOpen ? closeIcon(launcherGlyph, 22) : chatIcon();
     }
 
-    function isPhone(): boolean {
-      return phoneQuery.matches;
-    }
-
     let panelWidth = "400px";
     let panelHeight = "600px";
 
     function applyLayout() {
-      const phone = isPhone();
+      const phone = phoneQuery.matches;
       const inset = phone ? 16 : 20;
       container.style.bottom = `max(${inset}px, env(safe-area-inset-bottom))`;
       container.style[sideProp] = `max(${inset}px, env(safe-area-inset-${sideProp}))`;
       const fullScreen = isOpen && phone;
+      if (fullScreen) lockBodyScroll();
+      else unlockBodyScroll();
       fab.style.display = fullScreen ? "none" : "flex";
       chatWindow.setAttribute("aria-modal", String(fullScreen));
       resizeHandle.style.display = !fullScreen && finePointerQuery.matches ? "flex" : "none";
@@ -556,7 +550,7 @@ declare global {
     }
 
     function setPanelMotion(open: boolean) {
-      const hidden = isPhone() ? "translateY(100%)" : "translateY(8px)";
+      const hidden = phoneQuery.matches ? "translateY(100%)" : "translateY(8px)";
       const duration = open ? 200 : 120;
       chatWindow.style.transition = reducedMotion
         ? "none"
@@ -581,7 +575,6 @@ declare global {
       if (isOpen) applyLayout();
     }
 
-    // ── Iframe load failure ──────────────────────────────────────────────────
     const failOverlay = document.createElement("div");
     failOverlay.style.cssText =
       "display:none;position:absolute;top:0;left:0;right:0;bottom:0;z-index:30;flex-direction:column;" +
@@ -593,7 +586,7 @@ declare global {
     failRetry.style.cssText =
       "height:44px;padding:0 16px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:14px;font-weight:500;line-height:20px;" +
       `background:${palette.surface};color:${palette.fg};border:1px solid ${palette.lineStrong};`;
-    failRetry.textContent = chromeString("try_again_button");
+    failRetry.textContent = chromeString("retry");
     const failClose = document.createElement("button");
     failClose.type = "button";
     failClose.setAttribute("aria-label", chromeString("close_chat"));
@@ -620,11 +613,11 @@ declare global {
     }
 
     failRetry.addEventListener("click", () => {
-      showFailOverlay(chromeString("loading"), false);
+      showFailOverlay(chromeString("loading_overlay"), false);
       iframe.src = buildIframeSrc() + `&_=${Date.now()}`;
       armLoadFailTimer();
     });
-    failClose.addEventListener("click", () => closeChat());
+    failClose.addEventListener("click", () => closePanel?.());
 
     onIframeReady = () => {
       window.clearTimeout(loadFailTimer);
@@ -640,7 +633,6 @@ declare global {
       }
       chatWindow.style.display = "block";
       applyLayout();
-      if (isPhone()) lockBodyScroll();
       setPanelMotion(false);
       requestAnimationFrame(() => setPanelMotion(true));
       renderLauncher();
@@ -659,23 +651,20 @@ declare global {
         chatWindow.style.display = "none";
         applyLayout();
       }, reducedMotion ? 0 : 120);
-      unlockBodyScroll();
       fab.style.display = "flex";
       renderLauncher();
       fab.focus();
     };
 
-    function closeChat() {
-      closePanel?.();
-    }
-
     fab.addEventListener("click", () => {
-      if (isOpen) closeChat();
+      if (isOpen) closePanel?.();
       else openChat();
     });
 
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && isOpen) closeChat();
+      if (e.key === "Escape" && !e.defaultPrevented && isOpen && container.contains(document.activeElement)) {
+        closePanel?.();
+      }
     }
 
     resizeHandle.addEventListener("mousedown", (e) => {

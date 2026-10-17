@@ -1084,14 +1084,32 @@ export function ChatWidget({
     }
   }, [apiBase, botId, localeParam, messages, sessionId]);
 
+  const retryGreeting = useCallback(async () => {
+    setLoading(true);
+    try {
+      await fetchGreeting();
+    } catch (error) {
+      console.error("Chat9: greeting failed", error);
+      setMessages((prev) => [
+        ...prev,
+        createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchGreeting, localeParam]);
+
   const handleErrorRetry = useCallback((error: Extract<ChatWidgetMessage, { type: "error" }>) => {
+    if (loading) return;
     setMessages((prev) => prev.filter((m) => m.id !== error.id));
     if (error.retry.kind === "send") {
       void sendUserMessage(error.retry.message, { appendUserBubble: false });
     } else if (error.retry.kind === "escalate") {
       void handleLlmUnavailableEscalate(error.retry.messageId);
+    } else {
+      void retryGreeting();
     }
-  }, [handleLlmUnavailableEscalate, sendUserMessage]);
+  }, [handleLlmUnavailableEscalate, loading, retryGreeting, sendUserMessage]);
 
   useEffect(() => {
     if (!isOpen || !onClose) return;
@@ -1102,7 +1120,7 @@ export function ChatWidget({
   useEffect(() => {
     if (!onClose || pendingExternalLink) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose?.();
+      if (event.key === "Escape" && !event.isComposing) onClose?.();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -1226,8 +1244,8 @@ export function ChatWidget({
                       <span dir="auto">{msg.text}</span>
                     </p>
                     <div className="mt-3">
-                      <ActionButton variant="secondary" onClick={() => handleErrorRetry(msg)}>
-                        {tString(locale, "try_again_button")}
+                      <ActionButton variant="secondary" busy={loading} onClick={() => handleErrorRetry(msg)}>
+                        {tString(locale, "retry")}
                       </ActionButton>
                     </div>
                   </div>

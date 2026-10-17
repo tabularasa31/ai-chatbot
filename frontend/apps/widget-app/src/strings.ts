@@ -7,6 +7,8 @@
 import { sharedChromeString, type SharedChromeKey } from "@chat9/widget-shared";
 
 type AppStringKey =
+  | "loading"
+  | "try_again_button"
   | "unavailable"
   | "composer_label"
   | "composer_placeholder"
@@ -32,6 +34,8 @@ type AppStringKey =
 export type StringKey = AppStringKey | SharedChromeKey;
 
 const EN: Record<AppStringKey, string> = {
+  loading: "Loading…",
+  try_again_button: "Try again",
   unavailable: "Chat is unavailable.",
   composer_label: "Message",
   composer_placeholder: "Type a message…",
@@ -58,6 +62,8 @@ const EN: Record<AppStringKey, string> = {
 const LOCALES: Record<string, Partial<Record<AppStringKey, string>>> = {
   en: EN,
   ru: {
+    loading: "Загрузка…",
+    try_again_button: "Попробовать ещё раз",
     contact_support_button: "Связаться с поддержкой",
     support_notified: "Поддержка уведомлена. С вами свяжутся.",
   },
@@ -68,8 +74,8 @@ const SHARED_KEYS: ReadonlySet<StringKey> = new Set<SharedChromeKey>([
   "open_chat",
   "close_chat",
   "load_failed",
-  "loading",
-  "try_again_button",
+  "loading_overlay",
+  "retry",
 ]);
 
 function isSharedKey(key: StringKey): key is SharedChromeKey {
@@ -77,7 +83,7 @@ function isSharedKey(key: StringKey): key is SharedChromeKey {
 }
 
 export function t(locale: string | null | undefined, key: StringKey, vars?: { n: string }): string {
-  const text = isSharedKey(key) ? sharedChromeString(locale, key) : textFor(locale, key);
+  const text = isSharedKey(key) ? sharedChromeString(key) : textFor(locale, key);
   return vars ? text.replace("{n}", vars.n) : text;
 }
 

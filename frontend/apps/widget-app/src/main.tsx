@@ -1,5 +1,5 @@
 import { render } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useState } from "preact/hooks";
 import "./styles.css";
 import { ChatWidget } from "./ChatWidget";
 import { t } from "./strings";
@@ -93,6 +93,9 @@ function App() {
   const siteUrl = safeMarketingUrl(params.get("siteUrl"));
 
   const [hints, setHints] = useState<HintsState>(undefined);
+  const closePanel = useCallback(() => {
+    if (parentOrigin) window.parent.postMessage({ type: "chat9:close" }, parentOrigin);
+  }, [parentOrigin]);
   // True until the loader says otherwise: a standalone tab or an older loader
   // that never reports the panel behaves as it always did.
   const [panelOpen, setPanelOpen] = useState(true);
@@ -187,7 +190,7 @@ function App() {
         isOpen={panelOpen}
         apiBase={apiBase}
         siteUrl={siteUrl}
-        onClose={embeddedBubble && parentOrigin ? () => window.parent.postMessage({ type: "chat9:close" }, parentOrigin) : undefined}
+        onClose={embeddedBubble && parentOrigin ? closePanel : undefined}
       />
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef } from "react";
 import { ActionButton } from "./ActionButton";
 
 type LinkSafetyLabels = {
@@ -37,7 +37,7 @@ export function LinkSafetyModal({
     };
   }, []);
 
-  function handleKeyDown(event: KeyboardEvent) {
+  function handleKeyDown(event: { key: string; shiftKey: boolean; preventDefault: () => void }) {
     if (event.key === "Escape") {
       event.preventDefault();
       onCancel();

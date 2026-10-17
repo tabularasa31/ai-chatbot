@@ -47,13 +47,13 @@ All options are arguments to `Chat9Widget.start()`:
 | `mode` | `"bubble"` | `"bubble"` or `"inline"` |
 | `target` | — | DOM element id for inline mode |
 | `theme` | `"light"` | `"light"` or `"dark"`; the whole chat window follows it |
-| `color` | `"#7C3AED"` | Bubble background color (`#RGB`, `#RRGGBB`) |
+| `color` | `"#7C3AED"` | Color of the bubble, the send button and your visitor's messages (`#RGB`, `#RRGGBB`) |
 | `position` | `"right"` | `"right"` or `"left"` |
 | `topClearance` | `0` | px reserved at the viewport top (e.g. height of a fixed navbar) |
 | `userHints` | — | See [userHints](#userhints) |
 
 **Modes:**
-- **Bubble** — floating button, bottom corner of the page. The window has a close button in its header, and Escape closes it. On phones it opens full screen.
+- **Bubble** — floating button, bottom corner of the page. The window has a close button in its header, and Escape closes it; the bubble hides while the window is open. On phones it opens full screen.
 - **Inline** — renders inside a container you provide. Add `<div id="chat9-widget"></div>` where you want the widget.
 
 ### Routing from Russia

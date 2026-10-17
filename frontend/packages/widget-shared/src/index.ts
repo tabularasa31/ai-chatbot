@@ -70,6 +70,7 @@ export type LlmFailureState = {
 export type ErrorRetry =
   | { kind: "send"; message: string }
   | { kind: "greeting" }
+  | { kind: "history" }
   | { kind: "escalate"; messageId: string };
 
 export type ChatWidgetMessage =

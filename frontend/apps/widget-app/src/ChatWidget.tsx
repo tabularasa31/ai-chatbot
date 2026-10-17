@@ -291,6 +291,7 @@ export function ChatWidget({
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [greetingPending, setGreetingPending] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
   // Who is answering, as the server sees it: "bot" (nobody has escalated),
   // "waiting" (an open request nobody has picked up) or "live" (a human is in
@@ -322,6 +323,15 @@ export function ChatWidget({
   const linkOpenerRef = useRef<HTMLElement | null>(null);
   const modalOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The greeting request in flight, resolving to the session it opened (null on
+  // failure). A visitor's first message waits for it so both share one session.
+  const greetingInFlightRef = useRef<Promise<string | null> | null>(null);
+  // Set once the automatic greeting has been requested: an empty conversation
+  // is greeted exactly once, however often the effect re-runs.
+  const greetingRequestedRef = useRef(false);
+  // True once the visitor has sent a message since the greeting was requested;
+  // a greeting that arrives afterwards is dropped rather than shown after it.
+  const visitorSentRef = useRef(false);
   // Tracks the storage user_id derived from the current hints so other effects can use it.
   const userIdRef = useRef<string | null>(null);
 
@@ -604,10 +614,42 @@ export function ChatWidget({
       ticket_number?: string | null;
       sources?: WidgetSource[];
     };
-    applyAssistantMessage(data);
+    if (visitorSentRef.current) setHistoryLoaded(true);
+    else applyAssistantMessage(data);
     setSessionId(data.session_id);
     persistSession(botId, data.session_id, userIdRef.current);
+    return data.session_id;
   }, [applyAssistantMessage, botId, requestWidgetTurn]);
+
+  const appendGreetingError = useCallback((error: unknown) => {
+    console.error("Chat9: greeting failed", error);
+    setMessages((prev) => [
+      ...prev,
+      createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
+    ]);
+  }, [localeParam]);
+
+  const requestGreeting = useCallback((attemptSessionId: string | null) => {
+    visitorSentRef.current = false;
+    setGreetingPending(true);
+    const request = fetchGreeting(attemptSessionId)
+      .catch((error) => {
+        appendGreetingError(error);
+        return null;
+      })
+      .finally(() => {
+        greetingInFlightRef.current = null;
+        setGreetingPending(false);
+      });
+    greetingInFlightRef.current = request;
+    return request;
+  }, [appendGreetingError, fetchGreeting]);
+
+  const requestGreetingOnce = useCallback((attemptSessionId: string | null) => {
+    if (greetingRequestedRef.current) return;
+    greetingRequestedRef.current = true;
+    void requestGreeting(attemptSessionId);
+  }, [requestGreeting]);
 
   useEffect(() => {
     if (!sessionHydrated || !sessionId || historyLoaded) return;
@@ -624,10 +666,7 @@ export function ChatWidget({
           }
           return null;
         }
-        if (!r.ok) {
-          // Transient error (5xx, network) — keep session, silently skip history
-          return null;
-        }
+        if (!r.ok) throw new Error(`History error: ${r.status}`);
         return r.json() as Promise<{
           messages: { id: string; role: string; content: string }[];
           ticket_number?: string | null;
@@ -671,14 +710,16 @@ export function ChatWidget({
           if (data.messages.length > 0) {
             setMessages((prev) => appendSystemMarker(prev, "new_conversation"));
           }
-          void fetchGreeting(sessionId).catch(() => {
-            // Best-effort: without a greeting the visitor still gets a fresh
-            // conversation on their first real message.
-          });
+          requestGreetingOnce(sessionId);
         }
       })
-      .catch(() => {
-        // Network-level failure — keep session for next page load
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Chat9: history failed", error);
+        setMessages((prev) => [
+          ...prev,
+          createErrorMessage(tString(localeParam, "error_history"), { kind: "history" }),
+        ]);
       })
       .finally(() => {
         if (!cancelled) {
@@ -687,39 +728,13 @@ export function ChatWidget({
         }
       });
     return () => { cancelled = true; };
-  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, fetchGreeting]);
-
-  const appendGreetingError = useCallback((error: unknown) => {
-    console.error("Chat9: greeting failed", error);
-    setMessages((prev) => [
-      ...prev,
-      createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
-    ]);
-  }, [localeParam]);
+  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, localeParam, requestGreetingOnce]);
 
   useEffect(() => {
-    // Wait for history fetch to complete (or determine there's no stored session)
-    const needsHistoryFetch = sessionHydrated && sessionId && !historyLoaded;
-    if (!sessionHydrated || needsHistoryFetch || sessionId || messages.length > 0 || loading) return;
-    let cancelled = false;
-    setLoading(true);
-    void fetchGreeting()
-      .catch((error) => {
-        if (cancelled) return;
-        appendGreetingError(error);
-      })
-      .finally(() => {
-        // Unconditionally reset loading: the React flush microtask triggered by
-        // setMessages/setSessionId inside fetchGreeting runs before .finally(),
-        // so `cancelled` is already true here even on success. Keeping the guard
-        // would leave loading stuck at true and the input permanently disabled.
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appendGreetingError, fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
+    const waitingForHistory = sessionId !== null && !historyLoaded;
+    if (!sessionHydrated || waitingForHistory || loading || messages.length > 0) return;
+    requestGreetingOnce(sessionId);
+  }, [historyLoaded, loading, messages.length, requestGreetingOnce, sessionHydrated, sessionId]);
 
   // How often to ask whether a human has written. The ladder is the whole
   // point: a conversation the bot is handling is not polled at all, one
@@ -904,6 +919,7 @@ export function ChatWidget({
     setStreamingText("");
     setStatusStage(null);
     if (appendUserBubble) {
+      visitorSentRef.current = true;
       setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
     }
 
@@ -913,15 +929,17 @@ export function ChatWidget({
     };
 
     try {
+      const greetedSessionId = greetingInFlightRef.current ? await greetingInFlightRef.current : null;
+      const attemptSessionId = sessionId ?? greetedSessionId;
       let { res, payload } = await requestWidgetTurn({
         message: userMessage,
-        attemptSessionId: sessionId,
+        attemptSessionId,
         onChunk: handleChunk,
         onStatus: setStatusStage,
       });
       let detail = payload.detail;
       let code = apiErrorCode(detail);
-      if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
+      if (!res.ok && attemptSessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
         clearStoredSession(botId, userIdRef.current);
         setSessionId(null);
         setStreamingText("");
@@ -1093,27 +1111,18 @@ export function ChatWidget({
     }
   }, [apiBase, botId, localeParam, messages, sessionId]);
 
-  const retryGreeting = useCallback(async () => {
-    setLoading(true);
-    try {
-      await fetchGreeting();
-    } catch (error) {
-      appendGreetingError(error);
-    } finally {
-      setLoading(false);
-    }
-  }, [appendGreetingError, fetchGreeting]);
-
   const handleErrorRetry = useCallback((error: Extract<ChatWidgetMessage, { type: "error" }>) => {
     setMessages((prev) => prev.filter((m) => m.id !== error.id));
     if (error.retry.kind === "send") {
       void sendUserMessage(error.retry.message, { appendUserBubble: false });
     } else if (error.retry.kind === "escalate") {
       void handleLlmUnavailableEscalate(error.retry.messageId);
+    } else if (error.retry.kind === "history") {
+      setHistoryLoaded(false);
     } else {
-      void retryGreeting();
+      void requestGreeting(sessionId);
     }
-  }, [handleLlmUnavailableEscalate, retryGreeting, sendUserMessage]);
+  }, [handleLlmUnavailableEscalate, requestGreeting, sendUserMessage, sessionId]);
 
   useEffect(() => {
     if (!isOpen || !onClose || modalOpenRef.current) return;
@@ -1330,7 +1339,9 @@ export function ChatWidget({
               </div>
             </div>
           ) : loading ? (
-            <LoadingIndicator stage={statusStage} locale={locale ?? null} greeting={!sessionId && messages.length === 0} />
+            <LoadingIndicator stage={statusStage} locale={locale ?? null} greeting={messages.length === 0} />
+          ) : greetingPending ? (
+            <LoadingIndicator stage={null} locale={locale ?? null} greeting />
           ) : null}
         </div>
         </div>

@@ -114,7 +114,9 @@ A `user_id` personalizes the conversation (greeting, language, escalation detail
 
 Escalating to a human agent does not end the conversation. If the visitor's email is already known, the bot goes on answering their questions normally while the ticket is open. If it is not — the default for anonymous visitors — the bot asks for an email address and keeps asking until it gets one, because support replies by email. After the handoff the bot asks whether it can help with anything else; if the visitor declines, the bot says goodbye and the chat stays open — the next message is answered as usual. There is no closed state and no "start new chat" control: a conversation only rolls over into a fresh one after a week without messages, and the previous one stays visible above a "New conversation" separator.
 
-**Greeting** is shown once per new session and not repeated on resume.
+**Greeting** is shown once per browser, ever — per bot, and per identified user when you pass `user_id` or `email`. A returning visitor is not greeted again, even when a new conversation starts after the idle window. The greeting is shown in your `locale` hint if you set one, otherwise in the browser language, otherwise in English. It is not saved into the conversation, so it does not appear in the Inbox or after a page reload. Clearing browser storage or using a private window counts as a new browser, so the visitor is greeted again.
+
+Opening the chat bubble, or loading a page with an inline widget, does not start a conversation. A conversation starts with the visitor's first message, so visitors who open the widget and never write do not create empty conversations.
 
 **Clarification:** the bot may ask one follow-up question when a request is ambiguous. It appears as part of the normal text reply.
 

@@ -1,4 +1,5 @@
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, MouseEvent } from "react";
+import { Loader2 } from "lucide-react";
 import { cn } from "./utils";
 
 const FOCUS_RING_BASE = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2";
@@ -10,9 +11,13 @@ export const FOCUS_RING = {
 } as const;
 
 const VARIANTS = {
-  primary: "bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active",
-  secondary: "border border-line-strong bg-surface text-fg hover:bg-surface-alt active:bg-surface-alt",
-  ghost: "text-fg-muted hover:bg-surface-alt active:bg-surface-alt",
+  primary:
+    "bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active disabled:bg-surface-alt disabled:text-fg-faint",
+  secondary:
+    "border border-line-strong bg-surface text-fg hover:bg-surface-alt active:bg-surface-alt disabled:border-transparent disabled:bg-surface-alt disabled:text-fg-faint",
+  destructive:
+    "bg-danger text-danger-on hover:bg-danger-hover active:bg-danger-hover disabled:bg-surface-alt disabled:text-fg-faint",
+  ghost: "text-fg-muted hover:bg-surface-alt active:bg-surface-alt disabled:bg-transparent disabled:text-fg-faint",
 } as const;
 
 const DISABLED = "disabled:cursor-not-allowed disabled:border-transparent disabled:bg-surface-alt disabled:text-fg-faint";
@@ -32,7 +37,7 @@ type ButtonStyle = {
 /** Class string for elements that must look like a button but are not one, such as links. */
 export function buttonClasses({ variant, size = "default", offset = "canvas" }: ButtonStyle): string {
   return cn(
-    "inline-flex h-11 shrink-0 items-center justify-center rounded-control text-ui font-medium transition-colors",
+    "inline-flex h-11 shrink-0 items-center justify-center rounded-control text-ui font-medium transition-colors disabled:cursor-not-allowed",
     FOCUS_RING[offset],
     VARIANTS[variant],
     DISABLED,
@@ -40,13 +45,32 @@ export function buttonClasses({ variant, size = "default", offset = "canvas" }: 
   );
 }
 
+/** `busy` overlays a spinner on the hidden content, so the width never changes; clicks are ignored and focus is kept. */
 export function Button({
   variant,
   size,
   offset,
   className,
   type = "button",
+  busy = false,
+  onClick,
+  children,
   ...props
-}: ButtonStyle & ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button type={type} className={cn(buttonClasses({ variant, size, offset }), className)} {...props} />;
+}: ButtonStyle & { busy?: boolean } & ButtonHTMLAttributes<HTMLButtonElement>) {
+  function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    if (!busy) onClick?.(event);
+  }
+
+  return (
+    <button
+      type={type}
+      className={cn(buttonClasses({ variant, size, offset }), busy && "relative", className)}
+      aria-busy={busy || undefined}
+      onClick={handleClick}
+      {...props}
+    >
+      {busy && <Loader2 size={16} aria-hidden="true" className="absolute inset-0 m-auto animate-spin" />}
+      <span className={cn("inline-flex items-center gap-2", busy && "opacity-0")}>{children}</span>
+    </button>
+  );
 }

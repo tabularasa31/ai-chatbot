@@ -536,7 +536,18 @@ def test_archived_filter_is_source_specific(
         status=GapClusterStatus.dismissed,
         last_computed_at=datetime.now(timezone.utc),
     )
-    db_session.add_all([active_topic, dismissed_topic, active_cluster, closed_cluster, dismissed_cluster])
+    resolved_cluster = GapCluster(
+        tenant_id=tenant_id,
+        label="Published refund answer",
+        question_count=2,
+        aggregate_signal_weight=1.5,
+        coverage_score=0.3,
+        status=GapClusterStatus.resolved,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all(
+        [active_topic, dismissed_topic, active_cluster, closed_cluster, dismissed_cluster, resolved_cluster]
+    )
     db_session.flush()
     active_topic.linked_cluster_id = dismissed_cluster.id
     dismissed_cluster.linked_doc_topic_id = active_topic.id
@@ -560,8 +571,12 @@ def test_archived_filter_is_source_specific(
     assert {item["label"] for item in data["mode_b_items"]} == {
         "SAML metadata refresh",
         "Legacy invoice exports",
+        "Published refund answer",
     }
-    assert all(item["status"] in {"closed", "dismissed"} for item in data["mode_b_items"])
+    assert all(item["status"] in {"closed", "dismissed", "resolved"} for item in data["mode_b_items"])
+
+    active = tenant.get("/gap-analyzer?mode_b_status=active", headers={"Authorization": f"Bearer {token}"})
+    assert "Published refund answer" not in {item["label"] for item in active.json()["mode_b_items"]}
 
 
 # ---------------------------------------------------------------------------

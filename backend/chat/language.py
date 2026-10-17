@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
+from backend.chat.iso_15924 import ISO_15924_CODES
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
@@ -308,7 +309,7 @@ def _language_root(tag: str) -> str:
 
 
 def language_script_tag_of(raw: str | None) -> str | None:
-    """Primary language subtag plus an explicit script subtag (zh-Hant), without region.
+    """Primary language subtag plus an ISO 15924 script subtag (zh-Hant), without region.
 
     None when ``raw`` is not a language tag.
     """
@@ -316,7 +317,7 @@ def language_script_tag_of(raw: str | None) -> str | None:
     if not normalized:
         return None
     primary, *rest = normalized.split("-")
-    if rest and len(rest[0]) == 4:
+    if rest and rest[0] in ISO_15924_CODES:
         return f"{primary}-{rest[0]}"
     return primary
 

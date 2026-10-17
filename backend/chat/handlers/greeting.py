@@ -37,6 +37,7 @@ from backend.guards.injection_detector import detect_injection_structural
 from backend.models import Tenant, TenantProfile, TurnOutcome
 
 WIDGET_GREETING_CACHE_TTL_SECONDS = 7 * 24 * 3600
+WIDGET_GREETING_WEEKLY_GENERATION_CAP = 200
 ENGLISH = "en"
 
 
@@ -91,27 +92,58 @@ def _widget_greeting_cache_key(tenant_id: str, product_name: str, language: str)
     return f"widget:greeting:{tenant_id}:{product_digest}:{language}"
 
 
+async def _cached_greeting(tenant_id: str, product_name: str, language: str) -> str | None:
+    return await _bounded(
+        redis_mod.cache_get(_widget_greeting_cache_key(tenant_id, product_name, language)),
+        None,
+    )
+
+
+async def _reserve_generation(tenant_id: str) -> bool:
+    """Count one LLM generation against the tenant's weekly budget; allowed when Redis is down."""
+    client = redis_mod.get_redis()
+    if client is None:
+        return True
+    budget_key = f"widget:greeting-budget:{tenant_id}"
+
+    async def _increment() -> int:
+        await client.set(budget_key, 0, ex=WIDGET_GREETING_CACHE_TTL_SECONDS, nx=True)
+        return await client.incr(budget_key)
+
+    return await _bounded(_increment(), 0) <= WIDGET_GREETING_WEEKLY_GENERATION_CAP
+
+
 async def greet_widget_visitor(
     *, tenant_id: str, product_name: str, locale: str | None, api_key: str | None
 ) -> LocalizationResult:
     """Localized welcome for a visitor who has not written yet; persists nothing.
 
-    English when ``locale`` is absent, its language is not an ISO 639-1 code, or
-    the LLM is unavailable. A successful generation is cached in Redis per
-    tenant, product name and language (root plus explicit script, no region), so only the first visitor per
-    week pays for the LLM call.
+    English when ``locale`` is absent, its language is not an ISO 639-1 code, the
+    LLM is unavailable, or the tenant used up its weekly generation budget. A
+    successful generation is cached in Redis for a week per tenant, product name
+    and language (root plus ISO 15924 script when the locale names one, no
+    region). Over budget, a cached root-language greeting is still served.
     """
     language = language_script_tag_of(locale)
     root = language.split("-", 1)[0] if language else None
+    english = functools.partial(
+        _build_greeting_result,
+        product_name=product_name,
+        response_language=ENGLISH,
+        api_key=api_key,
+    )
     if root not in ISO_639_1_CODES or root == ENGLISH or not api_key:
-        return await _build_greeting_result(
-            product_name=product_name, response_language=ENGLISH, api_key=api_key
-        )
+        return await english()
 
-    cache_key = _widget_greeting_cache_key(tenant_id, product_name, language)
-    cached = await _bounded(redis_mod.cache_get(cache_key), None)
+    cached = await _cached_greeting(tenant_id, product_name, language)
     if cached:
         return LocalizationResult(text=cached)
+
+    if not await _reserve_generation(tenant_id):
+        root_cached = (
+            await _cached_greeting(tenant_id, product_name, root) if language != root else None
+        )
+        return LocalizationResult(text=root_cached) if root_cached else await english()
 
     result = await _build_greeting_result(
         product_name=product_name, response_language=language, api_key=api_key
@@ -119,7 +151,9 @@ async def greet_widget_visitor(
     if result.generated:
         await _bounded(
             redis_mod.cache_set_with_ttl(
-                cache_key, result.text, WIDGET_GREETING_CACHE_TTL_SECONDS
+                _widget_greeting_cache_key(tenant_id, product_name, language),
+                result.text,
+                WIDGET_GREETING_CACHE_TTL_SECONDS,
             ),
             False,
         )

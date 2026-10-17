@@ -1022,9 +1022,13 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     tenant: TestClient,
     db_session: Session,
     fake_redis: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """One LLM call per tenant, product name and language root; unknown language
-    roots, empty completions and LLM failures are never cached."""
+    """One LLM call per tenant, product name and language (root plus known script);
+    unknown roots, empty completions and LLM failures are never cached; a tenant
+    over its weekly generation budget costs no further LLM call."""
+    from backend.chat.handlers import greeting as greeting_module
+
     client_uuid, bot_public_id = _setup_widget_tenant(
         tenant, db_session, "widget-greeting-cache@example.com", "Greeting Cache Tenant"
     )
@@ -1032,6 +1036,9 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     russian = "Привет! Я помощник Greeting Cache Tenant. Задайте вопрос."
     german = "Hallo! Ich bin der Assistent von Greeting Cache Tenant. Stellen Sie Ihre Frage."
     llm.return_value = _chat_completion_response(russian, total_tokens=9)
+
+    def cached_greetings() -> set[str]:
+        return {key for key in fake_redis if key.startswith("widget:greeting:")}
 
     def greet(locale: str, bot_id: str = bot_public_id) -> str:
         response = tenant.get(f"/widget/greeting?bot_id={bot_id}&locale={locale}")
@@ -1041,7 +1048,7 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     assert greet("ru-RU") == russian
     assert greet("ru-UA") == russian
     assert llm.call_count == 1
-    assert len(fake_redis) == 1
+    assert len(cached_greetings()) == 1
 
     assert greet("zz-ZZ").startswith("I'm the Greeting Cache Tenant assistant")
     assert llm.call_count == 1
@@ -1056,7 +1063,19 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     assert greet("zh-TW") == russian
     assert greet("zh") == russian
     assert llm.call_count == 3
-    assert len(fake_redis) == 3
+    assert greet("zh-Zzzx") == russian
+    assert llm.call_count == 3
+    assert len(cached_greetings()) == 3
+
+    budget_key = f"widget:greeting-budget:{client_uuid}"
+    default_cap = greeting_module.WIDGET_GREETING_WEEKLY_GENERATION_CAP
+    monkeypatch.setattr(
+        greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", int(fake_redis[budget_key])
+    )
+    assert greet("zh-Hans-CN") == russian
+    assert greet("fr-FR").startswith("I'm the Greeting Cache Tenant assistant")
+    assert llm.call_count == 3
+    monkeypatch.setattr(greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", default_cap)
 
     other_client_uuid, other_bot_public_id = _setup_widget_tenant(
         tenant, db_session, "widget-greeting-cache-other@example.com", "Greeting Cache Tenant"
@@ -1064,7 +1083,7 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     assert other_client_uuid != client_uuid
     assert greet("ru-RU", other_bot_public_id) == russian
     assert llm.call_count == 4
-    assert len(fake_redis) == 4
+    assert len(cached_greetings()) == 4
 
     db_session.get(Tenant, client_uuid).name = "Renamed Tenant"
     db_session.commit()
@@ -1077,7 +1096,7 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     llm.return_value = _chat_completion_response(german, total_tokens=9)
     llm.side_effect = RuntimeError("llm down")
     assert greet("de-DE").startswith("I'm the Renamed Tenant assistant")
-    assert fake_redis == {}
+    assert not cached_greetings()
     llm.side_effect = None
     assert greet("de-DE") == german
     assert llm.call_count == 8

@@ -780,7 +780,7 @@ The widget greeting (`GET /widget/greeting`) has no user message to detect langu
 2. **Browser locale** — the `locale` query parameter or `navigator.language`. Weaker than the explicit hint because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
 3. **English** — final fallback when no signal is available.
 
-The hint outranks the browser locale: reversing that would silently override tenants who paid the integration cost of passing `locale` through `userHints`. The choice is made in `greetingLocale` (`frontend/apps/widget-app/src/greeting.ts`); the backend renders the greeting in whatever `locale` it receives.
+The hint outranks the browser locale: reversing that would silently override tenants who paid the integration cost of passing `locale` through `userHints`. The choice is made in `greetingLocale` (`frontend/apps/widget-app/src/greeting.ts`); the backend renders the greeting in the language of the `locale` it receives, without region (ISO 639-1 roots only; any other root gets the English text without an LLM call). A generated greeting is cached in Redis for 7 days per tenant, product name and language (the language root, plus the ISO 15924 script subtag when the browser locale names a known one, e.g. `zh-Hant`; never the region); each tenant gets at most 200 generations per week, after which a cached root-language greeting or the English text is served; the English fallback after an LLM failure is never cached.
 
 #### Language locking — fixed contract
 

@@ -4,10 +4,11 @@ import logging
 import re
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
+from backend.chat.iso_15924 import ISO_15924_CODES
 from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry
@@ -159,6 +160,7 @@ class ResolvedLanguageContext:
 class LocalizationResult:
     text: str
     tokens_used: int = 0
+    generated: bool = field(default=False, compare=False)
 
 
 def _threshold() -> float:
@@ -304,6 +306,20 @@ def _normalize_language_tag(raw: str | None) -> str | None:
 
 def _language_root(tag: str) -> str:
     return tag.split("-", 1)[0].lower()
+
+
+def locale_language_of(raw: str | None) -> tuple[str, str] | None:
+    """(root, root with an ISO 15924 script when present, e.g. ("zh", "zh-Hant")), without region.
+
+    None when ``raw`` is not a language tag.
+    """
+    normalized = _normalize_language_tag(raw)
+    if not normalized:
+        return None
+    primary, *rest = normalized.split("-")
+    if rest and rest[0] in ISO_15924_CODES:
+        return primary, f"{primary}-{rest[0]}"
+    return primary, primary
 
 
 def _language_matches(left: str, right: str) -> bool:
@@ -974,7 +990,8 @@ async def _run_text_llm(
         log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
         if not response.choices:
             return LocalizationResult(text=fallback, tokens_used=tokens_used)
-        output_text = (response.choices[0].message.content or "").strip() or fallback
+        generated_text = (response.choices[0].message.content or "").strip()
+        output_text = generated_text or fallback
         if emit_event:
             _emit_localized_event_safely(
                 canonical_text=fallback,
@@ -986,7 +1003,9 @@ async def _run_text_llm(
                 bot_id=bot_id,
                 chat_id=chat_id,
             )
-        return LocalizationResult(text=output_text, tokens_used=tokens_used)
+        return LocalizationResult(
+            text=output_text, tokens_used=tokens_used, generated=bool(generated_text)
+        )
     except Exception as exc:
         logger.warning(fail_log, exc)
         return LocalizationResult(text=fallback, tokens_used=0)

@@ -17,16 +17,27 @@ session or trace behind it.
 from __future__ import annotations
 
 import functools
+import hashlib
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
-from backend.chat.language import LocalizationResult, generate_greeting_in_language_result
+from backend.chat.iso_639_1 import ISO_639_1_CODES
+from backend.chat.language import (
+    LocalizationResult,
+    generate_greeting_in_language_result,
+    locale_language_of,
+)
 from backend.chat.persistence import _persist_turn_with_response_language
+from backend.core import redis as redis_mod
 from backend.core.db import run_sync
 from backend.guards.injection_detector import detect_injection_structural
 from backend.models import Tenant, TenantProfile, TurnOutcome
+
+WIDGET_GREETING_CACHE_TTL_SECONDS = 7 * 24 * 3600
+WIDGET_GREETING_WEEKLY_GENERATION_CAP = 200
+ENGLISH = "en"
 
 
 def _resolve_product_name(
@@ -75,18 +86,73 @@ async def widget_product_name(*, tenant: Tenant, db: AsyncSession) -> str:
     )
 
 
+def _widget_greeting_cache_key(tenant_id: str, product_name: str, language: str) -> str:
+    product_digest = hashlib.sha256(product_name.encode("utf-8")).hexdigest()[:16]
+    return f"widget:greeting:{tenant_id}:{product_digest}:{language}"
+
+
+async def _cached_greeting(tenant_id: str, product_name: str, language: str) -> str | None:
+    return await redis_mod.bounded(
+        redis_mod.cache_get(_widget_greeting_cache_key(tenant_id, product_name, language)),
+        None,
+    )
+
+
+async def _reserve_generation(tenant_id: str) -> bool:
+    """Count one LLM generation against the tenant's weekly budget; allowed when Redis is down."""
+    count = await redis_mod.bounded(
+        redis_mod.incr_with_ttl(
+            f"widget:greeting-budget:{tenant_id}", WIDGET_GREETING_CACHE_TTL_SECONDS
+        ),
+        None,
+    )
+    return count is None or count <= WIDGET_GREETING_WEEKLY_GENERATION_CAP
+
+
 async def greet_widget_visitor(
-    *, product_name: str, locale: str | None, api_key: str | None
+    *, tenant_id: str, product_name: str, locale: str | None, api_key: str | None
 ) -> LocalizationResult:
     """Localized welcome for a visitor who has not written yet; persists nothing.
 
-    English when ``locale`` is absent or the LLM is unavailable.
+    English when ``locale`` is absent, its language is not an ISO 639-1 code, the
+    LLM is unavailable, or the tenant used up its weekly generation budget. A
+    successful generation is cached in Redis for a week per tenant, product name
+    and language (root plus ISO 15924 script when the locale names one, no
+    region). Over budget, a cached root-language greeting is still served.
     """
-    return await _build_greeting_result(
+    root, language = locale_language_of(locale) or (None, None)
+    english = functools.partial(
+        _build_greeting_result,
         product_name=product_name,
-        response_language=locale or "en",
+        response_language=ENGLISH,
         api_key=api_key,
     )
+    if root not in ISO_639_1_CODES or root == ENGLISH or not api_key:
+        return await english()
+
+    cached = await _cached_greeting(tenant_id, product_name, language)
+    if cached:
+        return LocalizationResult(text=cached)
+
+    if not await _reserve_generation(tenant_id):
+        root_cached = (
+            await _cached_greeting(tenant_id, product_name, root) if language != root else None
+        )
+        return LocalizationResult(text=root_cached) if root_cached else await english()
+
+    result = await _build_greeting_result(
+        product_name=product_name, response_language=language, api_key=api_key
+    )
+    if result.generated:
+        await redis_mod.bounded(
+            redis_mod.cache_set_with_ttl(
+                _widget_greeting_cache_key(tenant_id, product_name, language),
+                result.text,
+                WIDGET_GREETING_CACHE_TTL_SECONDS,
+            ),
+            False,
+        )
+    return result
 
 
 class GreetingHandler(PipelineHandler):

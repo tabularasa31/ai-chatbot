@@ -398,7 +398,6 @@ export function ChatWidget({
   }), [locale, maybeOpenLinkSafety]);
 
   const storageUserId = deriveStorageUserId(hints);
-  const hasHints = Boolean(hints);
   const hintsRef = useRef(hints);
   useLayoutEffect(() => {
     hintsRef.current = hints;
@@ -408,11 +407,14 @@ export function ChatWidget({
     const userId = storageUserId;
     const sessionHints = hintsRef.current;
     userIdRef.current = userId;
+    let cancelled = false;
 
     setSessionHydrated(false);
     setHistoryLoaded(false);
     setActiveTicket(null);
     setHandoffState("bot");
+    setMessages([]);
+    setStreamingText("");
     cursorRef.current = null;
 
     // Purge the legacy shared-key session (pre-user-scoped namespacing) so stale
@@ -420,29 +422,34 @@ export function ChatWidget({
     if (userId) clearStoredSession(botId);
 
     const stored = readStoredSession(botId, userId);
+    setSessionId(stored);
 
-    if (sessionHints && !stored) {
+    if (userId && !stored) {
       fetch(`${apiBase}/widget/session/init`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bot_id: botId, user_hints: sessionHints }),
       })
         .then((r) => r.json())
-        .then((data: { session_id?: string }) => {
-          if (data.session_id) {
-            persistSession(botId, data.session_id, userId);
-            setSessionId(data.session_id);
-          }
+        .then((data: { session_id: string | null }) => {
+          if (cancelled || !data.session_id) return;
+          persistSession(botId, data.session_id, userId);
+          setSessionId(data.session_id);
         })
         .catch(() => {
-          // fall through to anonymous session
+          // the first message creates the session
         })
-        .finally(() => setSessionHydrated(true));
+        .finally(() => {
+          if (!cancelled) setSessionHydrated(true);
+        });
     } else {
-      setSessionId(stored);
       setSessionHydrated(true);
     }
-  }, [botId, storageUserId, hasHints, apiBase]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [botId, storageUserId, apiBase]);
 
   useEffect(() => {
     let cancelled = false;

@@ -540,7 +540,19 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     )
     assert attacker_wrong_hash.status_code == 200
     assert attacker_wrong_hash.json()["resumed"] is False
-    assert attacker_wrong_hash.json()["session_id"] != victim_session_id
+    assert attacker_wrong_hash.json()["session_id"] is None
+    wrong_hash_hints = {"user_id": "stranger-1", "user_hash": "0" * 64}
+    wrong_hash_turn = _post_widget_chat(tenant, bot_public_id, message="hi", user_hints=wrong_hash_hints)
+    wrong_hash_chat = (
+        db_session.query(Chat).filter(Chat.session_id == uuid.UUID(wrong_hash_turn.json()["session_id"])).one()
+    )
+    assert wrong_hash_chat.user_context["identity_verified"] is False
+    assert (
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "stranger-1")
+        .count()
+        == 0
+    )
 
     # Correct hash resumes the verified session.
     legit = tenant.post(

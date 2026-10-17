@@ -324,7 +324,7 @@ def _resolve_widget_identity(
             # Corrupted ciphertext must not 500 a public endpoint. Stay
             # strict with no valid secret — never fall back to legacy
             # (unverified) resume, that would reopen the hole this guards.
-            logger.error("widget_session_init_secret_decrypt_failed")
+            logger.error("widget_identity_secret_decrypt_failed")
 
     mode: Literal["hints", "anonymous"] = "anonymous"
     user_context: dict | None = None

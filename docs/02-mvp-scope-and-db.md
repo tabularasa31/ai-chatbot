@@ -34,7 +34,7 @@
 **Widget:**
 - Embeddable chat widget (iframe)
 - Send question → get answer
-- Optional **`userHints`**: tenant frontend passes plain-JSON personalization (name/email/locale/plan_tier/audience_tag) at `POST /widget/session/init`; context lands on `chats.user_context`. Untrusted — used only for personalization and escalation metadata, not access control.
+- Optional **`userHints`**: tenant frontend passes plain-JSON personalization (name/email/locale/plan_tier/audience_tag) at `POST /widget/session/init` (resume only) and with the first `POST /widget/chat`; context lands on `chats.user_context`. Untrusted — used only for personalization and escalation metadata, not access control.
 - Basic styling (no customization)
 
 **Database:**

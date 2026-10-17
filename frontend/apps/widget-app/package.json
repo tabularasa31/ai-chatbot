@@ -5,6 +5,7 @@
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "scripts": {
+    "test": "node --test src/greeting.test.ts",
     "build": "vite build && pnpm --filter @chat9/widget-loader build && node scripts/copy-loader.mjs",
     "dev": "vite",
     "preview": "vite preview",

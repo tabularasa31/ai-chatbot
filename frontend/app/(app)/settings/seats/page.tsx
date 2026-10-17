@@ -64,20 +64,24 @@ function OwnSeatSection({ members, onChange }: { members: TenantMember[]; onChan
 
   const seatedSince = members.find((member) => member.id === authUser.id)?.seat_granted_at ?? null;
 
-  async function changeSeat(take: boolean) {
+  async function run(action: () => Promise<unknown>, doneText: string, failureText: string) {
     setBusy(true);
     setFailure(null);
     setSaved(null);
     try {
-      await (take ? api.members.takeOwnSeat() : api.members.giveUpOwnSeat());
+      await action();
       await onChange();
-      setSaved(take ? "You have a seat." : "Seat given up.");
+      setSaved(doneText);
     } catch {
-      setFailure(take ? "Couldn't take a seat. Try again." : "Couldn't give up your seat. Try again.");
+      setFailure(failureText);
     } finally {
       setBusy(false);
     }
   }
+
+  const takeSeat = () => run(() => api.members.takeOwnSeat(), "You have a seat.", "Couldn't take a seat. Try again.");
+  const giveUpSeat = () =>
+    run(() => api.members.giveUpOwnSeat(), "Seat given up.", "Couldn't give up your seat. Try again.");
 
   return (
     <SettingsSection title="Your seat">
@@ -94,11 +98,11 @@ function OwnSeatSection({ members, onChange }: { members: TenantMember[]; onChan
       {failure && <InlineNotice tone="danger">{failure}</InlineNotice>}
       <SaveRow saved={saved}>
         {seatedSince ? (
-          <Button variant="secondary" busy={busy} onClick={() => void changeSeat(false)}>
+          <Button variant="secondary" busy={busy} onClick={() => void giveUpSeat()}>
             Give up my seat
           </Button>
         ) : (
-          <Button variant="primary" busy={busy} onClick={() => void changeSeat(true)}>
+          <Button variant="primary" busy={busy} onClick={() => void takeSeat()}>
             Take a seat
           </Button>
         )}

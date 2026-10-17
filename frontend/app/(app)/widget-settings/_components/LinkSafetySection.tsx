@@ -7,11 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/choice";
 import { Textarea } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
+import { serverRejection } from "../../settings/_components/errors";
 import {
   SaveRow,
   SectionFallback,
   SettingsSection,
-  serverRejection,
   useSavedMessage,
 } from "../../settings/_components/SettingsSection";
 

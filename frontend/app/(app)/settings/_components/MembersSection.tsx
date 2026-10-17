@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
-import { SECTION_CLASS } from "./SettingsSection";
+import { SettingsSection } from "./SettingsSection";
 
 const SKELETON_ROWS = 3;
 
@@ -28,12 +28,8 @@ export function MembersSection() {
   }
 
   return (
-    <section aria-labelledby="members-heading" className={SECTION_CLASS}>
-      <h2 id="members-heading" className="text-h2 text-fg">
-        Members
-        {members && <span className="ml-2 text-caption text-fg-muted tabular-nums">{members.length}</span>}
-      </h2>
-      <div className="mt-4">
+    <SettingsSection title="Members" meta={members?.length}>
+      <div>
         {members ? (
           <>
             <ul className="divide-y divide-line">
@@ -79,6 +75,6 @@ export function MembersSection() {
           onClose={() => setRemoving(null)}
         />
       )}
-    </section>
+    </SettingsSection>
   );
 }

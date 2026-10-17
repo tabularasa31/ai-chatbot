@@ -32,13 +32,8 @@ function ChoiceRow({
   );
 }
 
-export function Checkbox({
-  label,
-  helper,
-  className,
-  ...props
-}: { label: string; helper?: string; className?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "type">) {
-  return <ChoiceRow type="checkbox" label={label} helper={helper} className={className} {...props} />;
+export function Checkbox(props: { label: string; helper?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "type">) {
+  return <ChoiceRow type="checkbox" {...props} />;
 }
 
 export type RadioOption<T extends string> = { value: T; label: string; description: string };
@@ -57,7 +52,8 @@ export function RadioGroup<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="space-y-1">
+    <fieldset className="min-w-0 space-y-1">
+      <legend className="sr-only">{label}</legend>
       {options.map(({ value: optionValue, label: optionLabel, description }) => (
         <ChoiceRow
           key={optionValue}
@@ -71,6 +67,6 @@ export function RadioGroup<T extends string>({
           onChange={() => onChange(optionValue)}
         />
       ))}
-    </div>
+    </fieldset>
   );
 }

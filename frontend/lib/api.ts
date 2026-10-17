@@ -441,6 +441,11 @@ export type GapRecalculateResponse = {
   retry_after_seconds: number | null;
 };
 
+export const HTTP_BAD_REQUEST = 400;
+export const HTTP_CONFLICT = 409;
+export const HTTP_UNPROCESSABLE = 422;
+export const HTTP_TOO_MANY_REQUESTS = 429;
+
 /** Thrown by `request()` on a non-ok response; `status` lets callers branch on the HTTP code. */
 export class ApiError extends Error {
   status: number;
@@ -500,7 +505,7 @@ const SIGN_OUT_REASON_KEY = "chat9_sign_out_reason";
  *
  * For the case where losing the session is the *outcome* the user asked for
  * rather than something that went wrong — today, an owner deleting their own
- * workspace, which deletes their account with it.
+ * tenant, which deletes their account with it.
  *
  * The reason travels in `sessionStorage` rather than a query parameter,
  * because the URL does not survive the trip. Clearing the session cookie makes
@@ -513,7 +518,7 @@ const SIGN_OUT_REASON_KEY = "chat9_sign_out_reason";
  * page that just destroyed its own session still has revalidations in flight,
  * and each lands as a 401 that `handleUnauthorized` would answer by
  * redirecting to `/login?error=session_expired` — telling somebody who deleted
- * their workspace deliberately that their session expired.
+ * their tenant deliberately that their session expired.
  */
 export function signOutAndLeave(reason: SignOutReason): void {
   if (typeof window === "undefined") return;
@@ -698,7 +703,7 @@ export const api = {
      *
      * `skipAuthRedirect` is set for that reason: the generic 401 handler
      * bounces to `/login?error=session_expired`, which would tell an owner who
-     * just deleted their workspace on purpose that their session expired.
+     * just deleted their tenant on purpose that their session expired.
      */
     delete(tenantId: string): Promise<void> {
       return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the tenant", {

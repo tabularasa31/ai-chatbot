@@ -32,6 +32,7 @@ export function OpenAiKeySection() {
     event.preventDefault();
     const value = key.trim();
     if (!value) return;
+    setSaveFailed(false);
     if (!value.startsWith(KEY_PREFIX)) {
       setKeyError("Keys start with sk-.");
       return;
@@ -80,6 +81,7 @@ export function OpenAiKeySection() {
               onChange={(event) => {
                 setKey(event.target.value);
                 setKeyError(undefined);
+                setSaveFailed(false);
               }}
             />
             <a

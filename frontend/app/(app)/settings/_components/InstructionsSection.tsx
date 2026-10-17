@@ -9,10 +9,12 @@ import { Checkbox } from "@/components/ui/choice";
 import { Textarea } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { cn } from "@/components/ui/utils";
-import { SaveRow, SectionFallback, SettingsSection, saveErrorText, useSavedMessage } from "./SettingsSection";
+import { saveErrorText } from "./errors";
+import { SaveRow, SectionFallback, SettingsSection, useSavedMessage } from "./SettingsSection";
 
 const MAX_INSTRUCTIONS_LENGTH = 3000;
 const DEFAULT_PRESET = "support_agent";
+const PRODUCT_NAME_HINT = "Use {product_name} for your product name.";
 
 export function InstructionsSection() {
   const { bots, activeBot, error, mutate } = useActiveBot();
@@ -118,7 +120,7 @@ export function InstructionsSection() {
             mono
             rows={10}
             label="Your additions"
-            helper="Added after the standard instructions. Use {product_name} for your product name."
+            helper={ownPromptOnly ? PRODUCT_NAME_HINT : `Added after the standard instructions. ${PRODUCT_NAME_HINT}`}
             value={additions}
             error={additionsError}
             onChange={(event) => setAdditions(event.target.value)}

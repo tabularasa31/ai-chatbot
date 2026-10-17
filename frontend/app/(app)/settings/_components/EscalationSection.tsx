@@ -6,7 +6,8 @@ import { useSupportSettings } from "@/hooks/useApi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
-import { SaveRow, SectionFallback, SettingsSection, saveErrorText, useSavedMessage } from "./SettingsSection";
+import { saveErrorText } from "./errors";
+import { SaveRow, SectionFallback, SettingsSection, useSavedMessage } from "./SettingsSection";
 
 export function EscalationSection() {
   const { data: support, error, mutate } = useSupportSettings();

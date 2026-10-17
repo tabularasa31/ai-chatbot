@@ -8,7 +8,7 @@ import './docs.css';
 
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {
   return (
-    <RootProvider theme={{ defaultTheme: 'light', forcedTheme: 'light' }}>
+    <RootProvider theme={{ defaultTheme: 'light', forcedTheme: 'light', attribute: 'class', enableColorScheme: false }}>
       <ForcedLightScheme />
       <DocsLayout
         tree={source.pageTree}

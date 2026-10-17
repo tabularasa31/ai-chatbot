@@ -2,15 +2,12 @@
 
 import Link from "next/link";
 import { useRef, useState, type FormEvent } from "react";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, HTTP_CONFLICT, HTTP_TOO_MANY_REQUESTS } from "@/lib/api";
 import { useMembers } from "@/hooks/useApi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { linkClasses, SettingsSection } from "./SettingsSection";
-
-const HTTP_CONFLICT = 409;
-const HTTP_TOO_MANY_REQUESTS = 429;
 
 function inviteErrorText(err: unknown): string {
   if (err instanceof ApiError && err.status === HTTP_CONFLICT) return "This address already has an account.";

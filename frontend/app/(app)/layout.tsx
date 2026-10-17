@@ -2,7 +2,7 @@ import { Navbar } from "@/components/Navbar";
 import { Sidebar } from "@/components/Sidebar";
 import { DashboardWidgetLoader } from "@/components/DashboardWidgetLoader";
 import { ShellBanner } from "@/components/ShellBanner";
-import { SchemeSurface } from "@/components/SchemeSurface";
+import { SchemeSurface } from "@/components/ui/scheme-surface";
 import { getSessionFromCookie } from "@/lib/session";
 
 export default async function AppLayout({

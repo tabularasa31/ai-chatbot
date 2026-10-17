@@ -12,7 +12,7 @@ type ConfirmDialogProps = {
   confirmLabel: string;
   tone: "primary" | "destructive";
   failureMessage: string;
-  /** The user must type this exactly (trimmed) before the confirm button enables. */
+  /** The user must type this exactly (case-sensitive; surrounding spaces in what they type are ignored) before the confirm button enables. */
   confirmText?: string;
   onConfirm: () => Promise<void>;
   onClose: () => void;
@@ -65,7 +65,7 @@ export function ConfirmDialog({
         <div className="text-ui text-fg-muted">{body}</div>
         {confirmText !== undefined && (
           <Input
-            label={`Type ${confirmText} to confirm`}
+            label={`Type "${confirmText}" to confirm`}
             autoComplete="off"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
@@ -80,7 +80,7 @@ export function ConfirmDialog({
             variant={tone}
             offset="surface"
             busy={busy}
-            disabled={confirmText !== undefined && typed.trim() !== confirmText.trim()}
+            disabled={confirmText !== undefined && typed.trim() !== confirmText}
             onClick={() => void confirm()}
           >
             {confirmLabel}

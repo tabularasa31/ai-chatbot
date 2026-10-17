@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, HTTP_CONFLICT, HTTP_TOO_MANY_REQUESTS } from "@/lib/api";
 import { useClientMe } from "@/hooks/useApi";
+import { CodeValue } from "./CodeValue";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -16,8 +17,6 @@ import {
   useSavedMessage,
 } from "../../settings/_components/SettingsSection";
 
-const HTTP_CONFLICT = 409;
-const HTTP_TOO_MANY_REQUESTS = 429;
 const ROTATION_LIMIT_TEXT = "Too many rotations. Try again in an hour.";
 
 export function IdentityKeySection() {
@@ -53,6 +52,7 @@ export function IdentityKeySection() {
   }
 
   async function issueKey() {
+    setFailure(null);
     const data = await api.widgetIdentity.rotate();
     setSecret(data.secret);
     setRevealed(true);
@@ -77,6 +77,7 @@ export function IdentityKeySection() {
   }
 
   async function rotate() {
+    setFailure(null);
     try {
       await issueKey();
     } catch (err) {
@@ -111,9 +112,7 @@ export function IdentityKeySection() {
           )}
           {revealed && secret && (
             <div className="flex flex-wrap items-center gap-3">
-              <code className="flex min-h-11 min-w-0 flex-1 items-center break-all rounded-control border border-line bg-surface-alt px-3 font-mono text-caption text-fg">
-                {secret}
-              </code>
+              <CodeValue>{secret}</CodeValue>
               <CopyButton text={secret} label="Copy" variant="secondary" />
               <Button variant="secondary" onClick={hide}>
                 Hide

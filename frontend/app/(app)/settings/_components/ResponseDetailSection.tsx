@@ -77,7 +77,7 @@ export function ResponseDetailSection() {
       <form onSubmit={(event) => void save(event)} className="space-y-4">
         <p className="text-caption text-fg-muted">Applies to every chat.</p>
         <RadioGroup
-          label="Response detail"
+          label="Detail level"
           name="disclosure-level"
           options={DISCLOSURE_OPTIONS}
           value={level}

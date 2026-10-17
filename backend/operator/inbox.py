@@ -89,6 +89,7 @@ class InboxCounts:
 @dataclass(frozen=True)
 class ThreadMessage:
     message: Message
+    author_id: uuid.UUID | None
     author_label: str | None
 
 
@@ -591,6 +592,7 @@ def list_inbox(
             if newest is not None
             else None
         )
+        author_id = newest.operator_user_id if newest is not None and newest.operator_user_id in emails else None
         rows.append(
             InboxRow(
                 session_id=current.session_id,
@@ -602,7 +604,7 @@ def list_inbox(
                 waiting_since=v.waiting_since,
                 last_message_role=newest.role.value if newest is not None else None,
                 last_message_preview=_preview(newest.content) if newest is not None else None,
-                last_message_author_id=newest.operator_user_id if newest is not None else None,
+                last_message_author_id=author_id,
                 last_message_author_label=author_label,
                 last_activity=newest.created_at if newest is not None else current.created_at,
                 message_count=sum(count for _, count in per_chat),
@@ -657,7 +659,7 @@ def load_thread(
     )
 
     rows = (
-        db.query(Message, User.email)
+        db.query(Message, User.id, User.email)
         .outerjoin(
             User, and_(User.id == Message.operator_user_id, User.tenant_id == tenant_id)
         )
@@ -666,8 +668,8 @@ def load_thread(
         .all()
     )
     messages = [
-        ThreadMessage(message=m, author_label=email or m.operator_label)
-        for m, email in rows
+        ThreadMessage(message=m, author_id=author_id, author_label=email or m.operator_label)
+        for m, author_id, email in rows
     ]
 
     emails = _emails_by_user(

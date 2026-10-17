@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import type {
@@ -8,7 +7,6 @@ import type {
   SupportSettingsResponse,
   DisclosureConfigResponse,
   TenantMemberList,
-  InboxList,
   InboxSummary,
   Thread,
   AnalyticsPeriod,
@@ -61,13 +59,13 @@ export function useBotDisclosure(botId: string | null | undefined) {
 }
 
 export function useInbox(scope: "attention" | "all", query: string, refreshInterval = 0) {
-  const swr = useSWR<InboxList>(["operator/inbox", scope, query], () => api.operator.inbox(scope, query), {
-    refreshInterval,
-  });
-  const lastLoaded = useRef<{ scope: string; data: InboxList } | null>(null);
-  if (swr.data) lastLoaded.current = { scope, data: swr.data };
-  const sameScopeData = lastLoaded.current?.scope === scope ? lastLoaded.current.data : undefined;
-  return { ...swr, data: swr.data ?? sameScopeData, isCurrent: swr.data !== undefined };
+  const swr = useSWR(
+    ["operator/inbox", scope, query],
+    async () => ({ scope, query, list: await api.operator.inbox(scope, query) }),
+    { refreshInterval, keepPreviousData: true },
+  );
+  const loaded = swr.data?.scope === scope ? swr.data : undefined;
+  return { ...swr, data: loaded?.list, isCurrent: loaded?.query === query };
 }
 
 export function useInboxSummary(refreshInterval = 0) {
@@ -80,6 +78,17 @@ export function useAnalyticsSummary(period: AnalyticsPeriod) {
   return useSWR<AnalyticsSummaryResponse>(["analytics/summary", period], () => api.analytics.summary(period), {
     keepPreviousData: true,
   });
+}
+
+export function useAdminMetrics(enabled: boolean) {
+  return useSWR(
+    enabled ? "admin/metrics" : null,
+    async () => {
+      const [summary, tenants] = await Promise.all([api.admin.getSummary(), api.admin.getTenants()]);
+      return { summary, tenants };
+    },
+    { shouldRetryOnError: false, revalidateOnFocus: false }
+  );
 }
 
 export function useThread(sessionId: string | null, refreshInterval = 0) {

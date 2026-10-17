@@ -38,7 +38,7 @@
   @apply text-h1;
 }
 
-#nd-page > article > p.text-lg {
+#nd-page > article > p[class~='text-lg'] {
   @apply max-w-measure text-body;
 }
 
@@ -50,26 +50,22 @@
   @apply text-ui;
 }
 
-#nd-docs-layout h3.not-prose {
+#nd-docs-layout h3[class~='not-prose'] {
   @apply text-body font-semibold;
 }
 
-#nd-docs-layout .not-prose.text-xs,
-#nd-docs-layout .font-mono.text-\[13px\] {
+#nd-docs-layout [class~='not-prose'][class~='text-xs'],
+#nd-docs-layout [class~='font-mono'][class~='text-[13px]'] {
   @apply text-ui;
 }
 
-#nd-docs-layout .rounded-xl.border.text-xs.font-medium,
-#nd-sidebar .rounded-full.border.text-xs.font-medium {
+#nd-docs-layout [class~='rounded-xl'][class~='border'][class~='text-xs'][class~='font-medium'],
+#nd-sidebar [class~='rounded-full'][class~='border'][class~='text-xs'][class~='font-medium'] {
   @apply rounded-tag border-transparent bg-surface-alt font-mono text-caption text-fg;
 }
 
-#nd-docs-layout .rounded-xl.border.text-xs.font-medium.text-red-600 {
+#nd-docs-layout [class~='rounded-xl'][class~='border'][class~='text-xs'][class~='font-medium'][class~='text-red-600'] {
   @apply bg-danger-subtle text-danger;
-}
-
-#nd-toc a {
-  @apply flex min-h-11 items-center py-0 text-ui;
 }
 
 [role='dialog'] input {

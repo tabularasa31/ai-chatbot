@@ -1,5 +1,16 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { UserHints } from "@chat9/widget-shared";
+
+// Storage-key discriminator derived from hints. Lets us namespace localStorage
+// per visitor so one browser shared between accounts doesn't bleed history
+// across them. Falls back to email-based synthetic id matching the backend.
+export function deriveStorageUserId(hints: UserHints | null | undefined): string | null {
+  if (!hints) return null;
+  if (hints.user_id && hints.user_id.trim()) return hints.user_id.trim();
+  if (hints.email && hints.email.trim()) return `hint:${hints.email.trim()}`;
+  return null;
+}
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

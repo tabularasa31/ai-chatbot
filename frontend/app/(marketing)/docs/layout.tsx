@@ -3,27 +3,35 @@ import { RootProvider } from 'fumadocs-ui/provider';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { source } from '@/lib/source';
 import { Logo } from '@/components/Logo';
-import { ForcedLightScheme } from '@/components/ui/forced-light-scheme';
+import { SchemeSurface } from '@/components/ui/scheme-surface';
+import { SidebarPageLink } from './sidebar-page-link';
+import { ThemeSwitch } from '@/components/ui/theme-switch';
 import './docs.css';
 
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {
   return (
-    <RootProvider theme={{ defaultTheme: 'light', forcedTheme: 'light', attribute: 'class', enableColorScheme: false }}>
-      <ForcedLightScheme />
-      <DocsLayout
-        tree={source.pageTree}
-        nav={{
-          enabled: true,
-          title: <Logo size={18} textClassName="text-[15px]" />,
-        }}
-        sidebar={{
-          defaultOpenLevel: 1,
-          collapsible: false,
-        }}
-        containerProps={{ className: 'min-h-screen' }}
-      >
-        {children}
-      </DocsLayout>
+    <RootProvider theme={{ enabled: false }}>
+      <SchemeSurface>
+      <div className="text-fg">
+        <DocsLayout
+          tree={source.pageTree}
+          nav={{
+            enabled: true,
+            title: <Logo size={18} textClassName="text-body text-fg" />,
+          }}
+          disableThemeSwitch
+          sidebar={{
+            defaultOpenLevel: 1,
+            collapsible: false,
+            components: { Item: SidebarPageLink },
+            footer: <ThemeSwitch />,
+          }}
+          containerProps={{ className: 'min-h-screen' }}
+        >
+          {children}
+        </DocsLayout>
+      </div>
+      </SchemeSurface>
     </RootProvider>
   );
 }

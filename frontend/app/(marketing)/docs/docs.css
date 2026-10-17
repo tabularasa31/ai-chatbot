@@ -1,103 +1,99 @@
-/* ── Docs page: match the dashboard layout ───────────────────────────────
-   Dashboard pattern: dark sidebar + dark topbar + light content area.
-   Sidebar / topbar use the dashboard's #0A0A0F base + #FAF5FF text +
-   #E879F9 (nd-accent) pink for active items.
-   ──────────────────────────────────────────────────────────────────────── */
-
-/* 1. Light content area for the page body. */
-:root {
-  --fd-background:           220 14% 97% !important;   /* ≈ #F4F5F7 */
-  --fd-foreground:           222 47% 11% !important;
-  --fd-card:                 0 0% 100%   !important;
-  --fd-card-foreground:      222 47% 11% !important;
-  --fd-muted:                220 13% 93% !important;
-  --fd-muted-foreground:     215 16% 47% !important;
-  --fd-border:               220 13% 89% !important;
-  --fd-secondary:            220 14% 93% !important;
-  --fd-secondary-foreground: 222 47% 11% !important;
-  --fd-accent:               220 14% 91% !important;
-  --fd-accent-foreground:    222 47% 11% !important;
-  --fd-primary:              291 91% 60% !important;   /* nd-accent pink */
-  --fd-primary-foreground:   0 0% 100%   !important;
-  --fd-popover:              0 0% 100%   !important;
-  --fd-popover-foreground:   222 47% 11% !important;
-  --fd-ring:                 291 91% 73% !important;
-}
-
-body {
-  /* globals.css sets a dark body bg via its own --background variable;
-     the docs section needs the light dashboard content area instead. */
-  background-color: #F4F5F7 !important;
-  color: #111827;
-}
-
-/* 2. Sidebar — same column as the dashboard's <Sidebar />.
-      All --fd-* are re-scoped so menu cards, hover backgrounds, and
-      borders use the dashboard's dark palette inside the sidebar. */
-#nd-sidebar {
-  background-color:   #0A0A0F !important;
-  border-inline-end:  1px solid rgba(255, 255, 255, 0.07) !important;
-
-  --fd-background:             240 20% 5%   !important;
-  --fd-foreground:             275 100% 98% !important;
-  --fd-muted:                  240 16% 12%  !important;
-  --fd-muted-foreground:       275 8%  65%  !important;  /* soft white, not lavender */
-  --fd-secondary:              240 15% 14%  !important;
-  --fd-secondary-foreground:   275 100% 98% !important;
-  --fd-accent:                 240 16% 17%  !important;
-  --fd-accent-foreground:      275 100% 98% !important;
-  --fd-border:                 240 15% 18%  !important;
-  --fd-primary:                291 91% 73%  !important;
-  --fd-primary-foreground:     240 20% 5%   !important;
-}
-
-/* Sidebar items — dashboard look:
-     inactive  → text-nd-text/55 (soft white, not lavender)
-     hover     → text-nd-text/85 + slight white wash
-     active    → text-nd-text + nd-accent pink @ 8 % background */
-#nd-sidebar a,
-#nd-sidebar button {
-  font-size: 13px;
-}
-#nd-sidebar a[data-active='false'],
-#nd-sidebar a:not([data-active]),
+#nd-sidebar a[data-active],
 #nd-sidebar button[data-state] {
-  color: rgba(250, 245, 255, 0.55) !important;
-}
-#nd-sidebar a[data-active='false']:hover,
-#nd-sidebar a:not([data-active]):hover,
-#nd-sidebar button[data-state]:hover {
-  color: rgba(250, 245, 255, 0.85) !important;
-  background-color: rgba(255, 255, 255, 0.03) !important;
-}
-#nd-sidebar a[data-active='true'] {
-  color: #FAF5FF !important;
-  background-color: rgba(232, 121, 249, 0.08) !important;
+  @apply min-h-11 rounded-control px-3 text-ui font-medium;
+  transition: color 120ms, background-color 120ms;
 }
 
-/* Sidebar logo / title link (top of the column, no data-active attribute) — keep bright. */
-#nd-sidebar [class*='SidebarHeader'] a,
-#nd-sidebar header a {
-  color: #FAF5FF !important;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+[data-search-full],
+[data-search] {
+  @apply min-h-11 rounded-control;
 }
 
-/* 3. Top navbar header — dashboard topbar look. */
-header[class*='sticky'] {
-  background-color: #0A0A0F !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
-}
-header[class*='sticky'],
-header[class*='sticky'] a,
-header[class*='sticky'] button {
-  color: #FAF5FF;
+[data-search],
+#nd-subnav button {
+  @apply min-w-11;
 }
 
-/* 4. Match sidebar width to the dashboard (200 px). */
-@media (min-width: 768px) {
-  [style*='--fd-sidebar-width'],
-  .md\:\[--fd-sidebar-width\:268px\] {
-    --fd-sidebar-width: 200px !important;
+#nd-subnav button {
+  @apply min-h-11;
+}
+
+#nd-subnav a,
+#nd-sidebar a:not([data-active]) {
+  @apply inline-flex min-h-11 items-center;
+}
+
+#nd-sidebar a,
+#nd-sidebar button,
+#nd-subnav a,
+#nd-subnav button,
+#nd-tocnav button,
+#nd-toc a,
+[data-toc-popover] a,
+[data-search-full],
+[data-search] {
+  @apply focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus;
+}
+
+#nd-page > article > h1 {
+  @apply text-h1;
+}
+
+#nd-page > article > p[class~='text-lg'] {
+  @apply max-w-measure text-body;
+}
+
+#nd-docs-layout :not(pre) > code {
+  overflow-wrap: anywhere;
+}
+
+#nd-docs-layout .fd-codeblock code {
+  @apply text-ui;
+}
+
+#nd-toc a,
+[data-toc-popover] a {
+  @apply flex min-h-11 items-center py-0 text-ui;
+}
+
+#nd-docs-layout [style*='--fd-api-info-top'] h3[class~='not-prose'] {
+  @apply text-body font-semibold;
+}
+
+#nd-docs-layout [style*='--fd-api-info-top'] [class~='not-prose'][class~='text-xs'],
+#nd-docs-layout [style*='--fd-api-info-top'] [class~='font-mono'][class~='text-[13px]'] {
+  @apply text-ui;
+}
+
+#nd-docs-layout [class~='rounded-xl'][class~='border'][class~='text-xs'][class~='font-medium'],
+#nd-sidebar [class~='rounded-full'][class~='border'][class~='text-xs'][class~='font-medium'] {
+  @apply rounded-tag border-transparent bg-surface-alt font-mono text-caption text-fg;
+}
+
+#nd-docs-layout div[class~='rounded-xl'][class~='border'][class~='text-xs'][class~='font-medium'][class~='text-red-600'] {
+  @apply bg-danger-subtle text-danger;
+}
+
+[role='dialog'] input {
+  @apply min-h-11;
+}
+
+[role='dialog'] button[aria-selected],
+[role='dialog'] button[aria-label='Close Search'] {
+  @apply min-h-11;
+}
+
+[role='dialog'] button[aria-selected] {
+  @apply px-3 text-ui;
+}
+
+[role='dialog'] div.text-center {
+  @apply text-start;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #nd-sidebar a[data-active],
+  #nd-sidebar button[data-state] {
+    transition: none;
   }
 }

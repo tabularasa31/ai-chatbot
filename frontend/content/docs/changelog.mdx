@@ -7,6 +7,12 @@ description: What's changed in Chat9, most recent first.
 
 The colour scheme control is now a small icon that opens a System / Light / Dark menu. In the dashboard it moved from the bottom of the sidebar to the top bar, next to your e-mail.
 
+## 2026-10-17 — Inline widget fills its container
+
+An inline widget (`mode: "inline"`) now takes the height of its target element instead of a fixed 600px, so a shorter target no longer cuts off the message box. A target without a fixed height still gets 600px.
+
+**What to do:** nothing. To size the widget, give the target element a fixed height. See [Embedding the widget](/docs/embedding-the-widget).
+
 ## 2026-10-17 — New widget look
 
 The chat widget has a new look.

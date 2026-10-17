@@ -54,7 +54,7 @@ All options are arguments to `Chat9Widget.start()`:
 
 **Modes:**
 - **Bubble** — floating button, bottom corner of the page. The window has a close button in its header, and Escape closes it; the bubble hides while the window is open. On phones it opens full screen.
-- **Inline** — renders inside a container you provide. Add `<div id="chat9-widget"></div>` where you want the widget.
+- **Inline** — renders inside a container you provide. Add `<div id="chat9-widget"></div>` where you want the widget. A target with a fixed `height` (or one stretched by flex or grid) is filled; otherwise the widget is 600px tall. The target must be displayed (not `display: none`) when the widget starts.
 
 ### Routing from Russia
 

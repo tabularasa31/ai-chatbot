@@ -406,6 +406,7 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
         *,
         message_to_user: str = "A support ticket was created for you.",
         followup_decision: Optional[str] = None,
+        decision: Optional[str] = None,
         tokens_used: int = 15,
     ) -> Mock:
         esc_client = Mock()
@@ -418,6 +419,7 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
                                 {
                                     "message_to_user": message_to_user,
                                     "followup_decision": followup_decision,
+                                    **({"decision": decision} if decision else {}),
                                 }
                             )
                         )

@@ -758,6 +758,7 @@ def test_system_ticket_offer_waits_for_second_user_turn(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     relevance_guard_category,
+    escalation_openai_override,
     reason: str,
     prior_user_turn: bool,
     offer_expected: bool,
@@ -780,10 +781,23 @@ def test_system_ticket_offer_waits_for_second_user_turn(
             ]
         )
         db_session.commit()
-    marker = {"needs_human": " <needs_human/>", "offered_ticket": " <offered_ticket/>"}.get(reason, "")
+    plain_answer = "Check the DNS records."
+    marker = {
+        "needs_human": " <needs_human/>",
+        "offered_ticket": " Want me to open a ticket? <offered_ticket/>",
+    }.get(reason, "")
     _seed_rag_answer(
-        mock_openai_client, db_session, tenant_id, answer=f"Check the DNS records.{marker}"
+        mock_openai_client, db_session, tenant_id, answer=f"{plain_answer}{marker}"
     )
+    marked_generation = mock_openai_client.chat.completions.create.side_effect
+    plain_generation = _chat_completion_side_effect(plain_answer)
+
+    def _generation(*args: object, **kwargs: object) -> object:
+        regenerating = "HANDOFF (this turn)" in str(kwargs.get("messages"))
+        return (plain_generation if regenerating else marked_generation)(*args, **kwargs)
+
+    mock_openai_client.chat.completions.create.side_effect = _generation
+    escalation_openai_override(decision="yes")
     if reason == "user_complaint":
         db_session.query(TenantProfile).filter_by(tenant_id=tenant_id).update(
             {"product_name": "Acme"}
@@ -806,17 +820,16 @@ def test_system_ticket_offer_waits_for_second_user_turn(
     offer = pre_confirm_fallback_result("initial").message_to_user
     assert (offer in first["text"]) is offer_expected
     if not offer_expected:
-        assert first["text"] == "Check the DNS records."
+        assert first["text"] == plain_answer
     assert chat.escalation_pre_confirm_pending is offer_expected
 
     drive(tenant, api_key, chat.session_id, "yes")
-    if not offer_expected:
-        assert (
-            db_session.query(EscalationTicket)
-            .filter(EscalationTicket.tenant_id == tenant_id)
-            .count()
-            == 0
-        )
+    assert (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.tenant_id == tenant_id)
+        .count()
+        == int(offer_expected)
+    )
 
 
 @pytest.mark.escalation

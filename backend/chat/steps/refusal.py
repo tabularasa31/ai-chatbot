@@ -17,7 +17,6 @@ from backend.chat.types import (
     RetrievalContext,
 )
 from backend.guards.reject_response import RejectReason, build_reject_response_result
-from backend.models import Chat, MessageRole
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +28,6 @@ _REASON_ENUM: dict[RejectReasonLiteral, RejectReason] = {
     "social": RejectReason.SOCIAL,
     "social_question": RejectReason.SOCIAL_QUESTION,
 }
-
-
-def is_first_user_turn(chat: Chat | None) -> bool:
-    """True while the chat holds no earlier user message (a greeting does not count)."""
-    return chat is None or not any(
-        m.role == MessageRole.user for m in chat.messages or []
-    )
 
 
 async def build_reject_result(

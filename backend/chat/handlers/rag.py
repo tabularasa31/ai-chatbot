@@ -33,9 +33,9 @@ from backend.chat.decision import (
 )
 from backend.chat.events import _emit_chat_turn_event
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
+from backend.chat.language_context import is_first_user_turn
 from backend.chat.persistence import _persist_turn_with_response_language
 from backend.chat.post_turn import _trigger_log_analysis_threshold, _try_ingest_gap_signal
-from backend.chat.steps.refusal import is_first_user_turn
 from backend.chat.types import (
     ChatPipelineResult,
 )
@@ -738,22 +738,25 @@ class RagHandler(PipelineHandler):
         # answers the clarification while the gate reads it as consent to open
         # a ticket.
         _handoff_offer_appended = False
-        # A visitor who has not yet said a word is never offered a ticket by
-        # the system; they can always ask for a person themselves.
         _first_user_turn = is_first_user_turn(chat)
-        _handoff_offer_suppressed_first_turn = (
-            _first_user_turn
-            and not chat.escalation_pre_confirm_pending
-            and bool(result.llm_needs_human or result.llm_offered_ticket)
-        )
-        if (
-            not _first_user_turn
-            and not chat.escalation_pre_confirm_pending
+        _rescue_wanted = (
+            not chat.escalation_pre_confirm_pending
             and result.llm_needs_human
             and not result.llm_offered_ticket
             and not result.llm_clarifying
             and not result.llm_checklist
-        ):
+        )
+        _offered_ticket_wanted = (
+            not escalate
+            and not chat.escalation_pre_confirm_pending
+            and result.llm_offered_ticket
+        )
+        # A first reply never carries a system-initiated offer; the visitor
+        # can always ask for a person themselves.
+        _handoff_offer_suppressed_first_turn = _first_user_turn and (
+            _rescue_wanted or _offered_ticket_wanted
+        )
+        if _rescue_wanted and not _first_user_turn:
             _handoff_start = perf_counter()
             # "You can reach our support team right here" only informs a user
             # who asked how to reach support. Anywhere else it restates what
@@ -811,21 +814,13 @@ class RagHandler(PipelineHandler):
                 chat.id,
             )
 
-        # Safety net: decide() may classify a turn as a confident answer while
-        # the LLM still ends its reply with a ticket offer (the system prompt
-        # allows this when it judges the docs incomplete). The LLM signals
-        # the offer by appending OFFER_MARKER, which async_generate_answer strips
-        # and surfaces as ``result.llm_offered_ticket``. Without arming
-        # pre_confirm here, the user's "yes" / "да" / "ja" / "oui" reaches the
-        # next turn as an ordinary RAG query and is answered afresh instead of
-        # being read as acceptance of the ticket offer. The marker is
-        # machine-emitted, so this works in any response language.
-        if (
-            not _first_user_turn
-            and not escalate
-            and not chat.escalation_pre_confirm_pending
-            and result.llm_offered_ticket
-        ):
+        # Safety net for a model that ignores the prompt rule and writes its own
+        # ticket offer: the reply is still marked with OFFER_MARKER (stripped by
+        # async_generate_answer, surfaced as ``result.llm_offered_ticket``), so
+        # arming pre-confirm makes the user's "yes" / "да" / "ja" read as consent
+        # instead of a fresh RAG query. The marker is machine-emitted, so this
+        # works in any response language.
+        if _offered_ticket_wanted and not _first_user_turn:
             chat.escalation_pre_confirm_pending = True
             chat.escalation_pre_confirm_context = {
                 "trigger": EscalationTrigger.llm_self_offer.value,

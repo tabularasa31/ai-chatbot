@@ -21,6 +21,7 @@ from backend.chat.language import (
     log_llm_tokens,
     translate_text_result,
 )
+from backend.chat.language_context import is_first_user_turn
 from backend.chat.pii import redact_for_egress
 from backend.chat.prompts import build_rag_messages
 from backend.chat.steps.answer_cache import build_store_candidate
@@ -277,6 +278,7 @@ async def _async_generate_answer_native(
     strong_context: bool = False,
     allow_clarification: bool = True,
     require_clarification: str | None = None,
+    forbid_ticket_offer: bool = False,
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
@@ -316,6 +318,7 @@ async def _async_generate_answer_native(
         strong_context=strong_context,
         allow_clarification=allow_clarification,
         require_clarification=require_clarification,
+        forbid_ticket_offer=forbid_ticket_offer,
     )
     messages = _assemble_chat_messages(
         system_prompt=system_prompt,
@@ -815,6 +818,30 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
                     "retry_ms": _lang_retry_ms,
                 }
             )
+    if llm_offered_ticket and is_first_user_turn(run.chat):
+        (
+            raw_answer,
+            _retry_tokens,
+            _retry_in,
+            _retry_out,
+            llm_offered_ticket,
+            llm_needs_human,
+            llm_clarifying,
+            llm_checklist,
+        ) = await async_generate_answer(
+            run.question,
+            retrieval.chunk_texts,
+            response_language=language_context.response_language,
+            stream_callback=None,
+            forbid_ticket_offer=True,
+            **_generate_kwargs,
+        )
+        tokens_used += _retry_tokens
+        _input_toks += _retry_in
+        _output_toks += _retry_out
+        if trace is not None:
+            trace.update(metadata={"first_turn_offer_regenerated": True})
+
     llm_ms = int((perf_counter() - llm_start) * 1000)
     record_stage_ms(trace, "llm_ms", llm_ms)
 

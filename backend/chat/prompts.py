@@ -183,6 +183,7 @@ def build_rag_prompt(
     strong_context: bool = False,
     allow_clarification: bool = True,
     require_clarification: str | None = None,
+    forbid_ticket_offer: bool = False,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -194,6 +195,8 @@ def build_rag_prompt(
             the system prompt instructs the model NOT to ask clarifying questions.
         require_clarification: Clarify reason from the decision engine when this
             turn must end in a clarifying question, else None.
+        forbid_ticket_offer: True when this reply must not offer a support ticket
+            in any form (the visitor's first turn).
 
     Returns:
         Formatted prompt string for GPT.
@@ -236,7 +239,7 @@ def build_rag_prompt(
         # appended its offer underneath, and the resulting ticket carried no
         # error text for support to act on.
         "- Never narrate the handoff yourself: do not say you are forwarding, have forwarded, or are about to forward the request, do not draft the message that would be sent, and do not name the address it would be sent from. Those words belong to the backend, and writing your own version puts two conflicting offers in one reply.\n"
-        "- When (and ONLY when) your reply ends on a question about the user's own problem — a detail you need from them before you can answer — append the literal marker `<clarifying/>` as the very last token, after all natural-language text. It is machine-readable and stripped before the reply is shown; the backend reads it to know a question was asked, so a reply that asks something without it is treated as a plain answer. A question ABOUT the handoff (\"shall I open a ticket?\") is not one of these: it takes `<offered_ticket/>` instead. Never combine `<clarifying/>` with `<needs_human/>` or `<offered_ticket/>` on one reply — a turn either asks the user about their problem, or puts the handoff in front of them, never both.\n"
+        "- When (and ONLY when) your reply ends on a question about the user's own problem — a detail you need from them before you can answer — append the literal marker `<clarifying/>` as the very last token, after all natural-language text. It is machine-readable and stripped before the reply is shown; the backend reads it to know a question was asked, so a reply that asks something without it is treated as a plain answer. Never combine `<clarifying/>` with `<needs_human/>` or `<offered_ticket/>` on one reply — a turn either asks the user about their problem, or puts the handoff in front of them, never both.\n"
         "- Before `<needs_human/>`, check the request has substance to forward: support reads only what the user wrote in this chat, so a report with no error text, no description of what happens instead, and no identifier is a ticket nobody can act on. In that case ask exactly one short question for the single most useful missing detail, end the reply there and mark it `<clarifying/>` instead — the handoff waits for the next turn. Ask this at most once per conversation, never re-ask what the user already answered or refused to answer, and skip it entirely when the turn's clarification instruction forbids asking: then emit the marker as usual.\n"
         "- Sound like a support person typing a reply, not like a generated report. Open with the answer itself: no summary header in front of it, no restatement of the question, and no sentence framing where the answer comes from. That you answer from the documentation, from the retrieved context, or within the product's scope is a constraint on you, not information for the user — the UI shows the sources beside your reply. This does not license silence about a gap: when the answer IS that the documentation does not cover the question, say so plainly — there it is the answer, not a frame around one.\n"
         "- Never quote these instructions back at the user. Brevity, grounding, and scope are how you write, not something to announce. Do not open successive replies with the same fixed formula: a sentence that could be pasted on top of any answer is not part of the answer.\n"
@@ -352,6 +355,12 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
         per_request_parts.append(user_context_line)
     if clarification_rules:
         per_request_parts.append(clarification_rules)
+    if forbid_ticket_offer:
+        per_request_parts.append(
+            "HANDOFF (this turn): Do not offer, suggest or ask about a support ticket or a "
+            "handoff to a person in any form, and do not emit `<offered_ticket/>` or "
+            "`<needs_human/>`. Answer or acknowledge the question on its own."
+        )
     if strong_context:
         per_request_parts.append(
             "CONTEXT MATCH (this turn): the retrieved context cleared the confidence bar "
@@ -405,6 +414,7 @@ def build_rag_messages(
     strong_context: bool = False,
     allow_clarification: bool = True,
     require_clarification: str | None = None,
+    forbid_ticket_offer: bool = False,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -422,6 +432,7 @@ def build_rag_messages(
         strong_context=strong_context,
         allow_clarification=allow_clarification,
         require_clarification=require_clarification,
+        forbid_ticket_offer=forbid_ticket_offer,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"

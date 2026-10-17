@@ -50,7 +50,7 @@ function LoginForm() {
   else if (workspaceDeleted)
     notice = (
       <>
-        Your workspace and account were deleted. To start over, <AuthLink href="/signup">create an account</AuthLink>.
+        Your tenant was deleted, along with your account. <AuthLink href="/signup">Register again</AuthLink> to start a new one.
       </>
     );
   else if (sessionExpired) notice = "Your session expired. Sign in again.";

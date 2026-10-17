@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { InboxRow } from "@/lib/api";
 import { Button, FOCUS_RING, buttonClasses } from "@/components/ui/button";
-import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
+import { SkeletonRegion } from "@/components/ui/skeleton";
 import { LoadError } from "@/components/ui/load-error";
 import { cn } from "@/components/ui/utils";
 import { previewPrefix, rowMeta, visitorLabel } from "../_lib/labels";
@@ -70,7 +70,7 @@ function InboxRowItem({
 
 function RowsSkeleton() {
   return (
-    <DeferredSkeleton>
+    <SkeletonRegion>
       {Array.from({ length: SKELETON_ROWS }, (_, row) => (
         <div key={row} className="space-y-2 border-b border-line px-4 py-3">
           {SKELETON_BARS.map((width) => (
@@ -78,7 +78,7 @@ function RowsSkeleton() {
           ))}
         </div>
       ))}
-    </DeferredSkeleton>
+    </SkeletonRegion>
   );
 }
 

@@ -193,7 +193,7 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
   const [savedMessage, flashSaved] = useFlash();
   const savingRef = useRef(false);
   savingRef.current = saving;
-  const emailField = useRef<HTMLDivElement>(null);
+  const emailField = useRef<HTMLInputElement>(null);
 
   const refreshProfile = useCallback(async () => {
     const next = await api.knowledge.getProfile();
@@ -273,7 +273,7 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
 
   async function save() {
     setSaveFailed(false);
-    if (emailField.current?.querySelector("input")?.validity.typeMismatch) {
+    if (emailField.current?.validity.typeMismatch) {
       setEmailError("Enter a valid email address.");
       return;
     }
@@ -330,18 +330,17 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
           />
         </fieldset>
 
-        <div ref={emailField}>
-          <Input
-            label="Support email"
-            type="email"
-            error={emailError}
-            value={draft.support_email ?? ""}
-            onChange={(e) => {
-              setEmailError(undefined);
-              update({ support_email: e.target.value || null });
-            }}
-          />
-        </div>
+        <Input
+          ref={emailField}
+          label="Support email"
+          type="email"
+          error={emailError}
+          value={draft.support_email ?? ""}
+          onChange={(e) => {
+            setEmailError(undefined);
+            update({ support_email: e.target.value || null });
+          }}
+        />
 
         <fieldset>
           <legend className="mb-1 text-ui font-medium text-fg">Support URLs</legend>

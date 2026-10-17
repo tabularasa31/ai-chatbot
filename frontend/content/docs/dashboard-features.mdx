@@ -59,16 +59,16 @@ Doc gaps is the operator backlog for things your documentation may be missing an
 
 ## Settings → Bot (`/settings`)
 
-- **OpenAI API key** — per-client key, encrypted at rest; required for embeddings, chat, and document health checks. Save, update, or remove the key from this page.
+- **OpenAI API key** — per-tenant key, encrypted at rest; required for embeddings, chat, and document health checks. Save, replace, or remove the key from this page. Removing it asks for confirmation.
 
-- **Agent instructions** — shown as two parts. The standard instructions are read-only and maintained by Chat9 — they set your bot's baseline support-agent persona, tone, and ground rules, and are updated centrally as Chat9 improves them. **Your additions** is a textarea (up to 3 000 characters, with a character counter) where you add anything specific to your product on top of the standard instructions. The placeholder `{product_name}` is replaced at runtime with the product name extracted from your knowledge base.
+- **Instructions** — shown as two parts. The standard instructions are read-only and maintained by Chat9 — they set your bot's baseline support-agent persona, tone, and ground rules, and are updated centrally as Chat9 improves them. **Your additions** is a textarea (up to 3 000 characters, with a character counter) where you add anything specific to your product on top of the standard instructions. The placeholder `{product_name}` is replaced at runtime with the product name extracted from your knowledge base.
   - A **"Use only my own prompt"** toggle lets you drop the standard instructions entirely and run on your own text alone — use it if you want full control over your bot's persona instead of building on the Chat9 default.
   - Either way, Chat9's core product rules (grounding answers in your documentation, escalation behavior, formatting) always apply on top and cannot be overridden.
   - When you create a bot and provide a **website URL** at signup, Chat9 auto-extracts a short company description from that page and adds it to your instructions in the background.
 
-- **Response detail level** — Detailed / Standard / Corporate. Controls how much technical depth the bot includes in answers. This setting also lives on this page; see the description of each level when selecting it.
+- **Response detail** — Detailed / Standard / Corporate. Controls how much technical depth the bot includes in answers; it applies to every chat. See the description of each level when selecting it.
 
-- **Support inbox** — support email address that receives L2 escalation tickets, and an optional escalation language override (pins the language of tenant-side ticket artifacts independently of what language end users write in — see [Language Support](/docs/language) for the full picture).
+- **Escalation** — support email address that receives L2 escalation tickets, and an optional escalation language override (pins the language of tenant-side ticket artifacts independently of what language end users write in — see [Language Support](/docs/language) for the full picture).
 
 ## Inbox (`/inbox`)
 
@@ -83,7 +83,7 @@ Every conversation your visitors have had with the bot, and the place where a pe
 - **Missed replies go out by e-mail:** if the visitor has not had your reply on screen within five minutes — the widget is collapsed, the tab is in the background, or they have left the page — Chat9 e-mails them the reply text as you wrote it, to the address from their escalation request or the one your site passed to the widget. Several replies in a row arrive as one e-mail, and its Reply-To is your support inbox. A visitor with no known address is not e-mailed.
 - **Take / Return to bot:** take a conversation before you write, or hand it back to the bot explicitly. If you go quiet, the bot resumes on the visitor's next message after the idle window on its own.
 - **Mark resolved:** closes every open escalation ticket of the visitor (with an optional note), retires their e-mail reply addresses, and returns the conversation to the bot. The row leaves *Needs attention*.
-- **Seats:** anybody in the workspace can read the Inbox. Replying, taking, returning and resolving need an operator seat (**Settings → Seats**). A reply sent by e-mail from a seat holder lands in the same thread and looks the same as one sent here.
+- **Seats:** anybody in the tenant can read the Inbox. Replying, taking, returning and resolving need an operator seat (**Settings → Seats**). A reply sent by e-mail from a seat holder lands in the same thread and looks the same as one sent here.
 
 Chat9 does not assign conversations. A held conversation shows who holds it, and a colleague can still answer in it.
 
@@ -97,7 +97,7 @@ Set the **response detail level** (Detailed / Standard / Corporate) from **Setti
 
 ## Settings → Widget (`/widget-settings`)
 
-- **Widget identity verification** — optional owner-only card to generate, reveal/copy, and rotate the key used to verify a visitor's `user_id`. Without a key, user IDs are trusted as-is; with a key, only verified visitors restore conversations across devices. Rotating replaces the key immediately; requests still signed with the old key stop verifying.
+- **Identity verification** — optional owner-only section to generate, reveal/copy, and rotate the key used to verify a visitor's `user_id`. Without a key, user IDs are trusted as-is; with a key, only verified visitors restore conversations across devices. Rotating replaces the key immediately; requests still signed with the old key stop verifying.
 - See [Embedding the Widget → Identity verification](/docs/embedding-the-widget#identity-verification) for the full setup guide.
 
 ## Escalation tickets
@@ -116,7 +116,7 @@ A ticket is created automatically whenever a conversation is escalated. Tickets 
 **What happens when a ticket is created:**
 
 - The visitor's chat stays open — they can keep talking to the bot while your team works the ticket. Nothing closes it, not even the visitor saying they need nothing further; the conversation only rolls over into a new one after a week of silence.
-- An email notification is sent to the support email configured in Settings → Bot. When the workspace holds a seat, the e-mail also links straight to the conversation in the Inbox, and replying to it from a seat holder's mailbox lands the reply in the thread.
+- An email notification is sent to the support email configured in Settings → Bot. When the tenant has a seat holder, the e-mail also links straight to the conversation in the Inbox, and replying to it from a seat holder's mailbox lands the reply in the thread.
 - The conversation appears under **Inbox → Needs attention** with a sequential ticket number (e.g. `ESC-42`).
 - Tickets whose conversation has gone quiet are closed automatically. That only clears the queue; it does not mean anyone answered.
 

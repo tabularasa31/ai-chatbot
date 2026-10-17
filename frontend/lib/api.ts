@@ -50,7 +50,7 @@ export type TenantMember = {
   created_at: string;
   /**
    * When this person's operator seat was granted, or null for no seat.
-   * An invite grants one, so in practice only a workspace's founding owner
+   * An invite grants one, so in practice only a tenant's founding owner
    * is ever null here.
    */
   seat_granted_at: string | null;
@@ -691,7 +691,7 @@ export const api = {
       return getJson(`${BASE_URL}/tenants/me/llm-alert`, "Failed to load LLM alert");
     },
     /**
-     * Delete the workspace. Owner only, irreversible, and it takes the
+     * Delete the tenant. Owner only, irreversible, and it takes the
      * caller's own account with it — so every later request 401s, including
      * whatever this page would try to refetch. Callers must go straight to
      * /login rather than let that 401 be discovered by a background request.
@@ -701,7 +701,7 @@ export const api = {
      * just deleted their workspace on purpose that their session expired.
      */
     delete(tenantId: string): Promise<void> {
-      return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the workspace", {
+      return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the tenant", {
         method: "DELETE",
         skipAuthRedirect: true,
       });
@@ -722,7 +722,7 @@ export const api = {
       const data = await getJson<Partial<TenantMemberList>>(`${BASE_URL}/tenants/members`, "Failed to load team members");
       return { items: data.items ?? [], seats: data.seats ?? 0 };
     },
-    /** Always invites an operator: the workspace's one owner created it. */
+    /** Always invites an operator: the tenant's one owner created it. */
     invite(email: string): Promise<InviteMemberResponse> {
       return sendJson(`${BASE_URL}/tenants/members/invite`, "POST", { email }, "Failed to send the invite");
     },

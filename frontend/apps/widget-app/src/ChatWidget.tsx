@@ -405,6 +405,7 @@ export function ChatWidget({
 
     setSessionHydrated(false);
     setHistoryLoaded(false);
+    greetingRequestedRef.current = false;
     setActiveTicket(null);
     setHandoffState("bot");
     cursorRef.current = null;
@@ -614,6 +615,7 @@ export function ChatWidget({
       ticket_number?: string | null;
       sources?: WidgetSource[];
     };
+    // Marking history loaded keeps a late history fetch from overwriting the visitor's bubble.
     if (visitorSentRef.current) setHistoryLoaded(true);
     else applyAssistantMessage(data);
     setSessionId(data.session_id);
@@ -623,6 +625,7 @@ export function ChatWidget({
 
   const appendGreetingError = useCallback((error: unknown) => {
     console.error("Chat9: greeting failed", error);
+    if (visitorSentRef.current) return;
     setMessages((prev) => [
       ...prev,
       createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
@@ -710,7 +713,8 @@ export function ChatWidget({
           if (data.messages.length > 0) {
             setMessages((prev) => appendSystemMarker(prev, "new_conversation"));
           }
-          requestGreetingOnce(sessionId);
+          greetingRequestedRef.current = true;
+          void requestGreeting(sessionId);
         }
       })
       .catch((error) => {
@@ -728,7 +732,7 @@ export function ChatWidget({
         }
       });
     return () => { cancelled = true; };
-  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, localeParam, requestGreetingOnce]);
+  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, localeParam, requestGreeting]);
 
   useEffect(() => {
     const waitingForHistory = sessionId !== null && !historyLoaded;
@@ -920,7 +924,10 @@ export function ChatWidget({
     setStatusStage(null);
     if (appendUserBubble) {
       visitorSentRef.current = true;
-      setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
+      setMessages((prev) => [
+        ...prev.filter((m) => !(m.type === "error" && m.retry.kind === "greeting")),
+        createTextMessage("user", userMessage),
+      ]);
     }
 
     const handleChunk = (partial: string) => {
@@ -1119,7 +1126,7 @@ export function ChatWidget({
       void handleLlmUnavailableEscalate(error.retry.messageId);
     } else if (error.retry.kind === "history") {
       setHistoryLoaded(false);
-    } else {
+    } else if (!visitorSentRef.current && !greetingInFlightRef.current) {
       void requestGreeting(sessionId);
     }
   }, [handleLlmUnavailableEscalate, requestGreeting, sendUserMessage, sessionId]);

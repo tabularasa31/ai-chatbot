@@ -39,7 +39,7 @@
 // (api-ru.getchat9.live) from its own scriptOrigin. No flag needed.
 
 import { sharedChromeString, type SharedChromeKey } from "../../../packages/widget-shared/src/chromeStrings";
-import { ACCENT_ON_LIGHT, accentOnColor, rgbToHex, type Rgb } from "../../../packages/widget-shared/src/accent";
+import { ACCENT_ON_LIGHT, accentOnRgb, rgbToHex, type Rgb } from "../../../packages/widget-shared/src/accent";
 
 type UserHints = {
   user_id?: string;
@@ -112,6 +112,7 @@ declare global {
   const GRIP_SIZE = 24;
   const GRIP_FADE_MS = 120;
   const PANEL_RADIUS = "16px";
+  const COMPUTED_RGB = /^rgba?\((\d{1,3}(?:\.\d+)?)[\s,]+(\d{1,3}(?:\.\d+)?)[\s,]+(\d{1,3}(?:\.\d+)?)(?:[\s,/]+[\d.]+%?)?\)$/;
   const GRIP_MEDIA_QUERY = "(pointer: fine) and (hover: hover)";
 
   type PanelPalette = {
@@ -214,9 +215,12 @@ declare global {
     probe.style.color = cssColor;
     if (!probe.style.color) return null;
     document.body.appendChild(probe);
-    const channels = (getComputedStyle(probe).color.match(/\d+(\.\d+)?/g) ?? []).map(Number);
+    const computed = getComputedStyle(probe).color;
     probe.remove();
-    return channels.length >= 3 ? [channels[0], channels[1], channels[2]] : null;
+    const match = COMPUTED_RGB.exec(computed);
+    if (!match) return null;
+    const channels = [Number(match[1]), Number(match[2]), Number(match[3])];
+    return channels.every((c) => c <= 255) ? [channels[0], channels[1], channels[2]] : null;
   }
 
   // ── Persistent loader state (lives across start/stop cycles) ──────────────
@@ -248,9 +252,9 @@ declare global {
   // iframe's own document.hidden still says "visible". It reads this to decide
   // when a message has actually been on screen. It also carries whether the
   // panel is full-screen, which decides where focus goes on open.
-  function postPanelStateToIframe(h: MountHandles, open: boolean, fullScreen: boolean) {
+  function postPanelStateToIframe(h: MountHandles, open: boolean, fullScreen: boolean, grip: boolean) {
     if (!h.widgetOrigin) return;
-    h.iframe.contentWindow?.postMessage({ type: "chat9:panel", open, fullScreen }, h.widgetOrigin);
+    h.iframe.contentWindow?.postMessage({ type: "chat9:panel", open, fullScreen, grip }, h.widgetOrigin);
   }
 
   function start(config: StartConfig = {}) {
@@ -324,6 +328,7 @@ declare global {
     // once (e.g. on identity-driven remount), so we stay subscribed for the
     // entire mount lifetime.
     let panelOpen = mode === "inline";
+    let gripShown = false;
     const phoneFullScreen = (): boolean => window.matchMedia(PHONE_MEDIA_QUERY).matches;
     let closePanel: (() => void) | null = null;
     let onIframeReady: (() => void) | null = null;
@@ -342,7 +347,7 @@ declare global {
         console.error("Chat9: cannot determine widget origin — set widgetBase. Aborting handshake.");
         return;
       }
-      postPanelStateToIframe(handles, panelOpen, mode === "bubble" && panelOpen && phoneFullScreen());
+      postPanelStateToIframe(handles, panelOpen, mode === "bubble" && panelOpen && phoneFullScreen(), gripShown);
       postHintsToIframe(handles, currentHints);
     }
 
@@ -398,10 +403,10 @@ declare global {
     let loadFailTimer: number | undefined;
 
     const palette = PANEL_PALETTES[theme];
-    const launcherFill = color || LAUNCHER_DEFAULT_FILL;
-    const launcherHoverFilter = color ? "brightness(0.92)" : "";
-    const launcherActiveFilter = color ? "brightness(0.85)" : "";
-    const launcherGlyph = accentRgb ? accentOnColor(accentRgb) : ACCENT_ON_LIGHT;
+    const launcherFill = accentRgb ? rgbToHex(accentRgb) : LAUNCHER_DEFAULT_FILL;
+    const launcherHoverFilter = accentRgb ? "brightness(0.92)" : "";
+    const launcherActiveFilter = accentRgb ? "brightness(0.85)" : "";
+    const launcherGlyph = accentRgb ? rgbToHex(accentOnRgb(accentRgb)) : ACCENT_ON_LIGHT;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const phoneQuery = window.matchMedia(PHONE_MEDIA_QUERY);
     const gripQuery = window.matchMedia(GRIP_MEDIA_QUERY);
@@ -433,7 +438,7 @@ declare global {
     chatWindow.setAttribute("role", "dialog");
     chatWindow.setAttribute("aria-label", chromeString("panel_name"));
     chatWindow.style.cssText =
-      "display:none;position:relative;overflow:hidden;opacity:0;" +
+      "display:none;position:relative;overflow:hidden;opacity:0;box-sizing:border-box;" +
       `background:${palette.surface};border:1px solid ${palette.line};box-shadow:${palette.shadow};` +
       `transform-origin:${isLeft ? "bottom left" : "bottom right"};`;
 
@@ -444,9 +449,9 @@ declare global {
     const handleCorner = isLeft ? "top:0;right:0;" : "top:0;left:0;";
     const handleCursor = isLeft ? "ne-resize" : "nw-resize";
     resizeHandle.style.cssText =
-      "position:absolute;" +
+      "all:unset;position:absolute;" +
       handleCorner +
-      `box-sizing:border-box;width:${GRIP_SIZE}px;height:${GRIP_SIZE}px;padding:0;margin:0;border:none;background:transparent;` +
+      `box-sizing:border-box;width:${GRIP_SIZE}px;height:${GRIP_SIZE}px;background:transparent;` +
       `cursor:${handleCursor};z-index:20;display:none;align-items:center;justify-content:center;` +
       `color:${CHROME_FG_MUTED};opacity:0;` +
       (reducedMotion ? "" : `transition:opacity ${GRIP_FADE_MS}ms ease-out;`);
@@ -483,10 +488,10 @@ declare global {
       setLauncherState(launcherFill, "");
     }
     function launcherHover() {
-      setLauncherState(color ? launcherFill : LAUNCHER_HOVER_FILL, launcherHoverFilter);
+      setLauncherState(accentRgb ? launcherFill : LAUNCHER_HOVER_FILL, launcherHoverFilter);
     }
     function launcherActive() {
-      setLauncherState(color ? launcherFill : LAUNCHER_ACTIVE_FILL, launcherActiveFilter);
+      setLauncherState(accentRgb ? launcherFill : LAUNCHER_ACTIVE_FILL, launcherActiveFilter);
     }
     fab.addEventListener("mouseenter", launcherHover);
     fab.addEventListener("mouseleave", launcherRest);
@@ -516,6 +521,11 @@ declare global {
       fab.style.display = isOpen ? "none" : "flex";
       chatWindow.setAttribute("aria-modal", String(fullScreen));
       resizeHandle.style.display = !phone && gripQuery.matches ? "flex" : "none";
+      const grip = isOpen && !phone && gripQuery.matches;
+      if (grip !== gripShown) {
+        gripShown = grip;
+        if (handles) postPanelStateToIframe(handles, isOpen, fullScreen, grip);
+      }
       if (fullScreen) {
         const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
         Object.assign(chatWindow.style, {
@@ -641,14 +651,15 @@ declare global {
       setPanelMotion(false);
       requestAnimationFrame(() => setPanelMotion(true));
       iframe.focus();
-      if (handles) postPanelStateToIframe(handles, true, phoneFullScreen());
+      if (handles) postPanelStateToIframe(handles, true, phoneFullScreen(), gripShown);
     }
 
     closePanel = () => {
       if (!isOpen) return;
       isOpen = false;
       panelOpen = false;
-      if (handles) postPanelStateToIframe(handles, false, false);
+      if (handles) postPanelStateToIframe(handles, false, false, false);
+      gripShown = false;
       setPanelMotion(false);
       window.setTimeout(() => {
         if (isOpen) return;
@@ -662,8 +673,7 @@ declare global {
     };
 
     fab.addEventListener("click", () => {
-      if (isOpen) closePanel?.();
-      else openChat();
+      openChat();
     });
 
     function onKeyDown(e: KeyboardEvent) {
@@ -693,8 +703,8 @@ declare global {
     });
     chatWindow.addEventListener("focusin", () => revealGrip(true));
     chatWindow.addEventListener("focusout", (e) => {
-      const next = e.relatedTarget as Node | null;
-      revealGrip(panelHovered || (next !== null && chatWindow.contains(next)));
+      const next = e.relatedTarget;
+      revealGrip(panelHovered || (next instanceof Node && chatWindow.contains(next)));
     });
     resizeHandle.addEventListener("mouseenter", () => {
       resizeHandle.style.color = CHROME_FG;

@@ -4,8 +4,10 @@ import type { PageTree } from 'fumadocs-core/server';
 import { SidebarItem } from 'fumadocs-ui/layouts/docs/sidebar';
 import { usePathname } from 'next/navigation';
 
+const withoutTrailingSlash = (path: string) => path.replace(/\/$/, '');
+
 export function SidebarPageLink({ item }: { item: PageTree.Item }) {
-  const isCurrent = usePathname() === item.url;
+  const isCurrent = withoutTrailingSlash(usePathname()) === withoutTrailingSlash(item.url);
   return (
     <SidebarItem
       href={item.url}

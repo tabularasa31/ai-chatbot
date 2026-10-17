@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { Button, FOCUS_RING } from "@/components/ui/button";
-import { ThemeSwitch } from "@/components/ui/theme-switch";
+import { ThemeMenu } from "@/components/ui/theme-menu";
 import { cn } from "@/components/ui/utils";
 import { resolveScheme } from "@/lib/scheme";
 import { authLinkClasses, standaloneLinkClasses } from "./link-classes";
@@ -42,7 +42,7 @@ export function AuthCard({ centered, className, children, ...card }: AuthCardPro
         >
           {children}
         </div>
-        <ThemeSwitch className="mt-6" />
+        <ThemeMenu className="mt-4 -ml-3.5" />
       </div>
     </div>
   );

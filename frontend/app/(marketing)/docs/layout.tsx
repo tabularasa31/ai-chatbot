@@ -5,7 +5,7 @@ import { source } from '@/lib/source';
 import { Logo } from '@/components/Logo';
 import { SchemeSurface } from '@/components/ui/scheme-surface';
 import { SidebarPageLink } from './sidebar-page-link';
-import { ThemeSwitch } from '@/components/ui/theme-switch';
+import { ThemeMenu } from '@/components/ui/theme-menu';
 import './docs.css';
 
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {
@@ -24,7 +24,7 @@ export default function DocsSectionLayout({ children }: { children: ReactNode })
             defaultOpenLevel: 1,
             collapsible: false,
             components: { Item: SidebarPageLink },
-            footer: <ThemeSwitch />,
+            footer: <ThemeMenu className="-ml-0.5" />,
           }}
           containerProps={{ className: 'min-h-screen' }}
         >

@@ -46,8 +46,7 @@ def _make_chat(
     tenant: Tenant,
     *,
     age_minutes: int,
-    with_message: bool = True,
-    greeting_only: bool = False,
+    first_message_role: MessageRole | None = MessageRole.user,
 ) -> Chat:
     created = _utcnow() - timedelta(minutes=age_minutes + 5)
     last_activity = _utcnow() - timedelta(minutes=age_minutes)
@@ -60,11 +59,8 @@ def _make_chat(
     db.add(chat)
     db.commit()
     db.refresh(chat)
-    if with_message:
-        db.add(Message(chat_id=chat.id, role=MessageRole.user, content="hi"))
-        db.commit()
-    elif greeting_only:
-        db.add(Message(chat_id=chat.id, role=MessageRole.assistant, content="Hello!"))
+    if first_message_role is not None:
+        db.add(Message(chat_id=chat.id, role=first_message_role, content="hi"))
         db.commit()
     return chat
 
@@ -88,9 +84,9 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     fresh = _make_chat(db_session, tenant, age_minutes=5)
     active = _make_chat(db_session, tenant, age_minutes=90)
     active_last_activity = active.updated_at
-    empty = _make_chat(db_session, tenant, age_minutes=90, with_message=False)
+    empty = _make_chat(db_session, tenant, age_minutes=90, first_message_role=None)
     greeting_only = _make_chat(
-        db_session, tenant, age_minutes=90, with_message=False, greeting_only=True
+        db_session, tenant, age_minutes=90, first_message_role=MessageRole.assistant
     )
     already_reported = _make_chat(db_session, tenant, age_minutes=90)
     already_reported.session_ended_event_at = already_reported.updated_at

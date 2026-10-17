@@ -6,7 +6,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
-from backend.evals.client import ChatClient
+from backend.evals.client import ChatClient, ChatResponse
 from backend.evals.dataset import Dataset, GoldenCase
 from backend.evals.judge import AnthropicJudge
 from backend.evals.metrics import MetricResult, run_deterministic_metrics
@@ -46,6 +46,12 @@ def run(config: RunnerConfig) -> RunReport:
     )
 
 
+def _chain_break_reason(response: ChatResponse) -> str:
+    if response.error:
+        return f"chat error: code={response.error.get('code')} msg={response.error.get('message')}"
+    return "missing session_id"
+
+
 def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
     is_chain = bool(case.turns)
     messages = case.messages
@@ -74,19 +80,6 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
         last_response = chat_response
         session_id = chat_response.session_id
         total_latency_ms += chat_response.latency_ms
-        is_final_turn = turn_idx == len(messages)
-        if not is_final_turn and (chat_response.error or session_id is None):
-            return CaseResult(
-                case_id=case.id,
-                category=case.category,
-                lang=case.lang,
-                input=" | ".join(messages),
-                output=chat_response.text,
-                latency_ms=total_latency_ms,
-                metrics=[],
-                error=f"turn {turn_idx}: no session to continue ({chat_response.error or 'missing session_id'})",
-                turns_trace=turns_trace,
-            )
         # Either the offer is pending the user's yes/no, or the handoff already
         # happened this turn — an explicit human request mints the ticket without
         # ever arming the gate. Scoring only the former reads that path as "never
@@ -103,6 +96,19 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
         )
         if offered and escalation_offered_at_turn is None:
             escalation_offered_at_turn = turn_idx
+        is_final_turn = turn_idx == len(messages)
+        if not is_final_turn and (chat_response.error or session_id is None):
+            return CaseResult(
+                case_id=case.id,
+                category=case.category,
+                lang=case.lang,
+                input=" | ".join(messages),
+                output=chat_response.text,
+                latency_ms=total_latency_ms,
+                metrics=[],
+                error=f"turn {turn_idx}: {_chain_break_reason(chat_response)}",
+                turns_trace=turns_trace,
+            )
 
     assert last_response is not None  # messages is always >= 1 by validator
     output = last_response.text

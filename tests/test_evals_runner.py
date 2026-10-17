@@ -381,8 +381,14 @@ def test_chat_client_session_id_forwarding(session_id, expected_params) -> None:
         pytest.param(
             'data: {"type":"error","code":"boom","message":"failed"}',
             [{"bot_id": "ch_test"}],
-            "turn 1",
+            "turn 1: chat error: code=boom msg=failed",
             id="stops_when_a_non_final_turn_errors",
+        ),
+        pytest.param(
+            'data: {"type":"done","text":"ok"}',
+            [{"bot_id": "ch_test"}],
+            "turn 1: missing session_id",
+            id="stops_when_a_non_final_turn_returns_no_session",
         ),
     ],
 )
@@ -403,7 +409,7 @@ def test_chain_case_session_handling(first_turn_line, expected_calls, expected_e
 
     assert [call["params"] for call in http.calls] == expected_calls
     error = report.cases[0].error
-    assert (error is None) if expected_error is None else (expected_error in error)
+    assert error == expected_error
 
 
 # ─── runner end-to-end (mocked chat + judge) ────────────────────────────────

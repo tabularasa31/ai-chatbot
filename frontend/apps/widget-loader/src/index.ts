@@ -245,7 +245,8 @@ declare global {
   // Whether the visitor can see the chat panel. The widget-app cannot tell on
   // its own: a collapsed bubble hides the iframe with display:none, and the
   // iframe's own document.hidden still says "visible". It reads this to decide
-  // when a message has actually been on screen.
+  // when a message has actually been on screen. It also carries whether the
+  // panel is full-screen, which decides where focus goes on open.
   function postPanelStateToIframe(h: MountHandles, open: boolean, fullScreen: boolean) {
     if (!h.widgetOrigin) return;
     h.iframe.contentWindow?.postMessage({ type: "chat9:panel", open, fullScreen }, h.widgetOrigin);

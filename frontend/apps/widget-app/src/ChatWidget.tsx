@@ -319,6 +319,8 @@ export function ChatWidget({
   const [pendingExternalLink, setPendingExternalLink] = useState<PendingExternalLink | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const linkOpenerRef = useRef<HTMLElement | null>(null);
+  const modalOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // Tracks the storage user_id derived from the current hints so other effects can use it.
   const userIdRef = useRef<string | null>(null);
@@ -358,6 +360,7 @@ export function ChatWidget({
       const url = new URL(trimmedUrl, window.location.href);
       if (url.protocol !== "http:" && url.protocol !== "https:") return false;
       if (hostnameAllowed(url.hostname, widgetConfig.allowed_domains ?? [])) return false;
+      linkOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setPendingExternalLink({ url: url.href, hostname: url.hostname });
       return true;
     } catch {
@@ -1102,7 +1105,6 @@ export function ChatWidget({
   }, [appendGreetingError, fetchGreeting]);
 
   const handleErrorRetry = useCallback((error: Extract<ChatWidgetMessage, { type: "error" }>) => {
-    if (loading) return;
     setMessages((prev) => prev.filter((m) => m.id !== error.id));
     if (error.retry.kind === "send") {
       void sendUserMessage(error.retry.message, { appendUserBubble: false });
@@ -1111,10 +1113,10 @@ export function ChatWidget({
     } else {
       void retryGreeting();
     }
-  }, [handleLlmUnavailableEscalate, loading, retryGreeting, sendUserMessage]);
+  }, [handleLlmUnavailableEscalate, retryGreeting, sendUserMessage]);
 
   useEffect(() => {
-    if (!isOpen || !onClose) return;
+    if (!isOpen || !onClose || modalOpenRef.current) return;
     if (fullScreen) panelRef.current?.focus();
     else inputRef.current?.focus();
   }, [isOpen, fullScreen, onClose]);
@@ -1128,8 +1130,16 @@ export function ChatWidget({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose, pendingExternalLink]);
 
+  useEffect(() => {
+    if (pendingExternalLink) return;
+    const opener = linkOpenerRef.current;
+    linkOpenerRef.current = null;
+    if (opener?.isConnected) opener.focus();
+  }, [pendingExternalLink]);
+
   const padX = compact ? "pad-x-compact" : "pad-x";
   const modalOpen = pendingExternalLink !== null;
+  modalOpenRef.current = modalOpen;
 
   return (
     <div

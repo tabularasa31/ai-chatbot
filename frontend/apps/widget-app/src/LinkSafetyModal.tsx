@@ -30,11 +30,7 @@ export function LinkSafetyModal({
     : [`${labels.body} `, ""];
 
   useLayoutEffect(() => {
-    const opener = document.activeElement;
     cancelRef.current?.focus();
-    return () => {
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
-    };
   }, []);
 
   function handleKeyDown(event: { key: string; shiftKey: boolean; preventDefault: () => void }) {

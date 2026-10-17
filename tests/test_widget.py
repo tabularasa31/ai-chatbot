@@ -1017,6 +1017,47 @@ def test_widget_greeting_is_stateless_until_first_message(
     assert llm_down.json()["text"].startswith("I'm the Greeting Locale Tenant assistant")
 
 
+def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    fake_redis: dict[str, str],
+) -> None:
+    """One LLM call per tenant, product name and language root; unknown language
+    roots and LLM failures are never cached."""
+    client_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-greeting-cache@example.com", "Greeting Cache Tenant"
+    )
+    llm = mock_openai_client.chat.completions.create
+    llm.return_value = _chat_completion_response("Bonjour de Greeting Cache Tenant.", total_tokens=9)
+
+    def greet(locale: str) -> str:
+        response = tenant.get(f"/widget/greeting?bot_id={bot_public_id}&locale={locale}")
+        assert response.status_code == 200
+        return response.json()["text"]
+
+    assert greet("ru-RU") == "Bonjour de Greeting Cache Tenant."
+    assert greet("ru-UA") == "Bonjour de Greeting Cache Tenant."
+    assert llm.call_count == 1
+    assert len(fake_redis) == 1
+
+    assert greet("zz-ZZ").startswith("I'm the Greeting Cache Tenant assistant")
+    assert llm.call_count == 1
+
+    db_session.get(Tenant, client_uuid).name = "Renamed Tenant"
+    db_session.commit()
+    assert greet("ru-RU") == "Bonjour de Greeting Cache Tenant."
+    assert llm.call_count == 2
+
+    fake_redis.clear()
+    llm.side_effect = RuntimeError("llm down")
+    assert greet("de-DE").startswith("I'm the Renamed Tenant assistant")
+    assert fake_redis == {}
+    llm.side_effect = None
+    assert greet("de-DE") == "Bonjour de Greeting Cache Tenant."
+    assert llm.call_count == 4
+
+
 def test_widget_chat_uses_context(
     mock_openai_client: Mock,
     tenant: TestClient,

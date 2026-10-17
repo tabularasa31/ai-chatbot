@@ -435,6 +435,25 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
     return _apply
 
 
+@pytest.fixture
+def fake_redis(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    from backend.core import redis as redis_mod
+
+    store: dict[str, str] = {}
+
+    async def _get(key: str) -> str | None:
+        return store.get(key)
+
+    async def _set(key: str, value: str, ttl: int) -> bool:
+        store[key] = value
+        return True
+
+    monkeypatch.setattr(redis_mod, "is_enabled", lambda: True)
+    monkeypatch.setattr(redis_mod, "cache_get", _get)
+    monkeypatch.setattr(redis_mod, "cache_set_with_ttl", _set)
+    return store
+
+
 @pytest.fixture(autouse=True)
 def _reset_widget_rate_limit_key_override():
     """Clear widget rate-limit test hook so a failed test cannot leak state."""

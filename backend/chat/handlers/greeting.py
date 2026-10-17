@@ -17,16 +17,26 @@ session or trace behind it.
 from __future__ import annotations
 
 import functools
+import hashlib
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
-from backend.chat.language import LocalizationResult, generate_greeting_in_language_result
+from backend.chat.iso_639_1 import ISO_639_1_CODES
+from backend.chat.language import (
+    LocalizationResult,
+    generate_greeting_in_language_result,
+    language_root_of,
+)
 from backend.chat.persistence import _persist_turn_with_response_language
+from backend.core import redis as redis_mod
 from backend.core.db import run_sync
 from backend.guards.injection_detector import detect_injection_structural
 from backend.models import Tenant, TenantProfile, TurnOutcome
+
+WIDGET_GREETING_CACHE_TTL_SECONDS = 7 * 24 * 3600
+ENGLISH = "en"
 
 
 def _resolve_product_name(
@@ -75,18 +85,40 @@ async def widget_product_name(*, tenant: Tenant, db: AsyncSession) -> str:
     )
 
 
+def _widget_greeting_cache_key(tenant_id: str, product_name: str, language_root: str) -> str:
+    product_digest = hashlib.sha256(product_name.encode("utf-8")).hexdigest()[:16]
+    return f"widget:greeting:{tenant_id}:{product_digest}:{language_root}"
+
+
 async def greet_widget_visitor(
-    *, product_name: str, locale: str | None, api_key: str | None
+    *, tenant_id: str, product_name: str, locale: str | None, api_key: str | None
 ) -> LocalizationResult:
     """Localized welcome for a visitor who has not written yet; persists nothing.
 
-    English when ``locale`` is absent or the LLM is unavailable.
+    English when ``locale`` is absent, its language is not an ISO 639-1 code, or
+    the LLM is unavailable. A successful generation is cached in Redis per
+    tenant, product name and language root, so only the first visitor per
+    week pays for the LLM call.
     """
-    return await _build_greeting_result(
-        product_name=product_name,
-        response_language=locale or "en",
-        api_key=api_key,
+    root = language_root_of(locale)
+    if root not in ISO_639_1_CODES or root == ENGLISH or not api_key:
+        return await _build_greeting_result(
+            product_name=product_name, response_language=ENGLISH, api_key=api_key
+        )
+
+    cache_key = _widget_greeting_cache_key(tenant_id, product_name, root)
+    cached = await redis_mod.cache_get(cache_key)
+    if cached:
+        return LocalizationResult(text=cached)
+
+    result = await _build_greeting_result(
+        product_name=product_name, response_language=root, api_key=api_key
     )
+    if result.tokens_used > 0:
+        await redis_mod.cache_set_with_ttl(
+            cache_key, result.text, WIDGET_GREETING_CACHE_TTL_SECONDS
+        )
+    return result
 
 
 class GreetingHandler(PipelineHandler):

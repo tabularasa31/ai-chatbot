@@ -624,10 +624,7 @@ async def test_repeated_question_is_served_from_cache_without_openai(
     _insert_single_chunk(db_session, tenant_id=cl_row.id)
     counters = _patch_pipeline_fakes(monkeypatch, answer="Use the reset link in Settings.")
 
-    # Widget flow: the session opens with an empty bootstrap turn (persisted
-    # greeting), then the visitor's first question.
     session_id = uuid.uuid4()
-    await _ask(cl_row, api_key, db_session, "", session_id=session_id)
     first = await _ask(cl_row, api_key, db_session, session_id=session_id)
     assert first.text == "Use the reset link in Settings."
     assert counters == {"embed": 1, "generate": 1, "retrieve": 1}

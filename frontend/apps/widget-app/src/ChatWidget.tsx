@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type Components } from "react-markdown";
 import "highlight.js/styles/github-dark.css";
 import { ArrowUp, Check, Copy, ExternalLink, Info, Loader2, TriangleAlert, X } from "lucide-react";
@@ -323,9 +323,9 @@ export function ChatWidget({
   const linkOpenerRef = useRef<HTMLElement | null>(null);
   const modalOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Set once the greeting has been requested: it is asked for at most once per
-  // mount, so no identity or history refresh can trigger a second one.
-  const greetingRequestedRef = useRef(false);
+  // The identity the greeting was last requested for: each identity is asked
+  // at most once, so no history refresh can trigger a second request.
+  const greetingRequestedForRef = useRef<string | null>(null);
   // True once the visitor has sent a message; a greeting that arrives
   // afterwards is dropped rather than shown after it.
   const visitorSentRef = useRef(false);
@@ -399,7 +399,9 @@ export function ChatWidget({
   const storageUserId = deriveStorageUserId(hints);
   const hasHints = Boolean(hints);
   const hintsRef = useRef(hints);
-  hintsRef.current = hints;
+  useLayoutEffect(() => {
+    hintsRef.current = hints;
+  }, [hints]);
 
   useEffect(() => {
     const userId = storageUserId;
@@ -600,16 +602,16 @@ export function ChatWidget({
     return { res, payload };
   }, [botId, localeParam, apiBase]);
 
-  const requestGreeting = useCallback(async () => {
+  const requestGreeting = useCallback(async (userId: string | null) => {
     setGreetingPending(true);
     const text = await greetOnce({
       apiBase,
       botId,
-      userId: userIdRef.current,
+      userId,
       locale: greetingLocale(hints?.locale, localeParam),
     });
     setGreetingPending(false);
-    if (text && !visitorSentRef.current) applyAssistantMessage({ text });
+    if (text && !visitorSentRef.current && userIdRef.current === userId) applyAssistantMessage({ text });
   }, [apiBase, applyAssistantMessage, botId, hints?.locale, localeParam]);
 
   useEffect(() => {
@@ -685,9 +687,11 @@ export function ChatWidget({
   useEffect(() => {
     const waitingForHistory = sessionId !== null && !historyLoaded;
     if (!isOpen || !sessionHydrated || waitingForHistory || loading || messages.length > 0) return;
-    if (greetingRequestedRef.current || hasBeenGreeted(botId, userIdRef.current)) return;
-    greetingRequestedRef.current = true;
-    void requestGreeting();
+    const userId = userIdRef.current;
+    const identity = userId ?? "";
+    if (greetingRequestedForRef.current === identity || hasBeenGreeted(botId, userId)) return;
+    greetingRequestedForRef.current = identity;
+    void requestGreeting(userId);
   }, [botId, historyLoaded, isOpen, loading, messages.length, requestGreeting, sessionHydrated, sessionId]);
 
   // How often to ask whether a human has written. The ladder is the whole

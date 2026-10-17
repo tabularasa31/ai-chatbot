@@ -361,22 +361,24 @@ declare global {
         return;
       }
 
+      targetEl.innerHTML = "";
+      const hostSized = targetEl.clientHeight > 0;
+      const frameHeight = hostSized ? "100%" : `${DEFAULT_PANEL_HEIGHT}px`;
+
       const inlineFrame = makeIframe(true);
-      inlineFrame.style.cssText =
-        "width:100%;height:600px;border:none;display:block;border-radius:12px;overflow:hidden;";
+      inlineFrame.style.cssText = `width:100%;height:${frameHeight};border:none;display:block;border-radius:12px;overflow:hidden;`;
 
       // Inline mode reuses the container slot from targetEl. We wrap in our own
       // synthetic container so stop() can do a clean .remove() without nuking
       // sibling content the host page may have placed in targetEl.
       const inlineContainer = document.createElement("div");
       inlineContainer.id = "chat9-widget-container";
-      inlineContainer.style.cssText = "width:100%;";
+      inlineContainer.style.cssText = hostSized ? "width:100%;height:100%;" : "width:100%;";
       inlineContainer.appendChild(inlineFrame);
 
       // Synthetic resizeOverlay for type-uniformity with bubble mode (unused).
       const resizeOverlay = document.createElement("div");
 
-      targetEl.innerHTML = "";
       targetEl.appendChild(inlineContainer);
 
       handles = {

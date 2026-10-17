@@ -31,8 +31,7 @@ export type BlogPost = {
   description: string;
   excerpt?: string;
   publishedAt: string;
-  coverImage?: string;
-  coverAlt?: string;
+  cover?: { src: string; alt: string };
   socialImage?: string;
   tags: string[];
   body: BlogBlock[];

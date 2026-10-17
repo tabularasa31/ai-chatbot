@@ -38,7 +38,7 @@ export function generateMetadata({
   }
 
   const articleUrl = getArticleUrl(post.slug);
-  const socialImage = post.socialImage ?? post.coverImage;
+  const socialImage = post.socialImage ?? post.cover?.src;
   const images = socialImage
     ? [
         {
@@ -87,7 +87,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
 
   const relatedPosts = getRelatedBlogPosts(post.slug);
   const articleUrl = getArticleUrl(post.slug);
-  const jsonLdImage = post.socialImage ?? post.coverImage;
+  const jsonLdImage = post.socialImage ?? post.cover?.src;
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "BlogPosting",
@@ -110,13 +110,13 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
           </Link>
           <h1 className="mt-6 break-words text-display text-fg">{post.title}</h1>
           <div className="mt-4">
-            <PostMeta publishedAt={post.publishedAt} readingTimeMinutes={post.readingTimeMinutes} />
+            <PostMeta post={post} />
           </div>
-          {post.coverImage ? (
+          {post.cover ? (
             <figure>
               <ImageWithFallback
-                src={post.coverImage}
-                alt={post.coverAlt ?? ""}
+                src={post.cover.src}
+                alt={post.cover.alt}
                 className="mt-8 h-auto w-full rounded-surface"
               />
             </figure>

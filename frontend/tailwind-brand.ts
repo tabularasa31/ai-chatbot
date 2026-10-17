@@ -155,6 +155,10 @@ export const brandThemeExtend = {
     h2: ["1.25rem", { lineHeight: "1.75rem", fontWeight: "600" }],
     h1: ["1.5rem", { lineHeight: "2rem", fontWeight: "600" }],
   },
+  height: {
+    demo: "30rem",
+    "demo-sm": "35rem",
+  },
   borderRadius: {
     tag: "4px",
     control: "8px",

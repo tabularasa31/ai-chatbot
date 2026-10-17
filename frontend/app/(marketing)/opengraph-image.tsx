@@ -60,7 +60,7 @@ export default function OpengraphImage() {
             Answer support questions from your own documentation
           </div>
           <div style={{ color: "#A9A3BA", fontSize: 34, maxWidth: 880 }}>
-            Upload files or add your docs site, paste one snippet.
+            Upload files or add your docs site, paste one snippet, and hand off to your team when the bot cannot answer.
           </div>
         </div>
       </div>

@@ -23,16 +23,6 @@ textarea::placeholder {
   .text-balance {
     text-wrap: balance;
   }
-
-  .h-demo {
-    height: 30rem;
-  }
-
-  @media (min-width: 640px) {
-    .h-demo {
-      height: 35rem;
-    }
-  }
 }
 
 html:has([data-scheme-surface]) {

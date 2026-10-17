@@ -8,9 +8,11 @@ export const howChat9AiBotWorks: BlogPost = {
   excerpt:
     "Most AI chatbots are built to answer quickly. Chat9 is built to answer responsibly, especially when the underlying information is incomplete, weak, or in conflict.",
   publishedAt: "2026-03-28",
-  coverImage: "/blog/chat9-conflicting-sources.svg",
-  coverAlt:
-    "A Chat9 answer to \"When was the pricing update released?\" with two retrieved sources that disagree (published in 2024 and in 2025) and the label \"Conflict detected between sources\".",
+  cover: {
+    src: "/blog/chat9-conflicting-sources.svg",
+    alt:
+      "A Chat9 answer to \"When was the pricing update released?\" with two retrieved sources that disagree (published in 2024 and in 2025) and the label \"Conflict detected between sources\".",
+  },
   socialImage: "/blog/chat9-conflicting-sources.png",
   tags: ["product", "reliability", "rag"],
   body: [

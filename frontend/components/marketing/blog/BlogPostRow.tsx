@@ -7,7 +7,7 @@ type BlogPostRowProps = { post: BlogPostSummary; titleAs: "h2" | "h3" };
 export function BlogPostRow({ post, titleAs: Title }: BlogPostRowProps) {
   return (
     <li className="group relative -mx-4 rounded-control px-4 py-6 transition-colors duration-[120ms] hover:bg-surface-alt motion-reduce:transition-none">
-      <PostMeta publishedAt={post.publishedAt} readingTimeMinutes={post.readingTimeMinutes} />
+      <PostMeta post={post} />
       <Title className="mt-2 break-words text-h2 text-fg">
         <Link
           href={`/blog/${post.slug}`}

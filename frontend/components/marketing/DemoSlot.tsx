@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ensureLoaderScript } from "@/lib/widget-embed";
-import type { WindowWithChat9Widget } from "@/types/chat9-widget";
 import { standaloneLinkClasses } from "./classes";
 
 export const HOW_THE_BOT_ANSWERS_HREF = "/blog/how-chat9-ai-bot-works";
@@ -53,12 +52,12 @@ export function DemoSlot({ botId }: { botId: string }) {
 
     ensureLoaderScript(botId)
       .then(() => {
-        const w = window as WindowWithChat9Widget;
-        if (cancelled || !w.Chat9Widget) return;
+        const widget = window.Chat9Widget;
+        if (cancelled || !widget) return;
         clearTimeout(failTimer);
-        if (!w.Chat9Widget.isStarted()) {
+        if (!widget.isStarted()) {
           // The loader's baked-in apiBase is production; preview hosts must call their own origin.
-          w.Chat9Widget.start({ mode: "inline", target: TARGET_ID, apiBase: window.location.origin });
+          widget.start({ mode: "inline", target: TARGET_ID, apiBase: window.location.origin });
         }
         setStatus("ready");
       })
@@ -70,8 +69,7 @@ export function DemoSlot({ botId }: { botId: string }) {
       cancelled = true;
       clearTimeout(skeletonTimer);
       clearTimeout(failTimer);
-      const w = window as WindowWithChat9Widget;
-      w.Chat9Widget?.stop();
+      window.Chat9Widget?.stop();
       const target = document.getElementById(TARGET_ID);
       if (target) target.innerHTML = "";
     };
@@ -85,7 +83,7 @@ export function DemoSlot({ botId }: { botId: string }) {
       <section
         aria-label="Live demo"
         aria-busy={status === "loading"}
-        className="relative h-demo overflow-hidden rounded-surface border border-line bg-surface"
+        className="relative h-demo sm:h-demo-sm overflow-hidden rounded-surface border border-line bg-surface"
       >
         {status === "error" ? (
           <div className="p-6">

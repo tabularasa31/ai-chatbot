@@ -68,9 +68,9 @@ function assertValidPost(post: BlogPost, seenSlugs: Set<string>): void {
 }
 
 function formatPublishedDate(date: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "long",
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
+    month: "short",
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(`${date}T00:00:00Z`));

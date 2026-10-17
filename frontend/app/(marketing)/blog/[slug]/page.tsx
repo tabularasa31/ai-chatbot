@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { Footer } from "@/components/marketing/Footer";
-import { Navigation } from "@/components/marketing/Navigation";
-import { CTABanner } from "@/components/marketing/CTABanner";
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
+import { MarketingShell } from "@/components/marketing/MarketingShell";
+import { CONTAINER, standaloneLinkClasses, textLinkClasses } from "@/components/marketing/classes";
 import { ImageWithFallback } from "@/components/marketing/figma/ImageWithFallback";
 import { BlogBody } from "@/components/marketing/blog/BlogBody";
-import { BlogPostCard } from "@/components/marketing/blog/BlogPostCard";
+import { BlogPostList } from "@/components/marketing/blog/BlogPostList";
+import { PostMeta } from "@/components/marketing/blog/PostMeta";
+import { cn } from "@/components/ui/utils";
 import { getAllBlogPosts, getBlogPostBySlug, getRelatedBlogPosts } from "@/lib/blog";
 import { toAbsoluteUrl } from "@/lib/site";
 
@@ -97,93 +100,48 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
   };
 
   return (
-    <div
-      className="min-h-screen bg-[#0A0A0F]"
-      style={{ colorScheme: "dark" }}
-    >
-      <Navigation />
-      <main>
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-        />
-
-        <article className="mx-auto max-w-4xl px-6 py-16 md:py-24">
-          <div className="rounded-3xl border border-[#232338] bg-[#11131B] p-8 md:p-12">
-            <p className="text-sm uppercase tracking-[0.24em] text-[#38BDF8]">
-              Chat9 Blog
-            </p>
-
-            <h1 className="mt-6 text-4xl text-[#E6E0F0] md:text-6xl">
-              {post.title}
-            </h1>
-
-            <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-[#A9A3BA]">
-              <span>{post.formattedDate}</span>
-              <span className="h-1 w-1 rounded-full bg-[#FAF5FF]/30" />
-              <span>{post.readingTimeMinutes} min read</span>
-            </div>
-
-            {post.excerpt ? (
-              <p className="mt-8 text-xl leading-8 text-[#AFA8BF]">
-                {post.excerpt}
-              </p>
-            ) : null}
-
-            <div className="mt-8 flex flex-wrap gap-2">
-              {post.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="rounded-full border border-[#26314A] bg-[#10141D] px-3 py-1 text-xs uppercase tracking-[0.18em] text-[#5EC8FF]"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-
-            {post.coverImage ? (
-              <div className="mt-10 overflow-hidden rounded-3xl border border-[#1E1E2E]">
-                <ImageWithFallback
-                  src={post.coverImage}
-                  alt={post.title}
-                  className="h-auto w-full object-cover"
-                />
-              </div>
-            ) : null}
-
-            <div className="mt-12">
-              <BlogBody blocks={post.body} />
+    <MarketingShell>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <article className={cn(CONTAINER, "pt-8 pb-16 md:pt-12")}>
+        <div className="max-w-prose">
+          <Link href="/blog" className={cn(standaloneLinkClasses, "gap-2 no-underline hover:underline")}>
+            <ArrowLeft size={16} aria-hidden />
+            All articles
+          </Link>
+          <h1 className="mt-6 break-words text-display text-fg">{post.title}</h1>
+          <div className="mt-4">
+            <PostMeta publishedAt={post.publishedAt} readingTimeMinutes={post.readingTimeMinutes} />
+          </div>
+          {post.coverImage ? (
+            <figure>
+              <ImageWithFallback
+                src={post.coverImage}
+                alt={post.coverAlt ?? ""}
+                className="mt-8 h-auto w-full rounded-surface"
+              />
+            </figure>
+          ) : null}
+          <div className="mt-8">
+            <BlogBody blocks={post.body} />
+          </div>
+          <p className="mt-12 text-body text-fg">
+            Chat9 answers support questions from your own documentation.{" "}
+            <Link href="/" className={textLinkClasses}>
+              See how it works
+            </Link>
+          </p>
+        </div>
+      </article>
+      {relatedPosts.length > 0 ? (
+        <section className={cn(CONTAINER, "pb-12 md:pb-16")}>
+          <div className="max-w-prose border-t border-line pt-8">
+            <h2 className="text-h2 text-fg">More articles</h2>
+            <div className="mt-4">
+              <BlogPostList posts={relatedPosts} titleAs="h3" />
             </div>
           </div>
-        </article>
-
-        {relatedPosts.length > 0 ? (
-          <section className="mx-auto max-w-7xl px-6 pb-8">
-            <div className="mb-8 flex items-end justify-between gap-4">
-              <div>
-                <p className="text-sm uppercase tracking-[0.24em] text-[#38BDF8]">
-                  Keep reading
-                </p>
-                <h2 className="mt-3 text-3xl text-[#E6E0F0]">
-                  Related articles
-                </h2>
-              </div>
-            </div>
-            <div className="grid gap-6 lg:grid-cols-3">
-              {relatedPosts.map((relatedPost) => (
-                <BlogPostCard
-                  key={relatedPost.slug}
-                  post={relatedPost}
-                  compact
-                />
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        <CTABanner />
-      </main>
-      <Footer />
-    </div>
+        </section>
+      ) : null}
+    </MarketingShell>
   );
 }

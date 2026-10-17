@@ -209,6 +209,16 @@ SectionTabs (`components/ui/section-tabs.tsx`): the one tab strip, replacing the
 
 SettingsShell (`app/(app)/settings/_components/SettingsShell.tsx`): H1 "Settings" (`text-h1`), 16px below it the SectionTabs strip (Bot | Widget | Team | Seats), 24px below that the tab content, in a left-aligned `max-w-2xl` column. Needed because the four tabs live in two route trees (`/settings/**`, `/widget-settings`) that a single layout cannot cover, and so the strip and H1 stay on screen while a tab loads or fails. It also holds the owner gate: a non-owner sees the H1, "Only the account owner can open Settings." and a "Back to Inbox" link, with no tabs and without mounting the tab content (no owner-only requests fire). Tab content starts at `text-h2`; a tab name is never repeated as an H1.
 
+Marketing shell (`components/marketing/`, new): `MarketingShell` wraps every site and blog page (opts into the scheme, skip link, header, `<main id="content">`, footer); `SiteHeader` is static, 64px, text links Docs / Blog / Sign in (Dashboard when signed in) with a 44px menu button below 768 (`aria-expanded`, `aria-controls`, Escape closes and returns focus); `SiteFooter` carries the links and the one `ThemeSwitch` of the site. Reason: the old Navigation was sticky with blur, had 28px targets and no skip link; nothing shared fit.
+
+DefinitionRows: `<ol>`/`<ul>` of rows, title (`text-body` 600) in columns 1-4 and text in 5-12 from 768, stacked below, `divide-y line`, `py-6`. Used for setup steps and conditions on the landing page. Reason: replaces the identical-card feature grid with rows whose content differs.
+
+CodeSnippet: `surface-alt` block, Geist Mono `text-ui`, horizontal scroll inside itself (focusable, `aria-label`), secondary Copy button via `ui/copy-button`. Reason: `CodeBlockWithCopy` is dashboard-only (primary button, no scroll focus).
+
+DemoSlot: bordered `surface` box (`h-demo` = 480 below 640, 560 from 640) holding the inline widget; skeleton after 200ms, error with Reload page after a failed or 10s-late loader; not rendered when no bot id is configured. Reason: the old block swallowed loader errors and showed an environment variable name to visitors.
+
+BlogPostRow / BlogPostList: one row per post, meta line, title as the only link (stretched `::after`), excerpt, `divide-y line`, hover `surface-alt`. Tags are not shown. Reason: replaces the three-column card grid with a card, tags and a duplicate "Read article" link per post.
+
 States for any data region (list, table, document list, inbox, analytics):
 - Loading: nothing for the first 200ms, then skeleton blocks of the final layout in `surface-alt`, no shimmer; `aria-busy`. A whole-page spinner is not used; inline `Loader2` only for buttons and refetch.
 - Empty: left-aligned statement of what is missing in plain words (`text-ui`, `fg-muted`) plus the one action that fixes it, if it exists. No illustration, no dashed box. Centering only when the empty region is the whole page body.

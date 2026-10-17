@@ -2,14 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #0A0A0F;
-  --foreground: #FAF5FF;
-}
-
 body {
-  color: var(--foreground);
-  background: var(--background);
+  @apply bg-canvas text-fg;
 }
 
 input,
@@ -25,15 +19,19 @@ textarea::placeholder {
   opacity: 1;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  html {
-    scroll-behavior: smooth;
-  }
-}
-
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  .h-demo {
+    height: 30rem;
+  }
+
+  @media (min-width: 640px) {
+    .h-demo {
+      height: 35rem;
+    }
   }
 }
 

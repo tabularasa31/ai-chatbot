@@ -6,33 +6,20 @@ type BlogBodyProps = {
 
 export function BlogBody({ blocks }: BlogBodyProps) {
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6 text-body text-fg">
       {blocks.map((block, index) => {
         switch (block.type) {
           case "heading":
             return (
-              <h2
-                key={`${block.type}-${index}`}
-                className="pt-4 text-2xl text-nd-text md:text-3xl"
-              >
+              <h2 key={`${block.type}-${index}`} className="mt-6 -mb-2 text-h2">
                 {block.text}
               </h2>
             );
           case "paragraph":
-            return (
-              <p
-                key={`${block.type}-${index}`}
-                className="text-lg leading-8 text-[#C6C0D4]"
-              >
-                {block.text}
-              </p>
-            );
+            return <p key={`${block.type}-${index}`}>{block.text}</p>;
           case "list":
             return (
-              <ul
-                key={`${block.type}-${index}`}
-                className="list-disc space-y-3 pl-6 text-lg leading-8 text-[#C6C0D4] marker:text-[#5EC8FF]"
-              >
+              <ul key={`${block.type}-${index}`} className="list-disc space-y-2 pl-6 marker:text-fg-muted">
                 {block.items.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
@@ -40,15 +27,10 @@ export function BlogBody({ blocks }: BlogBodyProps) {
             );
           case "quote":
             return (
-              <blockquote
-                key={`${block.type}-${index}`}
-                className="rounded-r-2xl border-l-4 border-nd-accent bg-nd-base-alt px-6 py-5"
-              >
-                <p className="text-xl leading-8 text-nd-text">{block.text}</p>
+              <blockquote key={`${block.type}-${index}`} className="border-l-2 border-line-strong pl-4">
+                <p>{block.text}</p>
                 {block.attribution ? (
-                  <footer className="mt-3 text-sm uppercase tracking-[0.2em] text-[#A9A3BA]">
-                    {block.attribution}
-                  </footer>
+                  <footer className="mt-2 text-caption text-fg-muted">— {block.attribution}</footer>
                 ) : null}
               </blockquote>
             );

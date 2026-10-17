@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   metadataBase: getMetadataBase(),
   title: "Chat9 — AI support chatbot for your docs",
   description:
-    "Chat9 turns your docs into a 24/7 AI support agent. Upload your knowledge base, embed the widget, and let it answer customers automatically.",
+    "Chat9 answers support questions from your documentation. Upload files or add your docs site, paste one snippet, and hand off to your team when the bot cannot answer.",
 };
 
 export default function RootLayout({

@@ -858,20 +858,64 @@ Two tiers, by code path rather than by a single "escalate" flag: bot-detected
 triggers arm `escalation_pre_confirm_pending` and wait for the user's "yes"
 before a ticket is created; user- or system-initiated triggers create the
 ticket immediately via `perform_manual_escalation`. Ten code paths feed
-nine `EscalationTrigger` values.
+nine `EscalationTrigger` values. No bot-detected trigger fires on the
+visitor's first message — see "First-turn rule" below.
 
 | # | Trigger | Fires when (file:line) | Pre-confirm? | What the user sees | What lands in the ticket / analytics |
 |---|---------|------------------------|---------------|---------------------|----------------------------------------|
-| 1 | `low_similarity` (T-1) | `should_escalate`: `max(vector, rank) score < ESCALATION_THRESHOLD` (0.45) — `backend/escalation/service.py:198` | Yes, subject to the two-strike deferral below | Pre-confirm question (LLM-drafted, localized, `backend/escalation/openai_escalation.py:240`; canonical-English fallback on timeout, `rag.py:757`) unless deferred, in which case the ordinary RAG answer | Retrieved-chunk preview, trigger, best similarity score |
-| 2 | `no_documents`, fast path (T-2) | Zero-hits fast path, `chunk_count == 0` — `backend/chat/steps/retrieval.py:330-361` | Yes, with its own two-strike rule (below) | "Please rephrase" prompt on the first zero-hits turn; pre-confirm question on the second | Same as above |
-| 3 | `no_documents`, slow path | `chunk_count == 0` reached via `steps/generate.py:700` when FAQ/quick-answer context existed but no chunks came back — `backend/escalation/service.py:190-191` | Yes, subject to the same two-strike deferral as row 1 | The generated answer on the first such turn; pre-confirm question on the second weak turn | Same as above |
+| 1 | `low_similarity` (T-1) | `should_escalate`: `max(vector, rank) score < ESCALATION_THRESHOLD` (0.45) — `backend/escalation/service.py:198` | Yes, subject to the two-strike deferral below | Pre-confirm question (LLM-drafted, localized, `backend/escalation/openai_escalation.py:240`; canonical-English fallback on timeout, `pre_confirm_fallback_result` in `RagHandler._handle_sync`) unless deferred, in which case the ordinary RAG answer | Retrieved-chunk preview, trigger, best similarity score |
+| 2 | `no_documents`, fast path (T-2) | Zero-hits fast path, `chunk_count == 0` — `zero_hits_fast_path` in `backend/chat/steps/retrieval.py` | Yes, with its own two-strike rule (below) | "Please rephrase" prompt on the first zero-hits turn; pre-confirm question on the second | Same as above |
+| 3 | `no_documents`, slow path | `chunk_count == 0` reached via `run_generation` in `backend/chat/steps/generate.py` when FAQ/quick-answer context existed but no chunks came back — `backend/escalation/service.py:190-191` | Yes, subject to the same two-strike deferral as row 1 | The generated answer on the first such turn; pre-confirm question on the second weak turn | Same as above |
 | 4 | `user_request`, explicit ask (T-3) | Outright human request — `backend/chat/handlers/escalation.py:171-176`, `:663` | No — the ask is itself the confirmation | Ticket confirmation / handoff message | User's message as the ticket body |
 | 5 | `user_request`, elicited | Outright ask with nothing to forward yet; `escalation_awaiting_request` state — `backend/chat/handlers/escalation.py:740-771` | No — the detail supplied is itself the confirmation | Bot asks the user to describe their question, then confirms once answered | The detail supplied in the follow-up reply |
-| 6 | `user_complaint` | Relevance guard classifies the message as a complaint about support silence — `backend/chat/steps/pre_retrieval.py:747-752`, `backend/chat/steps/retrieval.py:478-497` | Yes — `support_complaint` pre-confirm variant, leads with an apology, `backend/chat/handlers/rag.py:716-719` | Apology + handoff question | Retrieved-chunk preview, trigger |
-| 7 | `llm_self_offer` | Model appends `OFFER_MARKER`/`HANDOFF_MARKER` on a turn `decide()` judged answerable — dead-end rescue `backend/chat/handlers/rag.py:861` (offer appended to the existing answer, no fresh confirm question) and safety net `rag.py:890` | Yes | Model's answer, with the offer appended | Retrieved-chunk preview, trigger |
+| 6 | `user_complaint` | Relevance guard classifies the message as a complaint about support silence — `relevance_guard` in `backend/chat/steps/pre_retrieval.py` (skipped on the first user message), `zero_hits_fast_path` in `backend/chat/steps/retrieval.py` (second consecutive zero-hits turn only) | Yes — `support_complaint` pre-confirm variant, leads with an apology (`_pre_confirm_variant` in `RagHandler._handle_sync`) | Apology + handoff question; on the first user message the complaint is answered like an ordinary question | Retrieved-chunk preview, trigger |
+| 7 | `llm_self_offer` | Model appends `OFFER_MARKER`/`HANDOFF_MARKER` on a turn `decide()` judged answerable — dead-end rescue in `RagHandler._handle_sync` (`_rescue_wanted`: offer appended to the existing answer, no fresh confirm question) and the `_offered_ticket_wanted` safety net in the same method. Neither runs on the first user message | Yes | Model's answer, with the offer appended; none on the first user message | Retrieved-chunk preview, trigger |
 | 8 | `answer_rejected` | `POST /widget/escalate` — `backend/widget/routes.py:1097` | No — immediate | Ticket confirmation | The rejected answer / conversation context |
 | 9 | `llm_unavailable` | Same endpoint, OpenAI unreachable — `backend/escalation/service.py:1924` | No — immediate, OpenAI is skipped entirely | Static, non-LLM copy — `backend/chat/llm_unavailable_copy.py:15-30` | Conversation context |
-| 10 | `loop_detected` / `clarify_loop_limit` override | Forced by `backend/chat/decision.py:329-333` / `:358-362`, applied in `backend/chat/handlers/rag.py:623-634` only when `should_escalate` said no | Yes — reuses the same pre-confirm flow as `low_similarity`, down to the same variant selection (`rag.py:716-723`): `no_answer` unless the question intent is `support_contact` | Pre-confirm question | Retrieved-chunk preview, trigger — the ticket records `loop_detected` / `clarify_loop_limit`, so a count by trigger separates loop-caused handoffs from weak retrieval. Tickets written before `esc_trigger_width_v1` say `low_similarity`; the real reason was never stored, so there is nothing to backfill |
+| 10 | `loop_detected` / `clarify_loop_limit` override | Forced by `backend/chat/decision.py:329-333` / `:358-362`, applied via `_POLICY_ESCALATE_TRIGGERS` in `RagHandler._handle_sync` (`backend/chat/handlers/rag.py`) only when `should_escalate` said no | Yes — reuses the same pre-confirm flow as `low_similarity`, down to the same variant selection (`_pre_confirm_variant`): `no_answer` unless the question intent is `support_contact` | Pre-confirm question | Retrieved-chunk preview, trigger — the ticket records `loop_detected` / `clarify_loop_limit`, so a count by trigger separates loop-caused handoffs from weak retrieval. Tickets written before `esc_trigger_width_v1` say `low_similarity`; the real reason was never stored, so there is nothing to backfill |
+
+### First-turn rule
+
+On the first user message of a conversation the bot never offers to forward
+the question to support and never arms `escalation_pre_confirm_pending`, for
+any reason. "First" is `is_first_user_turn` (`backend/chat/language_context.py`):
+the chat holds no earlier user message, and a greeting does not count. Three
+entry points are gated:
+
+- **`<needs_human/>` dead-end marker** (row 7, `_rescue_wanted` in
+  `RagHandler._handle_sync`): the model's answer is delivered as written and
+  no offer is appended.
+- **`<offered_ticket/>` self-offer** (row 7, `_offered_ticket_wanted`): the
+  generation step passes `forbid_ticket_offer` to the prompt builder
+  (`backend/chat/prompts.py`), which adds a first-turn instruction to the user
+  message. If the model still emits the marker, `run_generation`
+  (`backend/chat/steps/generate.py`) regenerates the reply once and takes the
+  retry's answer and markers; the handler then skips the safety net regardless.
+- **Complaint verdict** (row 6, `relevance_guard` in
+  `backend/chat/steps/pre_retrieval.py`): a `support_complaint` verdict on the
+  first message returns no result from the guard, so the message continues
+  through retrieval and generation and is answered normally.
+
+The other paths need no gate: `low_similarity` and `no_documents` defer their
+first weak turn anyway (two-strike deferral below), the zero-hits fast path
+answers a first zero-hits turn with the rephrase prompt and needs a second
+consecutive miss before it escalates, and the loop / clarification-limit
+overrides need earlier turns to exist.
+
+An explicit human request is not gated: it creates a ticket immediately on any
+turn, including the first (rows 4 and 5). From the second user message on the
+earlier behaviour applies unchanged — `<needs_human/>` appends the offer, and
+`low_similarity` / `no_documents` wait for a second consecutive weak turn.
+
+The model prompt carries two related rules: it is told never to write a ticket
+offer itself (the backend composes the offer; `<offered_ticket/>` only marks a
+reply that contains one anyway), and repeating the documentation's contact
+section is no longer a reason to emit `<needs_human/>`.
+
+Trace metadata on the turn: `handoff_offer_suppressed_first_turn` (an offer
+the first-turn rule withheld — `<needs_human/>`, a self-offer, or a complaint
+verdict) and `first_turn_offer_regenerated` (the generation step reran the
+reply because it contained an offer).
 
 ### Two-strike deferral
 
@@ -879,16 +923,16 @@ Every bot-detected retrieval verdict gives the user a second chance before
 offering a handoff, through two code sites:
 
 - `low_similarity` and the `no_documents` **slow path** share one tracker
-  (`_defer_weak_turn`, `backend/chat/handlers/rag.py:600-613`): the first
+  (`_defer_weak_turn` in `RagHandler._handle_sync`, `backend/chat/handlers/rag.py`): the first
   weak turn keeps its generated answer and only records
   `chats.last_reply_was_low_confidence`. A second weak turn escalates — the
   two strikes count across both flavours, so a conversation alternating
   between them still reaches the handoff on its second weak turn.
 - `no_documents` **fast path**: the first zero-hits turn sets
-  `chat.last_reply_was_rephrase_prompt` (`backend/chat/steps/retrieval.py:374-378`);
-  a relevance-model verdict is required on the second turn
-  (`retrieval.py:462-514`) before it escalates. The handler counts that same
-  flag as a strike (`rag.py:600-602`), so the fast path's own verdict is never
+  `chat.last_reply_was_rephrase_prompt` (`zero_hits_fast_path` in
+  `backend/chat/steps/retrieval.py`); a relevance-model verdict is required on
+  the second turn before it escalates. The handler counts that same flag as a
+  strike (`_weak_turn_already_seen` in `rag.py`), so the fast path's own verdict is never
   deferred a second time and its rephrase prompt also arms the slow path.
 
 Both trackers are treated as stale once the inactivity sweeper has reported
@@ -896,9 +940,9 @@ the session ended (`chats.session_ended_event_at`), so a user resuming days
 later starts from a clean first attempt.
 
 The `loop_detected` / `clarify_loop_limit` overrides force `escalate=True`
-*after* this deferral check (`rag.py:623-634`, evaluated after `:600-613`), so
-they can override the "wait for a second weak turn" softening on the very
-first turn.
+*after* this deferral check (the `_POLICY_ESCALATE_TRIGGERS` block in `rag.py`,
+evaluated after `_defer_weak_turn`), so they can override the "wait for a
+second weak turn" softening on the very first weak turn.
 
 ### Clarifying-question stand-down
 
@@ -906,18 +950,18 @@ When the model's reply is tagged `<clarifying/>` (a troubleshooting question,
 not an answer), a retrieval-score escalation (`low_similarity` or either
 `no_documents` path) stands down for that turn: the user gets the
 troubleshooting question instead of the handoff offer
-(`_clarifying_stood_down`, `backend/chat/handlers/rag.py:615-621`). The
+(`_clarifying_stood_down`, `backend/chat/handlers/rag.py`). The
 two-strike deferral runs first, so on a first weak turn there is no offer left
 to stand down and `handoff_stood_down` stays false.
 
 The clarification budget (`chat.clarification_count`) is debited only for a
 question the user actually saw — never for one a handoff offer silently
-replaced (`_clarification_charged`, `rag.py:787-793`).
+replaced (`_clarification_charged`, `rag.py`).
 
 The `loop_detected` and `clarify_loop_limit` overrides still force the
-handoff even over a stood-down clarifying reply (`rag.py:623-634`), and when
-they do, the stand-down is not counted
-(`_clarifying_stood_down = _clarifying_stood_down and not escalate`, `rag.py:636-638`).
+handoff even over a stood-down clarifying reply (the `_POLICY_ESCALATE_TRIGGERS`
+block in `rag.py`), and when they do, the stand-down is not counted
+(`_clarifying_stood_down = _clarifying_stood_down and not escalate`).
 
 ### Checklist before the handoff
 
@@ -945,16 +989,22 @@ When more than one trigger could fire on the same turn:
   yes/no answer to the pending offer even if it also reads as an outright ask
   (`backend/chat/handlers/escalation.py:125`, checked before `:171`).
 - The `loop_detected` / `clarify_loop_limit` override wins over the
-  weak-retrieval two-strike deferral (`rag.py:623-634`, applied after `:600-613`).
+  weak-retrieval two-strike deferral (the `_POLICY_ESCALATE_TRIGGERS` block in
+  `rag.py`, applied after `_defer_weak_turn`).
 - `user_complaint` wins over `no_documents` in the zero-hits fast path
-  (`backend/chat/steps/retrieval.py:478`, checked before `:514`).
+  (`zero_hits_fast_path` in `backend/chat/steps/retrieval.py`: the
+  `support_complaint` branch is checked before the trusted-relevant-verdict
+  branch).
+- The first-turn rule wins over `user_complaint` and `llm_self_offer`: on the
+  first user message neither arms a pre-confirm offer. An explicit human
+  request still wins over the first-turn rule.
 
 ### Threshold
 
 `ESCALATION_THRESHOLD = 0.45` lives at `backend/escalation/service.py:55`
 (single read site: `should_escalate`, `service.py:198`). Do not confuse it
 with the unrelated, unused alias `_ESCALATION_THRESHOLD`
-(= `KB_HIGH_CONFIDENCE_THRESHOLD`) at `backend/chat/handlers/rag.py:136` —
+(= `KB_HIGH_CONFIDENCE_THRESHOLD`) at module level in `backend/chat/handlers/rag.py` —
 it is never read.
 
 ### Outright vs. inferred human requests
@@ -1136,7 +1186,7 @@ Two PostHog events are emitted on every escalation:
 
 `low_similarity` means retrieval returned chunks but scored them below the handoff floor — the generated answer may still be useful, and the user may only need to rephrase. The first such turn therefore keeps its answer and offers nothing; it only records `chats.last_reply_was_low_confidence`. A second *consecutive* weak turn is treated as evidence the user is stuck and escalates through the pre-confirm gate as before. Any reply that did not come from weak retrieval resets the tracker, and it is treated as stale once the inactivity sweeper has reported the session ended.
 
-`no_documents` is deferred on both paths — see "Two-strike deferral" above: the fast path asks the user to rephrase once before escalating; the slow path (`escalation/service.py:190-191` via `steps/generate.py:700`) delivers the generated answer on the first zero-chunk turn and shares the `low_similarity` tracker, so the second weak turn of either flavour escalates.
+`no_documents` is deferred on both paths — see "Two-strike deferral" above: the fast path asks the user to rephrase once before escalating; the slow path (`escalation/service.py:190-191` via `run_generation` in `steps/generate.py`) delivers the generated answer on the first zero-chunk turn and shares the `low_similarity` tracker, so the second weak turn of either flavour escalates.
 
 #### Escalation rate alert
 

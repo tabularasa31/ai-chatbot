@@ -19,7 +19,7 @@ Chat9 is language-agnostic. End users can write in any language and the bot repl
 The first time a visitor opens the widget in a browser (per bot, and per identified user when `user_id`/`email` is passed), Chat9 shows a default greeting before the user has typed anything. At this point there is no user message to detect a language from, so Chat9 picks the greeting's language using a fixed chain:
 
 1. **`userHints.locale`** — if you passed `userHints` to `Chat9Widget.start({...})` (or to `Chat9Widget.setHints({...})`) and included a `locale`, that wins. It's the strongest signal because your own system told us about this specific visitor.
-2. **Browser locale** — the `Accept-Language` header from the user's browser, or the `locale` you optionally passed when calling `POST /widget/session/init`.
+2. **Browser locale** — the widget sends the visitor's browser locale along with the greeting request.
 3. **English** — final fallback when no signal is available.
 
 The greeting itself is rendered in the language picked from this chain. For example, if you pass `userHints.locale: "es-ES"`, the greeting opens in Spanish; if you pass nothing and the user's browser is in `de-DE`, the greeting opens in German; if neither is available, the greeting opens in English.
@@ -76,9 +76,9 @@ If you don't set an override, escalation artifacts default to English.
 
 If your tenant frontend already knows the visitor's preferred language (for example, a registered locale on their account profile), pass it via `userHints.locale` to `Chat9Widget.start({...})` (or `Chat9Widget.setHints({...})` after the widget is mounted). Chat9 will use it as the bootstrap greeting language and as a stronger initial signal than the browser default. See [Embedding the Widget → userHints](/docs/embedding-the-widget#userhints).
 
-### From the widget integration — `Accept-Language` / `locale` query
+### From the widget integration — `locale`
 
-For anonymous sessions, the widget passes the browser's locale automatically. You don't need to do anything for the common case. If you want to override the browser locale in a specific deployment context, you can pass `locale` as a query parameter to `POST /widget/chat`.
+For anonymous sessions, the widget passes the browser's locale automatically. You don't need to do anything for the common case. If you want to override the browser locale in a specific deployment context, you can pass `locale` in the request body (or as a `?locale=` query parameter) of `POST /widget/chat`.
 
 ## Edge cases worth knowing
 

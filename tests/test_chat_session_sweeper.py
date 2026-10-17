@@ -47,6 +47,7 @@ def _make_chat(
     *,
     age_minutes: int,
     with_message: bool = True,
+    greeting_only: bool = False,
 ) -> Chat:
     created = _utcnow() - timedelta(minutes=age_minutes + 5)
     last_activity = _utcnow() - timedelta(minutes=age_minutes)
@@ -62,6 +63,9 @@ def _make_chat(
     if with_message:
         db.add(Message(chat_id=chat.id, role=MessageRole.user, content="hi"))
         db.commit()
+    elif greeting_only:
+        db.add(Message(chat_id=chat.id, role=MessageRole.assistant, content="Hello!"))
+        db.commit()
     return chat
 
 
@@ -72,9 +76,9 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     - a fresh (non-idle) chat is left untouched
     - an idle chat with messages is swept: emitted once, marker set,
       duration_ms matches its real activity window
-    - an idle *empty* legacy chat (no messages) is marked but never emitted.
-      The has_messages check must correlate per row, not just "any message
-      exists anywhere" (that bug would emit for the empty chat too)
+    - an idle chat with no visitor message (empty, or greeting-only) is marked
+      but never emitted. The check must correlate per row, not just "any
+      message exists anywhere" (that bug would emit for these chats too)
     - a chat already carrying the marker is not re-swept/re-emitted
     - the marker write does not disturb updated_at — it is an analytics
       write, not activity, and rotation must still see the swept chat's real
@@ -85,6 +89,9 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     active = _make_chat(db_session, tenant, age_minutes=90)
     active_last_activity = active.updated_at
     empty = _make_chat(db_session, tenant, age_minutes=90, with_message=False)
+    greeting_only = _make_chat(
+        db_session, tenant, age_minutes=90, with_message=False, greeting_only=True
+    )
     already_reported = _make_chat(db_session, tenant, age_minutes=90)
     already_reported.session_ended_event_at = already_reported.updated_at
     db_session.commit()
@@ -117,7 +124,9 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     )
 
     db_session.refresh(empty)
+    db_session.refresh(greeting_only)
     assert empty.session_ended_event_at is not None
+    assert greeting_only.session_ended_event_at is not None
 
 
 def test_sweep_is_capped_and_drains_oldest_first(

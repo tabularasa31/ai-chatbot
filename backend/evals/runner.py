@@ -74,6 +74,19 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
         last_response = chat_response
         session_id = chat_response.session_id
         total_latency_ms += chat_response.latency_ms
+        is_final_turn = turn_idx == len(messages)
+        if not is_final_turn and (chat_response.error or session_id is None):
+            return CaseResult(
+                case_id=case.id,
+                category=case.category,
+                lang=case.lang,
+                input=" | ".join(messages),
+                output=chat_response.text,
+                latency_ms=total_latency_ms,
+                metrics=[],
+                error=f"turn {turn_idx}: no session to continue ({chat_response.error or 'missing session_id'})",
+                turns_trace=turns_trace,
+            )
         # Either the offer is pending the user's yes/no, or the handoff already
         # happened this turn — an explicit human request mints the ticket without
         # ever arming the gate. Scoring only the former reads that path as "never

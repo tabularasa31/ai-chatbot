@@ -90,9 +90,9 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     """Report chats inactive past the threshold via chat_session_ended.
 
     Returns the number of sessions for which an event was emitted. Chats with
-    at least one ``Message`` emit ``chat_session_ended outcome=timeout``;
-    message-less chats (rows from before a chat was created lazily with the
-    first message) are stamped silently. Both branches set
+    at least one visitor message emit ``chat_session_ended outcome=timeout``;
+    chats without one (rows from before a chat was created lazily with the
+    first message, or holding only a greeting) are stamped silently. Both branches set
     ``session_ended_event_at`` so the row drops out of the partial index
     ``ix_chats_sweeper_pending`` and is excluded from the next pass.
 
@@ -115,7 +115,9 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     reference = now or _utcnow()
     cutoff = reference - timedelta(seconds=settings.conversation_idle_timeout_seconds)
     has_messages_exists = (
-        select(Message.id).where(Message.chat_id == Chat.id).exists()
+        select(Message.id)
+        .where(Message.chat_id == Chat.id, Message.role == MessageRole.user)
+        .exists()
     )
     rows = (
         db.query(Chat, has_messages_exists.label("has_messages"))

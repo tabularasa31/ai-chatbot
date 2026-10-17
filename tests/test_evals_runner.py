@@ -315,8 +315,9 @@ def test_sse_data_parser_skips_non_data_lines() -> None:
 class _StubStreamResp:
     """Minimal stand-in for an httpx streaming response."""
 
-    def __init__(self) -> None:
+    def __init__(self, line: str) -> None:
         self.status_code = 200
+        self._line = line
 
     def __enter__(self):  # noqa: D401
         return self
@@ -325,16 +326,17 @@ class _StubStreamResp:
         return None
 
     def iter_lines(self):
-        yield 'data: {"type":"done","text":"ok","session_id":"chain-session"}'
+        yield self._line
 
 
 class _StubHttp:
-    def __init__(self) -> None:
+    def __init__(self, line: str = 'data: {"type":"done","text":"ok","session_id":"chain-session"}') -> None:
         self.calls: list[dict] = []
+        self._line = line
 
     def stream(self, method: str, url: str, *, json: dict | None = None, params: dict | None = None):
         self.calls.append({"method": method, "url": url, "json": json, "params": params})
-        return _StubStreamResp()
+        return _StubStreamResp(self._line)
 
 
 @pytest.mark.parametrize(
@@ -367,13 +369,30 @@ def test_chat_client_session_id_forwarding(session_id, expected_params) -> None:
     assert http.calls[0]["params"] == expected_params
 
 
-def test_chain_case_continues_the_session_minted_by_its_first_turn() -> None:
+@pytest.mark.parametrize(
+    ("first_turn_line", "expected_calls", "expected_error"),
+    [
+        pytest.param(
+            'data: {"type":"done","text":"ok","session_id":"chain-session"}',
+            [{"bot_id": "ch_test"}, {"bot_id": "ch_test", "session_id": "chain-session"}],
+            None,
+            id="continues_the_session_from_the_first_turn",
+        ),
+        pytest.param(
+            'data: {"type":"error","code":"boom","message":"failed"}',
+            [{"bot_id": "ch_test"}],
+            "turn 1",
+            id="stops_when_a_non_final_turn_errors",
+        ),
+    ],
+)
+def test_chain_case_session_handling(first_turn_line, expected_calls, expected_error) -> None:
     from backend.evals.client import ChatClient
     from backend.evals.dataset import Dataset, GoldenCase
 
-    http = _StubHttp()
+    http = _StubHttp(first_turn_line)
     case = GoldenCase(id="chain", category="rag", turns=["first", "second"])
-    run(
+    report = run(
         RunnerConfig(
             dataset=Dataset(name="chain", cases=[case]),
             tag="test",
@@ -382,10 +401,9 @@ def test_chain_case_continues_the_session_minted_by_its_first_turn() -> None:
         )
     )
 
-    assert [call["params"] for call in http.calls] == [
-        {"bot_id": "ch_test"},
-        {"bot_id": "ch_test", "session_id": "chain-session"},
-    ]
+    assert [call["params"] for call in http.calls] == expected_calls
+    error = report.cases[0].error
+    assert (error is None) if expected_error is None else (expected_error in error)
 
 
 # ─── runner end-to-end (mocked chat + judge) ────────────────────────────────

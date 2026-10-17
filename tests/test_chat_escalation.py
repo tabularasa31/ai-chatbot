@@ -805,6 +805,8 @@ def test_system_ticket_offer_waits_for_second_user_turn(
     db_session.refresh(chat)
     offer = pre_confirm_fallback_result("initial").message_to_user
     assert (offer in first["text"]) is offer_expected
+    if not offer_expected:
+        assert first["text"] == "Check the DNS records."
     assert chat.escalation_pre_confirm_pending is offer_expected
 
     drive(tenant, api_key, chat.session_id, "yes")

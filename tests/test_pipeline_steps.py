@@ -18,6 +18,7 @@ from backend.chat.language import ResolvedLanguageContext
 from backend.chat.steps import pre_retrieval, refusal, retrieval
 from backend.chat.types import PipelineRun, RetrievalContext
 from backend.guards.types import Verdict, VerdictReason
+from backend.models import Chat, Message, MessageRole
 from backend.search.reliability import build_reliability_assessment
 
 
@@ -245,6 +246,9 @@ def test_relevance_guard_complaint_recommends_escalation(
 
     run = _make_run()
     run.db = _ClosableDB()  # type: ignore[assignment]
+    run.chat = Chat(
+        messages=[Message(role=MessageRole.user, content="My domain is stuck")]
+    )
 
     async def _scenario():
         async def _verdict():

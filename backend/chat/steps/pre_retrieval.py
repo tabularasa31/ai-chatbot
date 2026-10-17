@@ -683,6 +683,17 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
 
     emit_pipeline_span(run, "relevance_guard", _rel_latency_s, {"blocked": not relevant})
 
+    if (
+        not relevant
+        and guard_reason == CATEGORY_SUPPORT_COMPLAINT
+        and is_first_user_turn(run.chat)
+    ):
+        # No system-initiated handoff offer on the first turn: the complaint
+        # is answered like any on-topic question.
+        if run.trace is not None:
+            run.trace.update(metadata={"handoff_offer_suppressed_first_turn": True})
+        return None
+
     if not relevant:
         await cancel_speculative_retrieval(run)
 
@@ -690,7 +701,7 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
         # in a refusal — offer the escalation handoff instead. The empty
         # retrieval context routes _handle_sync through the same
         # pre-confirm arming path as the consecutive-zero-hits escalation.
-        if guard_reason == CATEGORY_SUPPORT_COMPLAINT and not is_first_user_turn(run.chat):
+        if guard_reason == CATEGORY_SUPPORT_COMPLAINT:
             from backend.chat.steps.refusal import build_pre_confirm_escalation_result
             from backend.escalation.openai_escalation import pre_confirm_fallback_result
             from backend.models import EscalationTrigger

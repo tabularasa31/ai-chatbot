@@ -228,6 +228,13 @@ async def test_support_complaint_offers_escalation_not_refusal(
     monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _render)
 
     session_id = uuid.uuid4()
+    chat = Chat(tenant_id=cl_row.id, session_id=session_id)
+    db_session.add(chat)
+    db_session.commit()
+    db_session.add(
+        Message(chat_id=chat.id, role=MessageRole.user, content="My domain is stuck")
+    )
+    db_session.commit()
     outcome = await run_chat_turn(
         cl_row.id,
         "They have not answered me for two weeks already",

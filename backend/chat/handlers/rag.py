@@ -922,7 +922,11 @@ class RagHandler(PipelineHandler):
                     "clarify_asked": _clarify_asked,
                     "llm_needs_human": bool(result.llm_needs_human),
                     "handoff_offer_appended": _handoff_offer_appended,
-                    "handoff_offer_suppressed_first_turn": _handoff_offer_suppressed_first_turn,
+                    **(
+                        {"handoff_offer_suppressed_first_turn": True}
+                        if _handoff_offer_suppressed_first_turn
+                        else {}
+                    ),
                     # Loop-detection signals (always emitted so dashboards can
                     # distinguish "not evaluated" from "evaluated false").
                     **_decision.loop_trace_dict(_turn_ctx),

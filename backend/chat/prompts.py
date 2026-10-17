@@ -365,9 +365,13 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
         per_request_parts.append(
             "CONTEXT MATCH (this turn): the retrieved context cleared the confidence bar "
             "the backend uses to decide whether a handoff is needed. Answer the question "
-            "from that context rather than reporting it as undocumented. This does not "
-            "silence the `<needs_human/>` marker: if the only way forward your reply can "
-            "offer is reaching a human, still append it."
+            "from that context rather than reporting it as undocumented."
+            + (
+                ""
+                if forbid_ticket_offer
+                else " This does not silence the `<needs_human/>` marker: if the only way "
+                "forward your reply can offer is reaching a human, still append it."
+            )
         )
     if low_context:
         per_request_parts.append(

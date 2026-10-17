@@ -829,6 +829,7 @@ def test_system_ticket_offer_waits_for_second_user_turn(
     assert all("HANDOFF (this turn)" in prompt for prompt in generation_prompts) is (
         not offer_expected
     )
+    assert any("still append it" in prompt for prompt in generation_prompts) is offer_expected
     if not offer_expected:
         assert first["text"] == plain_answer
     assert chat.escalation_pre_confirm_pending is offer_expected

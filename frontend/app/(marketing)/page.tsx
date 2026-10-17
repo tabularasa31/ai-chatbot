@@ -157,9 +157,9 @@ export default function LandingPage() {
       <LandingJsonLd />
       <div className={cn(CONTAINER, SECTION_GAP, 'py-12 md:py-16')}>
         <section className="lg:grid lg:grid-cols-12 lg:items-start lg:gap-x-6">
-          <div className={cn('lg:col-span-5', !demoBotId && 'max-w-prose lg:col-span-12')}>
+          <div className={cn('lg:col-span-5', !demoBotId && 'max-w-measure lg:col-span-12')}>
             <h1 className="text-display text-fg">Answer support questions from your own documentation</h1>
-            <p className="mt-6 max-w-prose text-body text-fg">
+            <p className="mt-6 max-w-measure text-body text-fg">
               Upload your files or add your docs site, paste one snippet on your website, and the bot answers
               visitors in the language they write in. When it cannot answer, it hands the conversation to your
               team.
@@ -188,7 +188,7 @@ export default function LandingPage() {
           <DefinitionRows list="ol" rows={SETUP_ROWS} />
         </section>
 
-        <section className="max-w-prose">
+        <section className="max-w-measure">
           <h2 className="text-h2 text-fg">When the bot cannot answer, your team takes over</h2>
           <p className="mt-4 text-body text-fg">
             If the bot cannot find a confident answer in your documentation, or the visitor asks for a person,

@@ -5,7 +5,7 @@ type BlogPostListProps = { posts: BlogPostSummary[]; titleAs: "h2" | "h3" };
 
 export function BlogPostList({ posts, titleAs }: BlogPostListProps) {
   return (
-    <ul className="max-w-prose divide-y divide-line">
+    <ul className="max-w-measure">
       {posts.map((post) => (
         <BlogPostRow key={post.slug} post={post} titleAs={titleAs} />
       ))}

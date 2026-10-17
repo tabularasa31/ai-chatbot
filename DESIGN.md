@@ -28,7 +28,7 @@ Weights: 400 regular (body), 500 medium (labels, buttons, nav, table headers), 6
 | `text-display` | 36 / 44, 600, from 768px (24/32 below) | marketing/blog page title only |
 
 Heading map: display = marketing/blog H1; h1 = H1 everywhere else; h2 = H2; H3 and below = `text-body` 600. Headings of one level never differ between screens.
-Body line length 45-75 characters: prose containers use `max-w-prose` (65ch).
+Body line length 45-75 characters: prose containers on marketing and blog use `max-w-measure` (34rem, about 70-75 characters in Geist; `max-w-prose` at 65ch measured 88-96 characters because Geist is narrow).
 Tables, amounts, counters, dates in columns: `tabular-nums`; numeric columns right-aligned, header aligned the same way.
 
 ## 3. Spacing, radius, elevation
@@ -53,6 +53,7 @@ Elevation: shadows only for things that float. Cards, sections, banners, auth ca
 | `shadow-pop` | `0 4px 12px rgb(15 23 42 / 0.12)` | `0 4px 12px rgb(0 0 0 / 0.5)` | dropdown, popover, tooltip |
 | `shadow-overlay` | `0 16px 40px rgb(15 23 42 / 0.16)` | `0 16px 40px rgb(0 0 0 / 0.5)` | modal, drawer |
 | `scrim` | `#0A0A0F` at 60% | `#0A0A0F` at 60% | behind modal, drawer |
+| `chrome` (colour, `bg-chrome`) | `#0A0A0F` | `#0A0A0F` | dark plate behind artwork drawn for dark backgrounds (blog covers), both schemes |
 
 In dark, shadows are nearly invisible: floating layers also use `surface-alt` + 1px `line`.
 Motion: 120ms ease-out for colour/opacity state changes; 200ms for modal/drawer enter. Nothing scales, bounces or loops decoratively (remove `hover:scale-105`). Honour `prefers-reduced-motion` (no transition).
@@ -235,7 +236,7 @@ lucide-react only (already used in dashboard and widget). Sizes 16 (inline with 
 |---|---|---|---|---|
 | Dashboard | compact | `text-ui` 14/20, titles `text-h1` | content `max-w-6xl` (1152), forms/settings column `max-w-2xl` (672) | navbar 48px, sidebar 208px, section gap 32, in-section gap 16; desktop only (from 1024px), narrower widths not designed yet. Sidebar follows the active scheme; menu: section 9 |
 | Auth | comfortable | `text-body` | card `max-w-md` (448) | left-aligned form; centering only for short success/confirmation screens |
-| Marketing + blog | airy | `text-body`, `text-display` | container `max-w-6xl`, prose `max-w-prose` | layout, sections and copy of the landing are decided by the later redesign under the CoC; this system supplies tokens only. No hero/feature-grid defaults |
+| Marketing + blog | airy | `text-body`, `text-display` | container `max-w-6xl`, prose `max-w-measure` | layout, sections and copy of the landing are decided by the later redesign under the CoC; this system supplies tokens only. No hero/feature-grid defaults |
 | Docs | reading | `text-body` | fumadocs layout, prose 65ch | fumadocs preset fed from this file |
 | Widget | compact | `text-ui`, input 16/24 | fills the iframe | always light (light token values only, ignores the scheme cookie and the visitor's system setting), no snippet option; user bubble `brand-subtle`, assistant `surface-alt`, operator bubble `brand-subtle` + 1px `line` and a "Operator" caption (distinct from the bot by design), error bubble `danger-subtle`; send/close targets 44px; header is `surface` with a `line` divider |
 

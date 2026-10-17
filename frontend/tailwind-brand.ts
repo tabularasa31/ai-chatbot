@@ -44,6 +44,7 @@ const SCHEME_COLORS = {
     info: "#0369A1",
     "info-subtle": "#F0F9FF",
     scrim: "#0A0A0F",
+    chrome: "#0A0A0F",
   },
   dark: {
     canvas: "#0A0A0F",
@@ -71,6 +72,7 @@ const SCHEME_COLORS = {
     info: "#38BDF8",
     "info-subtle": "#10222F",
     scrim: "#0A0A0F",
+    chrome: "#0A0A0F",
   },
 } as const;
 
@@ -154,6 +156,9 @@ export const brandThemeExtend = {
     body: ["1rem", { lineHeight: "1.5rem" }],
     h2: ["1.25rem", { lineHeight: "1.75rem", fontWeight: "600" }],
     h1: ["1.5rem", { lineHeight: "2rem", fontWeight: "600" }],
+  },
+  maxWidth: {
+    measure: "34rem",
   },
   height: {
     demo: "30rem",

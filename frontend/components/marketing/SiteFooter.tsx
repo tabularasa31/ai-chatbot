@@ -34,7 +34,7 @@ export function SiteFooter() {
           </nav>
         </div>
         <div className="mt-6 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-caption text-fg-muted">(c) 2026 Chat9</p>
+          <p className="text-caption text-fg-muted">© 2026 Chat9</p>
           <div className="flex items-center gap-3">
             <span className="text-caption text-fg-muted">Theme</span>
             <ThemeSwitch />

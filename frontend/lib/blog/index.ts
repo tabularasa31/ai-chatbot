@@ -124,32 +124,11 @@ export function getBlogPostBySlug(slug: string): BlogPostSummary | undefined {
   return blogPosts.find((post) => post.slug === slug);
 }
 
-function getSharedTagScore(currentPost: BlogPost, candidate: BlogPost): number {
-  const currentTags = new Set(currentPost.tags);
-  return candidate.tags.reduce(
-    (score, tag) => score + (currentTags.has(tag) ? 1 : 0),
-    0,
-  );
-}
-
 export function getRelatedBlogPosts(
   currentSlug: string,
   limit = 3,
 ): BlogPostSummary[] {
-  const currentPost = getBlogPostBySlug(currentSlug);
-  if (!currentPost) return [];
-
   return blogPosts
     .filter((post) => post.slug !== currentSlug)
-    .sort((a, b) => {
-      const sharedTagDiff =
-        getSharedTagScore(currentPost, b) - getSharedTagScore(currentPost, a);
-      if (sharedTagDiff !== 0) return sharedTagDiff;
-
-      const publishedDiff = b.publishedAt.localeCompare(a.publishedAt);
-      if (publishedDiff !== 0) return publishedDiff;
-
-      return a.title.localeCompare(b.title);
-    })
     .slice(0, limit);
 }

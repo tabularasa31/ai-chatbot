@@ -103,7 +103,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
     <MarketingShell>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <article className={cn(CONTAINER, "pt-8 pb-16 md:pt-12")}>
-        <div className="max-w-prose">
+        <div className="max-w-measure">
           <Link href="/blog" className={cn(standaloneLinkClasses, "gap-2 no-underline hover:underline")}>
             <ArrowLeft size={16} aria-hidden />
             All articles
@@ -117,7 +117,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
               <ImageWithFallback
                 src={post.cover.src}
                 alt={post.cover.alt}
-                className="mt-8 h-auto w-full rounded-surface"
+                className="mt-8 h-auto w-full rounded-surface bg-chrome p-4"
               />
             </figure>
           ) : null}
@@ -134,7 +134,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
       </article>
       {relatedPosts.length > 0 ? (
         <section className={cn(CONTAINER, "pb-12 md:pb-16")}>
-          <div className="max-w-prose border-t border-line pt-8">
+          <div className="max-w-measure border-t border-line pt-8">
             <h2 className="text-h2 text-fg">More articles</h2>
             <div className="mt-4">
               <BlogPostList posts={relatedPosts} titleAs="h3" />

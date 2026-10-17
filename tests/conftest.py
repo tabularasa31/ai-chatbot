@@ -448,18 +448,14 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         store[key] = value
         return True
 
-    class _Client:
-        async def set(self, key: str, value: int, ex: int, nx: bool) -> None:
-            store.setdefault(key, str(value))
-
-        async def incr(self, key: str) -> int:
-            store[key] = str(int(store[key]) + 1)
-            return int(store[key])
+    async def _incr(key: str, ttl: int) -> int:
+        store[key] = str(int(store.get(key, "0")) + 1)
+        return int(store[key])
 
     monkeypatch.setattr(redis_mod, "is_enabled", lambda: True)
     monkeypatch.setattr(redis_mod, "cache_get", _get)
     monkeypatch.setattr(redis_mod, "cache_set_with_ttl", _set)
-    monkeypatch.setattr(redis_mod, "get_redis", lambda: _Client())
+    monkeypatch.setattr(redis_mod, "incr_with_ttl", _incr)
     return store
 
 

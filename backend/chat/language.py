@@ -308,8 +308,8 @@ def _language_root(tag: str) -> str:
     return tag.split("-", 1)[0].lower()
 
 
-def language_script_tag_of(raw: str | None) -> str | None:
-    """Primary language subtag plus an ISO 15924 script subtag (zh-Hant), without region.
+def locale_language_of(raw: str | None) -> tuple[str, str] | None:
+    """(root, root with an ISO 15924 script when present, e.g. ("zh", "zh-Hant")), without region.
 
     None when ``raw`` is not a language tag.
     """
@@ -318,8 +318,8 @@ def language_script_tag_of(raw: str | None) -> str | None:
         return None
     primary, *rest = normalized.split("-")
     if rest and rest[0] in ISO_15924_CODES:
-        return f"{primary}-{rest[0]}"
-    return primary
+        return primary, f"{primary}-{rest[0]}"
+    return primary, primary
 
 
 def _language_matches(left: str, right: str) -> bool:

@@ -1101,6 +1101,15 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     assert greet("de-DE") == german
     assert llm.call_count == 8
 
+    async def _redis_down(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(greeting_module.redis_mod, "cache_get", _redis_down)
+    monkeypatch.setattr(greeting_module.redis_mod, "incr_with_ttl", _redis_down)
+    monkeypatch.setattr(greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", 0)
+    assert greet("de-DE") == german
+    assert llm.call_count == 9
+
 
 def test_widget_chat_uses_context(
     mock_openai_client: Mock,

@@ -1,4 +1,4 @@
-"""The ISO 15924 four-letter script codes, title-cased (private-use Qaaa-Qabx excluded)."""
+"""The ISO 15924 four-letter script codes, title-cased (private-use and special codes excluded)."""
 
 ISO_15924_CODES: frozenset[str] = frozenset(
     """
@@ -13,7 +13,7 @@ ISO_15924_CODES: frozenset[str] = frozenset(
     Phli Phlp Phlv Phnx Piqd Plrd Prti Psin Ranj Rjng Rohg Roro Runr Samr Sara Sarb Saur Sgnw
     Shaw Shrd Shui Sidd Sidt Sind Sinh Sogd Sogo Sora Soyo Sund Sunu Sylo Syrc Syre Syrj Syrn
     Tagb Takr Tale Talu Taml Tang Tavt Tayo Telu Teng Tfng Tglg Thaa Thai Tibt Tirh Tnsa Todr
-    Tols Toto Tutg Ugar Vaii Visp Vith Wara Wcho Wole Xpeo Xsux Yezi Yiii Zanb Zinh Zmth Zsye
-    Zsym Zxxx Zyyy Zzzz
+    Tols Toto Tutg Ugar Vaii Visp Vith Wara Wcho Wole Xpeo Xsux Yezi Yiii Zanb Zmth Zsye
+    Zsym
     """.split()
 )

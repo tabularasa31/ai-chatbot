@@ -22,13 +22,12 @@ import hashlib
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from backend.chat.answer_cache import _bounded
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.iso_639_1 import ISO_639_1_CODES
 from backend.chat.language import (
     LocalizationResult,
     generate_greeting_in_language_result,
-    language_script_tag_of,
+    locale_language_of,
 )
 from backend.chat.persistence import _persist_turn_with_response_language
 from backend.core import redis as redis_mod
@@ -93,7 +92,7 @@ def _widget_greeting_cache_key(tenant_id: str, product_name: str, language: str)
 
 
 async def _cached_greeting(tenant_id: str, product_name: str, language: str) -> str | None:
-    return await _bounded(
+    return await redis_mod.bounded(
         redis_mod.cache_get(_widget_greeting_cache_key(tenant_id, product_name, language)),
         None,
     )
@@ -101,16 +100,13 @@ async def _cached_greeting(tenant_id: str, product_name: str, language: str) -> 
 
 async def _reserve_generation(tenant_id: str) -> bool:
     """Count one LLM generation against the tenant's weekly budget; allowed when Redis is down."""
-    client = redis_mod.get_redis()
-    if client is None:
-        return True
-    budget_key = f"widget:greeting-budget:{tenant_id}"
-
-    async def _increment() -> int:
-        await client.set(budget_key, 0, ex=WIDGET_GREETING_CACHE_TTL_SECONDS, nx=True)
-        return await client.incr(budget_key)
-
-    return await _bounded(_increment(), 0) <= WIDGET_GREETING_WEEKLY_GENERATION_CAP
+    count = await redis_mod.bounded(
+        redis_mod.incr_with_ttl(
+            f"widget:greeting-budget:{tenant_id}", WIDGET_GREETING_CACHE_TTL_SECONDS
+        ),
+        None,
+    )
+    return count is None or count <= WIDGET_GREETING_WEEKLY_GENERATION_CAP
 
 
 async def greet_widget_visitor(
@@ -124,8 +120,7 @@ async def greet_widget_visitor(
     and language (root plus ISO 15924 script when the locale names one, no
     region). Over budget, a cached root-language greeting is still served.
     """
-    language = language_script_tag_of(locale)
-    root = language.split("-", 1)[0] if language else None
+    root, language = locale_language_of(locale) or (None, None)
     english = functools.partial(
         _build_greeting_result,
         product_name=product_name,
@@ -149,7 +144,7 @@ async def greet_widget_visitor(
         product_name=product_name, response_language=language, api_key=api_key
     )
     if result.generated:
-        await _bounded(
+        await redis_mod.bounded(
             redis_mod.cache_set_with_ttl(
                 _widget_greeting_cache_key(tenant_id, product_name, language),
                 result.text,

@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { AdminMetricsSummary, AdminTenantMetricsItem } from "@/lib/api";
-import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
+import { SkeletonRegion } from "@/components/ui/skeleton";
 import { LoadError } from "@/components/ui/load-error";
 import { cn } from "@/components/ui/utils";
 import { useAdminMetrics, useClientMe } from "@/hooks/useApi";
@@ -145,7 +145,7 @@ function TenantsTable({ tenants }: { tenants: AdminTenantMetricsItem[] }) {
 
 function MetricsSkeleton() {
   return (
-    <DeferredSkeleton>
+    <SkeletonRegion>
       <div className="space-y-8">
         <div className="grid grid-cols-3 gap-6 lg:grid-cols-6">
           {Array.from({ length: 6 }, (_, index) => (
@@ -158,7 +158,7 @@ function MetricsSkeleton() {
           ))}
         </div>
       </div>
-    </DeferredSkeleton>
+    </SkeletonRegion>
   );
 }
 

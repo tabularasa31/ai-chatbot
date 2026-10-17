@@ -3,8 +3,8 @@ import { cn } from "./utils";
 const MAX_DISPLAYED = 99;
 
 const TONES = {
-  brand: "bg-brand text-brand-on",
-  quiet: "bg-surface-alt text-fg",
+  brand: "bg-chrome-accent text-chrome-accent-fg",
+  quiet: "bg-chrome-line text-chrome-fg",
 } as const;
 
 export function CountBadge({

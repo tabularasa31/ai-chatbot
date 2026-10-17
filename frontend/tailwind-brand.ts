@@ -3,6 +3,7 @@
 // `frontend/apps/widget-app/tailwind.config.ts` so both builds stay in sync.
 import type { Config } from "tailwindcss";
 import plugin from "tailwindcss/plugin";
+import { BRAND_VIOLET } from "./lib/brand";
 
 export const ND_BRAND_COLORS = {
   base: "#0A0A0F",
@@ -17,6 +18,18 @@ export const ND_BRAND_COLORS = {
   danger: "#F87171",
 } as const;
 
+const CHROME_COLORS = {
+  chrome: "#0A0A0F",
+  "chrome-fg": "#FAF5FF",
+  "chrome-fg-muted": "#A9A3BA",
+  "chrome-line": "#2E2E3E",
+  "chrome-line-strong": "#7C7793",
+  "chrome-hover": "#1E1E2E",
+  "chrome-active": "#2A2147",
+  "chrome-accent": "#A78BFA",
+  "chrome-accent-fg": "#0A0A0F",
+} as const;
+
 const SCHEME_COLORS = {
   light: {
     canvas: "#F8F9FA",
@@ -27,7 +40,7 @@ const SCHEME_COLORS = {
     fg: "#1E293B",
     "fg-muted": "#475569",
     "fg-faint": "#586579",
-    brand: "#7C3AED",
+    brand: BRAND_VIOLET,
     "brand-hover": "#6D28D9",
     "brand-active": "#5B21B6",
     "brand-on": "#FFFFFF",
@@ -44,35 +57,33 @@ const SCHEME_COLORS = {
     info: "#0369A1",
     "info-subtle": "#F0F9FF",
     scrim: "#0A0A0F",
-    chrome: "#0A0A0F",
   },
   dark: {
-    canvas: "#0A0A0F",
-    surface: "#12121A",
-    "surface-alt": "#1E1E2E",
-    line: "#2E2E3E",
-    "line-strong": "#716C87",
+    canvas: "#1A1A26",
+    surface: "#222233",
+    "surface-alt": "#2B2B3F",
+    line: "#3A3A50",
+    "line-strong": "#7C7793",
     fg: "#FAF5FF",
     "fg-muted": "#A9A3BA",
-    "fg-faint": "#8A849C",
+    "fg-faint": "#9B95AD",
     brand: "#A78BFA",
     "brand-hover": "#C4B5FD",
     "brand-active": "#8B5CF6",
     "brand-on": "#0A0A0F",
-    "brand-subtle": "#231C3F",
+    "brand-subtle": "#2D2552",
     focus: "#A78BFA",
     success: "#4ADE80",
-    "success-subtle": "#11271B",
+    "success-subtle": "#1A3626",
     warning: "#FBBF24",
-    "warning-subtle": "#2B2112",
+    "warning-subtle": "#3A2D16",
     danger: "#F87171",
-    "danger-subtle": "#2D1517",
+    "danger-subtle": "#432227",
     "danger-hover": "#FCA5A5",
     "danger-on": "#0A0A0F",
     info: "#38BDF8",
-    "info-subtle": "#10222F",
+    "info-subtle": "#183246",
     scrim: "#0A0A0F",
-    chrome: "#0A0A0F",
   },
 } as const;
 
@@ -127,7 +138,9 @@ function schemeVariables(scheme: Scheme): Record<string, string> {
   return variables;
 }
 
-const colorTokens = Object.keys(SCHEME_COLORS.light).filter((token) => token !== "scrim");
+const colorTokens = [...Object.keys(SCHEME_COLORS.light), ...Object.keys(CHROME_COLORS)].filter(
+  (token) => token !== "scrim",
+);
 
 const brandColors = {
   ...Object.fromEntries(
@@ -144,6 +157,16 @@ export function brandTokensPlugin(schemes: readonly Scheme[]) {
       [`@media (min-width: ${theme("screens.md")})`]: {
         ".text-display": { fontSize: "2.25rem", lineHeight: "2.75rem" },
       },
+    });
+  });
+}
+
+export function chromeTokensPlugin() {
+  return plugin(({ addBase }) => {
+    addBase({
+      ":root": Object.fromEntries(
+        Object.entries(CHROME_COLORS).map(([token, hex]) => [`--c-${token}`, hexToChannels(hex).join(" ")]),
+      ),
     });
   });
 }
@@ -173,6 +196,7 @@ export const brandThemeExtend = {
   boxShadow: {
     pop: "var(--shadow-pop)",
     overlay: "var(--shadow-overlay)",
+    "chrome-selected": "inset 2px 0 0 rgb(var(--c-chrome-accent))",
   },
 } satisfies NonNullable<Config["theme"]>;
 

@@ -50,7 +50,7 @@ export type TenantMember = {
   created_at: string;
   /**
    * When this person's operator seat was granted, or null for no seat.
-   * An invite grants one, so in practice only a workspace's founding owner
+   * An invite grants one, so in practice only a tenant's founding owner
    * is ever null here.
    */
   seat_granted_at: string | null;
@@ -434,12 +434,17 @@ export type GapDiscardDraftResponse = {
 export type GapRecalculateResponse = {
   tenant_id: string;
   mode: GapRunMode;
-  status: "accepted" | "in_progress" | "rate_limited";
+  status: "accepted" | "in_progress";
   command_kind: "orchestration";
   http_status_code: 202;
   accepted_at: string | null;
   retry_after_seconds: number | null;
 };
+
+export const HTTP_BAD_REQUEST = 400;
+export const HTTP_CONFLICT = 409;
+export const HTTP_UNPROCESSABLE = 422;
+export const HTTP_TOO_MANY_REQUESTS = 429;
 
 /** Thrown by `request()` on a non-ok response; `status` lets callers branch on the HTTP code. */
 export class ApiError extends Error {
@@ -500,7 +505,7 @@ const SIGN_OUT_REASON_KEY = "chat9_sign_out_reason";
  *
  * For the case where losing the session is the *outcome* the user asked for
  * rather than something that went wrong — today, an owner deleting their own
- * workspace, which deletes their account with it.
+ * tenant, which deletes their account with it.
  *
  * The reason travels in `sessionStorage` rather than a query parameter,
  * because the URL does not survive the trip. Clearing the session cookie makes
@@ -513,7 +518,7 @@ const SIGN_OUT_REASON_KEY = "chat9_sign_out_reason";
  * page that just destroyed its own session still has revalidations in flight,
  * and each lands as a 401 that `handleUnauthorized` would answer by
  * redirecting to `/login?error=session_expired` — telling somebody who deleted
- * their workspace deliberately that their session expired.
+ * their tenant deliberately that their session expired.
  */
 export function signOutAndLeave(reason: SignOutReason): void {
   if (typeof window === "undefined") return;
@@ -691,17 +696,17 @@ export const api = {
       return getJson(`${BASE_URL}/tenants/me/llm-alert`, "Failed to load LLM alert");
     },
     /**
-     * Delete the workspace. Owner only, irreversible, and it takes the
+     * Delete the tenant. Owner only, irreversible, and it takes the
      * caller's own account with it — so every later request 401s, including
      * whatever this page would try to refetch. Callers must go straight to
      * /login rather than let that 401 be discovered by a background request.
      *
      * `skipAuthRedirect` is set for that reason: the generic 401 handler
      * bounces to `/login?error=session_expired`, which would tell an owner who
-     * just deleted their workspace on purpose that their session expired.
+     * just deleted their tenant on purpose that their session expired.
      */
     delete(tenantId: string): Promise<void> {
-      return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the workspace", {
+      return requestVoid(`${BASE_URL}/tenants/${tenantId}`, "Failed to delete the tenant", {
         method: "DELETE",
         skipAuthRedirect: true,
       });
@@ -722,7 +727,7 @@ export const api = {
       const data = await getJson<Partial<TenantMemberList>>(`${BASE_URL}/tenants/members`, "Failed to load team members");
       return { items: data.items ?? [], seats: data.seats ?? 0 };
     },
-    /** Always invites an operator: the workspace's one owner created it. */
+    /** Always invites an operator: the tenant's one owner created it. */
     invite(email: string): Promise<InviteMemberResponse> {
       return sendJson(`${BASE_URL}/tenants/members/invite`, "POST", { email }, "Failed to send the invite");
     },

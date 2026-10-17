@@ -11,6 +11,23 @@ The Chat9 website and blog have a new design.
 - The home page shows a live demo of the widget next to the sign-up button, and describes setup and handoff to your team step by step.
 - Blog articles open as a single column, and the blog index is a list of articles.
 
+## 2026-10-17 — Settings redesign and dark mode for the dashboard
+
+**Settings:**
+- The four tabs (**Bot**, **Widget**, **Team**, **Seats**) are laid out as plain sections, each with its own Save button that is active only when something changed.
+- Removing the OpenAI key, rotating the identity key, removing a team member and deleting the tenant now ask for confirmation in a dialog.
+- The support inbox **Clear** button is gone: empty a field and save to unset it.
+- The seat price appears once, on **Seats**.
+- Wording: the company account is now called a **tenant** everywhere. "Workspace" is retired.
+
+**Dark mode:** the whole dashboard follows your colour scheme. Pick System, Light or Dark with the switch at the bottom of the menu.
+
+**What to do:** nothing. See [Dashboard Features](/docs/dashboard-features) for where each setting lives.
+
+## 2026-10-16 — Dark dashboard menu and top bar
+
+The dashboard menu and top bar are dark again, in both the light and dark themes, so they stand apart from the page. In the dark theme, the page area is a little lighter than before.
+
 **What to do:** nothing.
 
 ## 2026-10-16 — Inbox and Analytics redesign
@@ -39,6 +56,21 @@ Sign in, create account, email verification, password reset and team invitation 
 - There is no delay after signing in.
 
 **What to do:** nothing. See [Getting started](/docs/getting-started) for creating an account.
+
+## 2026-10-16 — Knowledge and Doc gaps redesign
+
+**Knowledge** has a new layout: documents and URL sources share one table, and a document's health is shown inline instead of in a hover tooltip. Deleting a file, a URL source or an indexed page now asks for confirmation and says what will be removed. **Accept all** on the FAQ tab asks first and states how many answers go live. Rejecting a FAQ answer asks first because the answer is deleted.
+
+**Doc gaps** is easier to scan:
+
+- The two columns are now two tabs: **Visitor questions** (formerly Mode B) and **Docs coverage** (formerly Mode A). Each tab shows how many gaps it holds.
+- A **Show** filter (Open, Archived, All) replaces the Active and Archive view switch and the per-column filters.
+- Coverage is shown as a percentage, for example "About 18% covered", instead of a raw score. The internal signal number is gone.
+- **Dismiss** is one click with an **Undo** note. Gaps with a draft in progress ask for confirmation instead.
+- Gaps you marked as resolved now appear under **Archived**, in **Closed**. Before, they were listed nowhere.
+- Draft previews for Docs coverage open in a side panel instead of pushing the list down.
+
+**What to do:** nothing. See [Dashboard Features](/docs/dashboard-features) for the updated Doc gaps and Knowledge sections.
 
 ## 2026-10-16 — New dashboard menu
 

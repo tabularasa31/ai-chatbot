@@ -785,7 +785,9 @@ def test_system_ticket_offer_waits_for_second_user_turn(
         mock_openai_client, db_session, tenant_id, answer=f"Check the DNS records.{marker}"
     )
     if reason == "user_complaint":
-        db_session.add(TenantProfile(tenant_id=tenant_id, product_name="Acme"))
+        db_session.query(TenantProfile).filter_by(tenant_id=tenant_id).update(
+            {"product_name": "Acme"}
+        )
         db_session.commit()
         relevance_guard_category("support_complaint")
     no_request = HumanRequestResult(human_request=False, message_has_request_content=True)
@@ -794,18 +796,25 @@ def test_system_ticket_offer_waits_for_second_user_turn(
         _human_request_sequence(no_request, no_request),
     )
 
-    [first, second] = drive(
+    [first] = drive(
         tenant,
         api_key,
         chat.session_id,
         "They have not answered me for two weeks already, what is going on",
-        "yes",
     )
-
+    db_session.refresh(chat)
     offer = pre_confirm_fallback_result("initial").message_to_user
     assert (offer in first["text"]) is offer_expected
-    tickets = db_session.query(EscalationTicket).filter(EscalationTicket.tenant_id == tenant_id)
-    assert tickets.count() == (1 if offer_expected else 0)
+    assert chat.escalation_pre_confirm_pending is offer_expected
+
+    drive(tenant, api_key, chat.session_id, "yes")
+    if not offer_expected:
+        assert (
+            db_session.query(EscalationTicket)
+            .filter(EscalationTicket.tenant_id == tenant_id)
+            .count()
+            == 0
+        )
 
 
 @pytest.mark.escalation

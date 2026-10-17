@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api } from "@/lib/api";
 import { useSupportSettings } from "@/hooks/useApi";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ export function EscalationSection() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useSavedMessage();
-  const emailField = useRef<HTMLInputElement>(null);
+  const [emailValid, setEmailValid] = useState(true);
 
   useEffect(() => {
     if (seeded || !support) return;
@@ -41,10 +41,6 @@ export function EscalationSection() {
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!dirty) return;
-    if (emailField.current?.validity.typeMismatch) {
-      setEmailError("Enter a valid email address.");
-      return;
-    }
     setSaving(true);
     setSaveError(null);
     setSaved(null);
@@ -68,7 +64,6 @@ export function EscalationSection() {
     <SettingsSection title="Escalation">
       <form onSubmit={(event) => void save(event)} noValidate className="space-y-4">
         <Input
-          ref={emailField}
           type="email"
           label="Support inbox email"
           helper={`Escalation tickets are emailed here. Empty: the owner's email (${support.fallback_email ?? "none"}).`}
@@ -76,8 +71,10 @@ export function EscalationSection() {
           value={email}
           onChange={(event) => {
             setEmail(event.target.value);
+            setEmailValid(event.target.validity.valid);
             setEmailError(undefined);
           }}
+          onBlur={() => !emailValid && setEmailError("Enter a valid email address.")}
         />
         <Input
           label="Escalation language"
@@ -87,7 +84,7 @@ export function EscalationSection() {
         />
         {saveError && <InlineNotice tone="danger">{saveError}</InlineNotice>}
         <SaveRow saved={saved}>
-          <Button type="submit" variant="primary" busy={saving} disabled={!dirty}>
+          <Button type="submit" variant="primary" busy={saving} disabled={!dirty || !emailValid}>
             Save escalation settings
           </Button>
         </SaveRow>

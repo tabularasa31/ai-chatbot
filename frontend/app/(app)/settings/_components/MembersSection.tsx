@@ -67,6 +67,7 @@ export function MembersSection() {
           title={removing.status === "pending" ? `Cancel the invite for ${removing.email}?` : `Remove ${removing.email}?`}
           body="Their account is deleted and their seat is released. Their past replies stay in transcripts, signed with their email."
           confirmLabel={removing.status === "pending" ? "Cancel invite" : "Remove member"}
+          cancelLabel={removing.status === "pending" ? "Keep invite" : undefined}
           tone="destructive"
           failureMessage={`Couldn't remove ${removing.email}. Try again.`}
           onConfirm={() => remove(removing)}

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { api, ApiError, HTTP_CONFLICT, HTTP_TOO_MANY_REQUESTS } from "@/lib/api";
 import { useMembers } from "@/hooks/useApi";
 import { Button } from "@/components/ui/button";
@@ -16,29 +16,25 @@ function inviteErrorText(err: unknown): string {
 }
 
 export function InviteSection() {
-  const { mutate } = useMembers();
+  const { data: members, mutate } = useMembers();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string>();
   const [sending, setSending] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
-  const field = useRef<HTMLInputElement>(null);
+  const [emailValid, setEmailValid] = useState(true);
 
   async function invite(event: FormEvent) {
     event.preventDefault();
     const address = email.trim();
     if (!address) return;
-    if (field.current?.validity.typeMismatch) {
-      setError("Enter a valid email address.");
-      return;
-    }
     setSending(true);
     setError(undefined);
     setSentTo(null);
     try {
       const result = await api.members.invite(address);
       setEmail("");
-      setSentTo(result.member.email);
       await mutate();
+      setSentTo(result.member.email);
     } catch (err) {
       setError(inviteErrorText(err));
     } finally {
@@ -51,7 +47,6 @@ export function InviteSection() {
       <form onSubmit={(event) => void invite(event)} noValidate className="space-y-4">
         <div className="flex flex-wrap items-start gap-3">
           <Input
-            ref={field}
             type="email"
             label="Email"
             autoComplete="off"
@@ -60,10 +55,12 @@ export function InviteSection() {
             error={error}
             onChange={(event) => {
               setEmail(event.target.value);
+              setEmailValid(event.target.validity.valid);
               setError(undefined);
             }}
+            onBlur={() => !emailValid && setError("Enter a valid email address.")}
           />
-          <Button type="submit" variant="primary" busy={sending} disabled={!email.trim()} className="sm:mt-6">
+          <Button type="submit" variant="primary" busy={sending} disabled={!email.trim() || !emailValid} className="sm:mt-6">
             Send invite
           </Button>
         </div>
@@ -75,7 +72,7 @@ export function InviteSection() {
           </Link>
           ).
         </p>
-        {sentTo && (
+        {sentTo && members?.items.some((member) => member.email.toLowerCase() === sentTo.toLowerCase()) && (
           <InlineNotice tone="info" onDismiss={() => setSentTo(null)}>
             Invite sent to {sentTo}. The link expires in 7 days.
           </InlineNotice>

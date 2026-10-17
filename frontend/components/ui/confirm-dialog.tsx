@@ -10,6 +10,7 @@ type ConfirmDialogProps = {
   title: string;
   body: ReactNode;
   confirmLabel: string;
+  cancelLabel?: string;
   tone: "primary" | "destructive";
   failureMessage: string;
   /** The user must type this exactly (case-sensitive; surrounding spaces are ignored on both sides) before the confirm button enables. */
@@ -27,6 +28,7 @@ export function ConfirmDialog({
   title,
   body,
   confirmLabel,
+  cancelLabel = "Cancel",
   tone,
   failureMessage,
   confirmText,
@@ -74,7 +76,7 @@ export function ConfirmDialog({
         {failed && <InlineNotice tone="danger">{failureMessage}</InlineNotice>}
         <div className="flex justify-end gap-3">
           <Button variant="secondary" offset="surface" onClick={onClose} disabled={busy}>
-            Cancel
+            {cancelLabel}
           </Button>
           <Button
             variant={tone}

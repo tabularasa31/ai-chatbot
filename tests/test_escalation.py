@@ -1039,29 +1039,6 @@ async def test_render_pre_confirm_text_admin_variants_ignore_transcript(
 
 @pytest.mark.asyncio
 @pytest.mark.smoke
-async def test_detect_human_request_empty_message_skips_llm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bootstrap (empty) message is answered deterministically without an
-    OpenAI call — nothing to classify."""
-    from backend.escalation import service as esc_service
-
-    def _fail(*args, **kwargs):
-        raise AssertionError("empty message must not reach the OpenAI client")
-
-    monkeypatch.setattr("backend.escalation.service.get_async_openai_client", _fail)
-
-    for message in ("", "   ", "\n\t"):
-        result = await esc_service.detect_human_request(message, "sk-test")
-        assert result.human_request is False
-        assert result.message_has_request_content is False
-        assert await esc_service.classify_question_intent(
-            message, "sk-test"
-        ) == esc_service.QuestionIntentResult()
-
-
-@pytest.mark.asyncio
-@pytest.mark.smoke
 async def test_render_pre_confirm_text_caches_localization_per_variant_and_language(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

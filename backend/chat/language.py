@@ -113,11 +113,11 @@ class LanguageDetectionResult:
 
 # Resolution reasons where per-turn language detection did not run, so
 # ``confidence`` / ``is_reliable`` are placeholder zeros rather than a real
-# measurement: the locked fast path (follow-up turns on a locked chat),
-# and detector crashes. Surfacing
-# confidence=0 for these poisons trace-level confidence analytics with false
-# negatives — a locked follow-up looks like a zero-confidence detection — so
-# callers that record confidence for analytics must skip these branches.
+# measurement: the locked fast path (follow-up turns on a locked chat) and
+# detector crashes. Surfacing confidence=0 for these poisons trace-level
+# confidence analytics with false negatives — a locked follow-up looks like a
+# zero-confidence detection — so callers that record confidence for analytics
+# must skip these branches.
 _CONFIDENCE_NOT_MEASURED_REASONS = frozenset(
     {
         "locked",
@@ -528,8 +528,7 @@ def _decide_language_lock(
     """Return True when the chat's language should now be frozen.
 
     Caller is responsible for skipping this when chat.language_locked is
-    already True (no need to re-decide) and for not calling on
-    turns (no real user message yet).
+    already True (no need to re-decide).
     """
     if not detection.is_reliable:
         return False

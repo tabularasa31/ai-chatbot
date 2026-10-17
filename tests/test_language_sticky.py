@@ -43,7 +43,7 @@ def _detect_from_map(mapping: dict[str, LanguageDetectionResult]):
     return _fake_detect
 
 
-def test_first_non_bootstrap_turn_no_history(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_first_turn_no_history(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "backend.chat.language.detect_language",
         lambda _text: _detection("ru"),

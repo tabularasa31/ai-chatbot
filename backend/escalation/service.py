@@ -177,11 +177,6 @@ async def detect_human_request(
     `tenant_id` partitions the in-memory result cache so tenants never read
     each other's classifications.
     """
-    # An empty message (widget-open bootstrap turn) has nothing to classify —
-    # answer deterministically instead of spending an LLM call on it.
-    if not message or not message.strip():
-        return HumanRequestResult(human_request=False, message_has_request_content=False)
-
     cache_key = hashlib.sha256(
         f"{tenant_id}:{message}".encode()
     ).hexdigest()
@@ -328,10 +323,6 @@ async def classify_question_intent(
     all-false verdict on timeout/error, which keeps the standard copy and
     simply attaches no quick answers.
     """
-    # An empty message (widget-open bootstrap turn) has no intent to classify.
-    if not message or not message.strip():
-        return QuestionIntentResult()
-
     cache_key = hashlib.sha256(f"{tenant_id}:{message}".encode()).hexdigest()
     cached = _question_intent_cache.get(cache_key)
     if cached is not None:
@@ -1780,8 +1771,7 @@ def transcript_messages_for_openai(chat: Chat) -> list[dict[str, str]]:
     """
     msgs: list[dict[str, str]] = []
     for m in sorted(chat.messages, key=lambda x: x.created_at or x.id):
-        # Skip empty-content messages (defensive guard; bootstrap no longer persists
-        # empty user messages, but old sessions may still have them in the DB).
+        # Skip empty-content messages: old sessions may still hold empty rows.
         if not (m.content or "").strip():
             continue
         role = "user" if m.role == MessageRole.user else "assistant"

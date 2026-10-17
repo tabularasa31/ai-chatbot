@@ -45,8 +45,7 @@ def default_router() -> HandlerRouter:
     Order matters: OperatorHandler comes first because a live human takeover
     outranks every other state — including a closed chat, so an operator who
     answers after the visitor said "no, that's all" never lands the turn in
-    EscalationStateMachine's closed-chat path. GreetingHandler then claims the
-    empty bootstrap turn on a brand-new session (the widget-open welcome) and
+    EscalationStateMachine's closed-chat path. GreetingHandler then claims
     bare social turns with no actionable request, EscalationStateMachine claims
     any active escalation state or explicit human request, and RagHandler is
     the catch-all that runs the full RAG pipeline for everything else.

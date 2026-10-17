@@ -398,7 +398,7 @@ async def async_process_chat_message(
         name="rag-query",
         session_id=str(session_id),
         tenant_id=str(tenant_id),
-        input=redacted_question or None,
+        input=redacted_question,
         metadata={"tenant_id": str(tenant_id), "session_id": str(session_id)},
         tags=[f"tenant:{tenant_id}"],
     )
@@ -487,7 +487,7 @@ async def async_process_chat_message(
             # key: at trace level it collided with retrieval "best_confidence_score"
             # (written by the RAG handler) and made per-trace confidence analytics
             # ambiguous. Omitted entirely — not written as 0.0 — when detection did
-            # not run this turn (locked follow-ups, bootstrap), so those turns stop
+            # not run this turn (locked follow-ups), so those turns stop
             # registering as false-negative zero-confidence detections.
             **(
                 {

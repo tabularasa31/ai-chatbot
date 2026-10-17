@@ -30,7 +30,7 @@ def _make_language_context(response_language: str = "en") -> ResolvedLanguageCon
         confidence=1.0,
         is_reliable=True,
         response_language=response_language,
-        response_language_resolution_reason="bootstrap_default_english",
+        response_language_resolution_reason="detected",
         escalation_language=response_language,
         escalation_language_source="default",
     )
@@ -41,7 +41,7 @@ def _make_handler_context(
     db: Session,
     tenant: Tenant | None,
     chat: Chat,
-    question_text: str = "",
+    question_text: str = "Hello!",
     is_new_session: bool = True,
     response_language: str = "en",
     tenant_profile: TenantProfile | None = None,

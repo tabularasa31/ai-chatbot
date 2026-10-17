@@ -7,6 +7,7 @@ export type SharedChromeKey =
   | "open_chat"
   | "close_chat"
   | "load_failed"
+  | "loading"
   | "try_again_button";
 
 type SharedChromeStrings = Record<SharedChromeKey, string>;
@@ -16,12 +17,13 @@ const EN: SharedChromeStrings = {
   open_chat: "Open chat",
   close_chat: "Close chat",
   load_failed: "Chat didn't load.",
+  loading: "Loading…",
   try_again_button: "Try again",
 };
 
 const SHARED_CHROME_LOCALES: Record<string, Partial<SharedChromeStrings>> = {
   en: EN,
-  ru: { try_again_button: "Попробовать ещё раз" },
+  ru: { try_again_button: "Попробовать ещё раз", loading: "Загрузка…" },
 };
 
 export function sharedChromeString(locale: string | null | undefined, key: SharedChromeKey): string {

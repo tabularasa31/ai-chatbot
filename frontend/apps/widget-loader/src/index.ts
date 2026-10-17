@@ -6,7 +6,8 @@
 //     Chat9Widget.start({
 //       userHints: { name: "Anna", email: "anna@example.com", locale: "ru-RU" },
 //       mode: "bubble",        // "bubble" | "inline"
-//       color: "#a855f7",
+//       theme: "light",        // "light" | "dark"
+//       color: "#7C3AED",      // launcher background (bubble mode)
 //       position: "right",      // "right" | "left"
 //       target: "<elementId>", // for mode: "inline"
 //       topClearance: 56,      // px reserved at viewport top (e.g. fixed navbar height)
@@ -39,6 +40,8 @@
 
 // Marks this file as a module so `declare global` is allowed under TS's
 // stricter rules; the IIFE wrapper still produces a side-effect-only bundle.
+import { sharedChromeString, type SharedChromeKey } from "../../../packages/widget-shared/src/chromeStrings";
+
 export {};
 
 type UserHints = {
@@ -54,6 +57,7 @@ type UserHints = {
 type StartConfig = {
   userHints?: UserHints;
   mode?: "bubble" | "inline";
+  theme?: "light" | "dark";
   color?: string;
   position?: "right" | "left";
   target?: string;
@@ -85,6 +89,46 @@ declare global {
   // is served from widget-ru.getchat9.live (the matching widget edge).
   // Bypasses TSPU throttling on Vercel/Railway from Russian ISPs.
   const RU_API_BASE = "https://api-ru.getchat9.live";
+
+  const PHONE_MEDIA_QUERY = "(max-width: 479px)";
+  const IFRAME_READY_TIMEOUT_MS = 8000;
+
+  // The host page has no access to our CSS variables, so the launcher and the
+  // panel frame carry the design tokens as constants (DESIGN.md section 4).
+  const LAUNCHER_DEFAULT_FILL = "#7C3AED";
+  const LAUNCHER_HOVER_FILL = "#6D28D9";
+  const LAUNCHER_ACTIVE_FILL = "#5B21B6";
+  const LAUNCHER_SHADOW = "0 4px 12px rgba(15,23,42,0.12)";
+  const LAUNCHER_FOCUS_RING = "0 0 0 2px #FFFFFF, 0 0 0 4px #1E293B";
+  const GLYPH_LIGHT = "#FFFFFF";
+  const GLYPH_DARK = "#0A0A0F";
+
+  type PanelPalette = {
+    surface: string;
+    line: string;
+    lineStrong: string;
+    fg: string;
+    faint: string;
+    shadow: string;
+  };
+  const PANEL_PALETTES: Record<"light" | "dark", PanelPalette> = {
+    light: {
+      surface: "#FFFFFF",
+      line: "#E2E8F0",
+      lineStrong: "#7C8BA1",
+      fg: "#1E293B",
+      faint: "#586579",
+      shadow: "0 16px 40px rgba(15,23,42,0.16)",
+    },
+    dark: {
+      surface: "#222233",
+      line: "#3A3A50",
+      lineStrong: "#7C7793",
+      fg: "#FAF5FF",
+      faint: "#9B95AD",
+      shadow: "0 16px 40px rgba(0,0,0,0.5)",
+    },
+  };
 
   const currentScript: HTMLScriptElement | null =
     (document.currentScript as HTMLScriptElement | null) ??
@@ -155,12 +199,27 @@ declare global {
     return Object.keys(out).length > 0 ? out : null;
   }
 
-  // Convert #RGB or #RRGGBB → rgba; returns null for named colors / rgb() etc.
-  function hexToRgba(hex: string | null, a: number): string | null {
-    const m = hex && hex.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
-    if (!m) return null;
-    const full = m[1].length === 3 ? m[1].split("").map((c) => c + c).join("") : m[1];
-    return `rgba(${parseInt(full.slice(0, 2), 16)},${parseInt(full.slice(2, 4), 16)},${parseInt(full.slice(4, 6), 16)},${a})`;
+  function channelLuminance(value: number): number {
+    const c = value / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  }
+
+  // Any CSS colour the tenant passes (hex, rgb(), named) resolves through the
+  // browser; glyph colour is whichever of white / near-black contrasts more.
+  function readableGlyphColor(cssColor: string): string {
+    const probe = document.createElement("span");
+    probe.style.color = cssColor;
+    document.body.appendChild(probe);
+    const channels = (getComputedStyle(probe).color.match(/\d+(\.\d+)?/g) ?? []).map(Number);
+    probe.remove();
+    if (channels.length < 3) return GLYPH_LIGHT;
+    const luminance =
+      0.2126 * channelLuminance(channels[0]) +
+      0.7152 * channelLuminance(channels[1]) +
+      0.0722 * channelLuminance(channels[2]);
+    const contrastWithWhite = 1.05 / (luminance + 0.05);
+    const contrastWithDark = (luminance + 0.05) / 0.0532;
+    return contrastWithWhite >= contrastWithDark ? GLYPH_LIGHT : GLYPH_DARK;
   }
 
   // ── Persistent loader state (lives across start/stop cycles) ──────────────
@@ -175,8 +234,7 @@ declare global {
     iframe: HTMLIFrameElement;
     widgetOrigin: string;
     onMessage: (e: MessageEvent) => void;
-    onMouseMove: (e: MouseEvent) => void;
-    onMouseUp: () => void;
+    teardown: () => void;
   };
   let handles: MountHandles | null = null;
 
@@ -204,6 +262,11 @@ declare global {
     }
 
     const mode = (config.mode || "bubble").toLowerCase();
+    const requestedTheme = (config.theme ?? "light").toString().toLowerCase();
+    if (requestedTheme !== "light" && requestedTheme !== "dark") {
+      console.warn(`Chat9: unknown theme "${config.theme}", using "light".`);
+    }
+    const theme: "light" | "dark" = requestedTheme === "dark" ? "dark" : "light";
     const color = config.color || null;
     const position = (config.position || "right").toLowerCase();
     const targetId = config.target || null;
@@ -225,9 +288,15 @@ declare global {
         (navigator.language || (navigator as Navigator & { userLanguage?: string }).userLanguage)) ||
       null;
 
+    function chromeString(key: SharedChromeKey): string {
+      return sharedChromeString(browserLocale, key);
+    }
+
     function buildIframeSrc(): string {
       const params = new URLSearchParams();
       params.set("botId", botId);
+      params.set("theme", theme);
+      params.set("mode", mode === "inline" ? "inline" : "bubble");
       if (browserLocale) params.set("locale", browserLocale);
       if (apiBase) params.set("apiBase", apiBase);
       if (typeof window !== "undefined" && window.location?.origin) {
@@ -254,11 +323,19 @@ declare global {
     // once (e.g. on identity-driven remount), so we stay subscribed for the
     // entire mount lifetime.
     let panelOpen = mode === "inline";
+    let closePanel: (() => void) | null = null;
+    let onIframeReady: (() => void) | null = null;
     function onMessage(event: MessageEvent) {
       if (!handles) return;
       if (event.source !== handles.iframe.contentWindow) return;
       const payload = event.data as { type?: string } | null;
-      if (!payload || typeof payload !== "object" || payload.type !== "chat9:ready") return;
+      if (!payload || typeof payload !== "object") return;
+      if (payload.type === "chat9:close") {
+        if (event.origin === handles.widgetOrigin) closePanel?.();
+        return;
+      }
+      if (payload.type !== "chat9:ready") return;
+      onIframeReady?.();
       if (!handles.widgetOrigin) {
         console.error("Chat9: cannot determine widget origin — set widgetBase. Aborting handshake.");
         return;
@@ -301,8 +378,7 @@ declare global {
         iframe: inlineFrame,
         widgetOrigin,
         onMessage,
-        onMouseMove: () => {},
-        onMouseUp: () => {},
+        teardown: () => {},
       };
       window.addEventListener("message", handles.onMessage);
       return;
@@ -315,76 +391,66 @@ declare global {
     let resizeStartY = 0;
     let resizeStartW = 0;
     let resizeStartH = 0;
+    let savedBodyOverflow = "";
+    let bodyScrollLocked = false;
+    let loadFailTimer: number | undefined;
 
-    const fabBg = color || "linear-gradient(135deg,#e879f9,#a855f7)";
-    const colorRgba1 = hexToRgba(color, 0.4);
-    const colorRgba2 = hexToRgba(color, 0.55);
-    const fabShadow = colorRgba1
-      ? `0 4px 18px ${colorRgba1}`
-      : color
-      ? "0 4px 18px rgba(0,0,0,0.28)"
-      : "0 4px 18px rgba(168,85,247,0.45)";
-    const fabShadowH = colorRgba2
-      ? `0 6px 24px ${colorRgba2}`
-      : color
-      ? "0 6px 24px rgba(0,0,0,0.38)"
-      : "0 6px 24px rgba(168,85,247,0.55)";
+    const palette = PANEL_PALETTES[theme];
+    const launcherFill = color || LAUNCHER_DEFAULT_FILL;
+    const launcherHoverFilter = color ? "brightness(0.92)" : "";
+    const launcherActiveFilter = color ? "brightness(0.85)" : "";
+    const launcherGlyph = readableGlyphColor(launcherFill);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const phoneQuery = window.matchMedia(PHONE_MEDIA_QUERY);
+    const finePointerQuery = window.matchMedia("(pointer: fine)");
 
     const isLeft = position === "left";
-    const hEdge = isLeft ? "left:20px;" : "right:20px;";
-    const tOrigin = isLeft ? "bottom left" : "bottom right";
-    const windowAlign = isLeft ? "align-items:flex-start;" : "align-items:flex-end;";
+    const sideProp = isLeft ? "left" : "right";
+    const windowAlign = isLeft ? "flex-start" : "flex-end";
 
-    const CHAT_ICON =
-      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-      '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+    const chatIcon = (): string =>
+      '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      `<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" stroke="${launcherGlyph}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>` +
       "</svg>";
 
-    const CLOSE_ICON =
-      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-      '<line x1="18" y1="6" x2="6" y2="18" stroke="white" stroke-width="2.5" stroke-linecap="round"/>' +
-      '<line x1="6" y1="6" x2="18" y2="18" stroke="white" stroke-width="2.5" stroke-linecap="round"/>' +
+    const closeIcon = (stroke: string, size: number): string =>
+      `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">` +
+      `<line x1="18" y1="6" x2="6" y2="18" stroke="${stroke}" stroke-width="2" stroke-linecap="round"/>` +
+      `<line x1="6" y1="6" x2="18" y2="18" stroke="${stroke}" stroke-width="2" stroke-linecap="round"/>` +
       "</svg>";
 
     const container = document.createElement("div");
     container.id = "chat9-widget-container";
     container.style.cssText =
-      "position:fixed;bottom:20px;" +
-      hEdge +
-      "z-index:9999;display:flex;flex-direction:column;" +
-      windowAlign +
-      "gap:12px;";
+      "position:fixed;z-index:9999;display:flex;flex-direction:column;gap:12px;" +
+      `align-items:${windowAlign};`;
     document.body.appendChild(container);
 
     const chatWindow = document.createElement("div");
     chatWindow.id = "chat9-chat-window";
+    chatWindow.setAttribute("role", "dialog");
+    chatWindow.setAttribute("aria-label", chromeString("panel_name"));
     chatWindow.style.cssText =
-      "display:none;width:400px;height:600px;min-width:280px;min-height:360px;" +
-      "max-width:min(700px, calc(100vw - 40px));" +
-      `max-height:min(820px, calc(100vh - 100px - ${topClearance}px));` +
-      "position:relative;border-radius:16px;overflow:hidden;" +
-      "box-shadow:0 8px 40px rgba(0,0,0,0.20);" +
-      "opacity:0;transform:scale(0.93) translateY(10px);" +
-      `transform-origin:${tOrigin};` +
-      "transition:opacity 0.22s ease, transform 0.22s ease;";
+      "display:none;position:relative;overflow:hidden;opacity:0;" +
+      `background:${palette.surface};border:1px solid ${palette.line};box-shadow:${palette.shadow};` +
+      `transform-origin:${isLeft ? "bottom left" : "bottom right"};`;
 
     const resizeHandle = document.createElement("div");
     resizeHandle.id = "chat9-resize-handle";
     const handleCorner = isLeft ? "top:0;right:0;" : "top:0;left:0;";
     const handleCursor = isLeft ? "ne-resize" : "nw-resize";
-    const handleRadius = isLeft ? "border-radius:0 0 0 6px;" : "border-radius:0 0 6px 0;";
     resizeHandle.style.cssText =
       "position:absolute;" +
       handleCorner +
       "width:28px;height:28px;cursor:" +
       handleCursor +
-      ";z-index:20;display:flex;align-items:center;justify-content:center;" +
-      handleRadius;
+      `;z-index:20;display:none;align-items:center;justify-content:center;color:${palette.faint};`;
+    resizeHandle.setAttribute("aria-hidden", "true");
     resizeHandle.innerHTML =
-      '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-      '<circle cx="2" cy="10" r="1.2" fill="rgba(255,255,255,0.45)"/>' +
-      '<circle cx="6" cy="10" r="1.2" fill="rgba(255,255,255,0.45)"/>' +
-      '<circle cx="2" cy="6" r="1.2" fill="rgba(255,255,255,0.45)"/>' +
+      '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
+      '<circle cx="2" cy="10" r="1.2" fill="currentColor"/>' +
+      '<circle cx="6" cy="10" r="1.2" fill="currentColor"/>' +
+      '<circle cx="2" cy="6" r="1.2" fill="currentColor"/>' +
       "</svg>";
 
     const iframe = makeIframe(false);
@@ -397,53 +463,220 @@ declare global {
 
     const fab = document.createElement("button");
     fab.id = "chat9-fab";
-    fab.title = "Chat9";
+    fab.type = "button";
+    fab.setAttribute("aria-controls", "chat9-chat-window");
     fab.style.cssText =
-      "width:56px;height:56px;border-radius:50%;border:none;background:" +
-      fabBg +
-      ";cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:" +
-      fabShadow +
-      ";transition:transform 0.18s ease, box-shadow 0.18s ease;flex-shrink:0;outline:none;";
-    fab.innerHTML = CHAT_ICON;
+      `width:56px;height:56px;border-radius:50%;border:none;background:${launcherFill};cursor:pointer;` +
+      "display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;" +
+      `box-shadow:${LAUNCHER_SHADOW};` +
+      (reducedMotion ? "" : "transition:background-color 120ms ease-out, filter 120ms ease-out;");
 
-    fab.addEventListener("mouseenter", () => {
-      fab.style.transform = "scale(1.08)";
-      fab.style.boxShadow = fabShadowH;
+    function setLauncherState(background: string, filter: string) {
+      fab.style.background = background;
+      fab.style.filter = filter;
+    }
+    function launcherRest() {
+      setLauncherState(launcherFill, "");
+    }
+    function launcherHover() {
+      setLauncherState(color ? launcherFill : LAUNCHER_HOVER_FILL, launcherHoverFilter);
+    }
+    function launcherActive() {
+      setLauncherState(color ? launcherFill : LAUNCHER_ACTIVE_FILL, launcherActiveFilter);
+    }
+    fab.addEventListener("mouseenter", launcherHover);
+    fab.addEventListener("mouseleave", launcherRest);
+    fab.addEventListener("mousedown", launcherActive);
+    fab.addEventListener("mouseup", launcherHover);
+    fab.addEventListener("focus", () => {
+      if (fab.matches(":focus-visible")) fab.style.boxShadow = `${LAUNCHER_FOCUS_RING}, ${LAUNCHER_SHADOW}`;
     });
-    fab.addEventListener("mouseleave", () => {
-      fab.style.transform = "scale(1)";
-      fab.style.boxShadow = fabShadow;
+    fab.addEventListener("blur", () => {
+      fab.style.boxShadow = LAUNCHER_SHADOW;
     });
+
+    function renderLauncher() {
+      fab.setAttribute("aria-label", chromeString(isOpen ? "close_chat" : "open_chat"));
+      fab.setAttribute("aria-expanded", String(isOpen));
+      fab.innerHTML = isOpen ? closeIcon(launcherGlyph, 22) : chatIcon();
+    }
+
+    function isPhone(): boolean {
+      return phoneQuery.matches;
+    }
+
+    let panelWidth = "400px";
+    let panelHeight = "600px";
+
+    function applyLayout() {
+      const phone = isPhone();
+      const inset = phone ? 16 : 20;
+      container.style.bottom = `max(${inset}px, env(safe-area-inset-bottom))`;
+      container.style[sideProp] = `max(${inset}px, env(safe-area-inset-${sideProp}))`;
+      const fullScreen = isOpen && phone;
+      fab.style.display = fullScreen ? "none" : "flex";
+      chatWindow.setAttribute("aria-modal", String(fullScreen));
+      resizeHandle.style.display = !fullScreen && finePointerQuery.matches ? "flex" : "none";
+      if (fullScreen) {
+        const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        Object.assign(chatWindow.style, {
+          position: "fixed",
+          top: "0",
+          left: "0",
+          right: "0",
+          bottom: "0",
+          width: "auto",
+          height: `${viewportHeight}px`,
+          minWidth: "0",
+          minHeight: "0",
+          maxWidth: "none",
+          maxHeight: "none",
+          border: "none",
+          borderRadius: "0",
+          boxShadow: "none",
+        });
+      } else {
+        Object.assign(chatWindow.style, {
+          position: "relative",
+          top: "auto",
+          left: "auto",
+          right: "auto",
+          bottom: "auto",
+          width: panelWidth,
+          height: panelHeight,
+          minWidth: "280px",
+          minHeight: "360px",
+          maxWidth: "min(700px, calc(100vw - 40px))",
+          maxHeight: `min(820px, calc(100vh - 100px - ${topClearance}px))`,
+          border: `1px solid ${palette.line}`,
+          borderRadius: "12px",
+          boxShadow: palette.shadow,
+        });
+      }
+    }
+
+    function setPanelMotion(open: boolean) {
+      const hidden = isPhone() ? "translateY(100%)" : "translateY(8px)";
+      const duration = open ? 200 : 120;
+      chatWindow.style.transition = reducedMotion
+        ? "none"
+        : `opacity ${duration}ms ease-out, transform ${duration}ms ease-out`;
+      chatWindow.style.opacity = open ? "1" : "0";
+      chatWindow.style.transform = open ? "translateY(0)" : hidden;
+    }
+
+    function lockBodyScroll() {
+      if (bodyScrollLocked) return;
+      bodyScrollLocked = true;
+      savedBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
+    function unlockBodyScroll() {
+      if (!bodyScrollLocked) return;
+      bodyScrollLocked = false;
+      document.body.style.overflow = savedBodyOverflow;
+    }
+
+    function onViewportResize() {
+      if (isOpen) applyLayout();
+    }
+
+    // ── Iframe load failure ──────────────────────────────────────────────────
+    const failOverlay = document.createElement("div");
+    failOverlay.style.cssText =
+      "display:none;position:absolute;top:0;left:0;right:0;bottom:0;z-index:30;flex-direction:column;" +
+      `align-items:center;justify-content:center;gap:16px;background:${palette.surface};color:${palette.fg};` +
+      "font:400 14px/20px system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;text-align:center;padding:16px;";
+    const failText = document.createElement("div");
+    const failRetry = document.createElement("button");
+    failRetry.type = "button";
+    failRetry.style.cssText =
+      "height:44px;padding:0 16px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:14px;font-weight:500;line-height:20px;" +
+      `background:${palette.surface};color:${palette.fg};border:1px solid ${palette.lineStrong};`;
+    failRetry.textContent = chromeString("try_again_button");
+    const failClose = document.createElement("button");
+    failClose.type = "button";
+    failClose.setAttribute("aria-label", chromeString("close_chat"));
+    failClose.style.cssText =
+      "position:absolute;top:0;right:0;width:44px;height:44px;border:none;background:transparent;" +
+      `cursor:pointer;display:flex;align-items:center;justify-content:center;margin:8px;`;
+    failClose.innerHTML = closeIcon(palette.fg, 20);
+    failOverlay.appendChild(failClose);
+    failOverlay.appendChild(failText);
+    failOverlay.appendChild(failRetry);
+
+    function showFailOverlay(message: string, withRetry: boolean) {
+      failText.textContent = message;
+      failRetry.style.display = withRetry ? "inline-block" : "none";
+      failOverlay.style.display = "flex";
+    }
+
+    function armLoadFailTimer() {
+      window.clearTimeout(loadFailTimer);
+      loadFailTimer = window.setTimeout(
+        () => showFailOverlay(chromeString("load_failed"), true),
+        IFRAME_READY_TIMEOUT_MS,
+      );
+    }
+
+    failRetry.addEventListener("click", () => {
+      showFailOverlay(chromeString("loading"), false);
+      iframe.src = buildIframeSrc() + `&_=${Date.now()}`;
+      armLoadFailTimer();
+    });
+    failClose.addEventListener("click", () => closeChat());
+
+    onIframeReady = () => {
+      window.clearTimeout(loadFailTimer);
+      failOverlay.style.display = "none";
+    };
 
     function openChat() {
       isOpen = true;
       panelOpen = true;
-      if (!iframe.src) iframe.src = buildIframeSrc();
+      if (!iframe.src) {
+        iframe.src = buildIframeSrc();
+        armLoadFailTimer();
+      }
       chatWindow.style.display = "block";
-      requestAnimationFrame(() => {
-        chatWindow.style.opacity = "1";
-        chatWindow.style.transform = "scale(1) translateY(0)";
-      });
-      fab.innerHTML = CLOSE_ICON;
+      applyLayout();
+      if (isPhone()) lockBodyScroll();
+      setPanelMotion(false);
+      requestAnimationFrame(() => setPanelMotion(true));
+      renderLauncher();
+      iframe.focus();
       if (handles) postPanelStateToIframe(handles, true);
     }
 
-    function closeChat() {
+    closePanel = () => {
+      if (!isOpen) return;
       isOpen = false;
       panelOpen = false;
       if (handles) postPanelStateToIframe(handles, false);
-      chatWindow.style.opacity = "0";
-      chatWindow.style.transform = "scale(0.93) translateY(10px)";
-      setTimeout(() => {
+      setPanelMotion(false);
+      window.setTimeout(() => {
+        if (isOpen) return;
         chatWindow.style.display = "none";
-      }, 220);
-      fab.innerHTML = CHAT_ICON;
+        applyLayout();
+      }, reducedMotion ? 0 : 120);
+      unlockBodyScroll();
+      fab.style.display = "flex";
+      renderLauncher();
+      fab.focus();
+    };
+
+    function closeChat() {
+      closePanel?.();
     }
 
     fab.addEventListener("click", () => {
       if (isOpen) closeChat();
       else openChat();
     });
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && isOpen) closeChat();
+    }
 
     resizeHandle.addEventListener("mousedown", (e) => {
       isResizing = true;
@@ -459,10 +692,10 @@ declare global {
       if (!isResizing) return;
       const dx = isLeft ? e.clientX - resizeStartX : resizeStartX - e.clientX;
       const dy = resizeStartY - e.clientY;
-      const newW = Math.max(280, Math.min(700, resizeStartW + dx));
-      const newH = Math.max(360, Math.min(820, resizeStartH + dy));
-      chatWindow.style.width = newW + "px";
-      chatWindow.style.height = newH + "px";
+      panelWidth = Math.max(280, Math.min(700, resizeStartW + dx)) + "px";
+      panelHeight = Math.max(360, Math.min(820, resizeStartH + dy)) + "px";
+      chatWindow.style.width = panelWidth;
+      chatWindow.style.height = panelHeight;
       e.preventDefault();
     }
 
@@ -474,12 +707,18 @@ declare global {
 
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onViewportResize);
+    window.visualViewport?.addEventListener("resize", onViewportResize);
 
     chatWindow.appendChild(resizeHandle);
     chatWindow.appendChild(iframe);
+    chatWindow.appendChild(failOverlay);
     container.appendChild(chatWindow);
     container.appendChild(fab);
     document.body.appendChild(resizeOverlay);
+    renderLauncher();
+    applyLayout();
 
     handles = {
       container,
@@ -487,8 +726,15 @@ declare global {
       iframe,
       widgetOrigin,
       onMessage,
-      onMouseMove,
-      onMouseUp,
+      teardown: () => {
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.removeEventListener("keydown", onKeyDown);
+        window.removeEventListener("resize", onViewportResize);
+        window.visualViewport?.removeEventListener("resize", onViewportResize);
+        window.clearTimeout(loadFailTimer);
+        unlockBodyScroll();
+      },
     };
     window.addEventListener("message", handles.onMessage);
   }
@@ -496,8 +742,7 @@ declare global {
   function stop() {
     if (!handles) return;
     window.removeEventListener("message", handles.onMessage);
-    document.removeEventListener("mousemove", handles.onMouseMove);
-    document.removeEventListener("mouseup", handles.onMouseUp);
+    handles.teardown();
     handles.container.remove();
     handles.resizeOverlay.remove();
     handles = null;

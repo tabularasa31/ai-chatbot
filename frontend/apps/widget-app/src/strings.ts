@@ -7,7 +7,6 @@
 import { sharedChromeString, type SharedChromeKey } from "@chat9/widget-shared";
 
 type AppStringKey =
-  | "loading"
   | "unavailable"
   | "composer_label"
   | "composer_placeholder"
@@ -33,7 +32,6 @@ type AppStringKey =
 export type StringKey = AppStringKey | SharedChromeKey;
 
 const EN: Record<AppStringKey, string> = {
-  loading: "Loading…",
   unavailable: "Chat is unavailable.",
   composer_label: "Message",
   composer_placeholder: "Type a message…",
@@ -60,7 +58,6 @@ const EN: Record<AppStringKey, string> = {
 const LOCALES: Record<string, Partial<Record<AppStringKey, string>>> = {
   en: EN,
   ru: {
-    loading: "Загрузка…",
     contact_support_button: "Связаться с поддержкой",
     support_notified: "Поддержка уведомлена. С вами свяжутся.",
   },
@@ -71,6 +68,7 @@ const SHARED_KEYS: ReadonlySet<StringKey> = new Set<SharedChromeKey>([
   "open_chat",
   "close_chat",
   "load_failed",
+  "loading",
   "try_again_button",
 ]);
 

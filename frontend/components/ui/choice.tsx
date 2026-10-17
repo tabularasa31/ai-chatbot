@@ -7,21 +7,19 @@ const ROW_CLASS =
 
 const CONTROL_CLASS = "mt-0.5 h-5 w-5 shrink-0 cursor-pointer accent-brand focus:outline-none";
 
-export function Checkbox({
+type ChoiceInputProps = { type: "checkbox" | "radio" } & Omit<InputHTMLAttributes<HTMLInputElement>, "type">;
+
+function ChoiceRow({
   label,
   helper,
+  selected,
   className,
-  ...props
-}: { label: string; helper?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "type">) {
+  ...input
+}: { label: string; helper?: string; selected?: boolean; className?: string } & ChoiceInputProps) {
   const helperId = useId();
   return (
-    <label className={cn(ROW_CLASS, className)}>
-      <input
-        type="checkbox"
-        aria-describedby={helper ? helperId : undefined}
-        className={CONTROL_CLASS}
-        {...props}
-      />
+    <label className={cn(ROW_CLASS, selected && "bg-brand-subtle hover:bg-brand-subtle", className)}>
+      <input aria-describedby={helper ? helperId : undefined} className={CONTROL_CLASS} {...input} />
       <span className="min-w-0">
         <span className="block text-ui font-medium text-fg">{label}</span>
         {helper && (
@@ -32,6 +30,15 @@ export function Checkbox({
       </span>
     </label>
   );
+}
+
+export function Checkbox({
+  label,
+  helper,
+  className,
+  ...props
+}: { label: string; helper?: string; className?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "type">) {
+  return <ChoiceRow type="checkbox" label={label} helper={helper} className={className} {...props} />;
 }
 
 export type RadioOption<T extends string> = { value: T; label: string; description: string };
@@ -51,21 +58,18 @@ export function RadioGroup<T extends string>({
 }) {
   return (
     <div role="radiogroup" aria-label={label} className="space-y-1">
-      {options.map((option) => (
-        <label key={option.value} className={cn(ROW_CLASS, option.value === value && "bg-brand-subtle hover:bg-brand-subtle")}>
-          <input
-            type="radio"
-            name={name}
-            value={option.value}
-            checked={option.value === value}
-            onChange={() => onChange(option.value)}
-            className={CONTROL_CLASS}
-          />
-          <span className="min-w-0">
-            <span className="block text-ui font-medium text-fg">{option.label}</span>
-            <span className="block text-caption text-fg-muted">{option.description}</span>
-          </span>
-        </label>
+      {options.map(({ value: optionValue, label: optionLabel, description }) => (
+        <ChoiceRow
+          key={optionValue}
+          type="radio"
+          name={name}
+          value={optionValue}
+          label={optionLabel}
+          helper={description}
+          selected={optionValue === value}
+          checked={optionValue === value}
+          onChange={() => onChange(optionValue)}
+        />
       ))}
     </div>
   );

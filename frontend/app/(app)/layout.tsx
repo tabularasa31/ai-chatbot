@@ -2,7 +2,7 @@ import { Navbar } from "@/components/Navbar";
 import { Sidebar } from "@/components/Sidebar";
 import { DashboardWidgetLoader } from "@/components/DashboardWidgetLoader";
 import { ShellBanner } from "@/components/ShellBanner";
-import { ForcedLightScheme } from "@/components/ui/forced-light-scheme";
+import { SchemeSurface } from "@/components/SchemeSurface";
 import { getSessionFromCookie } from "@/lib/session";
 
 export default async function AppLayout({
@@ -12,8 +12,7 @@ export default async function AppLayout({
 }) {
   const session = await getSessionFromCookie();
   return (
-    <div className="min-h-screen bg-canvas">
-      <ForcedLightScheme />
+    <SchemeSurface>
       <Navbar initialEmail={session?.email ?? null} />
       <Sidebar />
       <main className="ml-52 flex min-h-screen flex-col px-8 pb-8 pt-20 text-fg">
@@ -21,6 +20,6 @@ export default async function AppLayout({
         {children}
       </main>
       <DashboardWidgetLoader email={session?.email ?? null} />
-    </div>
+    </SchemeSurface>
   );
 }

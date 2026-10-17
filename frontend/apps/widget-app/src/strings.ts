@@ -67,6 +67,7 @@ const SHARED_KEYS: ReadonlySet<StringKey> = new Set<SharedChromeKey>([
   "panel_name",
   "open_chat",
   "close_chat",
+  "resize_chat",
   "load_failed",
   "loading",
   "try_again_button",

@@ -9,7 +9,7 @@ import { t } from "./strings";
 // first token).
 const STALLED_AFTER_MS = 8000;
 
-export function LoadingIndicator({ stage, locale }: { stage: string | null; locale: string | null }) {
+export function LoadingIndicator({ stage, locale, greeting }: { stage: string | null; locale: string | null; greeting: boolean }) {
   const [stalled, setStalled] = useState(false);
 
   useEffect(() => {
@@ -18,7 +18,9 @@ export function LoadingIndicator({ stage, locale }: { stage: string | null; loca
     return () => clearTimeout(id);
   }, [stage]);
 
-  const label = stalled
+  const label = greeting
+    ? t(locale, "loading")
+    : stalled
     ? t(locale, "status_stalled")
     : stage === "writing"
       ? t(locale, "status_writing")

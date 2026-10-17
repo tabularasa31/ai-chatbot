@@ -7,7 +7,7 @@
 //       userHints: { name: "Anna", email: "anna@example.com", locale: "ru-RU" },
 //       mode: "bubble",        // "bubble" | "inline"
 //       theme: "light",        // "light" | "dark"
-//       color: "#7C3AED",      // launcher background (bubble mode)
+//       color: "#7C3AED",      // launcher, send button and visitor bubble fill
 //       position: "right",      // "right" | "left"
 //       target: "<elementId>", // for mode: "inline"
 //       topClearance: 56,      // px reserved at viewport top (e.g. fixed navbar height)
@@ -39,6 +39,7 @@
 // (api-ru.getchat9.live) from its own scriptOrigin. No flag needed.
 
 import { sharedChromeString, type SharedChromeKey } from "../../../packages/widget-shared/src/chromeStrings";
+import { ACCENT_ON_LIGHT, accentOnColor, rgbToHex, type Rgb } from "../../../packages/widget-shared/src/accent";
 
 type UserHints = {
   user_id?: string;
@@ -96,15 +97,28 @@ declare global {
   const LAUNCHER_ACTIVE_FILL = "#5B21B6";
   const LAUNCHER_SHADOW = "0 4px 12px rgba(15,23,42,0.12)";
   const LAUNCHER_FOCUS_RING = "0 0 0 2px #FFFFFF, 0 0 0 4px #1E293B";
-  const GLYPH_LIGHT = "#FFFFFF";
-  const GLYPH_DARK = "#0A0A0F";
+  const CHROME_FG = "#FAF5FF";
+  const CHROME_FG_MUTED = "#A9A3BA";
+  const CHROME_ACCENT = "#A78BFA";
+  const DEFAULT_PANEL_WIDTH = 380;
+  const DEFAULT_PANEL_HEIGHT = 600;
+  const MIN_PANEL_WIDTH = 280;
+  const MIN_PANEL_HEIGHT = 360;
+  const MAX_PANEL_WIDTH = 700;
+  const MAX_PANEL_HEIGHT = 820;
+  const PANEL_OFFSET = 20;
+  const RESIZE_STEP = 20;
+  const RESIZE_STEP_LARGE = 80;
+  const GRIP_SIZE = 24;
+  const GRIP_FADE_MS = 120;
+  const PANEL_RADIUS = "16px";
+  const GRIP_MEDIA_QUERY = "(pointer: fine) and (hover: hover)";
 
   type PanelPalette = {
     surface: string;
     line: string;
     lineStrong: string;
     fg: string;
-    faint: string;
     shadow: string;
   };
   const PANEL_PALETTES: Record<"light" | "dark", PanelPalette> = {
@@ -113,7 +127,6 @@ declare global {
       line: "#E2E8F0",
       lineStrong: "#7C8BA1",
       fg: "#1E293B",
-      faint: "#586579",
       shadow: "0 16px 40px rgba(15,23,42,0.16)",
     },
     dark: {
@@ -121,7 +134,6 @@ declare global {
       line: "#3A3A50",
       lineStrong: "#7C7793",
       fg: "#FAF5FF",
-      faint: "#9B95AD",
       shadow: "0 16px 40px rgba(0,0,0,0.5)",
     },
   };
@@ -195,27 +207,16 @@ declare global {
     return Object.keys(out).length > 0 ? out : null;
   }
 
-  function channelLuminance(value: number): number {
-    const c = value / 255;
-    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-  }
-
   // Any CSS colour the tenant passes (hex, rgb(), named) resolves through the
-  // browser; glyph colour is whichever of white / near-black contrasts more.
-  function readableGlyphColor(cssColor: string): string {
+  // browser to concrete channels; null when the browser cannot parse it.
+  function resolveColor(cssColor: string): Rgb | null {
     const probe = document.createElement("span");
     probe.style.color = cssColor;
+    if (!probe.style.color) return null;
     document.body.appendChild(probe);
     const channels = (getComputedStyle(probe).color.match(/\d+(\.\d+)?/g) ?? []).map(Number);
     probe.remove();
-    if (channels.length < 3) return GLYPH_LIGHT;
-    const luminance =
-      0.2126 * channelLuminance(channels[0]) +
-      0.7152 * channelLuminance(channels[1]) +
-      0.0722 * channelLuminance(channels[2]);
-    const contrastWithWhite = 1.05 / (luminance + 0.05);
-    const contrastWithDark = (luminance + 0.05) / 0.0532;
-    return contrastWithWhite >= contrastWithDark ? GLYPH_LIGHT : GLYPH_DARK;
+    return channels.length >= 3 ? [channels[0], channels[1], channels[2]] : null;
   }
 
   // ── Persistent loader state (lives across start/stop cycles) ──────────────
@@ -265,6 +266,7 @@ declare global {
     }
     const theme: "light" | "dark" = requestedTheme === "dark" ? "dark" : "light";
     const color = config.color || null;
+    const accentRgb = color ? resolveColor(color) : null;
     const position = (config.position || "right").toLowerCase();
     const targetId = config.target || null;
     const topClearance =
@@ -294,6 +296,8 @@ declare global {
       params.set("botId", botId);
       params.set("theme", theme);
       params.set("mode", mode === "inline" ? "inline" : "bubble");
+      if (accentRgb) params.set("accent", rgbToHex(accentRgb));
+      if (position === "left") params.set("position", "left");
       if (browserLocale) params.set("locale", browserLocale);
       if (apiBase) params.set("apiBase", apiBase);
       if (typeof window !== "undefined" && window.location?.origin) {
@@ -397,10 +401,10 @@ declare global {
     const launcherFill = color || LAUNCHER_DEFAULT_FILL;
     const launcherHoverFilter = color ? "brightness(0.92)" : "";
     const launcherActiveFilter = color ? "brightness(0.85)" : "";
-    const launcherGlyph = readableGlyphColor(launcherFill);
+    const launcherGlyph = accentRgb ? accentOnColor(accentRgb) : ACCENT_ON_LIGHT;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const phoneQuery = window.matchMedia(PHONE_MEDIA_QUERY);
-    const finePointerQuery = window.matchMedia("(pointer: fine)");
+    const gripQuery = window.matchMedia(GRIP_MEDIA_QUERY);
 
     const isLeft = position === "left";
     const sideProp = isLeft ? "left" : "right";
@@ -433,22 +437,24 @@ declare global {
       `background:${palette.surface};border:1px solid ${palette.line};box-shadow:${palette.shadow};` +
       `transform-origin:${isLeft ? "bottom left" : "bottom right"};`;
 
-    const resizeHandle = document.createElement("div");
+    const resizeHandle = document.createElement("button");
     resizeHandle.id = "chat9-resize-handle";
+    resizeHandle.type = "button";
+    resizeHandle.setAttribute("aria-label", chromeString("resize_chat"));
     const handleCorner = isLeft ? "top:0;right:0;" : "top:0;left:0;";
     const handleCursor = isLeft ? "ne-resize" : "nw-resize";
     resizeHandle.style.cssText =
       "position:absolute;" +
       handleCorner +
-      "box-sizing:border-box;width:28px;height:28px;padding:6px;cursor:" +
-      handleCursor +
-      `;z-index:20;display:none;align-items:flex-start;justify-content:${isLeft ? "flex-end" : "flex-start"};color:${palette.faint};`;
-    resizeHandle.setAttribute("aria-hidden", "true");
+      `box-sizing:border-box;width:${GRIP_SIZE}px;height:${GRIP_SIZE}px;padding:0;margin:0;border:none;background:transparent;` +
+      `cursor:${handleCursor};z-index:20;display:none;align-items:center;justify-content:center;` +
+      `color:${CHROME_FG_MUTED};opacity:0;` +
+      (reducedMotion ? "" : `transition:opacity ${GRIP_FADE_MS}ms ease-out;`);
     resizeHandle.innerHTML =
-      '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       (isLeft
-        ? '<circle cx="10" cy="2" r="1.2" fill="currentColor"/><circle cx="6" cy="2" r="1.2" fill="currentColor"/><circle cx="10" cy="6" r="1.2" fill="currentColor"/>'
-        : '<circle cx="2" cy="2" r="1.2" fill="currentColor"/><circle cx="6" cy="2" r="1.2" fill="currentColor"/><circle cx="2" cy="6" r="1.2" fill="currentColor"/>') +
+        ? '<path d="M11 19H5v-6"/><path d="M13 5h6v6"/><path d="M19 5 5 19"/>'
+        : '<path d="M19 13v6h-6"/><path d="M5 11V5h6"/><path d="m5 5 14 14"/>') +
       "</svg>";
 
     const iframe = makeIframe(false);
@@ -493,26 +499,23 @@ declare global {
       fab.style.boxShadow = LAUNCHER_SHADOW;
     });
 
-    function renderLauncher() {
-      fab.setAttribute("aria-label", chromeString(isOpen ? "close_chat" : "open_chat"));
-      fab.setAttribute("aria-expanded", String(isOpen));
-      fab.innerHTML = isOpen ? closeIcon(launcherGlyph, 22) : chatIcon();
-    }
+    fab.setAttribute("aria-label", chromeString("open_chat"));
+    fab.innerHTML = chatIcon();
 
-    let panelWidth = "400px";
-    let panelHeight = "600px";
+    let panelWidth = `${DEFAULT_PANEL_WIDTH}px`;
+    let panelHeight = `${DEFAULT_PANEL_HEIGHT}px`;
 
     function applyLayout() {
       const phone = phoneQuery.matches;
-      const inset = phone ? 16 : 20;
+      const inset = phone ? 16 : PANEL_OFFSET;
       container.style.bottom = `max(${inset}px, env(safe-area-inset-bottom))`;
       container.style[sideProp] = `max(${inset}px, env(safe-area-inset-${sideProp}))`;
       const fullScreen = isOpen && phone;
       if (fullScreen) lockBodyScroll();
       else unlockBodyScroll();
-      fab.style.display = fullScreen ? "none" : "flex";
+      fab.style.display = isOpen ? "none" : "flex";
       chatWindow.setAttribute("aria-modal", String(fullScreen));
-      resizeHandle.style.display = !fullScreen && finePointerQuery.matches ? "flex" : "none";
+      resizeHandle.style.display = !phone && gripQuery.matches ? "flex" : "none";
       if (fullScreen) {
         const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
         Object.assign(chatWindow.style, {
@@ -540,12 +543,12 @@ declare global {
           bottom: "auto",
           width: panelWidth,
           height: panelHeight,
-          minWidth: "280px",
-          minHeight: "360px",
-          maxWidth: "min(700px, calc(100vw - 40px))",
-          maxHeight: `min(820px, calc(100vh - 100px - ${topClearance}px))`,
+          minWidth: `${MIN_PANEL_WIDTH}px`,
+          minHeight: `${MIN_PANEL_HEIGHT}px`,
+          maxWidth: `min(${MAX_PANEL_WIDTH}px, calc(100vw - ${2 * PANEL_OFFSET}px))`,
+          maxHeight: `min(${MAX_PANEL_HEIGHT}px, calc(100vh - ${2 * PANEL_OFFSET}px - ${topClearance}px))`,
           border: `1px solid ${palette.line}`,
-          borderRadius: "12px",
+          borderRadius: PANEL_RADIUS,
           boxShadow: palette.shadow,
         });
       }
@@ -637,7 +640,6 @@ declare global {
       applyLayout();
       setPanelMotion(false);
       requestAnimationFrame(() => setPanelMotion(true));
-      renderLauncher();
       iframe.focus();
       if (handles) postPanelStateToIframe(handles, true, phoneFullScreen());
     }
@@ -653,8 +655,9 @@ declare global {
         chatWindow.style.display = "none";
         applyLayout();
       }, reducedMotion ? 0 : 120);
+      panelHovered = false;
+      revealGrip(false);
       fab.style.display = "flex";
-      renderLauncher();
       fab.focus();
     };
 
@@ -668,6 +671,62 @@ declare global {
         closePanel?.();
       }
     }
+
+    function setPanelSize(width: number, height: number) {
+      panelWidth = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, width)) + "px";
+      panelHeight = Math.max(MIN_PANEL_HEIGHT, Math.min(MAX_PANEL_HEIGHT, height)) + "px";
+      chatWindow.style.width = panelWidth;
+      chatWindow.style.height = panelHeight;
+    }
+
+    let panelHovered = false;
+    function revealGrip(visible: boolean) {
+      resizeHandle.style.opacity = visible ? "1" : "0";
+    }
+    chatWindow.addEventListener("mouseenter", () => {
+      panelHovered = true;
+      revealGrip(true);
+    });
+    chatWindow.addEventListener("mouseleave", () => {
+      panelHovered = false;
+      revealGrip(chatWindow.contains(document.activeElement));
+    });
+    chatWindow.addEventListener("focusin", () => revealGrip(true));
+    chatWindow.addEventListener("focusout", (e) => {
+      const next = e.relatedTarget as Node | null;
+      revealGrip(panelHovered || (next !== null && chatWindow.contains(next)));
+    });
+    resizeHandle.addEventListener("mouseenter", () => {
+      resizeHandle.style.color = CHROME_FG;
+    });
+    resizeHandle.addEventListener("mouseleave", () => {
+      resizeHandle.style.color = CHROME_FG_MUTED;
+    });
+    resizeHandle.addEventListener("focus", () => {
+      if (resizeHandle.matches(":focus-visible")) resizeHandle.style.outline = `2px solid ${CHROME_ACCENT}`;
+    });
+    resizeHandle.addEventListener("blur", () => {
+      resizeHandle.style.outline = "none";
+    });
+    resizeHandle.addEventListener("keydown", (e) => {
+      if (e.key === "Home") {
+        setPanelSize(DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT);
+        e.preventDefault();
+        return;
+      }
+      const step = e.shiftKey ? RESIZE_STEP_LARGE : RESIZE_STEP;
+      const growsWidth = isLeft ? "ArrowRight" : "ArrowLeft";
+      const shrinksWidth = isLeft ? "ArrowLeft" : "ArrowRight";
+      let dw = 0;
+      let dh = 0;
+      if (e.key === growsWidth) dw = step;
+      else if (e.key === shrinksWidth) dw = -step;
+      else if (e.key === "ArrowUp") dh = step;
+      else if (e.key === "ArrowDown") dh = -step;
+      else return;
+      setPanelSize(chatWindow.offsetWidth + dw, chatWindow.offsetHeight + dh);
+      e.preventDefault();
+    });
 
     resizeHandle.addEventListener("mousedown", (e) => {
       isResizing = true;
@@ -683,10 +742,7 @@ declare global {
       if (!isResizing) return;
       const dx = isLeft ? e.clientX - resizeStartX : resizeStartX - e.clientX;
       const dy = resizeStartY - e.clientY;
-      panelWidth = Math.max(280, Math.min(700, resizeStartW + dx)) + "px";
-      panelHeight = Math.max(360, Math.min(820, resizeStartH + dy)) + "px";
-      chatWindow.style.width = panelWidth;
-      chatWindow.style.height = panelHeight;
+      setPanelSize(resizeStartW + dx, resizeStartH + dy);
       e.preventDefault();
     }
 
@@ -702,13 +758,12 @@ declare global {
     window.addEventListener("resize", onViewportResize);
     window.visualViewport?.addEventListener("resize", onViewportResize);
 
-    chatWindow.appendChild(resizeHandle);
     chatWindow.appendChild(iframe);
     chatWindow.appendChild(failOverlay);
+    chatWindow.appendChild(resizeHandle);
     container.appendChild(chatWindow);
     container.appendChild(fab);
     document.body.appendChild(resizeOverlay);
-    renderLauncher();
     applyLayout();
 
     handles = {

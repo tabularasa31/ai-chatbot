@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "preact/hooks";
 import "./styles.css";
 import { ChatWidget } from "./ChatWidget";
 import { t } from "./strings";
-import type { UserHints, WidgetTheme } from "@chat9/widget-shared";
+import { accentOnColor, parseHexColor, type UserHints, type WidgetTheme } from "@chat9/widget-shared";
 
 export type { UserHints };
 
@@ -78,9 +78,28 @@ function themeFromParam(raw: string | null): WidgetTheme {
   return raw === "dark" ? "dark" : "light";
 }
 
+const TENANT_ACCENT_HOVER_FILTER = "brightness(0.92)";
+const TENANT_ACCENT_ACTIVE_FILTER = "brightness(0.85)";
+
+function applyTenantAccent(root: HTMLElement, raw: string | null) {
+  const accent = parseHexColor(raw);
+  if (!accent) return;
+  const fill = accent.join(" ");
+  const on = parseHexColor(accentOnColor(accent));
+  if (!on) return;
+  root.style.setProperty("--c-accent", fill);
+  root.style.setProperty("--c-accent-hover", fill);
+  root.style.setProperty("--c-accent-active", fill);
+  root.style.setProperty("--c-accent-on", on.join(" "));
+  root.style.setProperty("--accent-hover-filter", TENANT_ACCENT_HOVER_FILTER);
+  root.style.setProperty("--accent-active-filter", TENANT_ACCENT_ACTIVE_FILTER);
+}
+
 // Set before the first paint so a dark widget never flashes light.
 const initialParams = new URLSearchParams(window.location.search);
 document.documentElement.dataset.theme = themeFromParam(initialParams.get("theme"));
+document.documentElement.dataset.position = initialParams.get("position") === "left" ? "left" : "right";
+applyTenantAccent(document.documentElement, initialParams.get("accent"));
 
 function App() {
   const params = initialParams;

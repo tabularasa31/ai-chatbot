@@ -161,3 +161,4 @@ export function appendSystemMarker(
 }
 
 export { sharedChromeString, type SharedChromeKey } from "./chromeStrings";
+export { ACCENT_ON_DARK, ACCENT_ON_LIGHT, accentOnColor, parseHexColor, rgbToHex, type Rgb } from "./accent";

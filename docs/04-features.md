@@ -604,8 +604,7 @@ User message
   ↓
 PII redaction
   ↓
-Bootstrap greeting early exit  (empty turn on a brand-new session → default greeting, return)
-  (No small-talk shortcut: every non-empty turn — including one-word greetings — continues
+(No small-talk shortcut: every non-empty turn — including one-word greetings — continues
    below. Short/unclear inputs are answered or get the zero-hits "please rephrase" soft reply.)
   ↓
 Parallel guard pool (3 threads, ~2 s budget):
@@ -761,7 +760,7 @@ Detection is structural: every entity above has the same shape in every language
 
 The bot now follows one shared language policy for deterministic assistant text:
 
-- before the first real user question, language-only turns use the bootstrap locale chain (see fixed contract below)
+- before the first real user question, the greeting uses the greeting locale chain (see fixed contract below)
 - after the first real question, replies should follow the language of that question
 
 This applies not only to generated RAG answers, but also to deterministic system text such as:
@@ -773,16 +772,15 @@ This applies not only to generated RAG answers, but also to deterministic system
 
 Localization of deterministic text is handled by a shared helper in `backend/chat/language.py`.
 
-#### Bootstrap locale chain — fixed contract
+#### Greeting locale — fixed contract
 
-For any turn that has no user message to detect language from (the bootstrap greeting and any other pre-question deterministic text), the response language is resolved in this exact order. **This order must not be changed without an explicit product decision** — call sites and tests rely on it.
+The widget greeting (`GET /widget/greeting`) has no user message to detect language from, so the widget sends one `locale` and the greeting is rendered in it. **This order must not be changed without an explicit product decision** — the widget and tests rely on it.
 
-1. **Prior session language** — the language the visitor actually spoke in an earlier conversation of this same session, carried across a rotation boundary (`rotated_from.last_response_language`). This is the strongest signal because it is an *observed* choice the visitor made, not a passive hint. It is only present when the session was rotated (an idle re-open); a genuinely first bootstrap has no prior language and falls through. Without it, a returning Russian-speaking visitor re-greeted after an idle gap would be greeted in English.
-2. **`user_context.locale`** — the locale the tenant explicitly passed for this user (typically via `userHints.locale` in `Chat9Widget.start({...})` or `Chat9Widget.setHints({...})`). The tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
-3. **`user_context.browser_locale` / request `Accept-Language`** — the browser-reported locale. Weaker than the explicit hint because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
-4. **English** — final fallback when no signal is available.
+1. **`userHints.locale`** — the locale the tenant explicitly passed for this user (via `Chat9Widget.start({...})` or `Chat9Widget.setHints({...})`). The tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
+2. **Browser locale** — the `locale` query parameter or `navigator.language`. Weaker than the explicit hint because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
+3. **English** — final fallback when no signal is available.
 
-Prior session language outranks KYC/browser deliberately: an observed language the visitor typed beats any hint. Below it, the explicit KYC hint outranks browser — reversing *that* would silently override tenants who paid the integration cost of passing `locale` through `userHints`. Implementation: [`_resolve_language_context_inner`](../backend/chat/language.py) in `backend/chat/language.py` — bootstrap branch; the carry across rotation lives in `_ensure_chat_async` in `backend/chat/service.py`.
+The hint outranks the browser locale: reversing that would silently override tenants who paid the integration cost of passing `locale` through `userHints`. The choice is made in `greetingLocale` (`frontend/apps/widget-app/src/greeting.ts`); the backend renders the greeting in the language of the `locale` it receives, without region (ISO 639-1 roots only; any other root gets the English text without an LLM call). A generated greeting is cached in Redis for 7 days per tenant, product name and language (the language root, plus the ISO 15924 script subtag when the browser locale names a known one, e.g. `zh-Hant`; never the region); each tenant gets at most 200 generations per week, after which a cached root-language greeting or the English text is served; the English fallback after an LLM failure is never cached.
 
 #### Language locking — fixed contract
 
@@ -797,18 +795,17 @@ A conversation is endless from the visitor's side — there is no "start new cha
 
 ### Default greeting
 
-When a new conversation starts before the first real user question, Chat9 can return a default assistant greeting instead of `422`:
+Before the first real user question, the widget shows a default assistant greeting fetched from `GET /widget/greeting?bot_id=…&locale=…`. The request is stateless: it creates no chat, session or trace, and the greeting is not part of the stored transcript — the conversation starts with the visitor's first message.
 
 `I’m the <product_name> assistant and can help with documentation, product setup, integrations, and finding the right information. Ask your question.`
 
 Behavior details:
 
-- the canonical greeting is stored in English
-- it is localized using the pre-question locale chain above
+- the canonical greeting is in English and is localized with the greeting locale above
 - `<product_name>` comes from `TenantProfile.product_name` when available, otherwise from the client name
-- the stock widget shows this greeting for every **new conversation**: a truly new session, or a session resumed after the conversation idle timeout (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, see "Sessions, conversations, and history")
-- resuming within the idle window does not repeat the greeting
-- empty follow-up turns inside an active conversation still return `422 Question is required`; an empty message on a rotation-pending session is the bootstrap for the new conversation's greeting
+- without an OpenAI key, or when the LLM call fails, the English text is returned
+- a browser is greeted once per bot (and per identified user): the widget remembers it in local storage, and the server never asks for a re-greeting, including after the conversation idle timeout (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, see "Sessions, conversations, and history")
+- an empty message to `POST /widget/chat` is always rejected with `422 message_required`
 
 ### Chat channels
 

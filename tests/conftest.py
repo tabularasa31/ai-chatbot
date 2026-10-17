@@ -438,6 +438,30 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
+def fake_redis(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    from backend.core import redis as redis_mod
+
+    store: dict[str, str] = {}
+
+    async def _get(key: str) -> str | None:
+        return store.get(key)
+
+    async def _set(key: str, value: str, ttl: int) -> bool:
+        store[key] = value
+        return True
+
+    async def _incr(key: str, ttl: int) -> int:
+        store[key] = str(int(store.get(key, "0")) + 1)
+        return int(store[key])
+
+    monkeypatch.setattr(redis_mod, "is_enabled", lambda: True)
+    monkeypatch.setattr(redis_mod, "cache_get", _get)
+    monkeypatch.setattr(redis_mod, "cache_set_with_ttl", _set)
+    monkeypatch.setattr(redis_mod, "incr_with_ttl", _incr)
+    return store
+
+
+@pytest.fixture
 def relevance_guard_category(monkeypatch: pytest.MonkeyPatch):
     """Make the relevance guard's LLM classify every message into a category."""
 

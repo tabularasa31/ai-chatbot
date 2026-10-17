@@ -3,6 +3,20 @@ title: Changelog
 description: What's changed in Chat9, most recent first.
 ---
 
+## 2026-10-17 — Widget greets a visitor once
+
+The widget now greets a visitor once per browser, ever. A returning visitor is not greeted again, even when a new conversation starts after a week without messages. If you pass `user_id` or `email`, the greeting is tracked per identified user.
+
+- Opening the chat bubble, or loading a page with an inline widget, no longer starts a conversation. A conversation starts with the visitor's first message, so visitors who never write no longer create empty conversations.
+- The greeting is shown in `userHints.locale` if you set one, otherwise in the browser language, otherwise in English.
+- The greeting is not saved into the conversation. In the Inbox a conversation starts with the visitor's first message, and after a page reload the visitor sees their conversation without the greeting.
+- The "Couldn't start the chat" error on open is gone.
+- Clearing browser storage or using a private window counts as a new browser, so the visitor is greeted again.
+
+**Who it affects:** your visitors, on every site with the widget.
+
+**What to do:** nothing. See [Embedding the widget](/docs/embedding-the-widget) and the [FAQ](/docs/faq).
+
 ## 2026-10-17 — No handoff offer on a visitor's first message
 
 The assistant no longer offers to forward a question to your support team on the visitor's first message in a conversation. It answers first, and offers a handoff only if the conversation continues without a resolution. A visitor who asks for a person still gets one immediately, on any message.

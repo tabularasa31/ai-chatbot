@@ -275,9 +275,7 @@ class RagHandler(PipelineHandler):
     """
 
     def can_handle(self, ctx: HandlerContext) -> bool:
-        # Empty input is GreetingHandler's domain or rejected outright; anything
-        # else falls through to RAG once earlier handlers decline.
-        return bool(ctx.question_text)
+        return True
 
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
         outcome = await self._in_sync(ctx, self._handle_sync)

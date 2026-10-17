@@ -29,8 +29,8 @@ export type Chat9StartConfig = {
 // the conversation). The third state is derived server-side, never stored.
 export type HandoffState = "bot" | "waiting" | "live";
 
-// Shared shape of a completed widget turn — used both for the non-streaming
-// (greeting) response and the accumulated payload of a streamed reply.
+// Shared shape of a completed widget turn: the accumulated payload of a
+// streamed reply, or the JSON error body of a failed one.
 export type WidgetTurnPayload = {
   detail?: unknown;
   text?: string;
@@ -69,7 +69,6 @@ export type LlmFailureState = {
 // visitor's text so it is never retyped.
 export type ErrorRetry =
   | { kind: "send"; message: string }
-  | { kind: "greeting" }
   | { kind: "history" }
   | { kind: "escalate"; messageId: string };
 
@@ -152,13 +151,6 @@ export function createSystemMessage(subtype: "new_conversation"): ChatWidgetMess
     type: "system",
     subtype,
   };
-}
-
-export function appendSystemMarker(
-  messages: ChatWidgetMessage[],
-  subtype: "new_conversation",
-): ChatWidgetMessage[] {
-  return [...messages, createSystemMessage(subtype)];
 }
 
 export { sharedChromeString, type SharedChromeKey } from "./chromeStrings";

@@ -259,10 +259,10 @@ jobs:
         with:
           version: 9.15.0
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
@@ -272,6 +272,10 @@ jobs:
         # workspace packages — the full install is required, but `--filter` would
         # skip the dashboard's own dependencies, which we don't need here.
         run: pnpm install --frozen-lockfile
+
+      - name: Test widget-app
+        working-directory: frontend
+        run: pnpm --filter @chat9/widget-app test
 
       - name: Build widget-app (also builds widget-loader and copies dist/widget.js)
         working-directory: frontend

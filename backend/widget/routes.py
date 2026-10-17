@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome
+from backend.chat.handlers.greeting import greet_widget_visitor, widget_product_name
 from backend.chat.language import async_localize_text_to_language_result, detect_language
 from backend.chat.llm_unavailable import (
     OPENAI_KEY_NOT_CONFIGURED_MESSAGE,
@@ -258,6 +259,46 @@ async def widget_config(
     )
 
 
+class WidgetGreetingResponse(BaseModel):
+    text: str
+
+
+@widget_router.get("/greeting", response_model=WidgetGreetingResponse)
+@limiter.limit(
+    settings.effective_widget_chat_per_client_rate,
+    key_func=widget_bot_rate_limit_key,
+)
+@limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
+async def widget_greeting(
+    request: Request,
+    bot_id: BotIdQuery,
+    locale: Annotated[
+        str | None, Query(description="Browser locale hint (e.g. ru-RU)")
+    ] = None,
+    db: AsyncSession = Depends(get_async_db),
+) -> WidgetGreetingResponse:
+    """Opening welcome for a visitor who has not written yet.
+
+    Stateless: no chat, session or trace is created. Without an OpenAI key the
+    English text is returned.
+    """
+    _bot, tenant = await _bot_tenant_or_error(
+        db,
+        get_bot_and_tenant_for_widget_session,
+        bot_id,
+        no_openai_detail="Bot not available",
+    )
+    product_name = await widget_product_name(tenant=tenant, db=db)
+    await db.close()
+    greeting = await greet_widget_visitor(
+        tenant_id=str(tenant.id),
+        product_name=product_name,
+        locale=sanitize_locale(locale),
+        api_key=tenant.openai_api_key,
+    )
+    return WidgetGreetingResponse(text=greeting.text)
+
+
 @widget_router.post("/session/init", response_model=WidgetSessionInitResponse)
 @limiter.limit("10/minute", key_func=widget_init_rate_limit_key)
 async def widget_session_init(
@@ -473,24 +514,22 @@ async def widget_chat(
             detail=widget_session_error_detail(SESSION_INVALID_CODE, "Invalid session_id"),
         )
 
-        def _lookup_existing_chat(s):
+        def _lookup_existing_chat(s) -> bool:
             existing_chat = _session_chats_query(
                 s, bot=_bot, tenant=tenant, session_id=sid
             ).first()
             if existing_chat is None:
-                return None
-            rotation_pending = should_rotate(existing_chat)
-            if existing_chat.bot_id is None and not rotation_pending:
-                # Skip the backfill when rotation is pending: the commit would
-                # refresh updated_at (onupdate) and make the pipeline see the
-                # stale chat as fresh; the new Chat gets its bot_id on creation.
+                return False
+            # Skip the backfill when rotation is pending: the commit would
+            # refresh updated_at (onupdate) and make the pipeline see the
+            # stale chat as fresh; the new Chat gets its bot_id on creation.
+            if existing_chat.bot_id is None and not should_rotate(existing_chat):
                 existing_chat.bot_id = _bot.id
                 s.add(existing_chat)
                 s.commit()
-            return rotation_pending
+            return True
 
-        rotation_pending = await run_sync(db, _lookup_existing_chat)
-        if rotation_pending is None:
+        if not await run_sync(db, _lookup_existing_chat):
             raise HTTPException(
                 status_code=409,
                 detail=widget_session_error_detail(
@@ -500,21 +539,16 @@ async def widget_chat(
             )
     else:
         sid = uuid.uuid4()
-        rotation_pending = False
 
     if not resolved_message:
-        if session_id and not rotation_pending:
-            logger.info(
-                "widget_message_rejected",
-                extra={"reason": "empty", "length": 0},
-            )
-            raise HTTPException(
-                status_code=422,
-                detail={"code": "message_required", "message": "message is required"},
-            )
-        # Bootstrap turn: a brand-new session, or a rotated conversation
-        # re-greeting a returning visitor (the pipeline opens the new Chat).
-        resolved_message = ""
+        logger.info(
+            "widget_message_rejected",
+            extra={"reason": "empty", "length": 0},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "message_required", "message": "message is required"},
+        )
     elif len(resolved_message) > _WIDGET_MESSAGE_MAX_CHARS:
         logger.info(
             "widget_message_rejected",
@@ -551,7 +585,6 @@ async def widget_chat(
         process_kwargs,
         tenant_public_id=getattr(tenant, "public_id", None),
         bot_public_id=getattr(_bot, "public_id", None),
-        is_greeting=resolved_message == "",
     )
 
 
@@ -588,7 +621,6 @@ def _emit_first_token_metric(
     ttft_ms: int,
     tenant_public_id: str | None,
     bot_public_id: str | None,
-    is_greeting: bool,
     chat_id: str | None = None,
 ) -> None:
     emit_tenant_event(
@@ -600,7 +632,6 @@ def _emit_first_token_metric(
             "ttft_ms": ttft_ms,
             "session_id": str(sid),
             "chat_id": chat_id,
-            "is_greeting": is_greeting,
         },
     )
 
@@ -611,7 +642,6 @@ def _widget_chat_stream(
     *,
     tenant_public_id: str | None = None,
     bot_public_id: str | None = None,
-    is_greeting: bool = False,
 ) -> StreamingResponse:
     async def event_stream():
         loop = asyncio.get_running_loop()
@@ -794,7 +824,6 @@ def _widget_chat_stream(
                 ttft_ms=ttft_ms,
                 tenant_public_id=tenant_public_id,
                 bot_public_id=bot_public_id,
-                is_greeting=is_greeting,
                 chat_id=outcome.chat_id if outcome is not None else None,
             )
         turn_response = WidgetChatTurnResponse(
@@ -882,10 +911,6 @@ class WidgetHistoryResponse(BaseModel):
     # Message indices where a newer conversation begins — the widget renders
     # a "new conversation" separator before each of them.
     boundary_indices: list[int] = []
-    # True when the session's latest conversation is idle past the rotation
-    # threshold: the widget shows a separator and fetches a fresh greeting
-    # (the next POST /widget/chat rotates server-side).
-    conversation_rotated: bool = False
 
 
 @widget_router.get("/history", response_model=WidgetHistoryResponse)
@@ -931,18 +956,6 @@ async def widget_history(
             for idx, m in enumerate(messages)
             if idx > 0 and m.chat_id != messages[idx - 1].chat_id
         ]
-        # Read-only signal: the actual rotation happens on the next POST.
-        # Suppress the auto re-greet when the idle conversation never got a
-        # user turn (greeting-only): rotating it would just churn another
-        # empty greeting Chat row + trace for a visitor who never engaged.
-        # A real message after idle still rotates server-side (widget_chat
-        # re-checks should_rotate), so an engaged returning visitor keeps
-        # getting a fresh conversation.
-        latest_has_user_turn = any(
-            m.chat_id == latest.id and m.role == MessageRole.user for m in messages
-        )
-        conversation_rotated = should_rotate(latest) and latest_has_user_turn
-
         ticket_number: str | None = None
         if latest.escalation_awaiting_ticket_id is not None:
             ticket = s.get(EscalationTicket, latest.escalation_awaiting_ticket_id)
@@ -957,7 +970,6 @@ async def widget_history(
             ],
             ticket_number=ticket_number,
             boundary_indices=boundary_indices,
-            conversation_rotated=conversation_rotated,
             handoff_state=_handoff_state(s, latest),
         )
 

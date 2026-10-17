@@ -23,10 +23,9 @@ import json
 import logging
 import unicodedata
 import uuid
-from collections.abc import Coroutine
 from dataclasses import asdict, dataclass
 from datetime import timedelta
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,12 +47,9 @@ AnswerCacheLevel = Literal["exact", "semantic"]
 
 _PAYLOAD_VERSION = 1
 _EXACT_KEY_PREFIX = "cache:answer:"
-# Both stores sit on the critical path of every eligible turn, so a stalled
-# backend must cost a bounded fraction of the latency the cache exists to save.
-_REDIS_TIMEOUT_SEC = 0.3
+# The semantic lookup sits on the critical path of every eligible turn, so a
+# stalled backend must cost a bounded fraction of the latency the cache saves.
 _SEMANTIC_LOOKUP_TIMEOUT_SEC = 2.0
-
-_T = TypeVar("_T")
 
 
 def is_enabled() -> bool:
@@ -258,18 +254,10 @@ async def resolve_scope(
 # ---------------------------------------------------------------------------
 
 
-async def _bounded(coro: Coroutine[Any, Any, _T], default: _T) -> _T:
-    try:
-        return await asyncio.wait_for(coro, timeout=_REDIS_TIMEOUT_SEC)
-    except Exception:
-        logger.debug("answer_cache_redis_call_failed", exc_info=True)
-        return default
-
-
 async def exact_get(scope: AnswerCacheScope) -> CachedAnswer | None:
     if not redis_mod.is_enabled():
         return None
-    raw = await _bounded(redis_mod.cache_get(scope.exact_key), None)
+    raw = await redis_mod.bounded(redis_mod.cache_get(scope.exact_key), None)
     cached = CachedAnswer.from_payload(raw) if raw else None
     if cached is None:
         record_miss(EXACT_CACHE_NAME)
@@ -279,7 +267,7 @@ async def exact_get(scope: AnswerCacheScope) -> CachedAnswer | None:
 
 
 async def _exact_set(scope: AnswerCacheScope, cached: CachedAnswer) -> None:
-    await _bounded(
+    await redis_mod.bounded(
         redis_mod.cache_set_with_ttl(
             scope.exact_key, cached.to_json(), settings.answer_cache_ttl_seconds
         ),

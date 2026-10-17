@@ -68,8 +68,7 @@ async def resolve_scope_for_turn(
         or any(m.role == MessageRole.user for m in chat.messages or [])
     )
     if (
-        not ctx.question_text
-        or not answer_cache.is_enabled()
+        not answer_cache.is_enabled()
         or ctx.user_context_line is not None
         or ctx.redacted_question != ctx.question
         or session_bound

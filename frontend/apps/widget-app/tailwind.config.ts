@@ -4,6 +4,7 @@ import {
   SYSTEM_SANS,
   brandThemeExtend,
   brandTokensPlugin,
+  chromeTokensPlugin,
 } from "../../tailwind-brand";
 
 // Light values come from the shared brand tokens (`frontend/tailwind-brand.ts`);
@@ -15,18 +16,9 @@ const config: Config = {
     extend: {
       ...brandThemeExtend,
       fontFamily: { sans: SYSTEM_SANS, mono: SYSTEM_MONO },
-      colors: {
-        ...brandThemeExtend.colors,
-        chrome: {
-          DEFAULT: "#0A0A0F",
-          fg: "#FAF5FF",
-          "fg-muted": "#A9A3BA",
-          hover: "#1E1E2E",
-        },
-      },
     },
   },
-  plugins: [brandTokensPlugin(["light"])],
+  plugins: [brandTokensPlugin(["light"]), chromeTokensPlugin()],
 };
 
 export default config;

@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import type { ComponentChildren, Ref } from "preact";
+import type { ReactNode, RefObject } from "react";
 
 const VARIANT_CLASSES = {
   primary: "bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active",
@@ -10,8 +10,8 @@ type ActionButtonProps = {
   variant: keyof typeof VARIANT_CLASSES;
   onClick: () => void;
   busy?: boolean;
-  buttonRef?: Ref<HTMLButtonElement>;
-  children: ComponentChildren;
+  buttonRef?: RefObject<HTMLButtonElement>;
+  children: ReactNode;
 };
 
 export function ActionButton({ variant, onClick, busy = false, buttonRef, children }: ActionButtonProps) {

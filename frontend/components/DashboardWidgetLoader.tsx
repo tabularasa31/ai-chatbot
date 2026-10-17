@@ -31,7 +31,6 @@ export function DashboardWidgetLoader({
       }
       w.Chat9Widget.start({
         apiBase: window.location.origin,
-        color: "#a855f7",
         topClearance: TOP_CLEARANCE,
         ...(hints ? { userHints: hints } : {}),
       });

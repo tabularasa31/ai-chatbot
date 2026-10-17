@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { ActionButton } from "./ActionButton";
 
 type LinkSafetyLabels = {

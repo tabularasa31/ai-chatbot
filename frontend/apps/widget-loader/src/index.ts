@@ -78,7 +78,7 @@ declare global {
 }
 
 (function () {
-  // Default API origin (the dashboard, where /widget/* and /api/widget-* proxy
+  // Default API origin (the dashboard, where /widget/* proxies
   // to the backend). Tenants on staging override via StartConfig.apiBase.
   const DEFAULT_API_BASE = "https://getchat9.live";
 

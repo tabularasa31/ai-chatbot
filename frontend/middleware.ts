@@ -14,7 +14,7 @@ const AUTH_PATHS = ["/login", "/signup"];
 
 // CORS allowlist for cross-origin requests from the standalone widget-app.
 // The widget-app lives on a different origin (e.g. widget.chat9.live) and
-// calls /widget/* and /api/widget-* on the dashboard origin.
+// calls /widget/* on the dashboard origin.
 // Identity flows via postMessage + Bearer token, so we never need
 // Access-Control-Allow-Credentials and never accept cookies cross-origin.
 const WIDGET_ALLOWED_ORIGINS = (process.env.WIDGET_ALLOWED_ORIGINS ?? "")
@@ -22,7 +22,7 @@ const WIDGET_ALLOWED_ORIGINS = (process.env.WIDGET_ALLOWED_ORIGINS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-const WIDGET_CORS_PATH_PREFIXES = ["/widget/", "/api/widget-session/"];
+const WIDGET_CORS_PATH_PREFIXES = ["/widget/"];
 
 function isWidgetCorsPath(pathname: string): boolean {
   return WIDGET_CORS_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -109,6 +109,5 @@ export const config = {
     "/signup",
     // Widget CORS — must be in the matcher for middleware to run.
     "/widget/:path*",
-    "/api/widget-session/:path*",
   ],
 };

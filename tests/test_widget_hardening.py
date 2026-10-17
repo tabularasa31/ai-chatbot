@@ -242,8 +242,8 @@ def test_session_init_succeeds_without_openai_key(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """The init endpoint must mint a session even when the tenant has no OpenAI
-    key configured. The chat turn surfaces NO_OPENAI separately — gating init
+    """The init endpoint must answer even when the tenant has no OpenAI key
+    configured. The chat turn surfaces NO_OPENAI separately — gating init
     on it would block the dashboard's own embedded widget on a fresh tenant.
     """
     body = _create_widget_client(
@@ -260,7 +260,6 @@ def test_session_init_succeeds_without_openai_key(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["mode"] == "anonymous"
-    assert "session_id" in payload
 
 
 # ---------------------------------------------------------------------------

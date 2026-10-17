@@ -315,8 +315,9 @@ def test_sse_data_parser_skips_non_data_lines() -> None:
 class _StubStreamResp:
     """Minimal stand-in for an httpx streaming response."""
 
-    def __init__(self) -> None:
+    def __init__(self, line: str) -> None:
         self.status_code = 200
+        self._line = line
 
     def __enter__(self):  # noqa: D401
         return self
@@ -325,32 +326,17 @@ class _StubStreamResp:
         return None
 
     def iter_lines(self):
-        yield 'data: {"type":"done","text":"ok"}'
-
-
-class _StubPostResp:
-    def __init__(self, payload: dict, status: int = 200) -> None:
-        self._payload = payload
-        self.status_code = status
-        self.text = ""
-
-    def json(self) -> dict:
-        return self._payload
+        yield self._line
 
 
 class _StubHttp:
-    def __init__(self, post_payload: dict | None = None) -> None:
+    def __init__(self, line: str = 'data: {"type":"done","text":"ok","session_id":"chain-session"}') -> None:
         self.calls: list[dict] = []
-        self.post_calls: list[dict] = []
-        self._post_payload = post_payload or {"session_id": "00000000-0000-0000-0000-0000000000ff"}
+        self._line = line
 
     def stream(self, method: str, url: str, *, json: dict | None = None, params: dict | None = None):
         self.calls.append({"method": method, "url": url, "json": json, "params": params})
-        return _StubStreamResp()
-
-    def post(self, url: str, *, json: dict | None = None, params: dict | None = None):
-        self.post_calls.append({"url": url, "json": json, "params": params})
-        return _StubPostResp(self._post_payload)
+        return _StubStreamResp(self._line)
 
 
 @pytest.mark.parametrize(
@@ -383,24 +369,47 @@ def test_chat_client_session_id_forwarding(session_id, expected_params) -> None:
     assert http.calls[0]["params"] == expected_params
 
 
-def test_start_session_sends_bot_id_in_json_body_not_query_params() -> None:
-    """Regression: /widget/session/init binds bot_id via WidgetSessionInitRequest
-    (a JSON body), so sending it as a query param returns 422 and breaks the
-    multi-turn chain runner before turn 1. Spotted by codex review on PR #685."""
-
+@pytest.mark.parametrize(
+    ("first_turn_line", "expected_calls", "expected_error"),
+    [
+        pytest.param(
+            'data: {"type":"done","text":"ok","session_id":"chain-session"}',
+            [{"bot_id": "ch_test"}, {"bot_id": "ch_test", "session_id": "chain-session"}],
+            None,
+            id="continues_the_session_from_the_first_turn",
+        ),
+        pytest.param(
+            'data: {"type":"error","code":"boom","message":"failed"}',
+            [{"bot_id": "ch_test"}],
+            "turn 1: chat error: code=boom msg=failed",
+            id="stops_when_a_non_final_turn_errors",
+        ),
+        pytest.param(
+            'data: {"type":"done","text":"ok"}',
+            [{"bot_id": "ch_test"}],
+            "turn 1: missing session_id",
+            id="stops_when_a_non_final_turn_returns_no_session",
+        ),
+    ],
+)
+def test_chain_case_session_handling(first_turn_line, expected_calls, expected_error) -> None:
     from backend.evals.client import ChatClient
+    from backend.evals.dataset import Dataset, GoldenCase
 
-    http = _StubHttp(post_payload={"session_id": "11111111-1111-1111-1111-111111111111"})
-    client = ChatClient(bot_public_id="ch_test", http=http)
-    sid = client.start_session()
-    assert sid == "11111111-1111-1111-1111-111111111111"
-    assert http.post_calls == [
-        {
-            "url": "/widget/session/init",
-            "json": {"bot_id": "ch_test"},
-            "params": None,
-        }
-    ]
+    http = _StubHttp(first_turn_line)
+    case = GoldenCase(id="chain", category="rag", turns=["first", "second"])
+    report = run(
+        RunnerConfig(
+            dataset=Dataset(name="chain", cases=[case]),
+            tag="test",
+            chat=ChatClient(bot_public_id="ch_test", http=http),
+            judge=None,
+        )
+    )
+
+    assert [call["params"] for call in http.calls] == expected_calls
+    error = report.cases[0].error
+    assert error == expected_error
 
 
 # ─── runner end-to-end (mocked chat + judge) ────────────────────────────────

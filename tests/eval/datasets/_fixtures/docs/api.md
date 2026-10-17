@@ -75,7 +75,7 @@ Send a user message and receive the bot's answer as a
 | Name | Required | What it is |
 |------|----------|------------|
 | `bot_id` | yes | Bot `public_id`. |
-| `session_id` | optional | UUID returned by `/widget/session/init`. Omit it to start a fresh session in this call. |
+| `session_id` | optional | UUID returned in the `done` frame of the first `/widget/chat` turn. Omit it to start a fresh session in this call. |
 | `locale` | optional | Browser locale hint. |
 
 **Request body** (JSON):

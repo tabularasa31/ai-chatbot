@@ -76,8 +76,8 @@ def get_bot_and_tenant_for_widget_chat(db: Session, bot_public_id: str) -> tuple
 def get_bot_and_tenant_for_widget_session(db: Session, bot_public_id: str) -> tuple[Bot, Tenant]:
     """
     Same lookup as get_bot_and_tenant_for_widget_chat but does not require an
-    OpenAI key on the tenant. The session/init endpoint must be allowed to mint
-    a session even when the key is not yet configured — the actual chat turn
+    OpenAI key on the tenant. The session/init endpoint must stay reachable
+    even when the key is not yet configured — the actual chat turn
     surfaces the NO_OPENAI error.
 
     Raises:

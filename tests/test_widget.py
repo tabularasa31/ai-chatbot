@@ -1046,18 +1046,30 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     assert greet("zz-ZZ").startswith("I'm the Greeting Cache Tenant assistant")
     assert llm.call_count == 1
 
+    traditional = "您好！我是 Greeting Cache Tenant 的助理。請提出您的問題。"
+    llm.return_value = _chat_completion_response(traditional, total_tokens=9)
+    assert greet("zh-Hant-TW") == traditional
+    assert greet("zh-Hant") == traditional
+    assert llm.call_count == 2
+    assert "zh-Hant" in llm.call_args.kwargs["messages"][0]["content"]
+    llm.return_value = _chat_completion_response(russian, total_tokens=9)
+    assert greet("zh-TW") == russian
+    assert greet("zh") == russian
+    assert llm.call_count == 3
+    assert len(fake_redis) == 3
+
     other_client_uuid, other_bot_public_id = _setup_widget_tenant(
         tenant, db_session, "widget-greeting-cache-other@example.com", "Greeting Cache Tenant"
     )
     assert other_client_uuid != client_uuid
     assert greet("ru-RU", other_bot_public_id) == russian
-    assert llm.call_count == 2
-    assert len(fake_redis) == 2
+    assert llm.call_count == 4
+    assert len(fake_redis) == 4
 
     db_session.get(Tenant, client_uuid).name = "Renamed Tenant"
     db_session.commit()
     assert greet("ru-RU") == russian
-    assert llm.call_count == 3
+    assert llm.call_count == 5
 
     fake_redis.clear()
     llm.return_value = _chat_completion_response("", total_tokens=9)
@@ -1068,7 +1080,7 @@ def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
     assert fake_redis == {}
     llm.side_effect = None
     assert greet("de-DE") == german
-    assert llm.call_count == 6
+    assert llm.call_count == 8
 
 
 def test_widget_chat_uses_context(

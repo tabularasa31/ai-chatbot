@@ -28,7 +28,7 @@ from backend.chat.iso_639_1 import ISO_639_1_CODES
 from backend.chat.language import (
     LocalizationResult,
     generate_greeting_in_language_result,
-    language_root_of,
+    language_script_tag_of,
 )
 from backend.chat.persistence import _persist_turn_with_response_language
 from backend.core import redis as redis_mod
@@ -86,9 +86,9 @@ async def widget_product_name(*, tenant: Tenant, db: AsyncSession) -> str:
     )
 
 
-def _widget_greeting_cache_key(tenant_id: str, product_name: str, language_root: str) -> str:
+def _widget_greeting_cache_key(tenant_id: str, product_name: str, language: str) -> str:
     product_digest = hashlib.sha256(product_name.encode("utf-8")).hexdigest()[:16]
-    return f"widget:greeting:{tenant_id}:{product_digest}:{language_root}"
+    return f"widget:greeting:{tenant_id}:{product_digest}:{language}"
 
 
 async def greet_widget_visitor(
@@ -98,22 +98,23 @@ async def greet_widget_visitor(
 
     English when ``locale`` is absent, its language is not an ISO 639-1 code, or
     the LLM is unavailable. A successful generation is cached in Redis per
-    tenant, product name and language root, so only the first visitor per
+    tenant, product name and language (root plus explicit script, no region), so only the first visitor per
     week pays for the LLM call.
     """
-    root = language_root_of(locale)
+    language = language_script_tag_of(locale)
+    root = language.split("-", 1)[0] if language else None
     if root not in ISO_639_1_CODES or root == ENGLISH or not api_key:
         return await _build_greeting_result(
             product_name=product_name, response_language=ENGLISH, api_key=api_key
         )
 
-    cache_key = _widget_greeting_cache_key(tenant_id, product_name, root)
+    cache_key = _widget_greeting_cache_key(tenant_id, product_name, language)
     cached = await _bounded(redis_mod.cache_get(cache_key), None)
     if cached:
         return LocalizationResult(text=cached)
 
     result = await _build_greeting_result(
-        product_name=product_name, response_language=root, api_key=api_key
+        product_name=product_name, response_language=language, api_key=api_key
     )
     if result.generated:
         await _bounded(

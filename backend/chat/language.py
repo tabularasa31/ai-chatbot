@@ -307,10 +307,18 @@ def _language_root(tag: str) -> str:
     return tag.split("-", 1)[0].lower()
 
 
-def language_root_of(raw: str | None) -> str | None:
-    """Primary language subtag of a locale string, or None when it is not a language tag."""
+def language_script_tag_of(raw: str | None) -> str | None:
+    """Primary language subtag plus an explicit script subtag (zh-Hant), without region.
+
+    None when ``raw`` is not a language tag.
+    """
     normalized = _normalize_language_tag(raw)
-    return _language_root(normalized) if normalized else None
+    if not normalized:
+        return None
+    primary, *rest = normalized.split("-")
+    if rest and len(rest[0]) == 4:
+        return f"{primary}-{rest[0]}"
+    return primary
 
 
 def _language_matches(left: str, right: str) -> bool:

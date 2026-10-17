@@ -33,7 +33,29 @@ function subscribe(onChange: () => void) {
   return () => window.removeEventListener(SCHEME_CHANGE_EVENT, onChange);
 }
 
-export function ThemeSwitch({ className }: { className?: string }) {
+const SURFACES = {
+  canvas: {
+    group: "border-line",
+    segment: "focus-visible:ring-focus",
+    checked: "bg-brand-subtle text-brand",
+    unchecked: "text-fg-muted hover:bg-surface-alt active:bg-surface-alt",
+  },
+  chrome: {
+    group: "border-chrome-line-strong",
+    segment: "focus-visible:ring-chrome-accent",
+    checked: "bg-chrome-active text-chrome-accent",
+    unchecked: "text-chrome-fg-muted hover:bg-chrome-hover active:bg-chrome-hover",
+  },
+} as const;
+
+export function ThemeSwitch({
+  className,
+  surface = "canvas",
+}: {
+  className?: string;
+  surface?: keyof typeof SURFACES;
+}) {
+  const styles = SURFACES[surface];
   const selected = useSyncExternalStore(subscribe, readSchemeCookie, getServerScheme);
   const buttons = useRef<Record<Scheme, HTMLButtonElement | null>>({
     system: null,
@@ -57,7 +79,7 @@ export function ThemeSwitch({ className }: { className?: string }) {
     <div
       role="radiogroup"
       aria-label="Colour scheme"
-      className={cn("inline-flex rounded-control border border-line", className)}
+      className={cn("inline-flex rounded-control border", styles.group, className)}
     >
       {SCHEMES.map((scheme) => {
         const { label, Icon } = OPTIONS[scheme];
@@ -78,10 +100,9 @@ export function ThemeSwitch({ className }: { className?: string }) {
             onKeyDown={onKeyDown}
             className={cn(
               "flex h-11 w-11 items-center justify-center first:rounded-l-control last:rounded-r-control",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
-              checked
-                ? "bg-brand-subtle text-brand"
-                : "text-fg-muted hover:bg-surface-alt active:bg-surface-alt",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset",
+              styles.segment,
+              checked ? styles.checked : styles.unchecked,
             )}
           >
             <Icon size={16} aria-hidden />

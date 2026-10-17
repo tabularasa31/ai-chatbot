@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HandoffState } from "@/lib/api";
-import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
+import { SkeletonRegion } from "@/components/ui/skeleton";
 import { LoadError } from "@/components/ui/load-error";
 import { useThread } from "@/hooks/useApi";
 import { Composer } from "./Composer";
@@ -19,7 +19,7 @@ const SKELETON_BUBBLES = ["w-2/3", "w-1/2 ml-auto", "w-3/4"];
 
 function ThreadSkeleton() {
   return (
-    <DeferredSkeleton>
+    <SkeletonRegion>
       <div className="space-y-2 border-b border-line p-4">
         <div className="h-6 w-1/3 rounded-tag bg-surface-alt" />
         <div className="h-4 w-1/4 rounded-tag bg-surface-alt" />
@@ -29,7 +29,7 @@ function ThreadSkeleton() {
           <div key={width} className={`h-11 rounded-bubble bg-surface-alt ${width}`} />
         ))}
       </div>
-    </DeferredSkeleton>
+    </SkeletonRegion>
   );
 }
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useState, type ButtonHTMLAttributes } from "react";
 import { Loader2 } from "lucide-react";
-import { ApiError, api, type Thread } from "@/lib/api";
+import { ApiError, api, HTTP_CONFLICT, type Thread } from "@/lib/api";
 import { Button, FOCUS_RING } from "@/components/ui/button";
 import { cn } from "@/components/ui/utils";
 
@@ -16,7 +16,6 @@ const FAILURE_MESSAGE: Record<Action, string> = {
 };
 
 const CONFLICT_MESSAGE = "Another operator took this conversation.";
-const HTTP_CONFLICT = 409;
 
 const FIELD_CLASS = "w-full rounded-control border bg-surface px-3 text-ui text-fg placeholder:text-fg-faint";
 const HELPER_ID = "composer-helper";

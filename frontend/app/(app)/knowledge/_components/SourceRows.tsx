@@ -70,7 +70,7 @@ export function FileRow({
   return (
     <tr className="border-b border-line hover:bg-surface-alt">
       <td className={SOURCE_CELL_CLASS}>
-        <button type="button" onClick={onPreview} className={`block break-words ${NAME_BUTTON_CLASS}`} title="View extracted text">
+        <button type="button" onClick={onPreview} className={`block break-words py-3 ${NAME_BUTTON_CLASS}`} title="View extracted text">
           {doc.filename}
         </button>
         <p className={`${NAME_CAPTIONS_CLASS} text-caption text-fg-muted`}>File</p>
@@ -121,7 +121,7 @@ export function UrlRow({
               event.stopPropagation();
               onToggle();
             }}
-            className={`inline-flex items-center gap-1 ${NAME_BUTTON_CLASS}`}
+            className={`inline-flex items-center gap-1 py-3 ${NAME_BUTTON_CLASS}`}
           >
             <Chevron size={16} aria-hidden="true" className="shrink-0" />
             <span className="min-w-0 break-words">{source.name}</span>

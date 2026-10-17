@@ -3,6 +3,7 @@
 // `frontend/apps/widget-app/tailwind.config.ts` so both builds stay in sync.
 import type { Config } from "tailwindcss";
 import plugin from "tailwindcss/plugin";
+import { BRAND_VIOLET } from "./lib/brand";
 
 export const ND_BRAND_COLORS = {
   base: "#0A0A0F",
@@ -39,7 +40,7 @@ const SCHEME_COLORS = {
     fg: "#1E293B",
     "fg-muted": "#475569",
     "fg-faint": "#586579",
-    brand: "#7C3AED",
+    brand: BRAND_VIOLET,
     "brand-hover": "#6D28D9",
     "brand-active": "#5B21B6",
     "brand-on": "#FFFFFF",

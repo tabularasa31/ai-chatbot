@@ -1,4 +1,4 @@
-import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { forwardRef, useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "./utils";
 
@@ -44,18 +44,15 @@ function Field({
   );
 }
 
-export function Input({
-  label,
-  hideLabel,
-  helper,
-  error,
-  className,
-  ...props
-}: FieldProps & InputHTMLAttributes<HTMLInputElement>) {
+export const Input = forwardRef<HTMLInputElement, FieldProps & InputHTMLAttributes<HTMLInputElement>>(function Input(
+  { label, hideLabel, helper, error, className, ...props },
+  ref,
+) {
   return (
     <Field label={label} hideLabel={hideLabel} helper={helper} error={error} className={className}>
       {({ id, describedBy, invalid }) => (
         <input
+          ref={ref}
           id={id}
           aria-describedby={describedBy}
           aria-invalid={invalid || undefined}
@@ -65,7 +62,7 @@ export function Input({
       )}
     </Field>
   );
-}
+});
 
 export function Select({
   label,

@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { api } from "@/lib/api";
 import type { UserHints, WindowWithChat9Widget } from "@/types/chat9-widget";
 import { ensureLoaderScript } from "@/lib/widget-embed";
+import { BRAND_VIOLET } from "@/lib/brand";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
 
@@ -31,7 +32,7 @@ export function DashboardWidgetLoader({
       }
       w.Chat9Widget.start({
         apiBase: window.location.origin,
-        color: "#a855f7",
+        color: BRAND_VIOLET,
         topClearance: TOP_CLEARANCE,
         ...(hints ? { userHints: hints } : {}),
       });

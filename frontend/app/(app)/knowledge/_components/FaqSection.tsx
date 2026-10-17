@@ -8,7 +8,7 @@ import { Input, Select, Textarea } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
-import { FlashMessage, useFlash } from "./flash";
+import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { LINK_CLASS } from "./link-class";
 import { confidenceLevel } from "./shared";
 

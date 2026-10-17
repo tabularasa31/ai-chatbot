@@ -105,9 +105,10 @@ export function Textarea({
   hideLabel,
   helper,
   error,
+  mono,
   className,
   ...props
-}: FieldProps & TextareaHTMLAttributes<HTMLTextAreaElement>) {
+}: FieldProps & { mono?: boolean } & TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <Field label={label} hideLabel={hideLabel} helper={helper} error={error} className={className}>
       {({ id, describedBy, invalid }) => (
@@ -115,7 +116,7 @@ export function Textarea({
           id={id}
           aria-describedby={describedBy}
           aria-invalid={invalid || undefined}
-          className={cn(CONTROL_CLASS, "min-h-11 py-2", borderClass(invalid))}
+          className={cn(CONTROL_CLASS, "min-h-11 py-2", mono && "font-mono", borderClass(invalid))}
           {...props}
         />
       )}

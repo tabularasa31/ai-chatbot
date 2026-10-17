@@ -8,7 +8,7 @@ import {
   type UrlSource,
   type UrlSourceDetail,
 } from "@/lib/api";
-import { useFlash } from "./flash";
+import { useFlash } from "@/components/ui/flash";
 import {
   POLLABLE_SOURCE_STATUSES,
   parseExclusions,

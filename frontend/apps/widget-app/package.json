@@ -4,6 +4,9 @@
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "test": "node --test src/greeting.test.ts",
     "build": "vite build && pnpm --filter @chat9/widget-loader build && node scripts/copy-loader.mjs",

@@ -324,7 +324,7 @@ export function ChatWidget({
   const modalOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // Set once the greeting has been requested: it is asked for at most once per
-  // mount, however often the effect re-runs.
+  // mount, so no identity or history refresh can trigger a second one.
   const greetingRequestedRef = useRef(false);
   // True once the visitor has sent a message; a greeting that arrives
   // afterwards is dropped rather than shown after it.
@@ -396,13 +396,18 @@ export function ChatWidget({
     ),
   }), [locale, maybeOpenLinkSafety]);
 
+  const storageUserId = deriveStorageUserId(hints);
+  const hasHints = Boolean(hints);
+  const hintsRef = useRef(hints);
+  hintsRef.current = hints;
+
   useEffect(() => {
-    const userId = deriveStorageUserId(hints);
+    const userId = storageUserId;
+    const sessionHints = hintsRef.current;
     userIdRef.current = userId;
 
     setSessionHydrated(false);
     setHistoryLoaded(false);
-    greetingRequestedRef.current = false;
     setActiveTicket(null);
     setHandoffState("bot");
     cursorRef.current = null;
@@ -413,11 +418,11 @@ export function ChatWidget({
 
     const stored = readStoredSession(botId, userId);
 
-    if (hints && !stored) {
+    if (sessionHints && !stored) {
       fetch(`${apiBase}/widget/session/init`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bot_id: botId, user_hints: hints }),
+        body: JSON.stringify({ bot_id: botId, user_hints: sessionHints }),
       })
         .then((r) => r.json())
         .then((data: { session_id?: string }) => {
@@ -434,7 +439,7 @@ export function ChatWidget({
       setSessionId(stored);
       setSessionHydrated(true);
     }
-  }, [botId, hints, apiBase]);
+  }, [botId, storageUserId, hasHints, apiBase]);
 
   useEffect(() => {
     let cancelled = false;

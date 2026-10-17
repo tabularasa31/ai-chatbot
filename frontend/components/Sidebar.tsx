@@ -17,7 +17,6 @@ import { api } from "@/lib/api";
 import { useClientMe, useInboxSummary } from "@/hooks/useApi";
 import { FOCUS_RING } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/count-badge";
-import { ThemeSwitch } from "@/components/ui/theme-switch";
 import { cn } from "@/components/ui/utils";
 
 type BadgeKey = "inbox" | "gaps";
@@ -132,9 +131,6 @@ export function Sidebar() {
             </div>
           ))}
       </nav>
-      <div className="border-t border-chrome-line pt-3">
-        <ThemeSwitch surface="chrome" />
-      </div>
     </aside>
   );
 }

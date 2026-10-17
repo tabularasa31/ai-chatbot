@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
 import { FOCUS_RING } from "@/components/ui/button";
-import { ThemeSwitch } from "@/components/ui/theme-switch";
+import { ThemeMenu } from "@/components/ui/theme-menu";
 import { cn } from "@/components/ui/utils";
 import { CONTAINER, navLinkClasses } from "./classes";
 
@@ -35,10 +35,7 @@ export function SiteFooter() {
         </div>
         <div className="mt-6 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-caption text-fg-muted">© 2026 Chat9</p>
-          <div className="flex items-center gap-3">
-            <span className="text-caption text-fg-muted">Theme</span>
-            <ThemeSwitch />
-          </div>
+          <ThemeMenu className="-ml-3 sm:ml-0 sm:-mr-3" align="end" />
         </div>
       </div>
     </footer>

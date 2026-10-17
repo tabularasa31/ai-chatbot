@@ -6,6 +6,7 @@ import { LogOut } from "lucide-react";
 import { api, clearSession } from "@/lib/api";
 import { LogoMark } from "@/components/Logo";
 import { Button, FOCUS_RING } from "@/components/ui/button";
+import { ThemeMenu } from "@/components/ui/theme-menu";
 import { useAuthUser } from "@/hooks/useApi";
 
 const LOGOUT_CLASSES =
@@ -43,6 +44,7 @@ export function Navbar({
             {userEmail}
           </span>
         )}
+        <ThemeMenu surface="chrome" side="below" align="end" />
         <Button variant="secondary" offset="chrome" className={LOGOUT_CLASSES} onClick={handleLogout}>
           <LogOut size={16} aria-hidden="true" />
           Log out

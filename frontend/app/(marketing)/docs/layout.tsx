@@ -26,7 +26,7 @@ export default function DocsSectionLayout({ children }: { children: ReactNode })
             components: { Item: SidebarPageLink },
             footer: <ThemeSwitch />,
           }}
-          containerProps={{ className: 'min-h-screen bg-canvas text-fg' }}
+          containerProps={{ className: 'min-h-screen' }}
         >
           {children}
         </DocsLayout>

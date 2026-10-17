@@ -47,9 +47,10 @@ AnswerCacheLevel = Literal["exact", "semantic"]
 
 _PAYLOAD_VERSION = 1
 _EXACT_KEY_PREFIX = "cache:answer:"
-# Both stores sit on the critical path of every eligible turn, so a stalled
-# backend must cost a bounded fraction of the latency the cache exists to save.
+# The semantic lookup sits on the critical path of every eligible turn, so a
+# stalled backend must cost a bounded fraction of the latency the cache saves.
 _SEMANTIC_LOOKUP_TIMEOUT_SEC = 2.0
+
 
 def is_enabled() -> bool:
     return settings.answer_cache_ttl_seconds > 0

@@ -143,7 +143,7 @@ async def cache_set_with_ttl(key: str, value: str, ttl_seconds: int) -> bool:
 
 async def incr_with_ttl(key: str, ttl_seconds: int) -> int | None:
     """Atomically increment a counter and make sure it expires. `None` on any error."""
-    if _client is None or ttl_seconds <= 0:
+    if _client is None:
         return None
     try:
         return int(await _client.eval(_INCR_WITH_TTL_LUA, 1, key, ttl_seconds))

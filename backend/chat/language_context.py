@@ -45,8 +45,11 @@ def _assistant_turn_index(chat: Chat) -> int:
     return sum(1 for message in (chat.messages or []) if message.role == MessageRole.assistant) + 1
 
 
-def _user_message_count(chat: Chat) -> int:
-    return sum(1 for message in (chat.messages or []) if message.role == MessageRole.user)
+def is_first_user_turn(chat: Chat | None) -> bool:
+    """True while the chat holds no earlier user message (a greeting does not count)."""
+    return chat is None or not any(
+        message.role == MessageRole.user for message in chat.messages or []
+    )
 
 
 def _maybe_lock_language(
@@ -62,11 +65,11 @@ def _maybe_lock_language(
         confidence=language_context.confidence,
         is_reliable=language_context.is_reliable,
     )
-    is_first_user_turn = _user_message_count(chat) == 0
+    first_user_turn = is_first_user_turn(chat)
     if not _decide_language_lock(
         detection=detection,
         previous_response_language=previous_response_language,
-        is_first_user_turn=is_first_user_turn,
+        is_first_user_turn=first_user_turn,
     ):
         return
     chat.language_locked = True
@@ -77,7 +80,7 @@ def _maybe_lock_language(
             "chat_id": str(chat.id),
             "tenant_id": str(chat.tenant_id),
             "locked_to": chat.last_response_language or detection.detected_language,
-            "rule": "first_turn_high_conf" if is_first_user_turn else "two_consistent_turns",
+            "rule": "first_turn_high_conf" if first_user_turn else "two_consistent_turns",
             "detected_language": detection.detected_language,
             "confidence": detection.confidence,
         },

@@ -7,7 +7,7 @@ PG_PASSWORD ?= password
 PG_DBNAME ?= chatbot
 
 .PHONY: db-up db-down db-recreate db-ready db-logs test test-sqlite test-pgvector coverage clean smoke auth-reset escalation rag-edge pgvector-only multi-hop-eval
-.PHONY: coverage-all lint-deprecated
+.PHONY: coverage-all lint-deprecated widget-test
 
 db-up:
 	$(COMPOSE) up -d db
@@ -75,6 +75,9 @@ escalation:
 
 rag-edge:
 	PYTHONPATH=. pytest -q tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop -m rag_edge
+
+widget-test:
+	cd frontend && pnpm --filter @chat9/widget-app test
 
 pgvector-only: db-up db-ready
 	PG_USER="$(PG_USER)" PG_PASSWORD="$(PG_PASSWORD)" PYTHONPATH=. pytest -q -m pgvector tests/pgvector_tests/

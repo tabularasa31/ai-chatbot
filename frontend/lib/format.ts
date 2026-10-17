@@ -32,3 +32,16 @@ export function formatDate(iso: string | null | undefined, fallback = "—"): st
 export function formatTime(iso: string | null | undefined, fallback = "—"): string {
   return format(iso, fallback, (d) => d.toLocaleTimeString(undefined, { timeStyle: "short" }));
 }
+
+export function formatWhen(iso: string | null): string {
+  if (!iso) return "—";
+  const date = parseApiDate(iso);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: sameYear ? undefined : "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}

@@ -23,7 +23,6 @@ type AppStringKey =
   | "opens_new_tab"
   | "error_send"
   | "error_rate_limit"
-  | "error_greeting"
   | "error_history"
   | "error_support"
   | "contact_support_button"
@@ -49,7 +48,6 @@ const EN: Record<AppStringKey, string> = {
   opens_new_tab: "Opens in a new tab",
   error_send: "Couldn't send your message.",
   error_rate_limit: "Too many messages. Wait a moment.",
-  error_greeting: "Couldn't start the chat.",
   error_history: "Couldn't load your conversation.",
   error_support: "Couldn't reach support.",
   contact_support_button: "Contact support",

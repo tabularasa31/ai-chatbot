@@ -384,9 +384,9 @@ async def widget_session_init(
     db: AsyncSession = Depends(get_async_db),
 ) -> WidgetSessionInitResponse:
     """
-    Start a widget session. Optional `user_hints` attaches untrusted
-    personalization fields (name/email/locale/...) supplied by the tenant
-    frontend; sessions still work without them.
+    Resume an identified visitor's most recent session. Creates nothing: a
+    conversation starts with the first `/widget/chat` message, so anonymous
+    and not-yet-known identities get `session_id: null`.
     """
     _bot, tenant = await _bot_tenant_or_error(
         db,
@@ -449,30 +449,7 @@ async def widget_session_init(
                 session_id=resumed_session_id, mode="hints", resumed=True
             )
 
-    if identity.mode == "hints":
-        return WidgetSessionInitResponse(session_id=None, mode="hints", resumed=False)
-
-    session_id = uuid.uuid4()
-
-    # Always persist the session row so the returned session_id can be used
-    # in the next /widget/chat call without hitting session_not_found.
-    # Stamp bot_id up front to skip the lazy backfill in widget_chat.
-    def _create_session(s):
-        s.add(
-            Chat(
-                tenant_id=tenant.id,
-                bot_id=_bot.id,
-                session_id=session_id,
-                user_context=user_context,
-            )
-        )
-        s.commit()
-
-    await run_sync(db, _create_session)
-
-    return WidgetSessionInitResponse(
-        session_id=session_id, mode="anonymous", resumed=False
-    )
+    return WidgetSessionInitResponse(session_id=None, mode=identity.mode, resumed=False)
 
 
 @widget_router.post(

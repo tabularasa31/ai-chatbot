@@ -54,23 +54,6 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
     total_latency_ms = 0
     escalation_offered_at_turn: int | None = None
 
-    if is_chain:
-        try:
-            session_id = config.chat.start_session()
-        except Exception as exc:
-            logger.warning("eval_case_session_init_failed id=%s err=%s", case.id, exc)
-            return CaseResult(
-                case_id=case.id,
-                category=case.category,
-                lang=case.lang,
-                input=" | ".join(messages),
-                output="",
-                latency_ms=0,
-                metrics=[],
-                error=f"session init failed: {exc}",
-                turns_trace=[],
-            )
-
     last_response = None
     for turn_idx, message in enumerate(messages, start=1):
         try:
@@ -89,6 +72,7 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
                 turns_trace=turns_trace,
             )
         last_response = chat_response
+        session_id = chat_response.session_id
         total_latency_ms += chat_response.latency_ms
         # Either the offer is pending the user's yes/no, or the handoff already
         # happened this turn — an explicit human request mints the ticket without

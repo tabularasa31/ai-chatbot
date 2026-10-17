@@ -459,20 +459,16 @@ def test_widget_identified_visitor_conversation_starts_with_first_message(
     assert other_device.json()["session_id"] == (session_id if expect_resume else None)
 
 
-def test_widget_anonymous_session_init_always_starts_a_new_session(
+def test_widget_anonymous_session_init_creates_no_chat(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-anon-init@example.com")
-    payload = {"bot_id": bot_public_id}
+    client_uuid, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-anon-init@example.com")
 
-    first = tenant.post("/widget/session/init", json=payload)
-    second = tenant.post("/widget/session/init", json=payload)
+    opened = tenant.post("/widget/session/init", json={"bot_id": bot_public_id})
 
-    assert first.json()["mode"] == "anonymous"
-    assert first.json()["session_id"] and second.json()["session_id"]
-    assert second.json()["resumed"] is False
-    assert second.json()["session_id"] != first.json()["session_id"]
+    assert opened.json() == {"session_id": None, "mode": "anonymous", "resumed": False}
+    assert db_session.query(Chat).filter(Chat.tenant_id == client_uuid).count() == 0
 
 
 def test_widget_session_init_strict_tenant_verifies_user_hash(

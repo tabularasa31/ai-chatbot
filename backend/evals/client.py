@@ -34,6 +34,8 @@ class ChatResponse:
     #: `expected_escalation_offered_by_turn`, which asks whether the
     #: conversation reached support, not whether a question is outstanding.
     ticket_number: str | None = None
+    #: From the `done` event; the next turn of a chain passes it back to continue the conversation.
+    session_id: str | None = None
     error: dict | None = None
     raw_events: list[dict] = field(default_factory=list)
 
@@ -42,8 +44,6 @@ class HttpStreamLike(Protocol):
     """Subset of httpx.Client / TestClient shared by both backends."""
 
     def stream(self, method: str, url: str, *, json: dict | None = ..., params: dict | None = ...) -> Any: ...
-
-    def post(self, url: str, *, json: dict | None = ..., params: dict | None = ...) -> Any: ...
 
 
 class ChatClient:
@@ -55,32 +55,10 @@ class ChatClient:
         http: HttpStreamLike,
         *,
         path: str = "/widget/chat",
-        session_init_path: str = "/widget/session/init",
     ) -> None:
         self.bot_public_id = bot_public_id
         self.http = http
         self.path = path
-        self.session_init_path = session_init_path
-
-    def start_session(self) -> str:
-        """POST /widget/session/init and return the new session_id. Required
-        before chain (multi-turn) calls — the widget chat endpoint rejects
-        an unknown session_id with 409 ``session_not_found``.
-
-        ``bot_id`` goes in the JSON body (WidgetSessionInitRequest), NOT
-        the query string — the endpoint binds it via ``Body()``.
-        """
-        resp = self.http.post(self.session_init_path, json={"bot_id": self.bot_public_id})
-        status = getattr(resp, "status_code", None)
-        if status != 200:
-            detail = getattr(resp, "text", "")
-            try:
-                detail = resp.json()
-            except Exception:
-                pass
-            raise RuntimeError(f"session init HTTP {status}: {detail}")
-        body = resp.json()
-        return str(body["session_id"])
 
     def ask(self, question: str, *, session_id: str | None = None) -> ChatResponse:
         # Only forward session_id when the caller explicitly passed one
@@ -148,6 +126,7 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
     sources: list[dict[str, str]] = []
     escalation_offered = False
     ticket_number: str | None = None
+    session_id: str | None = None
     error: dict | None = None
 
     for ev in events:
@@ -160,6 +139,7 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
             final_text = ev.get("text") or "".join(chunks)
             escalation_offered = bool(ev.get("escalation_offered"))
             ticket_number = ev.get("ticket_number")
+            session_id = ev.get("session_id")
             sources = ev.get("sources") or []
         elif kind == "error":
             error = ev
@@ -171,6 +151,7 @@ def _aggregate_events(events: list[dict], latency_ms: int) -> ChatResponse:
         latency_ms=latency_ms,
         escalation_offered=escalation_offered,
         ticket_number=ticket_number,
+        session_id=session_id,
         error=error,
         raw_events=events,
     )

@@ -1,409 +1,286 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
-import type { DocumentListItem, UrlSource, UrlSourceDetail } from "@/lib/api";
-import { formatDateTimeLocale } from "@/lib/format";
-import {
-  TypeBadge,
-  StatusBadge,
-  MixedRow,
-  stopRowClick,
-  formatSchedule,
-} from "./shared";
-import { HealthCell, SourceHealthCell } from "./HealthPanel";
-import { UrlSourcesSection } from "./UrlSourcesSection";
+import { useMemo, useRef, useState } from "react";
+import type { ChangeEvent } from "react";
+import type { UrlSource } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Input } from "@/components/ui/field";
+import { InlineNotice } from "@/components/ui/inline-notice";
+import { LoadError } from "@/components/ui/load-error";
+import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { DocumentPreviewDrawer } from "./DocumentPreviewDrawer";
+import { FlashMessage } from "./flash";
+import { SourceForm } from "./SourceForm";
+import { FileRow, UrlRow } from "./SourceRows";
+import { UrlSourcesSection, type DetailView } from "./UrlSourcesSection";
+import { useSources, type Sources } from "./useSources";
+import type { MixedRow } from "./shared";
 
-export interface DocumentsSectionProps {
-  documents: DocumentListItem[];
-  sources: UrlSource[];
-  filter: string;
-  setFilter: Dispatch<SetStateAction<string>>;
+const ACCEPTED_FILE_TYPES = ".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt,.html,.htm";
+const ADD_URL_FORM_ID = "add-url-form";
+const SKELETON_ROWS = 5;
+const SOURCES_TABLE_ID = "sources-table";
 
-  uploading: boolean;
-  uploadProgress: { current: number; total: number } | null;
-  submittingUrl: boolean;
-  error: string;
-  uploadError: string;
-  recheckingId: string | null;
-  refreshingSourceId: string | null;
-  deletingPageId: string | null;
-
-  expandedSourceId: string | null;
-  detail: UrlSourceDetail | null;
-  detailLoading: boolean;
-
-  showUrlForm: boolean;
-  setShowUrlForm: Dispatch<SetStateAction<boolean>>;
-  urlInput: string;
-  setUrlInput: Dispatch<SetStateAction<string>>;
-  nameInput: string;
-  setNameInput: Dispatch<SetStateAction<string>>;
-  scheduleInput: string;
-  setScheduleInput: Dispatch<SetStateAction<string>>;
-  exclusionsInput: string;
-  setExclusionsInput: Dispatch<SetStateAction<string>>;
-
-  isEditing: boolean;
-  setIsEditing: Dispatch<SetStateAction<boolean>>;
-  editName: string;
-  setEditName: Dispatch<SetStateAction<string>>;
-  editSchedule: string;
-  setEditSchedule: Dispatch<SetStateAction<string>>;
-  editExclusions: string;
-  setEditExclusions: Dispatch<SetStateAction<string>>;
-  isSaving: boolean;
-
-  onUpload: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
-  onCreateUrlSource: () => Promise<void>;
-  onDeleteFile: (id: string) => Promise<void>;
-  onDeleteSource: (id: string) => Promise<void>;
-  onRefreshSource: (id: string) => Promise<void>;
-  onDeleteSourcePage: (sourceId: string, docId: string) => Promise<void>;
-  onOpenEdit: (source: UrlSource) => void;
-  onSaveEdit: () => Promise<void>;
-  onRecheckHealth: (docId: string) => Promise<void>;
-  onToggleDetail: (sourceId: string) => Promise<void>;
+function sourcesTable() {
+  return document.getElementById(SOURCES_TABLE_ID);
 }
 
-export function DocumentsSection({
-  documents,
-  sources,
-  filter,
-  setFilter,
-  uploading,
-  uploadProgress,
-  submittingUrl,
-  error,
-  uploadError,
-  recheckingId,
-  refreshingSourceId,
-  deletingPageId,
-  expandedSourceId,
-  detail,
-  detailLoading,
-  showUrlForm,
-  setShowUrlForm,
-  urlInput,
-  setUrlInput,
-  nameInput,
-  setNameInput,
-  scheduleInput,
-  setScheduleInput,
-  exclusionsInput,
-  setExclusionsInput,
-  isEditing,
-  setIsEditing,
-  editName,
-  setEditName,
-  editSchedule,
-  setEditSchedule,
-  editExclusions,
-  setEditExclusions,
-  isSaving,
-  onUpload,
-  onCreateUrlSource,
-  onDeleteFile,
-  onDeleteSource,
-  onRefreshSource,
-  onDeleteSourcePage,
-  onOpenEdit,
-  onSaveEdit,
-  onRecheckHealth,
-  onToggleDetail,
-}: DocumentsSectionProps) {
+type PendingDelete =
+  | { kind: "file"; id: string; name: string }
+  | { kind: "source"; id: string; name: string; pages: number }
+  | { kind: "page"; sourceId: string; pageId: string };
+
+function sourceDeleteBody(pages: number): string {
+  if (pages === 0) return "The source is removed. No pages are indexed yet.";
+  if (pages === 1) return "The 1 indexed page is removed and the bot stops using it.";
+  return `All ${pages} indexed pages are removed and the bot stops using them.`;
+}
+
+function deleteDialogProps(pending: PendingDelete, sources: Sources) {
+  switch (pending.kind) {
+    case "file":
+      return {
+        title: `Delete "${pending.name}"?`,
+        body: "The bot stops using this file. This can't be undone.",
+        confirmLabel: "Delete file",
+        failureMessage: "Couldn't delete this file. Try again.",
+        onConfirm: () => sources.deleteFile(pending.id),
+      };
+    case "source":
+      return {
+        title: `Delete "${pending.name}"?`,
+        body: sourceDeleteBody(pending.pages),
+        confirmLabel: "Delete source",
+        failureMessage: "Couldn't delete this source. Try again.",
+        onConfirm: () => sources.deleteSource(pending.id),
+      };
+    case "page":
+      return {
+        title: "Delete this page?",
+        body: "It is removed from Knowledge and skipped in future refreshes.",
+        confirmLabel: "Delete page",
+        failureMessage: "Couldn't delete this page. Try again.",
+        onConfirm: () => sources.deleteSourcePage(pending.sourceId, pending.pageId),
+      };
+  }
+}
+
+function detailView(sources: Sources, source: UrlSource): DetailView {
+  const onRetry = () => sources.loadDetail(source.id);
+  if (sources.detail?.id === source.id) {
+    return { state: "ready", detail: sources.detail, onRetryRefresh: sources.detailState === "error" ? onRetry : null };
+  }
+  if (sources.detailState === "error") return { state: "error", onRetry };
+  return { state: "loading" };
+}
+
+export function DocumentsSection() {
+  const sources = useSources();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [filter, setFilter] = useState("");
+  const [showUrlForm, setShowUrlForm] = useState(false);
   const [previewDocumentId, setPreviewDocumentId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+
   const rows = useMemo(() => {
     const text = filter.trim().toLowerCase();
     const mixed: MixedRow[] = [
-      ...documents.map((item) => ({ kind: "file" as const, item })),
-      ...sources.map((item) => ({ kind: "url" as const, item })),
+      ...sources.documents.map((item) => ({ kind: "file" as const, item })),
+      ...sources.sources.map((item) => ({ kind: "url" as const, item })),
     ];
-    return mixed.filter((row) => {
-      if (!text) return true;
-      if (row.kind === "file") return row.item.filename.toLowerCase().includes(text);
-      return (row.item.name?.toLowerCase().includes(text) ?? false) || row.item.url.toLowerCase().includes(text);
-    });
-  }, [documents, sources, filter]);
+    if (!text) return mixed;
+    return mixed.filter((row) =>
+      row.kind === "file"
+        ? row.item.filename.toLowerCase().includes(text)
+        : row.item.name.toLowerCase().includes(text) || row.item.url.toLowerCase().includes(text),
+    );
+  }, [sources.documents, sources.sources, filter]);
+
+  const uploading = sources.uploadProgress !== null;
+
+  async function handleFilesChosen(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.target;
+    const files = Array.from(input.files ?? []);
+    input.value = "";
+    if (files.length > 0) await sources.uploadFiles(files);
+  }
+
+  function renderEmpty() {
+    if (sources.loadState === "loading") {
+      return (
+        <SkeletonRegion>
+          {Array.from({ length: SKELETON_ROWS }, (_, index) => (
+            <Skeleton key={index} className="mb-3 h-11 w-full" />
+          ))}
+        </SkeletonRegion>
+      );
+    }
+    if (sources.loadState === "error") return null;
+    if (filter.trim()) {
+      return (
+        <div className="space-y-3">
+          <p className="text-ui text-fg-muted">{`No sources match "${filter.trim()}".`}</p>
+          <Button variant="secondary" onClick={() => setFilter("")}>
+            Clear filter
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <p className="max-w-prose text-ui text-fg-muted">
+        No sources yet. Upload files or add a docs website so the bot has something to answer from.
+      </p>
+    );
+  }
+
+  const dialog = pendingDelete && deleteDialogProps(pendingDelete, sources);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-end gap-4">
-        <div className="flex items-center gap-3">
-          <label className="inline-flex items-center gap-2">
-            <span className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700">
-              {uploading
-                ? uploadProgress
-                  ? `Processing ${uploadProgress.current}/${uploadProgress.total}…`
-                  : "Processing…"
-                : "Upload files"}
-            </span>
-            <input
-              type="file"
-              multiple
-              accept=".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt,.html,.htm"
-              onChange={onUpload}
-              disabled={uploading}
-              className="sr-only"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => setShowUrlForm((prev) => !prev)}
-            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <Input
+          label="Filter sources"
+          hideLabel
+          type="search"
+          placeholder="Filter sources"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="w-72 max-w-full"
+        />
+        <div className="flex flex-wrap items-center gap-3">
+          <p role="status" className="w-40 text-right text-ui tabular-nums text-fg-muted empty:hidden sm:empty:block">
+            {sources.uploadProgress && `Uploading ${sources.uploadProgress.current} of ${sources.uploadProgress.total}`}
+          </p>
+          <FlashMessage message={sources.uploadedMessage} />
+          <Button
+            variant="secondary"
+            aria-expanded={showUrlForm}
+            aria-controls={ADD_URL_FORM_ID}
+            onClick={() => setShowUrlForm((open) => !open)}
           >
-            + Add from URL
-          </button>
+            Add from URL
+          </Button>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            accept={ACCEPTED_FILE_TYPES}
+            aria-label="Choose files to upload"
+            onChange={(event) => void handleFilesChosen(event)}
+          />
+          <Button variant="primary" busy={uploading} onClick={() => fileInput.current?.click()}>
+            Upload files
+          </Button>
         </div>
       </div>
 
       {showUrlForm && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">URL</span>
-              <input
-                type="url"
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="https://docs.yourproduct.com"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Name</span>
-              <input
-                type="text"
-                value={nameInput}
-                onChange={(e) => setNameInput(e.target.value)}
-                placeholder="Optional display name"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Schedule</span>
-              <select
-                value={scheduleInput}
-                onChange={(e) => setScheduleInput(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-              >
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="manual">Manual only</option>
-              </select>
-            </label>
-            <label className="block md:col-span-2">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Exclusions</span>
-              <textarea
-                value={exclusionsInput}
-                onChange={(e) => setExclusionsInput(e.target.value)}
-                placeholder={"/blog/*\n/changelog/*"}
-                rows={4}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-              />
-            </label>
-          </div>
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => void onCreateUrlSource()}
-              disabled={submittingUrl || !urlInput.trim()}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {submittingUrl ? "Checking and starting…" : "Add and start indexing"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowUrlForm(false)}
-              className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <section id={ADD_URL_FORM_ID} aria-label="Add from URL" className="border-y border-line py-6">
+          <SourceForm
+            initial={{ name: "", schedule: "weekly", exclusions: "" }}
+            withUrl
+            submitLabel="Add and start indexing"
+            failureFallback="Couldn't add this source. Try again."
+            onSubmit={async (values) => {
+              await sources.createUrlSource(values);
+              setShowUrlForm(false);
+            }}
+            onCancel={() => setShowUrlForm(false)}
+          />
+        </section>
       )}
 
-      <div className="flex items-center justify-between gap-4">
-        <input
-          type="text"
-          placeholder="Filter sources…"
-          aria-label="Filter sources"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="w-60 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-        />
-      </div>
-
-      {uploadError && (
-        <div className="whitespace-pre-line rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
-          {uploadError}
-        </div>
+      {sources.loadState === "error" && (
+        <LoadError message="Couldn't load your sources." onRetry={sources.load} />
       )}
-      {error && (
-        <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
+      {sources.actionError && (
+        <InlineNotice tone="danger" onDismiss={sources.clearActionError}>
+          {sources.actionError}
+        </InlineNotice>
+      )}
+      {sources.uploadErrors.length > 0 && (
+        <InlineNotice tone="danger" onDismiss={sources.clearUploadErrors}>
+          <ul>
+            {sources.uploadErrors.map(({ filename, message }) => (
+              <li key={filename} className="break-words">{`${filename}: ${message}`}</li>
+            ))}
+          </ul>
+        </InlineNotice>
       )}
 
-      <div className="overflow-x-auto overflow-y-visible rounded-xl border border-slate-200 bg-white">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-b border-slate-100 bg-slate-50">
-              <th scope="col" className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Name</th>
-              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Type</th>
-              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Status</th>
-              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Indexed / Updated</th>
-              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Scheduled</th>
-              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Health / Warnings</th>
-              <th scope="col" className="px-4 py-3 text-right text-[11px] font-medium uppercase tracking-wider text-slate-400">Actions</th>
+      <table id={SOURCES_TABLE_ID} tabIndex={-1} className="w-full table-fixed border-collapse focus:outline-none" aria-busy={sources.loadState === "loading"}>
+        <thead>
+          <tr className="border-b border-line text-left text-caption font-medium text-fg-muted">
+            <th scope="col" className="px-4 py-3 font-medium">Source</th>
+            <th scope="col" className="w-48 px-4 py-3 font-medium">Status</th>
+            <th scope="col" className="hidden w-24 px-4 py-3 text-right font-medium xl:table-cell">Pages</th>
+            <th scope="col" className="w-36 px-4 py-3 text-right font-medium">Updated</th>
+            <th scope="col" className="w-40 px-2 py-3">
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="px-4 py-6">
+                {renderEmpty()}
+              </td>
             </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="py-12 text-center text-sm text-slate-500">
-                  {filter ? "No sources match your filter." : "No sources yet. Upload a file or add a docs URL."}
-                </td>
-              </tr>
-            ) : (
-              rows.map((row) => {
-                if (row.kind === "file") {
-                  const doc = row.item;
-                  const isEmbedding = doc.status === "processing" || doc.status === "embedding";
-                  return (
-                    <tr key={doc.id} className="transition-colors hover:bg-slate-50/60">
-                      <td className="max-w-[280px] px-5 py-3.5 text-sm font-medium text-slate-800">
-                        <button
-                          type="button"
-                          onClick={() => setPreviewDocumentId(doc.id)}
-                          className="truncate text-left text-slate-800 hover:text-violet-700 hover:underline"
-                          title="View extracted text"
-                        >
-                          {doc.filename}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3.5"><TypeBadge type="file" /></td>
-                      <td className="px-4 py-3.5"><StatusBadge status={doc.status} /></td>
-                      <td className="px-4 py-3.5 text-xs text-slate-500">
-                        <div>—</div>
-                        <div className="mt-1">{isEmbedding ? "embedding…" : formatDateTimeLocale(doc.updated_at || doc.created_at)}</div>
-                      </td>
-                      <td className="px-4 py-3.5 text-xs text-slate-400">—</td>
-                      <td className="px-4 py-3.5"><HealthCell health={doc.health_status} isEmbedding={isEmbedding} /></td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center justify-end gap-2">
-                          {!isEmbedding && (
-                            <button
-                              type="button"
-                              onClick={() => void onRecheckHealth(doc.id)}
-                              disabled={recheckingId === doc.id}
-                              className="text-xs text-slate-400 hover:text-slate-600 disabled:opacity-40"
-                            >
-                              {recheckingId === doc.id ? "…" : "Re-check"}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => void onDeleteFile(doc.id)}
-                            className="text-xs text-red-400 hover:text-red-600"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                }
+          ) : (
+            rows.map((row) =>
+              row.kind === "file" ? (
+                <FileRow
+                  key={row.item.id}
+                  doc={row.item}
+                  rechecking={sources.recheckingId === row.item.id}
+                  onPreview={() => setPreviewDocumentId(row.item.id)}
+                  onRecheck={() => void sources.recheckHealth(row.item.id)}
+                  onRequestDelete={() => setPendingDelete({ kind: "file", id: row.item.id, name: row.item.filename })}
+                />
+              ) : (
+                <UrlRow
+                  key={row.item.id}
+                  source={row.item}
+                  expanded={sources.expandedSourceId === row.item.id}
+                  refreshing={sources.refreshingSourceId === row.item.id}
+                  onToggle={() => void sources.toggleDetail(row.item.id)}
+                  onEdit={() => void sources.startEdit(row.item.id)}
+                  onRefresh={() => void sources.refreshSource(row.item.id)}
+                  onRequestDelete={() =>
+                    setPendingDelete({ kind: "source", id: row.item.id, name: row.item.name, pages: row.item.pages_indexed })
+                  }
+                  detail={
+                    <UrlSourcesSection
+                      source={row.item}
+                      view={detailView(sources, row.item)}
+                      isEditing={sources.isEditing}
+                      onSaveEdit={(values) => sources.saveEdit(row.item.id, values)}
+                      onCancelEdit={sources.stopEditing}
+                      onRequestDeletePage={(pageId) =>
+                        setPendingDelete({ kind: "page", sourceId: row.item.id, pageId })
+                      }
+                      onPreviewPage={setPreviewDocumentId}
+                    />
+                  }
+                />
+              ),
+            )
+          )}
+        </tbody>
+      </table>
 
-                const source = row.item;
-                const isExpanded = expandedSourceId === source.id;
-                const currentDetail = detail?.id === source.id ? detail : null;
-                const pageMeta = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
-
-                return (
-                  <Fragment key={source.id}>
-                    <tr
-                      className={`cursor-pointer transition-colors hover:bg-slate-50/60 ${isExpanded ? "bg-violet-50/40" : ""}`}
-                      onClick={() => void onToggleDetail(source.id)}
-                    >
-                      <td className="px-5 py-3.5">
-                        <div className="max-w-[320px] text-sm font-medium text-slate-800">{source.name}</div>
-                        <div className="mt-1 max-w-[320px] truncate text-xs text-slate-400">{source.url}</div>
-                      </td>
-                      <td className="px-4 py-3.5"><TypeBadge type="url" /></td>
-                      <td className="px-4 py-3.5"><StatusBadge status={source.status} /></td>
-                      <td className="px-4 py-3.5 text-xs text-slate-500">
-                        <div>{pageMeta} pages</div>
-                        <div className="mt-1">{formatDateTimeLocale(source.updated_at)}</div>
-                      </td>
-                      <td className="px-4 py-3.5 text-xs text-slate-500">
-                        <div>{formatSchedule(source.schedule)}</div>
-                        <div className="mt-1 text-slate-400">
-                          {formatDateTimeLocale(source.next_crawl_at, "No next run")}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <SourceHealthCell status={source.status} warning={source.warning_message} error={source.error_message} />
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center justify-end gap-2" onClick={stopRowClick} role="presentation">
-                          <button
-                            type="button"
-                            onClick={() => onOpenEdit(source)}
-                            className="text-xs text-slate-500 hover:text-slate-700"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void onRefreshSource(source.id)}
-                            disabled={refreshingSourceId === source.id}
-                            className="text-xs text-indigo-400 hover:text-indigo-600 disabled:opacity-40"
-                          >
-                            {refreshingSourceId === source.id ? "…" : "Refresh"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void onDeleteSource(source.id)}
-                            className="text-xs text-red-400 hover:text-red-600"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {isExpanded && (
-                      <UrlSourcesSection
-                        source={source}
-                        detail={currentDetail}
-                        detailLoading={detailLoading}
-                        isEditing={isEditing}
-                        setIsEditing={setIsEditing}
-                        editName={editName}
-                        setEditName={setEditName}
-                        editSchedule={editSchedule}
-                        setEditSchedule={setEditSchedule}
-                        editExclusions={editExclusions}
-                        setEditExclusions={setEditExclusions}
-                        isSaving={isSaving}
-                        onSaveEdit={onSaveEdit}
-                        onDeletePage={onDeleteSourcePage}
-                        deletingPageId={deletingPageId}
-                        onPreviewPage={setPreviewDocumentId}
-                      />
-                    )}
-                  </Fragment>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-      <DocumentPreviewDrawer
-        documentId={previewDocumentId}
-        onClose={() => setPreviewDocumentId(null)}
-      />
+      <DocumentPreviewDrawer documentId={previewDocumentId} onClose={() => setPreviewDocumentId(null)} />
+      {dialog && (
+        <ConfirmDialog
+          {...dialog}
+          tone="destructive"
+          fallbackFocus={sourcesTable}
+          onClose={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 }

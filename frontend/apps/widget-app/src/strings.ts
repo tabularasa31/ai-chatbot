@@ -24,6 +24,7 @@ type AppStringKey =
   | "error_send"
   | "error_rate_limit"
   | "error_greeting"
+  | "error_history"
   | "error_support"
   | "contact_support_button"
   | "support_notified"
@@ -49,6 +50,7 @@ const EN: Record<AppStringKey, string> = {
   error_send: "Couldn't send your message.",
   error_rate_limit: "Too many messages. Wait a moment.",
   error_greeting: "Couldn't start the chat.",
+  error_history: "Couldn't load your conversation.",
   error_support: "Couldn't reach support.",
   contact_support_button: "Contact support",
   support_notified: "Support has been notified. Someone from the team will follow up.",
@@ -67,6 +69,7 @@ const SHARED_KEYS: ReadonlySet<StringKey> = new Set<SharedChromeKey>([
   "panel_name",
   "open_chat",
   "close_chat",
+  "resize_chat",
   "load_failed",
   "loading",
   "try_again_button",

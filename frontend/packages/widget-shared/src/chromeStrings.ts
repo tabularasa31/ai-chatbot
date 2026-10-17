@@ -6,6 +6,7 @@ export type SharedChromeKey =
   | "panel_name"
   | "open_chat"
   | "close_chat"
+  | "resize_chat"
   | "load_failed"
   | "loading"
   | "try_again_button";
@@ -14,6 +15,7 @@ const EN: Record<SharedChromeKey, string> = {
   panel_name: "Assistant",
   open_chat: "Open chat",
   close_chat: "Close chat",
+  resize_chat: "Resize chat",
   load_failed: "Chat didn't load.",
   loading: "Loading…",
   try_again_button: "Try again",

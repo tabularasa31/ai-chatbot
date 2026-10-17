@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type Components } from "react-markdown";
 import "highlight.js/styles/github-dark.css";
-import { Check, Copy, ExternalLink, Info, Loader2, Send, TriangleAlert, X } from "lucide-react";
+import { ArrowUp, Check, Copy, ExternalLink, Info, Loader2, TriangleAlert, X } from "lucide-react";
 import { ActionButton } from "./ActionButton";
 import { cn, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
@@ -97,7 +97,7 @@ function CodeCopyButton({ code, locale }: { code: string; locale: string | null 
       onClick={handleCopy}
       aria-label={label}
       title={label}
-      className="inline-flex h-11 w-11 items-center justify-center rounded-control text-chrome-fg-muted transition-colors hover:bg-chrome-hover"
+      className="hit-44 relative inline-flex h-8 w-8 items-center justify-center rounded-control text-chrome-fg-muted transition-colors hover:bg-chrome-hover"
     >
       {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
     </button>
@@ -121,8 +121,8 @@ function codeComponent(locale: string | null): Components["code"] {
     // Children are already highlighted spans; copy needs the raw text.
     const rawCode = hastToText(node).replace(/\n$/, "");
     return (
-      <div dir="ltr" className="my-2 overflow-hidden rounded-control bg-chrome text-chrome-fg">
-        <div className="flex h-11 items-center justify-end px-1">
+      <div dir="ltr" className="mt-2 overflow-hidden rounded-control bg-chrome text-chrome-fg">
+        <div className="flex h-9 items-center justify-end px-1">
           <CodeCopyButton code={rawCode} locale={locale} />
         </div>
         <pre className="overflow-x-auto whitespace-pre px-4 pb-4 text-caption">
@@ -134,8 +134,8 @@ function codeComponent(locale: string | null): Components["code"] {
 }
 
 const DEFAULT_SITE_URL = "https://getchat9.live";
-const BUBBLE_CLASSES = "min-w-0 max-w-[85%] rounded-bubble px-4 py-2 [overflow-wrap:anywhere]";
-const ASSISTANT_BUBBLE_CLASSES = "border border-line bg-surface-alt text-fg";
+const BUBBLE_CLASSES = "min-w-0 max-w-[85%] rounded-bubble px-3 py-2 [overflow-wrap:anywhere]";
+const ASSISTANT_BUBBLE_CLASSES = "rounded-bl-tag border border-line bg-surface text-fg";
 
 function sourceHostname(url: string): string | null {
   try {
@@ -291,6 +291,7 @@ export function ChatWidget({
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [greetingPending, setGreetingPending] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
   // Who is answering, as the server sees it: "bot" (nobody has escalated),
   // "waiting" (an open request nobody has picked up) or "live" (a human is in
@@ -322,6 +323,15 @@ export function ChatWidget({
   const linkOpenerRef = useRef<HTMLElement | null>(null);
   const modalOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The greeting request in flight, resolving to the session it opened (null on
+  // failure). A visitor's first message waits for it so both share one session.
+  const greetingInFlightRef = useRef<Promise<string | null> | null>(null);
+  // Set once the automatic greeting has been requested: an empty conversation
+  // is greeted exactly once, however often the effect re-runs.
+  const greetingRequestedRef = useRef(false);
+  // True once the visitor has sent a message since the greeting was requested;
+  // a greeting that arrives afterwards is dropped rather than shown after it.
+  const visitorSentRef = useRef(false);
   // Tracks the storage user_id derived from the current hints so other effects can use it.
   const userIdRef = useRef<string | null>(null);
 
@@ -395,6 +405,7 @@ export function ChatWidget({
 
     setSessionHydrated(false);
     setHistoryLoaded(false);
+    greetingRequestedRef.current = false;
     setActiveTicket(null);
     setHandoffState("bot");
     cursorRef.current = null;
@@ -604,10 +615,44 @@ export function ChatWidget({
       ticket_number?: string | null;
       sources?: WidgetSource[];
     };
-    applyAssistantMessage(data);
+    // Marking history loaded keeps a late history fetch from overwriting the visitor's bubble.
+    if (visitorSentRef.current) setHistoryLoaded(true);
+    else applyAssistantMessage(data);
     setSessionId(data.session_id);
     persistSession(botId, data.session_id, userIdRef.current);
+    return data.session_id;
   }, [applyAssistantMessage, botId, requestWidgetTurn]);
+
+  const appendGreetingError = useCallback((error: unknown) => {
+    console.error("Chat9: greeting failed", error);
+    if (visitorSentRef.current) return;
+    setMessages((prev) => [
+      ...prev,
+      createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
+    ]);
+  }, [localeParam]);
+
+  const requestGreeting = useCallback((attemptSessionId: string | null) => {
+    visitorSentRef.current = false;
+    setGreetingPending(true);
+    const request = fetchGreeting(attemptSessionId)
+      .catch((error) => {
+        appendGreetingError(error);
+        return null;
+      })
+      .finally(() => {
+        greetingInFlightRef.current = null;
+        setGreetingPending(false);
+      });
+    greetingInFlightRef.current = request;
+    return request;
+  }, [appendGreetingError, fetchGreeting]);
+
+  const requestGreetingOnce = useCallback((attemptSessionId: string | null) => {
+    if (greetingRequestedRef.current) return;
+    greetingRequestedRef.current = true;
+    void requestGreeting(attemptSessionId);
+  }, [requestGreeting]);
 
   useEffect(() => {
     if (!sessionHydrated || !sessionId || historyLoaded) return;
@@ -624,10 +669,7 @@ export function ChatWidget({
           }
           return null;
         }
-        if (!r.ok) {
-          // Transient error (5xx, network) — keep session, silently skip history
-          return null;
-        }
+        if (!r.ok) throw new Error(`History error: ${r.status}`);
         return r.json() as Promise<{
           messages: { id: string; role: string; content: string }[];
           ticket_number?: string | null;
@@ -671,14 +713,17 @@ export function ChatWidget({
           if (data.messages.length > 0) {
             setMessages((prev) => appendSystemMarker(prev, "new_conversation"));
           }
-          void fetchGreeting(sessionId).catch(() => {
-            // Best-effort: without a greeting the visitor still gets a fresh
-            // conversation on their first real message.
-          });
+          greetingRequestedRef.current = true;
+          void requestGreeting(sessionId);
         }
       })
-      .catch(() => {
-        // Network-level failure — keep session for next page load
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Chat9: history failed", error);
+        setMessages((prev) => [
+          ...prev,
+          createErrorMessage(tString(localeParam, "error_history"), { kind: "history" }),
+        ]);
       })
       .finally(() => {
         if (!cancelled) {
@@ -687,39 +732,13 @@ export function ChatWidget({
         }
       });
     return () => { cancelled = true; };
-  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, fetchGreeting]);
-
-  const appendGreetingError = useCallback((error: unknown) => {
-    console.error("Chat9: greeting failed", error);
-    setMessages((prev) => [
-      ...prev,
-      createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
-    ]);
-  }, [localeParam]);
+  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, localeParam, requestGreeting]);
 
   useEffect(() => {
-    // Wait for history fetch to complete (or determine there's no stored session)
-    const needsHistoryFetch = sessionHydrated && sessionId && !historyLoaded;
-    if (!sessionHydrated || needsHistoryFetch || sessionId || messages.length > 0 || loading) return;
-    let cancelled = false;
-    setLoading(true);
-    void fetchGreeting()
-      .catch((error) => {
-        if (cancelled) return;
-        appendGreetingError(error);
-      })
-      .finally(() => {
-        // Unconditionally reset loading: the React flush microtask triggered by
-        // setMessages/setSessionId inside fetchGreeting runs before .finally(),
-        // so `cancelled` is already true here even on success. Keeping the guard
-        // would leave loading stuck at true and the input permanently disabled.
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appendGreetingError, fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
+    const waitingForHistory = sessionId !== null && !historyLoaded;
+    if (!sessionHydrated || waitingForHistory || loading || messages.length > 0) return;
+    requestGreetingOnce(sessionId);
+  }, [historyLoaded, loading, messages.length, requestGreetingOnce, sessionHydrated, sessionId]);
 
   // How often to ask whether a human has written. The ladder is the whole
   // point: a conversation the bot is handling is not polled at all, one
@@ -904,7 +923,11 @@ export function ChatWidget({
     setStreamingText("");
     setStatusStage(null);
     if (appendUserBubble) {
-      setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
+      visitorSentRef.current = true;
+      setMessages((prev) => [
+        ...prev.filter((m) => !(m.type === "error" && m.retry.kind === "greeting")),
+        createTextMessage("user", userMessage),
+      ]);
     }
 
     const handleChunk = (partial: string) => {
@@ -913,15 +936,17 @@ export function ChatWidget({
     };
 
     try {
+      const greetedSessionId = greetingInFlightRef.current ? await greetingInFlightRef.current : null;
+      const attemptSessionId = sessionId ?? greetedSessionId;
       let { res, payload } = await requestWidgetTurn({
         message: userMessage,
-        attemptSessionId: sessionId,
+        attemptSessionId,
         onChunk: handleChunk,
         onStatus: setStatusStage,
       });
       let detail = payload.detail;
       let code = apiErrorCode(detail);
-      if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
+      if (!res.ok && attemptSessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
         clearStoredSession(botId, userIdRef.current);
         setSessionId(null);
         setStreamingText("");
@@ -1093,27 +1118,18 @@ export function ChatWidget({
     }
   }, [apiBase, botId, localeParam, messages, sessionId]);
 
-  const retryGreeting = useCallback(async () => {
-    setLoading(true);
-    try {
-      await fetchGreeting();
-    } catch (error) {
-      appendGreetingError(error);
-    } finally {
-      setLoading(false);
-    }
-  }, [appendGreetingError, fetchGreeting]);
-
   const handleErrorRetry = useCallback((error: Extract<ChatWidgetMessage, { type: "error" }>) => {
     setMessages((prev) => prev.filter((m) => m.id !== error.id));
     if (error.retry.kind === "send") {
       void sendUserMessage(error.retry.message, { appendUserBubble: false });
     } else if (error.retry.kind === "escalate") {
       void handleLlmUnavailableEscalate(error.retry.messageId);
-    } else {
-      void retryGreeting();
+    } else if (error.retry.kind === "history") {
+      setHistoryLoaded(false);
+    } else if (!visitorSentRef.current && !greetingInFlightRef.current) {
+      void requestGreeting(sessionId);
     }
-  }, [handleLlmUnavailableEscalate, retryGreeting, sendUserMessage]);
+  }, [handleLlmUnavailableEscalate, requestGreeting, sendUserMessage, sessionId]);
 
   useEffect(() => {
     if (!isOpen || !onClose || modalOpenRef.current) return;
@@ -1152,20 +1168,31 @@ export function ChatWidget({
         aria-hidden={modalOpen}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <header className={cn("header-bar flex flex-shrink-0 items-center justify-between border-b border-line bg-surface", padX)}>
-          <h1 className="text-body font-semibold">{tString(locale, "panel_name")}</h1>
+        <header className="header-bar flex flex-shrink-0 items-center justify-between bg-chrome text-chrome-fg dark:border-b dark:border-chrome-line">
+          <div className="min-w-0">
+            <h1 className="text-body font-semibold leading-5">{tString(locale, "panel_name")}</h1>
+            <a
+              href={withUtm(siteUrl, botId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hit-link relative inline-block text-caption text-chrome-line-strong hover:text-chrome-fg-muted focus-visible:outline-chrome-accent"
+            >
+              {tString(locale, "powered_by")}
+            </a>
+          </div>
           {onClose ? (
             <button
               type="button"
               onClick={onClose}
               aria-label={tString(locale, "close_chat")}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-fg-muted transition-colors hover:bg-surface-alt"
+              className="header-close hit-44 relative inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-chrome-fg transition-colors hover:bg-chrome-hover active:bg-chrome-active focus-visible:outline-chrome-accent"
             >
-              <X size={20} aria-hidden="true" />
+              <X size={16} aria-hidden="true" />
             </button>
           ) : null}
         </header>
 
+        <div className="flex min-h-0 flex-1 flex-col bg-canvas">
         {ticketNotice ? (
           <div role="status" className="m-2 flex items-start gap-2 rounded-control bg-info-subtle px-3 py-2 text-ui text-fg">
             <Info size={16} aria-hidden="true" className="mt-0.5 flex-shrink-0 text-info" />
@@ -1178,7 +1205,7 @@ export function ChatWidget({
           role="log"
           aria-live="polite"
           aria-busy={loading}
-          className={cn("min-h-0 flex-1 space-y-4 overflow-y-auto py-4", padX)}
+          className={cn("min-h-0 flex-1 space-y-3 overflow-y-auto py-4", padX)}
         >
           {messages.map((msg, i) => {
             if (msg.type === "system") {
@@ -1194,7 +1221,7 @@ export function ChatWidget({
             if (msg.type === "user") {
               return (
                 <div key={msg.id} className="flex justify-end">
-                  <div dir="auto" className={cn(BUBBLE_CLASSES, "whitespace-pre-wrap bg-brand-subtle text-ui text-fg")}>
+                  <div dir="auto" className={cn(BUBBLE_CLASSES, "accent-fill rounded-br-tag whitespace-pre-wrap text-ui")}>
                     {msg.text}
                   </div>
                 </div>
@@ -1204,7 +1231,7 @@ export function ChatWidget({
             if (msg.type === "operator") {
               return (
                 <div key={msg.id} className="flex">
-                  <div className={cn(BUBBLE_CLASSES, "border border-line bg-brand-subtle")}>
+                  <div className={cn(BUBBLE_CLASSES, "rounded-bl-tag border border-line bg-surface-alt")}>
                     <p className="mb-1 text-caption font-medium text-fg-muted">{operatorLabel}</p>
                     <MarkdownBody text={msg.text} components={markdownComponents} />
                   </div>
@@ -1250,12 +1277,12 @@ export function ChatWidget({
             if (msg.type === "error") {
               return (
                 <div key={msg.id} className="flex">
-                  <div role="alert" className={cn(BUBBLE_CLASSES, "bg-danger-subtle")}>
+                  <div role="alert" className={cn(BUBBLE_CLASSES, "rounded-bl-tag bg-danger-subtle pb-3")}>
                     <p className="flex items-start gap-2 text-ui">
                       <TriangleAlert size={16} aria-hidden="true" className="mt-0.5 flex-shrink-0 text-danger" />
                       <span dir="auto">{msg.text}</span>
                     </p>
-                    <div className="mt-3">
+                    <div className="mt-2">
                       <ActionButton variant="secondary" disabled={loading} onClick={() => handleErrorRetry(msg)}>
                         {tString(locale, "try_again_button")}
                       </ActionButton>
@@ -1319,11 +1346,14 @@ export function ChatWidget({
               </div>
             </div>
           ) : loading ? (
-            <LoadingIndicator stage={statusStage} locale={locale ?? null} />
+            <LoadingIndicator stage={statusStage} locale={locale ?? null} greeting={messages.length === 0} />
+          ) : greetingPending ? (
+            <LoadingIndicator stage={null} locale={locale ?? null} greeting />
           ) : null}
         </div>
+        </div>
 
-        <div className={cn("flex-shrink-0 pt-3", padX)}>
+        <div className={cn("pad-b-composer flex-shrink-0 bg-surface pt-2", padX)}>
           <div className="flex items-center gap-2">
             <input
               ref={inputRef}
@@ -1341,28 +1371,23 @@ export function ChatWidget({
               enterKeyHint="send"
               autoComplete="off"
               autoCapitalize="sentences"
-              className="h-11 min-w-0 flex-1 rounded-full border border-line-strong bg-surface-alt px-4 text-body text-fg placeholder:text-fg-faint dark:bg-canvas"
+              className="composer-input h-10 min-w-0 flex-1 rounded-full border border-line bg-surface-alt px-4 text-fg placeholder:text-fg-faint dark:bg-canvas"
             />
             <button
               type="button"
               onClick={handleSendClick}
-              disabled={!canSend}
+              disabled={!loading && !trimmedInput}
+              aria-disabled={loading || undefined}
+              aria-busy={loading}
               aria-label={tString(locale, "send_message")}
-              className="inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-brand text-brand-on transition-colors hover:bg-brand-hover active:bg-brand-active disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint"
+              className="accent-fill accent-press hit-44-send relative inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint"
             >
-              <Send size={20} aria-hidden="true" />
+              {loading ? (
+                <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+              ) : (
+                <ArrowUp size={16} aria-hidden="true" />
+              )}
             </button>
-          </div>
-
-          <div className="pad-b-safe flex justify-center">
-            <a
-              href={withUtm(siteUrl, botId)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-11 items-center text-caption text-fg-muted hover:underline focus-visible:underline"
-            >
-              {tString(locale, "powered_by")}
-            </a>
           </div>
         </div>
       </div>

@@ -70,6 +70,7 @@ export type LlmFailureState = {
 export type ErrorRetry =
   | { kind: "send"; message: string }
   | { kind: "greeting" }
+  | { kind: "history" }
   | { kind: "escalate"; messageId: string };
 
 export type ChatWidgetMessage =
@@ -161,3 +162,4 @@ export function appendSystemMarker(
 }
 
 export { sharedChromeString, type SharedChromeKey } from "./chromeStrings";
+export { ACCENT_ON_LIGHT, accentOnRgb, parseHexColor, rgbToHex, type Rgb } from "./accent";

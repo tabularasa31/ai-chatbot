@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "preact/hooks";
 import "./styles.css";
 import { ChatWidget } from "./ChatWidget";
 import { t } from "./strings";
-import type { UserHints, WidgetTheme } from "@chat9/widget-shared";
+import { accentOnRgb, parseHexColor, type UserHints, type WidgetTheme } from "@chat9/widget-shared";
 
 export type { UserHints };
 
@@ -78,9 +78,26 @@ function themeFromParam(raw: string | null): WidgetTheme {
   return raw === "dark" ? "dark" : "light";
 }
 
+const TENANT_ACCENT_HOVER_FILTER = "brightness(0.92)";
+const TENANT_ACCENT_ACTIVE_FILTER = "brightness(0.85)";
+
+function applyTenantAccent(root: HTMLElement, raw: string | null) {
+  const accent = parseHexColor(raw);
+  if (!accent) return;
+  const fill = accent.join(" ");
+  root.style.setProperty("--c-accent", fill);
+  root.style.setProperty("--c-accent-hover", fill);
+  root.style.setProperty("--c-accent-active", fill);
+  root.style.setProperty("--c-accent-on", accentOnRgb(accent).join(" "));
+  root.style.setProperty("--accent-hover-filter", TENANT_ACCENT_HOVER_FILTER);
+  root.style.setProperty("--accent-active-filter", TENANT_ACCENT_ACTIVE_FILTER);
+}
+
 // Set before the first paint so a dark widget never flashes light.
 const initialParams = new URLSearchParams(window.location.search);
 document.documentElement.dataset.theme = themeFromParam(initialParams.get("theme"));
+document.documentElement.dataset.position = initialParams.get("position") === "left" ? "left" : "right";
+applyTenantAccent(document.documentElement, initialParams.get("accent"));
 
 function App() {
   const params = initialParams;
@@ -89,6 +106,7 @@ function App() {
   const apiBase = safeOrigin((params.get("apiBase") ?? "").trim());
   const parentOrigin = safeOrigin(params.get("parentOrigin"));
   const embeddedBubble = params.get("mode") === "bubble" && window.parent !== window;
+  if (embeddedBubble) document.documentElement.dataset.bubble = "on";
   // siteUrl can be any http(s) URL (path/query allowed for marketing links).
   const siteUrl = safeMarketingUrl(params.get("siteUrl"));
 
@@ -137,7 +155,10 @@ function App() {
         applyHints(null);
       } else if (data.type === "chat9:panel") {
         setPanelOpen(Boolean((data as { open?: unknown }).open));
-        setPanelFullScreen(Boolean((data as { fullScreen?: unknown }).fullScreen));
+        const fullScreen = Boolean((data as { fullScreen?: unknown }).fullScreen);
+        setPanelFullScreen(fullScreen);
+        document.documentElement.dataset.fullscreen = fullScreen ? "on" : "off";
+        document.documentElement.dataset.grip = (data as { grip?: unknown }).grip === true ? "on" : "off";
       }
     }
     window.addEventListener("message", handleMessage);

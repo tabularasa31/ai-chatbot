@@ -408,14 +408,14 @@ async def test_short_social_question_classified_on_first_zero_hits_turn(
 
 
 @pytest.mark.asyncio
-async def test_offtopic_is_still_rejected_with_support_offer(
+async def test_offtopic_is_still_rejected_and_asked_to_rephrase(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC4: real off-topic still gets the refusal — which now ends with an
-    offer to forward the request to support instead of a dead end."""
+    """AC4: real off-topic still gets the refusal — which ends by asking the
+    visitor to rephrase, with no support handoff offer."""
     cl_row, api_key = _create_client(tenant, db_session, email="gc-offtopic@example.com")
     _stub_common(monkeypatch)
     _stub_guard_verdict(monkeypatch, (False, "offtopic", _PROFILE_STUB))
@@ -437,7 +437,8 @@ async def test_offtopic_is_still_rejected_with_support_offer(
     )
 
     assert "Sorry, but I can't help with that question" in outcome.text
-    assert "forward your request" in outcome.text
+    assert "rephras" in outcome.text
+    assert "forward your request" not in outcome.text
 
     db_session.expire_all()
     chat = (

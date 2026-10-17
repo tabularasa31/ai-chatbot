@@ -670,7 +670,7 @@ The guard LLM classifies each message into one of four categories in a single ca
 | Category | Routing |
 |---|---|
 | `relevant` | Continue the RAG pipeline |
-| `offtopic` | `guard_reject / not_relevant`; the refusal text ends with an offer to forward the request to support |
+| `offtopic` | `guard_reject / not_relevant`; the refusal text says what the bot can help with and asks the visitor to rephrase; it carries no support offer |
 | `support_complaint` | User complains support hasn't replied / they've been waiting — pre-confirm escalation offer (`user_complaint` trigger), never a refusal |
 | `social` | Pure thanks / farewell that slipped past the greeting handler — polite localized acknowledgement |
 

@@ -36,15 +36,15 @@ def _profile(product_name: str, topics: list[str]) -> Mock:
     "reason, profile, required, any_of, forbidden",
     [
         pytest.param(
-            RejectReason.NOT_RELEVANT, None, ["Sorry", "this product"], [], ["Я отвечаю только"],
+            RejectReason.NOT_RELEVANT, None, ["Sorry", "this product", "rephras"], [], ["Я отвечаю только"],
             id="not_relevant_no_profile",
         ),
         pytest.param(
-            RejectReason.NOT_RELEVANT, _profile("WidgetPro", []), ["WidgetPro", "Sorry"], [], ["Я отвечаю только"],
+            RejectReason.NOT_RELEVANT, _profile("WidgetPro", []), ["WidgetPro", "Sorry", "rephras"], [], ["Я отвечаю только"],
             id="not_relevant_with_product_name",
         ),
         pytest.param(
-            RejectReason.NOT_RELEVANT, _profile("WidgetPro", ["API", "Billing", "Auth"]), ["WidgetPro"], ["API", "Billing"], [],
+            RejectReason.NOT_RELEVANT, _profile("WidgetPro", ["API", "Billing", "Auth"]), ["WidgetPro", "rephras"], ["API", "Billing"], ["forward your request"],
             id="not_relevant_with_topic_hint",
         ),
         pytest.param(

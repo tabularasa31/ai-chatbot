@@ -22,6 +22,7 @@ import hashlib
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from backend.chat.answer_cache import _bounded
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.iso_639_1 import ISO_639_1_CODES
 from backend.chat.language import (
@@ -107,16 +108,19 @@ async def greet_widget_visitor(
         )
 
     cache_key = _widget_greeting_cache_key(tenant_id, product_name, root)
-    cached = await redis_mod.cache_get(cache_key)
+    cached = await _bounded(redis_mod.cache_get(cache_key), None)
     if cached:
         return LocalizationResult(text=cached)
 
     result = await _build_greeting_result(
         product_name=product_name, response_language=root, api_key=api_key
     )
-    if result.tokens_used > 0:
-        await redis_mod.cache_set_with_ttl(
-            cache_key, result.text, WIDGET_GREETING_CACHE_TTL_SECONDS
+    if result.generated:
+        await _bounded(
+            redis_mod.cache_set_with_ttl(
+                cache_key, result.text, WIDGET_GREETING_CACHE_TTL_SECONDS
+            ),
+            False,
         )
     return result
 

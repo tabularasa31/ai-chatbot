@@ -55,21 +55,13 @@ from tests.test_rag_pipeline import _create_client, _FakeTrace, _insert_single_c
 
 
 @pytest.fixture
-def fake_redis(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    store: dict[str, str] = {}
-
-    async def _get(key: str) -> str | None:
-        return store.get(key)
-
-    async def _set(key: str, value: str, ttl: int) -> bool:
-        store[key] = value
-        return True
-
+def answer_cache_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "answer_cache_ttl_seconds", 3600)
-    monkeypatch.setattr(redis_mod, "is_enabled", lambda: True)
-    monkeypatch.setattr(redis_mod, "cache_get", _get)
-    monkeypatch.setattr(redis_mod, "cache_set_with_ttl", _set)
-    return store
+
+
+@pytest.fixture
+def fake_redis(fake_redis: dict[str, str], answer_cache_ttl: None) -> dict[str, str]:
+    return fake_redis
 
 
 @pytest.fixture(autouse=True)

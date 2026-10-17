@@ -159,6 +159,7 @@ class ResolvedLanguageContext:
 class LocalizationResult:
     text: str
     tokens_used: int = 0
+    generated: bool = False
 
 
 def _threshold() -> float:
@@ -980,7 +981,8 @@ async def _run_text_llm(
         log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
         if not response.choices:
             return LocalizationResult(text=fallback, tokens_used=tokens_used)
-        output_text = (response.choices[0].message.content or "").strip() or fallback
+        generated_text = (response.choices[0].message.content or "").strip()
+        output_text = generated_text or fallback
         if emit_event:
             _emit_localized_event_safely(
                 canonical_text=fallback,
@@ -992,7 +994,9 @@ async def _run_text_llm(
                 bot_id=bot_id,
                 chat_id=chat_id,
             )
-        return LocalizationResult(text=output_text, tokens_used=tokens_used)
+        return LocalizationResult(
+            text=output_text, tokens_used=tokens_used, generated=bool(generated_text)
+        )
     except Exception as exc:
         logger.warning(fail_log, exc)
         return LocalizationResult(text=fallback, tokens_used=0)

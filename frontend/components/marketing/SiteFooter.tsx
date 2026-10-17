@@ -25,18 +25,18 @@ export function SiteFooter() {
           >
             <Logo size={22} textClassName="text-xl text-fg" />
           </Link>
-          <nav aria-label="Footer" className="-mx-3 flex flex-wrap items-center">
-            {LINKS.map(({ href, label }) => (
-              <Link key={href} href={href} className={navLinkClasses}>
-                {label}
-              </Link>
-            ))}
-          </nav>
+          <div className="-mx-3 flex flex-wrap items-center">
+            <nav aria-label="Footer" className="flex flex-wrap items-center">
+              {LINKS.map(({ href, label }) => (
+                <Link key={href} href={href} className={navLinkClasses}>
+                  {label}
+                </Link>
+              ))}
+            </nav>
+            <ThemeMenu className="-ml-0.5" />
+          </div>
         </div>
-        <div className="mt-6 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-caption text-fg-muted">© 2026 Chat9</p>
-          <ThemeMenu className="-ml-3.5 sm:ml-0 sm:-mr-3.5" align="end" />
-        </div>
+        <p className="mt-6 text-caption text-fg-muted">© 2026 Chat9</p>
       </div>
     </footer>
   );

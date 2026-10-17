@@ -9,6 +9,65 @@
   @apply min-h-11 rounded-control;
 }
 
+[data-search],
+#nd-subnav button {
+  @apply min-w-11;
+}
+
+#nd-subnav button {
+  @apply min-h-11;
+}
+
+#nd-subnav a,
+#nd-sidebar a:not([data-active]) {
+  @apply inline-flex min-h-11 items-center;
+}
+
+#nd-sidebar a,
+#nd-sidebar button,
+#nd-subnav a,
+#nd-subnav button,
+#nd-tocnav button,
+#nd-toc a,
+[data-search-full],
+[data-search] {
+  @apply focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus;
+}
+
+#nd-page > article > h1 {
+  @apply text-h1;
+}
+
+#nd-page > article > p.text-lg {
+  @apply max-w-measure text-body;
+}
+
+#nd-docs-layout :not(pre) > code {
+  overflow-wrap: anywhere;
+}
+
+#nd-docs-layout .fd-codeblock code {
+  @apply text-ui;
+}
+
+#nd-docs-layout h3.not-prose {
+  @apply text-body font-semibold;
+}
+
+#nd-docs-layout .not-prose.text-xs,
+#nd-docs-layout .font-mono.text-\[13px\] {
+  @apply text-ui;
+}
+
+#nd-docs-layout .rounded-xl.border.text-xs.font-medium,
+#nd-sidebar .rounded-full.border.text-xs.font-medium {
+  @apply rounded-tag border-transparent bg-surface-alt font-mono text-caption text-fg;
+}
+
+#nd-docs-layout .rounded-xl.border.text-xs.font-medium.text-red-600 {
+  @apply bg-danger-subtle text-danger;
+}
+
 #nd-toc a {
   @apply flex min-h-11 items-center py-0 text-ui;
 }

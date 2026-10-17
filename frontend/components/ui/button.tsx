@@ -14,6 +14,8 @@ const VARIANTS = {
   ghost: "text-fg-muted hover:bg-surface-alt active:bg-surface-alt",
 } as const;
 
+const DISABLED = "disabled:cursor-not-allowed disabled:border-transparent disabled:bg-surface-alt disabled:text-fg-faint";
+
 const SIZES = {
   default: "gap-2 px-4",
   icon: "w-11",
@@ -32,6 +34,7 @@ export function buttonClasses({ variant, size = "default", offset = "canvas" }: 
     "inline-flex h-11 shrink-0 items-center justify-center rounded-control text-ui font-medium transition-colors",
     FOCUS_RING[offset],
     VARIANTS[variant],
+    DISABLED,
     SIZES[size],
   );
 }

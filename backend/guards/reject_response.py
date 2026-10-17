@@ -103,21 +103,19 @@ def _build_canonical_reject_response(
     # the small-talk early exit; use a soft invite rather than a blunt refusal.
     if question is not None and len(question.split()) <= _SOFT_REJECT_MAX_WORDS:
         return f"Hi! I'm here to help with {product_name} questions. What would you like to know?"
-    # Both refusals end with a support handoff offer so an off-topic verdict
-    # (which can be a guard false positive) is never a dead end for the user.
+    # An off-topic verdict can be a guard false positive, so both refusals end by
+    # asking the visitor to rephrase rather than leaving a bare "no".
     if topic_hint:
         return (
             f"Sorry, but I can't help with that question. "
             f"I can answer questions about {product_name} or its settings, "
             f"for example about {topic_hint}. "
-            f"If you need something else, just ask me to forward your request "
-            f"to the support team."
+            f"If your question is about that, please try rephrasing it."
         )
     return (
         f"Sorry, but I can't help with that question. "
         f"I can answer questions about {product_name} or its settings. "
-        f"If you need something else, just ask me to forward your request "
-        f"to the support team."
+        f"If your question is about that, please try rephrasing it."
     )
 
 

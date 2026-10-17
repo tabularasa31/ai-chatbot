@@ -281,6 +281,19 @@ def _tenant_bot_public_id(tenant: TestClient, db_session: Session, email: str, n
     return get_default_bot_public_id(tenant, token)
 
 
+def _post_second_turn(tenant: TestClient, bot_public_id: str, question: str) -> object:
+    """The offer is never made on a visitor's first turn, so open the chat first."""
+    first = post_chat_message(
+        tenant, bot_public_id=bot_public_id, question="Не приходит SMS с кодом"
+    )
+    return post_chat_message(
+        tenant,
+        bot_public_id=bot_public_id,
+        question=question,
+        session_id=first.json()["session_id"],
+    )
+
+
 def _patch_retrieval(monkeypatch: pytest.MonkeyPatch, *, score: float) -> None:
     from backend.chat.types import RetrievalContext
     from backend.search.reliability import build_reliability_assessment
@@ -359,9 +372,7 @@ def test_needs_human_reply_gets_the_offer_appended_and_arms_pre_confirm(
     bot_public_id = _tenant_bot_public_id(
         tenant, db_session, "deadend-offer@example.com", "Dead End Offer Tenant"
     )
-    response = post_chat_message(
-        tenant, bot_public_id=bot_public_id, question="Почему не приходит код ?"
-    )
+    response = _post_second_turn(tenant, bot_public_id, "Почему не приходит код ?")
     session_id = uuid.UUID(response.json()["session_id"])
 
     assert response.status_code == 200
@@ -545,11 +556,7 @@ def test_rescue_keeps_the_support_contact_variant_when_asked_how_to_reach_suppor
     bot_public_id = _tenant_bot_public_id(
         tenant, db_session, "deadend-contact@example.com", "Contact Question Tenant"
     )
-    response = post_chat_message(
-        tenant,
-        bot_public_id=bot_public_id,
-        question="Как связаться с поддержкой ?",
-    )
+    response = _post_second_turn(tenant, bot_public_id, "Как связаться с поддержкой ?")
 
     assert response.status_code == 200
     assert seen == ["support_contact"]
@@ -578,9 +585,7 @@ def test_offer_render_failure_still_arms_the_gate(
     bot_public_id = _tenant_bot_public_id(
         tenant, db_session, "deadend-render-fail@example.com", "Render Failure Tenant"
     )
-    response = post_chat_message(
-        tenant, bot_public_id=bot_public_id, question="Почему не приходит код ?"
-    )
+    response = _post_second_turn(tenant, bot_public_id, "Почему не приходит код ?")
     session_id = uuid.UUID(response.json()["session_id"])
 
     assert response.status_code == 200

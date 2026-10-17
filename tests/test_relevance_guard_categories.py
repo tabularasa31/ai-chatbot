@@ -228,6 +228,13 @@ async def test_support_complaint_offers_escalation_not_refusal(
     monkeypatch.setattr("backend.chat.handlers.escalation.render_pre_confirm_text", _render)
 
     session_id = uuid.uuid4()
+    chat = Chat(tenant_id=cl_row.id, session_id=session_id)
+    db_session.add(chat)
+    db_session.commit()
+    db_session.add(
+        Message(chat_id=chat.id, role=MessageRole.user, content="My domain is stuck")
+    )
+    db_session.commit()
     outcome = await run_chat_turn(
         cl_row.id,
         "They have not answered me for two weeks already",
@@ -401,14 +408,14 @@ async def test_short_social_question_classified_on_first_zero_hits_turn(
 
 
 @pytest.mark.asyncio
-async def test_offtopic_is_still_rejected_with_support_offer(
+async def test_offtopic_is_still_rejected_and_asked_to_rephrase(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC4: real off-topic still gets the refusal — which now ends with an
-    offer to forward the request to support instead of a dead end."""
+    """AC4: real off-topic still gets the refusal — which ends by asking the
+    visitor to rephrase, with no support handoff offer."""
     cl_row, api_key = _create_client(tenant, db_session, email="gc-offtopic@example.com")
     _stub_common(monkeypatch)
     _stub_guard_verdict(monkeypatch, (False, "offtopic", _PROFILE_STUB))
@@ -430,7 +437,8 @@ async def test_offtopic_is_still_rejected_with_support_offer(
     )
 
     assert "Sorry, but I can't help with that question" in outcome.text
-    assert "forward your request" in outcome.text
+    assert "rephras" in outcome.text
+    assert "forward your request" not in outcome.text
 
     db_session.expire_all()
     chat = (

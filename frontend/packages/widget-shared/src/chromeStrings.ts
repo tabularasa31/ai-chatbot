@@ -7,16 +7,16 @@ export type SharedChromeKey =
   | "open_chat"
   | "close_chat"
   | "load_failed"
-  | "loading_overlay"
-  | "retry";
+  | "loading"
+  | "try_again_button";
 
 const EN: Record<SharedChromeKey, string> = {
   panel_name: "Assistant",
   open_chat: "Open chat",
   close_chat: "Close chat",
   load_failed: "Chat didn't load.",
-  loading_overlay: "Loading…",
-  retry: "Try again",
+  loading: "Loading…",
+  try_again_button: "Try again",
 };
 
 export function sharedChromeString(key: SharedChromeKey): string {

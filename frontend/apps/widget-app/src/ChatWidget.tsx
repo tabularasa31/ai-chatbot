@@ -59,6 +59,8 @@ interface ChatWidgetProps {
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
   /** Whether the widget panel is currently visible. Used to trigger scroll-to-bottom on reopen. */
   isOpen?: boolean;
+  /** The loader reports the panel as full-screen (phones): focus the panel, not the input. */
+  fullScreen?: boolean;
   /** Origin for API calls (e.g. "https://getchat9.live"). No trailing slash. */
   apiBase: string;
   /** Marketing site URL for the "Powered by Chat9" footer link. */
@@ -132,7 +134,6 @@ function codeComponent(locale: string | null): Components["code"] {
 }
 
 const DEFAULT_SITE_URL = "https://getchat9.live";
-const PHONE_MEDIA_QUERY = "(max-width: 479px)";
 const BUBBLE_CLASSES = "min-w-0 max-w-[85%] rounded-bubble px-4 py-2 [overflow-wrap:anywhere]";
 const ASSISTANT_BUBBLE_CLASSES = "border border-line bg-surface-alt text-fg";
 
@@ -279,6 +280,7 @@ export function ChatWidget({
   hints,
   renderBelowAssistant,
   isOpen = true,
+  fullScreen = false,
   apiBase,
   siteUrl = DEFAULT_SITE_URL,
   onClose,
@@ -684,6 +686,14 @@ export function ChatWidget({
     return () => { cancelled = true; };
   }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, fetchGreeting]);
 
+  const appendGreetingError = useCallback((error: unknown) => {
+    console.error("Chat9: greeting failed", error);
+    setMessages((prev) => [
+      ...prev,
+      createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
+    ]);
+  }, [localeParam]);
+
   useEffect(() => {
     // Wait for history fetch to complete (or determine there's no stored session)
     const needsHistoryFetch = sessionHydrated && sessionId && !historyLoaded;
@@ -693,11 +703,7 @@ export function ChatWidget({
     void fetchGreeting()
       .catch((error) => {
         if (cancelled) return;
-        console.error("Chat9: greeting failed", error);
-        setMessages((prev) => [
-          ...prev,
-          createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
-        ]);
+        appendGreetingError(error);
       })
       .finally(() => {
         // Unconditionally reset loading: the React flush microtask triggered by
@@ -710,7 +716,7 @@ export function ChatWidget({
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId, localeParam]);
+  }, [appendGreetingError, fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
 
   // How often to ask whether a human has written. The ladder is the whole
   // point: a conversation the bot is handling is not polled at all, one
@@ -1089,15 +1095,11 @@ export function ChatWidget({
     try {
       await fetchGreeting();
     } catch (error) {
-      console.error("Chat9: greeting failed", error);
-      setMessages((prev) => [
-        ...prev,
-        createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
-      ]);
+      appendGreetingError(error);
     } finally {
       setLoading(false);
     }
-  }, [fetchGreeting, localeParam]);
+  }, [appendGreetingError, fetchGreeting]);
 
   const handleErrorRetry = useCallback((error: Extract<ChatWidgetMessage, { type: "error" }>) => {
     if (loading) return;
@@ -1113,9 +1115,9 @@ export function ChatWidget({
 
   useEffect(() => {
     if (!isOpen || !onClose) return;
-    if (window.matchMedia(PHONE_MEDIA_QUERY).matches) panelRef.current?.focus();
+    if (fullScreen) panelRef.current?.focus();
     else inputRef.current?.focus();
-  }, [isOpen, onClose]);
+  }, [isOpen, fullScreen, onClose]);
 
   useEffect(() => {
     if (!onClose || pendingExternalLink) return;
@@ -1244,8 +1246,8 @@ export function ChatWidget({
                       <span dir="auto">{msg.text}</span>
                     </p>
                     <div className="mt-3">
-                      <ActionButton variant="secondary" busy={loading} onClick={() => handleErrorRetry(msg)}>
-                        {tString(locale, "retry")}
+                      <ActionButton variant="secondary" disabled={loading} onClick={() => handleErrorRetry(msg)}>
+                        {tString(locale, "try_again_button")}
                       </ActionButton>
                     </div>
                   </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { ActionButton } from "./ActionButton";
 
 type LinkSafetyLabels = {
@@ -29,7 +29,7 @@ export function LinkSafetyModal({
     ? labels.body.split("{hostname}", 2)
     : [`${labels.body} `, ""];
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const opener = document.activeElement;
     cancelRef.current?.focus();
     return () => {

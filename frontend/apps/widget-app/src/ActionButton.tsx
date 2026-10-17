@@ -10,17 +10,18 @@ type ActionButtonProps = {
   variant: keyof typeof VARIANT_CLASSES;
   onClick: () => void;
   busy?: boolean;
+  disabled?: boolean;
   buttonRef?: RefObject<HTMLButtonElement>;
   children: ReactNode;
 };
 
-export function ActionButton({ variant, onClick, busy = false, buttonRef, children }: ActionButtonProps) {
+export function ActionButton({ variant, onClick, busy = false, disabled = false, buttonRef, children }: ActionButtonProps) {
   return (
     <button
       ref={buttonRef}
       type="button"
       onClick={onClick}
-      disabled={busy}
+      disabled={busy || disabled}
       aria-busy={busy}
       className={`inline-flex h-11 items-center justify-center gap-2 rounded-control px-4 text-ui font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${VARIANT_CLASSES[variant]}`}
     >

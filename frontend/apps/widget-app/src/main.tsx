@@ -99,6 +99,7 @@ function App() {
   // True until the loader says otherwise: a standalone tab or an older loader
   // that never reports the panel behaves as it always did.
   const [panelOpen, setPanelOpen] = useState(true);
+  const [panelFullScreen, setPanelFullScreen] = useState(false);
 
   useEffect(() => {
     // Standalone tab (no embedding iframe) — resolve anonymous immediately.
@@ -136,6 +137,7 @@ function App() {
         applyHints(null);
       } else if (data.type === "chat9:panel") {
         setPanelOpen(Boolean((data as { open?: unknown }).open));
+        setPanelFullScreen(Boolean((data as { fullScreen?: unknown }).fullScreen));
       }
     }
     window.addEventListener("message", handleMessage);
@@ -188,6 +190,7 @@ function App() {
         locale={locale}
         hints={hints}
         isOpen={panelOpen}
+        fullScreen={panelFullScreen}
         apiBase={apiBase}
         siteUrl={siteUrl}
         onClose={embeddedBubble && parentOrigin ? closePanel : undefined}

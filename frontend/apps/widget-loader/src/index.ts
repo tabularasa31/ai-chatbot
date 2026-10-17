@@ -246,9 +246,9 @@ declare global {
   // its own: a collapsed bubble hides the iframe with display:none, and the
   // iframe's own document.hidden still says "visible". It reads this to decide
   // when a message has actually been on screen.
-  function postPanelStateToIframe(h: MountHandles, open: boolean) {
+  function postPanelStateToIframe(h: MountHandles, open: boolean, fullScreen: boolean) {
     if (!h.widgetOrigin) return;
-    h.iframe.contentWindow?.postMessage({ type: "chat9:panel", open }, h.widgetOrigin);
+    h.iframe.contentWindow?.postMessage({ type: "chat9:panel", open, fullScreen }, h.widgetOrigin);
   }
 
   function start(config: StartConfig = {}) {
@@ -319,6 +319,7 @@ declare global {
     // once (e.g. on identity-driven remount), so we stay subscribed for the
     // entire mount lifetime.
     let panelOpen = mode === "inline";
+    const phoneFullScreen = (): boolean => window.matchMedia(PHONE_MEDIA_QUERY).matches;
     let closePanel: (() => void) | null = null;
     let onIframeReady: (() => void) | null = null;
     function onMessage(event: MessageEvent) {
@@ -336,8 +337,8 @@ declare global {
         console.error("Chat9: cannot determine widget origin — set widgetBase. Aborting handshake.");
         return;
       }
+      postPanelStateToIframe(handles, panelOpen, mode === "bubble" && panelOpen && phoneFullScreen());
       postHintsToIframe(handles, currentHints);
-      postPanelStateToIframe(handles, panelOpen);
     }
 
     // ── INLINE MODE ──────────────────────────────────────────────────────────
@@ -438,15 +439,15 @@ declare global {
     resizeHandle.style.cssText =
       "position:absolute;" +
       handleCorner +
-      "width:28px;height:28px;cursor:" +
+      "box-sizing:border-box;width:28px;height:28px;padding:6px;cursor:" +
       handleCursor +
-      `;z-index:20;display:none;align-items:center;justify-content:center;color:${palette.faint};`;
+      `;z-index:20;display:none;align-items:flex-start;justify-content:${isLeft ? "flex-end" : "flex-start"};color:${palette.faint};`;
     resizeHandle.setAttribute("aria-hidden", "true");
     resizeHandle.innerHTML =
       '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
-      '<circle cx="2" cy="10" r="1.2" fill="currentColor"/>' +
-      '<circle cx="6" cy="10" r="1.2" fill="currentColor"/>' +
-      '<circle cx="2" cy="6" r="1.2" fill="currentColor"/>' +
+      (isLeft
+        ? '<circle cx="10" cy="2" r="1.2" fill="currentColor"/><circle cx="6" cy="2" r="1.2" fill="currentColor"/><circle cx="10" cy="6" r="1.2" fill="currentColor"/>'
+        : '<circle cx="2" cy="2" r="1.2" fill="currentColor"/><circle cx="6" cy="2" r="1.2" fill="currentColor"/><circle cx="2" cy="6" r="1.2" fill="currentColor"/>') +
       "</svg>";
 
     const iframe = makeIframe(false);
@@ -586,7 +587,7 @@ declare global {
     failRetry.style.cssText =
       "height:44px;padding:0 16px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:14px;font-weight:500;line-height:20px;" +
       `background:${palette.surface};color:${palette.fg};border:1px solid ${palette.lineStrong};`;
-    failRetry.textContent = chromeString("retry");
+    failRetry.textContent = chromeString("try_again_button");
     const failClose = document.createElement("button");
     failClose.type = "button";
     failClose.setAttribute("aria-label", chromeString("close_chat"));
@@ -613,7 +614,7 @@ declare global {
     }
 
     failRetry.addEventListener("click", () => {
-      showFailOverlay(chromeString("loading_overlay"), false);
+      showFailOverlay(chromeString("loading"), false);
       iframe.src = buildIframeSrc() + `&_=${Date.now()}`;
       armLoadFailTimer();
     });
@@ -637,14 +638,14 @@ declare global {
       requestAnimationFrame(() => setPanelMotion(true));
       renderLauncher();
       iframe.focus();
-      if (handles) postPanelStateToIframe(handles, true);
+      if (handles) postPanelStateToIframe(handles, true, phoneFullScreen());
     }
 
     closePanel = () => {
       if (!isOpen) return;
       isOpen = false;
       panelOpen = false;
-      if (handles) postPanelStateToIframe(handles, false);
+      if (handles) postPanelStateToIframe(handles, false, false);
       setPanelMotion(false);
       window.setTimeout(() => {
         if (isOpen) return;

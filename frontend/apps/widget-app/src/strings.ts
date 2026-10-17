@@ -7,8 +7,6 @@
 import { sharedChromeString, type SharedChromeKey } from "@chat9/widget-shared";
 
 type AppStringKey =
-  | "loading"
-  | "try_again_button"
   | "unavailable"
   | "composer_label"
   | "composer_placeholder"
@@ -34,8 +32,6 @@ type AppStringKey =
 export type StringKey = AppStringKey | SharedChromeKey;
 
 const EN: Record<AppStringKey, string> = {
-  loading: "Loading…",
-  try_again_button: "Try again",
   unavailable: "Chat is unavailable.",
   composer_label: "Message",
   composer_placeholder: "Type a message…",
@@ -50,10 +46,10 @@ const EN: Record<AppStringKey, string> = {
   copy_code: "Copy code",
   code_copied: "Code copied",
   opens_new_tab: "Opens in a new tab",
-  error_send: "Couldn't send your message. Try again.",
-  error_rate_limit: "Too many messages. Wait a moment, then try again.",
-  error_greeting: "Couldn't start the chat. Try again.",
-  error_support: "Couldn't reach support. Try again.",
+  error_send: "Couldn't send your message.",
+  error_rate_limit: "Too many messages. Wait a moment.",
+  error_greeting: "Couldn't start the chat.",
+  error_support: "Couldn't reach support.",
   contact_support_button: "Contact support",
   support_notified: "Support has been notified. Someone from the team will follow up.",
   powered_by: "Powered by Chat9",
@@ -62,8 +58,6 @@ const EN: Record<AppStringKey, string> = {
 const LOCALES: Record<string, Partial<Record<AppStringKey, string>>> = {
   en: EN,
   ru: {
-    loading: "Загрузка…",
-    try_again_button: "Попробовать ещё раз",
     contact_support_button: "Связаться с поддержкой",
     support_notified: "Поддержка уведомлена. С вами свяжутся.",
   },
@@ -74,8 +68,8 @@ const SHARED_KEYS: ReadonlySet<StringKey> = new Set<SharedChromeKey>([
   "open_chat",
   "close_chat",
   "load_failed",
-  "loading_overlay",
-  "retry",
+  "loading",
+  "try_again_button",
 ]);
 
 function isSharedKey(key: StringKey): key is SharedChromeKey {

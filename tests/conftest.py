@@ -406,6 +406,7 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
         *,
         message_to_user: str = "A support ticket was created for you.",
         followup_decision: Optional[str] = None,
+        decision: Optional[str] = None,
         tokens_used: int = 15,
     ) -> Mock:
         esc_client = Mock()
@@ -418,6 +419,7 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
                                 {
                                     "message_to_user": message_to_user,
                                     "followup_decision": followup_decision,
+                                    **({"decision": decision} if decision else {}),
                                 }
                             )
                         )
@@ -431,6 +433,26 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
             lambda _api_key, **_kwargs: esc_client,
         )
         return esc_client
+
+    return _apply
+
+
+@pytest.fixture
+def relevance_guard_category(monkeypatch: pytest.MonkeyPatch):
+    """Make the relevance guard's LLM classify every message into a category."""
+
+    def _apply(category: str) -> None:
+        guard_client = Mock()
+        guard_client.chat.completions.create = AsyncMock(
+            return_value=Mock(
+                choices=[Mock(message=Mock(content=json.dumps({"category": category})))],
+                usage=Mock(total_tokens=5),
+            )
+        )
+        monkeypatch.setattr(
+            "backend.guards.relevance_checker.get_async_openai_client",
+            lambda _api_key, **_kwargs: guard_client,
+        )
 
     return _apply
 

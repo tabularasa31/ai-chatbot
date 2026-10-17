@@ -32,6 +32,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.chat.events import _emit_quick_answer_lookup_event
 from backend.chat.followup import build_dialog_context
+from backend.chat.language_context import is_first_user_turn
 from backend.chat.steps.refusal import build_reject_result
 from backend.chat.types import (
     ChatPipelineResult,
@@ -682,6 +683,17 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
     from backend.chat.events import emit_pipeline_span
 
     emit_pipeline_span(run, "relevance_guard", _rel_latency_s, {"blocked": not relevant})
+
+    if (
+        not relevant
+        and guard_reason == CATEGORY_SUPPORT_COMPLAINT
+        and is_first_user_turn(run.chat)
+    ):
+        # No system-initiated handoff offer on the first turn: the complaint
+        # is answered like any on-topic question.
+        if run.trace is not None:
+            run.trace.update(metadata={"handoff_offer_suppressed_first_turn": True})
+        return None
 
     if not relevant:
         await cancel_speculative_retrieval(run)

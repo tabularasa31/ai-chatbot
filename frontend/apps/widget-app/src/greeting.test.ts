@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, mock, test } from "node:test";
-import { greetOnce, hasBeenGreeted } from "./greeting.ts";
+import { greetOnce, greetingLocale, hasBeenGreeted } from "./greeting.ts";
 
 class MemoryStorage {
   readonly items = new Map<string, string>();
@@ -63,5 +63,13 @@ describe("greetOnce", () => {
     assert.equal(rejected, null);
     assert.equal(offline, null);
     assert.equal(storage.items.size, 0);
+  });
+});
+
+describe("greetingLocale", () => {
+  test("the tenant hint outranks the browser locale; blank hints fall back", () => {
+    assert.equal(greetingLocale("de-DE", "fr-FR"), "de-DE");
+    assert.equal(greetingLocale("  ", "fr-FR"), "fr-FR");
+    assert.equal(greetingLocale(undefined, undefined), undefined);
   });
 });

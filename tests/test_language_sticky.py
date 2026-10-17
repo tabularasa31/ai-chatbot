@@ -43,20 +43,6 @@ def _detect_from_map(mapping: dict[str, LanguageDetectionResult]):
     return _fake_detect
 
 
-def test_bootstrap_turn_unchanged() -> None:
-    context = resolve_language_context(
-        current_turn_text="",
-        is_bootstrap_turn=True,
-        bootstrap_user_locale="fr-FR",
-        browser_locale="de-DE",
-        tenant_escalation_language="es",
-    )
-
-    assert context.response_language == "fr-FR"
-    assert context.response_language_resolution_reason == "bootstrap_user_locale"
-    assert context.detected_language == "unknown"
-
-
 def test_first_non_bootstrap_turn_no_history(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "backend.chat.language.detect_language",
@@ -65,9 +51,6 @@ def test_first_non_bootstrap_turn_no_history(monkeypatch: pytest.MonkeyPatch) ->
 
     context = resolve_language_context(
         current_turn_text="Как сбросить пароль?",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
         previous_response_language=None,
         recent_user_turn_texts=["Как сбросить пароль?"],
@@ -91,9 +74,6 @@ def test_sticky_retains_on_single_outlier(monkeypatch: pytest.MonkeyPatch) -> No
 
     context = resolve_language_context(
         current_turn_text="Traceback: ValueError",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
         previous_response_language="ru",
         recent_user_turn_texts=["Traceback: ValueError", "Как исправить?", "Привет"],
@@ -117,9 +97,6 @@ def test_sticky_switches_on_two_consecutive_new_language(monkeypatch: pytest.Mon
 
     context = resolve_language_context(
         current_turn_text="Нужна помощь",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
         previous_response_language="en",
         recent_user_turn_texts=["Нужна помощь", "Как сбросить", "Hello"],
@@ -155,9 +132,6 @@ def test_sticky_no_signal(
 
     context = resolve_language_context(
         current_turn_text="?",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
         previous_response_language=previous_response_language,
         recent_user_turn_texts=["?", "ok", "."],
@@ -203,9 +177,6 @@ def test_sticky_switch_margin(
 
     context = resolve_language_context(
         current_turn_text=current_text,
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
         previous_response_language=previous_response_language,
         recent_user_turn_texts=recent_texts,
@@ -251,9 +222,6 @@ def test_resolve_language_context_preserves_latest_variant_for_winning_root(
 
     context = resolve_language_context(
         current_turn_text="最新消息",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
         previous_response_language="en",
         recent_user_turn_texts=["最新消息", "你好"],
@@ -294,9 +262,6 @@ def test_resolve_language_context_backwards_compatible_without_sticky_kwargs(
 
     context = resolve_language_context(
         current_turn_text="bonjour",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
     )
 
@@ -714,9 +679,6 @@ def test_resolve_language_context_skips_detection_when_locked(
 
     context = resolve_language_context(
         current_turn_text="Some message in any language",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
         previous_response_language="es",
         recent_user_turn_texts=["Some message in any language"],

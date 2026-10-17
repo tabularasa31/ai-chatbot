@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome
-from backend.chat.handlers.greeting import greet_widget_visitor
+from backend.chat.handlers.greeting import greet_widget_visitor, widget_product_name
 from backend.chat.language import async_localize_text_to_language_result, detect_language
 from backend.chat.llm_unavailable import (
     OPENAI_KEY_NOT_CONFIGURED_MESSAGE,
@@ -288,8 +288,12 @@ async def widget_greeting(
         bot_id,
         no_openai_detail="Bot not available",
     )
+    product_name = await widget_product_name(tenant=tenant, db=db)
+    await db.close()
     greeting = await greet_widget_visitor(
-        tenant=tenant, locale=sanitize_locale(locale), db=db
+        product_name=product_name,
+        locale=sanitize_locale(locale),
+        api_key=tenant.openai_api_key,
     )
     return WidgetGreetingResponse(text=greeting.text)
 

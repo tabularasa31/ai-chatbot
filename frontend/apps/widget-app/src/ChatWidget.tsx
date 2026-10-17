@@ -21,7 +21,7 @@ import {
   type WidgetSource,
   type WidgetTurnPayload,
 } from "@chat9/widget-shared";
-import { greetOnce, hasBeenGreeted, markGreeted } from "./greeting";
+import { greetingLocale, greetOnce, hasBeenGreeted, markGreeted } from "./greeting";
 import { t as tString } from "./strings";
 
 export type ChatWidgetBelowAssistantContext = {
@@ -601,11 +601,11 @@ export function ChatWidget({
       apiBase,
       botId,
       userId: userIdRef.current,
-      locale: localeParam,
+      locale: greetingLocale(hints?.locale, localeParam),
     });
     setGreetingPending(false);
     if (text && !visitorSentRef.current) applyAssistantMessage({ text });
-  }, [apiBase, applyAssistantMessage, botId, localeParam]);
+  }, [apiBase, applyAssistantMessage, botId, hints?.locale, localeParam]);
 
   useEffect(() => {
     if (!sessionHydrated || !sessionId || historyLoaded) return;

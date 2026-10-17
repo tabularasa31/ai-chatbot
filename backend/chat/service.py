@@ -388,13 +388,11 @@ async def async_process_chat_message(
     # The human-request and intent classifiers overlap the chat setup and the
     # answer-cache lookup below; an exact cache hit abandons them.
     _hrc_start = perf_counter()
-    classifier_task: asyncio.Future[tuple[Any, Any]] | None = None
-    if redacted_question.strip():
-        classifier_task = asyncio.gather(
-            detect_human_request(redacted_question, api_key, tenant_id),
-            classify_question_intent(redacted_question, api_key, tenant_id),
-        )
-        classifier_task.add_done_callback(_discard_task_result)
+    classifier_task: asyncio.Future[tuple[Any, Any]] = asyncio.gather(
+        detect_human_request(redacted_question, api_key, tenant_id),
+        classify_question_intent(redacted_question, api_key, tenant_id),
+    )
+    classifier_task.add_done_callback(_discard_task_result)
 
     trace = begin_trace(
         name="rag-query",
@@ -453,9 +451,6 @@ async def async_process_chat_message(
             current_turn_text=question_text,
             tenant_row=tenant_row,
             tenant_profile=tenant_profile,
-            is_bootstrap_turn=False,
-            bootstrap_user_locale=None,
-            browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
             chat=chat,
             db=s,
         ),
@@ -552,9 +547,8 @@ async def async_process_chat_message(
     if cached_result is not None:
         handler_ctx.extras["_pipeline_result"] = cached_result
         handler_ctx.message_has_request_content = True
-        if classifier_task is not None:
-            classifier_task.cancel()
-    elif classifier_task is not None:
+        classifier_task.cancel()
+    else:
         human_request_result, question_intent = await classifier_task
         handler_ctx.explicit_human_request = human_request_result.human_request
         handler_ctx.human_request_explicit = human_request_result.human_request_explicit

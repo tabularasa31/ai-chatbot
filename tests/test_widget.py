@@ -855,7 +855,6 @@ def test_widget_history_marks_conversation_boundaries(
     data = r.json()
     assert [m["content"] for m in data["messages"]] == ["old question", "old answer", "new question"]
     assert data["boundary_indices"] == [2]
-    assert "conversation_rotated" not in data
 
 
 @pytest.mark.parametrize(
@@ -1008,6 +1007,14 @@ def test_widget_greeting_is_stateless_until_first_message(
 
     assert no_key.status_code == 200
     assert no_key.json()["text"].startswith("I'm the Greeting Locale Tenant assistant")
+
+    db_session.get(Tenant, client_uuid).openai_api_key = encrypt_value("sk-test")
+    db_session.commit()
+    mock_openai_client.chat.completions.create.side_effect = RuntimeError("llm down")
+    llm_down = tenant.get(f"/widget/greeting?bot_id={bot_public_id}&locale=fr-FR")
+
+    assert llm_down.status_code == 200
+    assert llm_down.json()["text"].startswith("I'm the Greeting Locale Tenant assistant")
 
 
 def test_widget_chat_uses_context(

@@ -295,24 +295,6 @@ async def test_localize_skips_when_detection_confident_but_target_is_root_match(
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_language_context_bootstrap_sets_unknown_detection() -> None:
-    context = resolve_language_context(
-        current_turn_text="",
-        is_bootstrap_turn=True,
-        bootstrap_user_locale="fr-FR",
-        browser_locale="de-DE",
-        tenant_escalation_language="es",
-    )
-
-    assert context.detected_language == "unknown"
-    assert context.confidence == 0.0
-    assert context.is_reliable is False
-    assert context.response_language == "fr-FR"
-    assert context.response_language_resolution_reason == "bootstrap_user_locale"
-    assert context.escalation_language == "es"
-    assert context.escalation_language_source == "tenant"
-
-
 def test_resolve_language_context_detector_failure_returns_english(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -324,9 +306,6 @@ def test_resolve_language_context_detector_failure_returns_english(
 
     ctx = resolve_language_context(
         current_turn_text="bonjour",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=None,
         tenant_escalation_language=None,
     )
 

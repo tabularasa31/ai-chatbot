@@ -20,6 +20,14 @@ export function markGreeted(botId: string, userId?: string | null): void {
   }
 }
 
+/** The tenant-supplied locale hint wins over the browser locale. */
+export function greetingLocale(
+  hintLocale: string | null | undefined,
+  browserLocale: string | undefined,
+): string | undefined {
+  return hintLocale?.trim() || browserLocale;
+}
+
 /**
  * Fetches the welcome text for a browser that has not been greeted yet and
  * records that it was. Resolves to null when already greeted or when the

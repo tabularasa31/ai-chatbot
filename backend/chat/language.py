@@ -114,16 +114,13 @@ class LanguageDetectionResult:
 # Resolution reasons where per-turn language detection did not run, so
 # ``confidence`` / ``is_reliable`` are placeholder zeros rather than a real
 # measurement: the locked fast path (follow-up turns on a locked chat),
-# bootstrap turns (no user text yet), and detector crashes. Surfacing
+# and detector crashes. Surfacing
 # confidence=0 for these poisons trace-level confidence analytics with false
 # negatives — a locked follow-up looks like a zero-confidence detection — so
 # callers that record confidence for analytics must skip these branches.
 _CONFIDENCE_NOT_MEASURED_REASONS = frozenset(
     {
         "locked",
-        "bootstrap_user_locale",
-        "browser_locale",
-        "bootstrap_default_english",
         "detector_failure",
     }
 )
@@ -147,7 +144,7 @@ class ResolvedLanguageContext:
     def detection_confidence_measured(self) -> bool:
         """True when ``confidence`` / ``is_reliable`` reflect a real detection.
 
-        False in the locked / bootstrap / detector-failure fast paths, where
+        False in the locked / detector-failure fast paths, where
         both fields are placeholder zeros. Analytics surfaces (Langfuse trace
         metadata) must omit confidence entirely in that case rather than record
         a misleading 0.0 — see ``trace.update`` in ``backend/chat/service.py``.
@@ -169,9 +166,6 @@ def _threshold() -> float:
 
 
 _RESOLUTION_REASON_TO_SOURCE = {
-    "bootstrap_user_locale": "default",
-    "browser_locale": "default",
-    "bootstrap_default_english": "default",
     "sticky_no_signal": "sticky",
     "sticky_retained": "sticky",
     "sticky_switched": "sticky",
@@ -501,7 +495,7 @@ def _weighted_vote(texts: list[str]) -> tuple[str | None, dict[str, int]]:
 # Once a chat's language is locked, all subsequent turns reply in the same
 # language regardless of what the user types — see resolve_language_context's
 # locked fast path. The decision to lock is made by _decide_language_lock,
-# which is called once per (non-bootstrap) turn after detection.
+# which is called once per turn after detection.
 #
 # Lock rules:
 #   1. First-turn confidence gate for non-English: lock immediately when the
@@ -534,7 +528,7 @@ def _decide_language_lock(
     """Return True when the chat's language should now be frozen.
 
     Caller is responsible for skipping this when chat.language_locked is
-    already True (no need to re-decide) and for not calling on bootstrap
+    already True (no need to re-decide) and for not calling on
     turns (no real user message yet).
     """
     if not detection.is_reliable:
@@ -558,9 +552,6 @@ def _decide_language_lock(
 def resolve_language_context(
     *,
     current_turn_text: str | None,
-    is_bootstrap_turn: bool,
-    bootstrap_user_locale: str | None,
-    browser_locale: str | None,
     tenant_escalation_language: str | None,
     previous_response_language: str | None = None,
     recent_user_turn_texts: list[str] | None = None,
@@ -572,13 +563,9 @@ def resolve_language_context(
     # Locked-language fast path: once a chat's language is locked, the bot
     # always responds in last_response_language and detection is skipped.
     # This is the post-lock steady state — see _decide_language_lock for how
-    # locks are set. Bootstrap turns ignore the lock since by definition
-    # there is no last_response_language yet on the very first turn; in
-    # practice locks are only set on real (non-bootstrap) turns so this
-    # branch only short-circuits actual chat replies.
+    # locks are set.
     if (
         language_locked
-        and not is_bootstrap_turn
         and previous_response_language
     ):
         escalation_language = _normalize_config_language(tenant_escalation_language) or "en"
@@ -597,9 +584,6 @@ def resolve_language_context(
     else:
         context = _resolve_language_context_inner(
             current_turn_text=current_turn_text,
-            is_bootstrap_turn=is_bootstrap_turn,
-            bootstrap_user_locale=bootstrap_user_locale,
-            browser_locale=browser_locale,
             tenant_escalation_language=tenant_escalation_language,
             previous_response_language=previous_response_language,
             recent_user_turn_texts=recent_user_turn_texts,
@@ -620,9 +604,6 @@ def resolve_language_context(
 def _resolve_language_context_inner(
     *,
     current_turn_text: str | None,
-    is_bootstrap_turn: bool,
-    bootstrap_user_locale: str | None,
-    browser_locale: str | None,
     tenant_escalation_language: str | None,
     previous_response_language: str | None = None,
     recent_user_turn_texts: list[str] | None = None,
@@ -632,47 +613,6 @@ def _resolve_language_context_inner(
 ) -> ResolvedLanguageContext:
     escalation_language = _normalize_config_language(tenant_escalation_language) or "en"
     escalation_language_source = "tenant" if _normalize_config_language(tenant_escalation_language) else "default"
-
-    if is_bootstrap_turn:
-        # Fixed contract — must not be reordered.
-        # Bootstrap (no user message yet) resolves response_language as:
-        #   1. user_context.locale     (KYC, tenant-passed via identity_token)
-        #   2. browser_locale          (Accept-Language / widget hint)
-        #   3. English                 (final fallback)
-        # See
-        # docs/04-features.md "Bootstrap locale chain — fixed contract"
-        # and docs/docs-ru/08-chat-pipeline.md for the rationale.
-        bootstrap_language = _normalize_config_language(bootstrap_user_locale)
-        if bootstrap_language:
-            return ResolvedLanguageContext(
-                detected_language="unknown",
-                confidence=0.0,
-                is_reliable=False,
-                response_language=bootstrap_language,
-                response_language_resolution_reason="bootstrap_user_locale",
-                escalation_language=escalation_language,
-                escalation_language_source=escalation_language_source,
-            )
-        browser_language = _normalize_config_language(browser_locale)
-        if browser_language:
-            return ResolvedLanguageContext(
-                detected_language="unknown",
-                confidence=0.0,
-                is_reliable=False,
-                response_language=browser_language,
-                response_language_resolution_reason="browser_locale",
-                escalation_language=escalation_language,
-                escalation_language_source=escalation_language_source,
-            )
-        return ResolvedLanguageContext(
-            detected_language="unknown",
-            confidence=0.0,
-            is_reliable=False,
-            response_language="en",
-            response_language_resolution_reason="bootstrap_default_english",
-            escalation_language=escalation_language,
-            escalation_language_source=escalation_language_source,
-        )
 
     try:
         detection = detect_language(current_turn_text)

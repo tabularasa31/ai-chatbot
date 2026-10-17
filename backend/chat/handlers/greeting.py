@@ -22,11 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
-from backend.chat.language import (
-    LocalizationResult,
-    generate_greeting_in_language_result,
-    resolve_language_context,
-)
+from backend.chat.language import LocalizationResult, generate_greeting_in_language_result
 from backend.chat.persistence import _persist_turn_with_response_language
 from backend.core.db import run_sync
 from backend.guards.injection_detector import detect_injection_structural
@@ -59,7 +55,7 @@ async def _build_greeting_result(
     *,
     product_name: str,
     response_language: str,
-    api_key: str,
+    api_key: str | None,
 ) -> LocalizationResult:
     fallback_text = (
         f"I'm the {product_name} assistant and can help with documentation, "
@@ -73,29 +69,23 @@ async def _build_greeting_result(
     )
 
 
+async def widget_product_name(*, tenant: Tenant, db: AsyncSession) -> str:
+    return await run_sync(
+        db, lambda sync_db: _resolve_product_name(tenant=tenant, db=sync_db)
+    )
+
+
 async def greet_widget_visitor(
-    *, tenant: Tenant, locale: str | None, db: AsyncSession
+    *, product_name: str, locale: str | None, api_key: str | None
 ) -> LocalizationResult:
     """Localized welcome for a visitor who has not written yet; persists nothing.
 
-    Releases ``db``'s pooled connection before the LLM call.
+    English when ``locale`` is absent or the LLM is unavailable.
     """
-    language_context = resolve_language_context(
-        current_turn_text=None,
-        is_bootstrap_turn=True,
-        bootstrap_user_locale=None,
-        browser_locale=locale,
-        tenant_escalation_language=None,
-        tenant_id=tenant.public_id,
-    )
-    product_name = await run_sync(
-        db, lambda sync_db: _resolve_product_name(tenant=tenant, db=sync_db)
-    )
-    await db.close()
     return await _build_greeting_result(
         product_name=product_name,
-        response_language=language_context.response_language,
-        api_key=tenant.openai_api_key,
+        response_language=locale or "en",
+        api_key=api_key,
     )
 
 

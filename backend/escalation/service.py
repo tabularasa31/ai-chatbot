@@ -1992,9 +1992,6 @@ def _perform_manual_escalation_impl(
         )
         language_context = resolve_language_context(
             current_turn_text=user_note or "[User requested support via the Talk to support action.]",
-            is_bootstrap_turn=False,
-            bootstrap_user_locale=None,
-            browser_locale=(effective or {}).get("browser_locale"),
             tenant_escalation_language=(
                 support_config.get("escalation_language")
                 or getattr(tenant_profile, "escalation_language", None)

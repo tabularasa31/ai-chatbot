@@ -183,7 +183,7 @@ function fumadocsScheme(scheme: Scheme) {
     "primary-foreground": hexToHsl(c["brand-on"]),
     secondary: hexToHsl(c["surface-alt"]),
     "secondary-foreground": hexToHsl(c.fg),
-    accent: hexToHsl(c["brand-subtle"]),
+    accent: hexToHsl(c["surface-alt"]),
     "accent-foreground": hexToHsl(c.fg),
     ring: hexToHsl(c.focus),
   };
@@ -193,3 +193,94 @@ export const fumadocsPreset = {
   light: fumadocsScheme("light"),
   dark: fumadocsScheme("dark"),
 };
+
+const PROSE_MEASURE = "65ch";
+
+const proseColors = {
+  "--tw-prose-body": "theme('colors.fg')",
+  "--tw-prose-headings": "theme('colors.fg')",
+  "--tw-prose-lead": "theme('colors.fg-muted')",
+  "--tw-prose-links": "theme('colors.brand')",
+  "--tw-prose-bold": "theme('colors.fg')",
+  "--tw-prose-counters": "theme('colors.fg-muted')",
+  "--tw-prose-bullets": "theme('colors.fg-muted')",
+  "--tw-prose-hr": "theme('colors.line')",
+  "--tw-prose-quotes": "theme('colors.fg-muted')",
+  "--tw-prose-quote-borders": "theme('colors.line-strong')",
+  "--tw-prose-captions": "theme('colors.fg-muted')",
+  "--tw-prose-code": "theme('colors.fg')",
+  "--tw-prose-th-borders": "theme('colors.line')",
+  "--tw-prose-td-borders": "theme('colors.line')",
+  "--tw-prose-kbd": "theme('colors.fg')",
+  "--tw-prose-kbd-shadows": "theme('colors.line-strong')",
+};
+
+const proseHeadings = {
+  h1: { fontSize: "1.5rem", lineHeight: "2rem", fontWeight: "600", marginBottom: "1rem" },
+  h2: {
+    fontSize: "1.25rem",
+    lineHeight: "1.75rem",
+    fontWeight: "600",
+    marginTop: "3rem",
+    marginBottom: "1rem",
+  },
+  "h3, h4": {
+    fontSize: "1rem",
+    lineHeight: "1.5rem",
+    fontWeight: "600",
+    marginTop: "2rem",
+    marginBottom: "0.5rem",
+  },
+  "h2 code, h3 code": { fontSize: "0.875rem" },
+};
+
+export const docsTypography = {
+  DEFAULT: {
+    css: [
+      proseColors,
+      {
+        lineHeight: "1.5rem",
+        "p, li, dd, blockquote, h1, h2, h3, h4": { maxWidth: PROSE_MEASURE },
+        p: { marginTop: "1rem", marginBottom: "1rem" },
+        li: { marginTop: "0.25rem", marginBottom: "0.25rem" },
+        ...proseHeadings,
+        code: {
+          fontFamily: ["var(--font-geist-mono)", ...SYSTEM_MONO].join(", "),
+          fontSize: "0.875rem",
+          padding: "0 0.25rem",
+          border: "none",
+          borderRadius: "theme('borderRadius.tag')",
+          background: "theme('colors.surface-alt')",
+        },
+        "a:not([data-card])": {
+          fontWeight: "400",
+          textDecorationColor: "currentColor",
+          transition: "color 120ms",
+        },
+        "a:not([data-card]):hover": { color: "theme('colors.brand-hover')", opacity: "1" },
+        "a:not([data-card]):focus-visible": {
+          outline: "2px solid theme('colors.focus')",
+          outlineOffset: "2px",
+          borderRadius: "theme('borderRadius.tag')",
+        },
+        blockquote: {
+          fontStyle: "normal",
+          fontWeight: "400",
+          borderInlineStartWidth: "2px",
+          marginTop: "1rem",
+          marginBottom: "1rem",
+        },
+        "blockquote p:first-of-type::before": { content: "none" },
+        "blockquote p:last-of-type::after": { content: "none" },
+        table: { fontSize: "0.875rem", lineHeight: "1.25rem" },
+        "thead th": {
+          fontSize: "0.75rem",
+          lineHeight: "1rem",
+          fontWeight: "500",
+          color: "theme('colors.fg-muted')",
+        },
+        "th, td": { paddingInline: "1rem" },
+      },
+    ],
+  },
+} satisfies NonNullable<Config["theme"]>["typography"];

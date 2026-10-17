@@ -26,10 +26,7 @@ from backend.chat.handlers.rag import RagHandler
 from backend.chat.language import (
     ResolvedLanguageContext,
 )
-from backend.chat.language_context import (
-    _is_bootstrap_question,
-    _resolve_chat_language_context,
-)
+from backend.chat.language_context import _resolve_chat_language_context
 from backend.chat.pii import redact
 from backend.chat.pipeline import (
     async_run_chat_pipeline,
@@ -380,6 +377,9 @@ async def async_process_chat_message(
     """
     _turn_started_at = perf_counter()
 
+    if not question.strip():
+        raise ValueError("Question is required")
+
     # Tenant is near-static; a per-process TTL cache collapses this DB hop into
     # a memory read on the hot path (item 1 of the chat-latency plan). A miss
     # loads from DB and populates the cache; tenant-update routes invalidate it.
@@ -396,8 +396,7 @@ async def async_process_chat_message(
     redacted_question = redact(question).redacted_text
 
     # The human-request and intent classifiers overlap the chat setup and the
-    # answer-cache lookup below; an exact cache hit abandons them. A bootstrap
-    # turn (widget open) carries an empty question and nothing to classify.
+    # answer-cache lookup below; an exact cache hit abandons them.
     _hrc_start = perf_counter()
     classifier_task: asyncio.Future[tuple[Any, Any]] | None = None
     if redacted_question.strip():
@@ -464,8 +463,8 @@ async def async_process_chat_message(
             current_turn_text=question_text,
             tenant_row=tenant_row,
             tenant_profile=tenant_profile,
-            is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
-            bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
+            is_bootstrap_turn=False,
+            bootstrap_user_locale=None,
             browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
             prior_session_language=prior_session_language,
             chat=chat,
@@ -521,9 +520,6 @@ async def async_process_chat_message(
         },
         user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
     )
-
-    if not question_text and not is_new_session:
-        raise ValueError("Question is required")
 
     handler_ctx = await _build_handler_context_async(
         db=db,

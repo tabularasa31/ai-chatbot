@@ -1,31 +1,34 @@
-"""Greeting handler — bootstrap turn and bare social greetings.
+"""Greeting handler and the stateless widget welcome.
 
-Handles two shapes of turn with a localized greeting instead of running
-retrieval / generation:
+``GreetingHandler`` answers a bare social turn — a typed message with no
+actionable request (a greeting, thanks, or ack) — with a localized greeting
+instead of running retrieval / generation. It is gated on the semantic
+human-request classifier (``message_has_request_content``), NOT on word count:
+short real questions ("price?", "wildcard?") still carry request content and
+flow to RAG. The earlier SmallTalkHandler keyed off word count and so wrongly
+greeted one-word questions — this avoids that class of bug while still keeping
+bare greetings from landing on the "I couldn't find that in the documentation"
+soft reply.
 
-* Bootstrap — empty input on a brand-new session (the widget-open welcome).
-* Bare social turn — a typed message with no actionable request (a greeting,
-  thanks, or ack). This is gated on the semantic human-request classifier
-  (``message_has_request_content``), NOT on word count: short real questions
-  ("price?", "wildcard?") still carry request content and flow to RAG. The
-  earlier SmallTalkHandler keyed off word count and so wrongly greeted
-  one-word questions — this avoids that class of bug while still keeping bare
-  greetings from landing on the "I couldn't find that in the documentation"
-  soft reply.
+``greet_widget_visitor`` renders the widget's opening welcome without a chat,
+session or trace behind it.
 """
 
 from __future__ import annotations
 
 import functools
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
-from backend.chat.language import LocalizationResult, generate_greeting_in_language_result
-from backend.chat.persistence import (
-    _persist_assistant_message_with_response_language,
-    _persist_turn_with_response_language,
+from backend.chat.language import (
+    LocalizationResult,
+    generate_greeting_in_language_result,
+    resolve_language_context,
 )
+from backend.chat.persistence import _persist_turn_with_response_language
+from backend.core.db import run_sync
 from backend.guards.injection_detector import detect_injection_structural
 from backend.models import Tenant, TenantProfile, TurnOutcome
 
@@ -70,17 +73,39 @@ async def _build_greeting_result(
     )
 
 
-class GreetingHandler(PipelineHandler):
-    """Greet the user instead of running RAG on a bootstrap or bare social turn.
+async def greet_widget_visitor(
+    *, tenant: Tenant, locale: str | None, db: AsyncSession
+) -> LocalizationResult:
+    """Localized welcome for a visitor who has not written yet; persists nothing.
 
-    * Bootstrap: empty input on a brand-new session. Persists only the
-      assistant greeting — storing an empty user-message row would pollute
-      analytics and inject a blank turn into the OpenAI transcript. Bootstrap
-      detection on the next call relies on ``bool(chat.messages)``.
-    * Bare social turn: a typed message the human-request classifier flagged as
-      carrying no actionable request, emitted only at the *start* of a
-      conversation (before any substantive turn). Persists the full user +
-      assistant turn.
+    Releases ``db``'s pooled connection before the LLM call.
+    """
+    language_context = resolve_language_context(
+        current_turn_text=None,
+        is_bootstrap_turn=True,
+        bootstrap_user_locale=None,
+        browser_locale=locale,
+        tenant_escalation_language=None,
+        tenant_id=tenant.public_id,
+    )
+    product_name = await run_sync(
+        db, lambda sync_db: _resolve_product_name(tenant=tenant, db=sync_db)
+    )
+    await db.close()
+    return await _build_greeting_result(
+        product_name=product_name,
+        response_language=language_context.response_language,
+        api_key=tenant.openai_api_key,
+    )
+
+
+class GreetingHandler(PipelineHandler):
+    """Greet the user instead of running RAG on a bare social turn.
+
+    A bare social turn is a typed message the human-request classifier flagged
+    as carrying no actionable request, emitted only at the *start* of a
+    conversation (before any substantive turn). Persists the full user +
+    assistant turn.
 
     Once the chat has substantive content, a bare social turn is never greeted:
     the welcome text is an opener, so re-emitting it mid-dialogue is wrong (and
@@ -93,11 +118,7 @@ class GreetingHandler(PipelineHandler):
     """
 
     def can_handle(self, ctx: HandlerContext) -> bool:
-        # Bootstrap: empty input on a brand-new session.
-        if not ctx.question_text:
-            return ctx.is_new_session
-
-        # Typed turn: only greet when there is genuinely no request to answer.
+        # Only greet when there is genuinely no request to answer.
         if ctx.message_has_request_content or ctx.explicit_human_request:
             return False
 
@@ -131,8 +152,6 @@ class GreetingHandler(PipelineHandler):
         return True
 
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
-        from backend.core.db import run_sync
-
         product_name = await run_sync(
             ctx.async_db,
             lambda sync_db: _resolve_product_name(
@@ -156,47 +175,28 @@ class GreetingHandler(PipelineHandler):
     def _handle_sync(
         self, ctx: HandlerContext, sync_db: Session, *, greeting: LocalizationResult
     ) -> ChatTurnOutcome:
-        is_bootstrap = not ctx.question_text
-        if is_bootstrap:
-            # Empty bootstrap turn: persist only the assistant greeting.
-            _persist_assistant_message_with_response_language(
-                db=sync_db,
-                chat=ctx.chat,
-                tenant_id=ctx.tenant_id,
-                response_language=ctx.language_context.response_language,
-                resolution_reason=ctx.language_context.response_language_resolution_reason,
-                assistant_content=greeting.text,
-                extra_tokens=greeting.tokens_used,
-                language_context=ctx.language_context,
-                turn_outcome=TurnOutcome.social,
-            )
-        else:
-            # Typed social turn: persist the real user message and the greeting.
-            _persist_turn_with_response_language(
-                db=sync_db,
-                chat=ctx.chat,
-                tenant_id=ctx.tenant_id,
-                response_language=ctx.language_context.response_language,
-                resolution_reason=ctx.language_context.response_language_resolution_reason,
-                user_content=ctx.question,
-                assistant_content=greeting.text,
-                document_ids=[],
-                extra_tokens=greeting.tokens_used,
-                language_context=ctx.language_context,
-                trace=ctx.trace,
-                turn_outcome=TurnOutcome.social,
-            )
+        _persist_turn_with_response_language(
+            db=sync_db,
+            chat=ctx.chat,
+            tenant_id=ctx.tenant_id,
+            response_language=ctx.language_context.response_language,
+            resolution_reason=ctx.language_context.response_language_resolution_reason,
+            user_content=ctx.question,
+            assistant_content=greeting.text,
+            document_ids=[],
+            extra_tokens=greeting.tokens_used,
+            language_context=ctx.language_context,
+            trace=ctx.trace,
+            turn_outcome=TurnOutcome.social,
+        )
 
         if ctx.trace is not None:
             ctx.trace.update(
-                output={
-                    "answer": greeting.text,
-                    "source": "greeting" if is_bootstrap else "greeting_social",
-                },
+                output={"answer": greeting.text, "source": "greeting_social"},
                 metadata={
                     "escalated": False,
                     "greeting": True,
-                    "greeting_kind": "bootstrap" if is_bootstrap else "social",
+                    "greeting_kind": "social",
                     "response_language": ctx.language_context.response_language,
                 },
             )

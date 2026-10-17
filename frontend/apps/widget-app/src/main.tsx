@@ -3,7 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import "./styles.css";
 import { ChatWidget } from "./ChatWidget";
 import { t } from "./strings";
-import type { UserHints } from "@chat9/widget-shared";
+import type { UserHints, WidgetTheme } from "@chat9/widget-shared";
 
 export type { UserHints };
 
@@ -74,12 +74,21 @@ function safeOrigin(raw: string | null | undefined): string | null {
   }
 }
 
+function themeFromParam(raw: string | null): WidgetTheme {
+  return raw === "dark" ? "dark" : "light";
+}
+
+// Set before the first paint so a dark widget never flashes light.
+const initialParams = new URLSearchParams(window.location.search);
+document.documentElement.dataset.theme = themeFromParam(initialParams.get("theme"));
+
 function App() {
-  const params = new URLSearchParams(window.location.search);
+  const params = initialParams;
   const botId = (params.get("botId") ?? "").trim() || null;
   const locale = params.get("locale") || (typeof navigator !== "undefined" ? navigator.language : null);
   const apiBase = safeOrigin((params.get("apiBase") ?? "").trim());
   const parentOrigin = safeOrigin(params.get("parentOrigin"));
+  const embeddedBubble = params.get("mode") === "bubble" && window.parent !== window;
   // siteUrl can be any http(s) URL (path/query allowed for marketing links).
   const siteUrl = safeMarketingUrl(params.get("siteUrl"));
 
@@ -146,19 +155,17 @@ function App() {
   }, [parentOrigin]);
 
   if (!botId || !apiBase) {
+    console.error("Chat9: missing required loader parameters botId and apiBase.");
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4">
-        <div className="max-w-md rounded-[28px] border border-[#DCE5F2] bg-white px-6 py-7 text-center shadow-[0_24px_80px_rgba(15,23,42,0.12)]">
-          <h1 className="text-xl font-semibold tracking-[-0.03em] text-[#0F172A]">{t(locale, "misconfigured_title")}</h1>
-          <p className="mt-3 text-sm leading-6 text-[#64748B]">{t(locale, "misconfigured_body")}</p>
-        </div>
+      <div className="flex h-screen w-full items-center justify-center bg-surface px-4 text-ui text-fg">
+        {t(locale, "unavailable")}
       </div>
     );
   }
 
   if (hints === undefined) {
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4 text-sm text-[#64748B]">
+      <div role="status" className="flex h-screen w-full items-center justify-center bg-surface px-4 text-ui text-fg-muted">
         {t(locale, "loading")}
       </div>
     );
@@ -180,6 +187,7 @@ function App() {
         isOpen={panelOpen}
         apiBase={apiBase}
         siteUrl={siteUrl}
+        onClose={embeddedBubble && parentOrigin ? () => window.parent.postMessage({ type: "chat9:close" }, parentOrigin) : undefined}
       />
     </div>
   );

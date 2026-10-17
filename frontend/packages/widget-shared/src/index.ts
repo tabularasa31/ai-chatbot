@@ -10,9 +10,12 @@ export type UserHints = {
   audience_tag?: string;
 };
 
+export type WidgetTheme = "light" | "dark";
+
 export type Chat9StartConfig = {
   userHints?: UserHints;
   mode?: "bubble" | "inline";
+  theme?: WidgetTheme;
   color?: string;
   position?: "right" | "left";
   target?: string;
@@ -62,6 +65,13 @@ export type LlmFailureState = {
   can_escalate: boolean;
 };
 
+// What "Try again" on an error bubble repeats. A failed send keeps the
+// visitor's text so it is never retyped.
+export type ErrorRetry =
+  | { kind: "send"; message: string }
+  | { kind: "greeting" }
+  | { kind: "escalate"; messageId: string };
+
 export type ChatWidgetMessage =
   | {
       // "operator" is a human answering the visitor — through the dashboard
@@ -70,9 +80,15 @@ export type ChatWidgetMessage =
       // differently, carries a byline, and must never be counted as a bot
       // reply by anything reading this list.
       id: string;
-      type: "assistant" | "user" | "error" | "operator";
+      type: "assistant" | "user" | "operator";
       text: string;
       sources?: WidgetSource[];
+    }
+  | {
+      id: string;
+      type: "error";
+      text: string;
+      retry: ErrorRetry;
     }
   | {
       id: string;
@@ -96,8 +112,12 @@ function createMessageId(): string {
   return `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+export function createErrorMessage(text: string, retry: ErrorRetry): ChatWidgetMessage {
+  return { id: createMessageId(), type: "error", text, retry };
+}
+
 export function createTextMessage(
-  type: "assistant" | "user" | "error" | "operator",
+  type: "assistant" | "user" | "operator",
   text: string,
   sources?: WidgetSource[],
 ): ChatWidgetMessage {
@@ -139,3 +159,5 @@ export function appendSystemMarker(
 ): ChatWidgetMessage[] {
   return [...messages, createSystemMessage(subtype)];
 }
+
+export { sharedChromeString, type SharedChromeKey } from "./chromeStrings";

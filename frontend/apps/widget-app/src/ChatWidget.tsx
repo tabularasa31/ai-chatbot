@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type Components } from "react-markdown";
 import "highlight.js/styles/github-dark.css";
-import { MessageCircle, Send, Ticket } from "lucide-react";
+import { Check, Copy, ExternalLink, Info, Loader2, Send, TriangleAlert, X } from "lucide-react";
+import { ActionButton } from "./ActionButton";
 import { cn, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { MarkdownBody } from "./MarkdownBody";
 import {
   appendSystemMarker,
+  createErrorMessage,
   createLlmUnavailableMessage,
   createSystemMessage,
   createTextMessage,
@@ -61,6 +63,9 @@ interface ChatWidgetProps {
   apiBase: string;
   /** Marketing site URL for the "Powered by Chat9" footer link. */
   siteUrl?: string;
+  /** Asks the host page to close the panel. Absent when the widget cannot be
+   *  closed (inline mode, standalone tab): no header button, Escape does nothing. */
+  onClose?: () => void;
 }
 
 /** Recursively extract plain text from a hast node (works after rehype-highlight). */
@@ -74,69 +79,70 @@ function hastToText(node: unknown): string {
   return "";
 }
 
-function CodeCopyButton({ code }: { code: string }) {
+const COPIED_FEEDBACK_MS = 2000;
+
+function CodeCopyButton({ code, locale }: { code: string; locale: string | null }) {
   const [copied, setCopied] = useState(false);
   async function handleCopy() {
     await navigator.clipboard.writeText(code);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
   }
+  const label = tString(locale, copied ? "code_copied" : "copy_code");
   return (
     <button
       type="button"
       onClick={handleCopy}
-      aria-label={copied ? "Copied!" : "Copy code"}
-      title={copied ? "Copied!" : "Copy code"}
-      className="absolute right-2.5 top-2.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-700/50 bg-slate-800/80 text-slate-200 transition-colors hover:bg-slate-700/90"
+      aria-label={label}
+      title={label}
+      className="inline-flex h-11 w-11 items-center justify-center rounded-control text-chrome-fg-muted transition-colors hover:bg-chrome-hover"
     >
-      {copied ? (
-        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
-          <path d="M5 12.5 9.5 17 19 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
-          <rect x="9" y="9" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
-          <rect x="5" y="5" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.75" />
-        </svg>
-      )}
+      {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
     </button>
   );
 }
 
-const MD_COMPONENTS: Components = {
-  a: ({ node: _node, ...props }) => (
-    // eslint-disable-next-line jsx-a11y/anchor-has-content -- content is spread from react-markdown props at runtime
-    <a {...props} target="_blank" rel="noopener noreferrer" />
-  ),
+const STATIC_MD_COMPONENTS: Components = {
   img: () => null,
   // Prevent react-markdown's default <pre> wrapper — our code component handles it.
   pre: ({ children }) => <>{children}</>,
-  code: ({ node, className, children, ...props }) => {
-    const isBlock = !!className;
-    if (isBlock) {
-      // Extract raw text from hast node for copy (children are already highlighted spans).
-      const rawCode = hastToText(node).replace(/\n$/, "");
-      return (
-        <div className="relative my-2">
-          <CodeCopyButton code={rawCode} />
-          <pre className="overflow-x-auto whitespace-pre rounded-lg bg-slate-900 p-4 pr-12 text-xs text-slate-100">
-            <code className={className}>{children}</code>
-          </pre>
-        </div>
-      );
-    }
-    return (
-      <code
-        className="rounded bg-slate-700 px-1 py-0.5 font-mono text-xs text-slate-100"
-        {...props}
-      >
-        {children}
-      </code>
-    );
-  },
+  table: ({ node: _node, ...props }) => (
+    <div className="my-2 overflow-x-auto">
+      <table {...props} />
+    </div>
+  ),
 };
 
+function codeComponent(locale: string | null): Components["code"] {
+  return ({ node, className, children, ...props }) => {
+    if (!className) return <code {...props}>{children}</code>;
+    // Children are already highlighted spans; copy needs the raw text.
+    const rawCode = hastToText(node).replace(/\n$/, "");
+    return (
+      <div dir="ltr" className="my-2 overflow-hidden rounded-control bg-chrome text-chrome-fg">
+        <div className="flex h-11 items-center justify-end px-1">
+          <CodeCopyButton code={rawCode} locale={locale} />
+        </div>
+        <pre className="overflow-x-auto whitespace-pre px-4 pb-4 text-caption">
+          <code className={className}>{children}</code>
+        </pre>
+      </div>
+    );
+  };
+}
+
 const DEFAULT_SITE_URL = "https://getchat9.live";
+const PHONE_MEDIA_QUERY = "(max-width: 479px)";
+const BUBBLE_CLASSES = "min-w-0 max-w-[85%] rounded-bubble px-4 py-2 [overflow-wrap:anywhere]";
+const ASSISTANT_BUBBLE_CLASSES = "border border-line bg-surface-alt text-fg";
+
+function sourceHostname(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
 const SESSION_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const RETRYABLE_SESSION_ERROR_CODES = new Set([
   "session_invalid",
@@ -275,6 +281,7 @@ export function ChatWidget({
   isOpen = true,
   apiBase,
   siteUrl = DEFAULT_SITE_URL,
+  onClose,
 }: ChatWidgetProps) {
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
   const [input, setInput] = useState("");
@@ -309,6 +316,7 @@ export function ChatWidget({
   const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
   const [pendingExternalLink, setPendingExternalLink] = useState<PendingExternalLink | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Tracks the storage user_id derived from the current hints so other effects can use it.
   const userIdRef = useRef<string | null>(null);
@@ -316,6 +324,13 @@ export function ChatWidget({
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
   const trimmedInput = input.trim();
   const canSend = Boolean(trimmedInput) && !loading;
+  const ticketNotice = activeTicket
+    ? tString(
+        locale,
+        handoffState === "waiting" ? "ticket_waiting" : handoffState === "live" ? "ticket_live" : "ticket_open",
+        { n: activeTicket },
+      )
+    : null;
 
   const linkSafetyLabels = widgetConfig?.link_safety_labels ?? {
     title: "Open external link?",
@@ -349,7 +364,8 @@ export function ChatWidget({
   }, [widgetConfig]);
 
   const markdownComponents = useMemo<Components>(() => ({
-    ...MD_COMPONENTS,
+    ...STATIC_MD_COMPONENTS,
+    code: codeComponent(locale ?? null),
     a: ({ node: _node, href, onClick, ...props }) => (
       // eslint-disable-next-line jsx-a11y/anchor-has-content -- content is spread from react-markdown props at runtime
       <a
@@ -366,7 +382,7 @@ export function ChatWidget({
         }}
       />
     ),
-  }), [maybeOpenLinkSafety]);
+  }), [locale, maybeOpenLinkSafety]);
 
   useEffect(() => {
     const userId = deriveStorageUserId(hints);
@@ -677,12 +693,10 @@ export function ChatWidget({
     void fetchGreeting()
       .catch((error) => {
         if (cancelled) return;
+        console.error("Chat9: greeting failed", error);
         setMessages((prev) => [
           ...prev,
-          createTextMessage(
-            "error",
-            error instanceof Error ? error.message : "Failed to load greeting",
-          ),
+          createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
         ]);
       })
       .finally(() => {
@@ -696,7 +710,7 @@ export function ChatWidget({
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
+  }, [fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId, localeParam]);
 
   // How often to ask whether a human has written. The ladder is the whole
   // point: a conversation the bot is handling is not polled at all, one
@@ -862,6 +876,13 @@ export function ChatWidget({
     };
   }, [apiBase, botId, isOpen, pendingReadId, sessionId]);
 
+  const appendSendError = useCallback((key: "error_send" | "error_rate_limit", message: string) => {
+    setMessages((prev) => [
+      ...prev,
+      createErrorMessage(tString(localeParam, key), { kind: "send", message }),
+    ]);
+  }, [localeParam]);
+
   /** Send a user message through /widget/chat and apply the response.
    *  Used both by the input-area send button and by the Try again retry path
    *  for an LLM-unavailable degraded turn (in which case `appendUserBubble`
@@ -907,7 +928,9 @@ export function ChatWidget({
       }
 
       if (!res.ok) {
-        throw new Error(formatApiDetail(detail, `API error: ${res.status}`));
+        console.error("Chat9: chat request failed", res.status, formatApiDetail(detail, ""));
+        appendSendError(res.status === 429 ? "error_rate_limit" : "error_send", userMessage);
+        return;
       }
 
       // LLM-unavailable degraded path: render typed fallback with action
@@ -939,19 +962,14 @@ export function ChatWidget({
       setSessionId(data.session_id);
       persistSession(botId, data.session_id, userIdRef.current);
     } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        createTextMessage(
-          "error",
-          error instanceof Error ? error.message : "Failed to send message",
-        ),
-      ]);
+      console.error("Chat9: chat request failed", error);
+      appendSendError("error_send", userMessage);
     } finally {
       setStreamingText("");
       setStatusStage(null);
       setLoading(false);
     }
-  }, [applyAssistantMessage, botId, requestWidgetTurn, sessionId]);
+  }, [appendSendError, applyAssistantMessage, botId, requestWidgetTurn, sessionId]);
 
   const handleSend = async () => {
     const userMessage = trimmedInput;
@@ -1058,248 +1076,264 @@ export function ChatWidget({
             : m,
         ),
       );
+      console.error("Chat9: escalate failed", error);
       setMessages((prev) => [
         ...prev,
-        createTextMessage(
-          "error",
-          error instanceof Error ? error.message : "Failed to contact support",
-        ),
+        createErrorMessage(tString(localeParam, "error_support"), { kind: "escalate", messageId }),
       ]);
     }
   }, [apiBase, botId, localeParam, messages, sessionId]);
 
-  return (
-    <div className="relative flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">
-      {/* Header */}
-      <div className="bg-nd-base-alt px-6 py-4 flex items-center gap-3 flex-shrink-0">
-        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-nd-accent to-violet-500 flex items-center justify-center flex-shrink-0">
-          <MessageCircle size={22} className="text-white" />
-        </div>
-        <div>
-          <div className="text-white font-medium">Chat9 Assistant</div>
-          <div className="text-gray-400 text-sm">Online</div>
-        </div>
-      </div>
+  const handleErrorRetry = useCallback((error: Extract<ChatWidgetMessage, { type: "error" }>) => {
+    setMessages((prev) => prev.filter((m) => m.id !== error.id));
+    if (error.retry.kind === "send") {
+      void sendUserMessage(error.retry.message, { appendUserBubble: false });
+    } else if (error.retry.kind === "escalate") {
+      void handleLlmUnavailableEscalate(error.retry.messageId);
+    }
+  }, [handleLlmUnavailableEscalate, sendUserMessage]);
 
-      {/* Messages */}
+  useEffect(() => {
+    if (!isOpen || !onClose) return;
+    if (window.matchMedia(PHONE_MEDIA_QUERY).matches) panelRef.current?.focus();
+    else inputRef.current?.focus();
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!onClose || pendingExternalLink) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose?.();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, pendingExternalLink]);
+
+  const padX = compact ? "pad-x-compact" : "pad-x";
+  const modalOpen = pendingExternalLink !== null;
+
+  return (
+    <div
+      ref={panelRef}
+      tabIndex={-1}
+      className="relative flex h-full w-full min-h-0 flex-col overflow-hidden bg-surface focus:outline-none"
+    >
       <div
-        ref={messagesRef}
-        className={cn("min-h-0 flex-1 overflow-y-auto bg-white p-6", compact ? "text-[13px]" : "")}
+        inert={modalOpen}
+        aria-hidden={modalOpen}
+        className="flex min-h-0 flex-1 flex-col"
       >
-        {activeTicket ? (
-          <div className={cn("flex flex-wrap gap-2", compact ? "mb-3" : "mb-4")}>
-            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
-              <Ticket size={14} />
-              Ticket {activeTicket}
-            </div>
+        <header className={cn("header-bar flex flex-shrink-0 items-center justify-between border-b border-line bg-surface", padX)}>
+          <h1 className="text-body font-semibold">{tString(locale, "panel_name")}</h1>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={tString(locale, "close_chat")}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-fg-muted transition-colors hover:bg-surface-alt"
+            >
+              <X size={20} aria-hidden="true" />
+            </button>
+          ) : null}
+        </header>
+
+        {ticketNotice ? (
+          <div role="status" className="m-2 flex items-start gap-2 rounded-control bg-info-subtle px-3 py-2 text-ui text-fg">
+            <Info size={16} aria-hidden="true" className="mt-0.5 flex-shrink-0 text-info" />
+            {ticketNotice}
           </div>
         ) : null}
 
-        {messages.length === 0 && !loading ? (
-          <div className="flex h-full min-h-[320px] items-start justify-center pt-14 text-center">
-            <p className={cn("text-gray-400", compact ? "text-[13px]" : "text-sm")}>Ask anything about Chat9…</p>
-          </div>
-        ) : (
-          <div className={cn("space-y-5", compact ? "text-[13px]" : "text-sm")}>
-            {messages.map((msg, i) => {
-                if (msg.type === "system") {
-                  return (
-                    <div key={msg.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
-                      <p className="font-medium text-slate-800">New conversation</p>
-                    </div>
-                  );
-                }
+        <div
+          ref={messagesRef}
+          role="log"
+          aria-live="polite"
+          aria-busy={loading}
+          className={cn("min-h-0 flex-1 space-y-4 overflow-y-auto py-4", padX)}
+        >
+          {messages.map((msg, i) => {
+            if (msg.type === "system") {
+              return (
+                <div key={msg.id} className="flex items-center gap-3 text-caption text-fg-muted">
+                  <span aria-hidden="true" className="h-px flex-1 bg-line" />
+                  {tString(locale, "new_conversation")}
+                  <span aria-hidden="true" className="h-px flex-1 bg-line" />
+                </div>
+              );
+            }
 
-                if (msg.type === "user") {
-                  return (
-                    <div key={msg.id} className="flex justify-end">
-                      <div className="max-w-[85%] rounded-2xl px-4 py-2 bg-[#f3e8ff] text-gray-800">
-                        <p className="whitespace-pre-wrap">{msg.text}</p>
-                      </div>
-                    </div>
-                  );
-                }
+            if (msg.type === "user") {
+              return (
+                <div key={msg.id} className="flex justify-end">
+                  <div dir="auto" className={cn(BUBBLE_CLASSES, "whitespace-pre-wrap bg-brand-subtle text-ui text-fg")}>
+                    {msg.text}
+                  </div>
+                </div>
+              );
+            }
 
-                if (msg.type === "operator") {
-                  // Visually distinct from the bot on purpose: the visitor
-                  // has to be able to tell that a person is answering them.
-                  // The byline is the server's, already in the language the
-                  // conversation is being held in.
-                  return (
-                    <div key={msg.id} className="flex items-end gap-3">
-                      <div className="max-w-[85%] rounded-2xl border border-violet-200 bg-violet-50 px-4 py-2 text-gray-800">
-                        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-violet-600">
-                          {operatorLabel}
-                        </p>
-                        <MarkdownBody text={msg.text} components={markdownComponents} />
-                      </div>
-                    </div>
-                  );
-                }
+            if (msg.type === "operator") {
+              return (
+                <div key={msg.id} className="flex">
+                  <div className={cn(BUBBLE_CLASSES, "border border-line bg-brand-subtle")}>
+                    <p className="mb-1 text-caption font-medium text-fg-muted">{operatorLabel}</p>
+                    <MarkdownBody text={msg.text} components={markdownComponents} />
+                  </div>
+                </div>
+              );
+            }
 
-                if (msg.type === "llm_unavailable") {
-                  const showRetry =
-                    msg.failureState.retryable && msg.escalationStatus !== "done";
-                  const showEscalate =
-                    msg.failureState.can_escalate && msg.escalationStatus !== "done";
-                  const busy =
-                    msg.retryInProgress || msg.escalationStatus === "in_progress";
-                  return (
-                    <div key={msg.id} className="flex items-end gap-3">
-                      <div className="max-w-[85%] rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-                        <p className="whitespace-pre-wrap">{msg.text}</p>
-                        {(showRetry || showEscalate) ? (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {showRetry ? (
-                              <button
-                                type="button"
-                                onClick={() => void handleLlmUnavailableRetry(msg.id)}
-                                disabled={busy}
-                                className="inline-flex items-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {tString(localeParam, "try_again_button")}
-                              </button>
-                            ) : null}
-                            {showEscalate ? (
-                              <button
-                                type="button"
-                                onClick={() => void handleLlmUnavailableEscalate(msg.id)}
-                                disabled={busy}
-                                className="inline-flex items-center rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {tString(localeParam, "contact_support_button")}
-                              </button>
-                            ) : null}
-                          </div>
+            if (msg.type === "llm_unavailable") {
+              const showRetry = msg.failureState.retryable && msg.escalationStatus !== "done";
+              const showEscalate = msg.failureState.can_escalate && msg.escalationStatus !== "done";
+              const escalateVariant = showRetry ? "secondary" : "primary";
+              return (
+                <div key={msg.id} className="flex">
+                  <div className={cn(BUBBLE_CLASSES, ASSISTANT_BUBBLE_CLASSES)}>
+                    <p dir="auto" className="whitespace-pre-wrap text-ui">{msg.text}</p>
+                    {showRetry || showEscalate ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {showRetry ? (
+                          <ActionButton
+                            variant="primary"
+                            busy={msg.retryInProgress}
+                            onClick={() => void handleLlmUnavailableRetry(msg.id)}
+                          >
+                            {tString(locale, "try_again_button")}
+                          </ActionButton>
                         ) : null}
-                      </div>
-                    </div>
-                  );
-                }
-
-                const isError = msg.type === "error";
-                const userQuestion = msg.type === "assistant" ? precedingUserQuestion(messages, i) : "";
-                return (
-                  <div key={msg.id}>
-                    <div className="flex items-end gap-3">
-                      <div
-                        className={cn(
-                          "max-w-[85%] rounded-2xl px-4 py-2",
-                          isError
-                            ? "border border-[#FECACA] bg-[#FFF1F2] text-[#991B1B]"
-                            : "bg-gray-100 text-gray-800",
-                        )}
-                      >
-                        {isError ? (
-                          <p className="whitespace-pre-wrap">{msg.text}</p>
-                        ) : (
-                          <MarkdownBody text={msg.text} components={markdownComponents} />
-                        )}
-                      </div>
-                    </div>
-
-                    {msg.type === "assistant" && msg.sources && msg.sources.length > 0 && (
-                      <div className="ml-1 mt-1.5 flex flex-wrap gap-1.5">
-                        {msg.sources.map((src: WidgetSource) => {
-                          let hostname: string | null = null;
-                          try { hostname = new URL(src.url).hostname; } catch { /* skip favicon */ }
-                          return (
-                            <a
-                              key={src.url}
-                              href={src.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(event) => {
-                                if (maybeOpenLinkSafety(src.url)) {
-                                  event.preventDefault();
-                                }
-                              }}
-                              className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors"
-                            >
-                              {hostname && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={`https://www.google.com/s2/favicons?domain=${hostname}&sz=16`}
-                                  alt=""
-                                  className="h-3 w-3"
-                                />
-                              )}
-                              <span className="max-w-[140px] truncate">{src.title}</span>
-                              <svg className="h-2.5 w-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                              </svg>
-                            </a>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {msg.type === "assistant" && renderBelowAssistant && userQuestion.trim() ? (
-                      <div className="ml-12 mt-3 max-w-[85%]">
-                        {renderBelowAssistant({
-                          messageIndex: i,
-                          userQuestion,
-                          assistantContent: msg.text,
-                        })}
+                        {showEscalate ? (
+                          <ActionButton
+                            variant={escalateVariant}
+                            busy={msg.escalationStatus === "in_progress"}
+                            onClick={() => void handleLlmUnavailableEscalate(msg.id)}
+                          >
+                            {tString(locale, "contact_support_button")}
+                          </ActionButton>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
-                );
-            })}
-
-            {loading && streamingText ? (
-              <div className="flex items-end gap-3">
-                <div className="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2 text-gray-800">
-                  <MarkdownBody text={streamingText} components={markdownComponents} />
                 </div>
-              </div>
-            ) : loading ? (
-              <div className="flex items-end gap-3">
-                <LoadingIndicator stage={statusStage} />
-              </div>
-            ) : null}
-          </div>
-        )}
-      </div>
+              );
+            }
 
-      {/* Input area */}
-      <div className={cn("border-t border-gray-200 bg-white px-4 sm:px-6", compact ? "py-3" : "py-4")}>
-        <div className="flex items-center gap-3">
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Type a message..."
-            disabled={loading}
-            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:cursor-not-allowed disabled:text-gray-400"
-          />
-          <button
-            type="button"
-            onClick={handleSendClick}
-            disabled={!canSend}
-            className="flex-shrink-0 p-3 bg-violet-500 hover:bg-violet-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
-            aria-label="Send message"
-          >
-            <Send size={18} />
-          </button>
+            if (msg.type === "error") {
+              return (
+                <div key={msg.id} className="flex">
+                  <div role="alert" className={cn(BUBBLE_CLASSES, "bg-danger-subtle")}>
+                    <p className="flex items-start gap-2 text-ui">
+                      <TriangleAlert size={16} aria-hidden="true" className="mt-0.5 flex-shrink-0 text-danger" />
+                      <span dir="auto">{msg.text}</span>
+                    </p>
+                    <div className="mt-3">
+                      <ActionButton variant="secondary" onClick={() => handleErrorRetry(msg)}>
+                        {tString(locale, "try_again_button")}
+                      </ActionButton>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            const userQuestion = msg.type === "assistant" ? precedingUserQuestion(messages, i) : "";
+            return (
+              <div key={msg.id}>
+                <div className="flex">
+                  <div className={cn(BUBBLE_CLASSES, ASSISTANT_BUBBLE_CLASSES)}>
+                    <MarkdownBody text={msg.text} components={markdownComponents} />
+                  </div>
+                </div>
+
+                {msg.sources && msg.sources.length > 0 ? (
+                  <ul className="mt-2 max-w-[85%]">
+                    {msg.sources.map((src: WidgetSource) => (
+                      <li key={src.url}>
+                        <a
+                          href={src.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(event) => {
+                            if (maybeOpenLinkSafety(src.url)) event.preventDefault();
+                          }}
+                          className="flex min-h-11 items-center gap-2 py-1"
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="line-clamp-2 block text-ui text-brand underline [overflow-wrap:anywhere]">{src.title}</span>
+                            <span className="block text-caption text-fg-muted [overflow-wrap:anywhere]">{sourceHostname(src.url)}</span>
+                          </span>
+                          <ExternalLink size={16} aria-hidden="true" className="flex-shrink-0 text-fg-muted" />
+                          <span className="sr-only">{tString(locale, "opens_new_tab")}</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+
+                {renderBelowAssistant && userQuestion.trim() ? (
+                  <div className="mt-3 max-w-[85%]">
+                    {renderBelowAssistant({
+                      messageIndex: i,
+                      userQuestion,
+                      assistantContent: msg.text,
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+
+          {loading && streamingText ? (
+            <div className="flex">
+              <div className={cn(BUBBLE_CLASSES, ASSISTANT_BUBBLE_CLASSES)}>
+                <MarkdownBody text={streamingText} components={markdownComponents} />
+              </div>
+            </div>
+          ) : loading ? (
+            <LoadingIndicator stage={statusStage} locale={locale ?? null} />
+          ) : null}
         </div>
 
-        <div className="mt-2 text-center">
-          <a
-            href={withUtm(siteUrl, botId)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-medium text-gray-400 transition hover:text-gray-600"
-          >
-            Powered by Chat9
-            <span aria-hidden="true">→</span>
-          </a>
+        <div className={cn("flex-shrink-0 pt-3", padX)}>
+          <div className="flex items-center gap-2">
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.nativeEvent.isComposing && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              dir="auto"
+              aria-label={tString(locale, "composer_label")}
+              placeholder={tString(locale, "composer_placeholder")}
+              enterKeyHint="send"
+              autoComplete="off"
+              autoCapitalize="sentences"
+              className="h-11 min-w-0 flex-1 rounded-full border border-line-strong bg-surface-alt px-4 text-body text-fg placeholder:text-fg-faint dark:bg-canvas"
+            />
+            <button
+              type="button"
+              onClick={handleSendClick}
+              disabled={!canSend}
+              aria-label={tString(locale, "send_message")}
+              className="inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-brand text-brand-on transition-colors hover:bg-brand-hover active:bg-brand-active disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint"
+            >
+              <Send size={20} aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="pad-b-safe flex justify-center">
+            <a
+              href={withUtm(siteUrl, botId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-11 items-center text-caption text-fg-muted hover:underline focus-visible:underline"
+            >
+              {tString(locale, "powered_by")}
+            </a>
+          </div>
         </div>
       </div>
 

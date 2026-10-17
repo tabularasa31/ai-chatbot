@@ -1,5 +1,3 @@
-import type { WindowWithChat9Widget } from "@/types/chat9-widget";
-
 export const WIDGET_LOADER_URL =
   process.env.NEXT_PUBLIC_WIDGET_LOADER_URL || "https://widget.getchat9.live/widget.js";
 
@@ -40,11 +38,11 @@ let scriptReady: Promise<void> | null = null;
 // Injects the loader once per browser session; re-injects if a prior
 // resolution went stale (e.g. after destroy() cleared window.Chat9Widget).
 export function ensureLoaderScript(botId: string): Promise<void> {
-  if (scriptReady && !(window as WindowWithChat9Widget).Chat9Widget) {
+  if (scriptReady && !window.Chat9Widget) {
     scriptReady = null;
   }
   if (scriptReady) return scriptReady;
-  if ((window as WindowWithChat9Widget).Chat9Widget) {
+  if (window.Chat9Widget) {
     scriptReady = Promise.resolve();
     return scriptReady;
   }

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
-import { Footer } from "@/components/marketing/Footer";
-import { Navigation } from "@/components/marketing/Navigation";
-import { BlogPostCard } from "@/components/marketing/blog/BlogPostCard";
+import Link from "next/link";
+import { MarketingShell } from "@/components/marketing/MarketingShell";
+import { BlogPostList } from "@/components/marketing/blog/BlogPostList";
+import { CONTAINER, standaloneLinkClasses } from "@/components/marketing/classes";
+import { cn } from "@/components/ui/utils";
 import { getAllBlogPosts } from "@/lib/blog";
 
 export const metadata: Metadata = {
@@ -35,36 +37,22 @@ export default function BlogIndexPage() {
   const posts = getAllBlogPosts();
 
   return (
-    <div
-      className="min-h-screen bg-[#0A0A0F]"
-      style={{ colorScheme: "dark" }}
-    >
-      <Navigation />
-      <main>
-        <section className="mx-auto max-w-7xl px-6 py-20 md:py-28">
-          <div className="max-w-3xl">
-            <p className="text-sm uppercase tracking-[0.24em] text-[#38BDF8]">
-              Chat9 Blog
-            </p>
-            <h1 className="mt-6 text-5xl text-[#FAF5FF] md:text-6xl">
-              Clear thinking for AI chat, support, and product teams.
-            </h1>
-            <p className="mt-6 text-xl leading-8 text-[#AFA8BF]">
-              Articles for operators and decision-makers who want practical
-              ways to use AI chat without adding complexity.
-            </p>
-          </div>
-        </section>
-
-        <section className="mx-auto max-w-7xl px-6 pb-24">
-          <div className="grid gap-6 lg:grid-cols-3">
-            {posts.map((post) => (
-              <BlogPostCard key={post.slug} post={post} />
-            ))}
-          </div>
-        </section>
-      </main>
-      <Footer />
-    </div>
+    <MarketingShell>
+      <div className={cn(CONTAINER, "py-12 md:py-16")}>
+        <h1 className="text-display text-fg">Blog</h1>
+        <div className="mt-8">
+          {posts.length > 0 ? (
+            <BlogPostList posts={posts} titleAs="h2" />
+          ) : (
+            <div>
+              <p className="text-body text-fg">No articles yet.</p>
+              <Link href="/docs" className={standaloneLinkClasses}>
+                Read the docs
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
+    </MarketingShell>
   );
 }

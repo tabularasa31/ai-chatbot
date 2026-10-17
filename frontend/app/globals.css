@@ -2,14 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #0A0A0F;
-  --foreground: #FAF5FF;
-}
-
 body {
-  color: var(--foreground);
-  background: var(--background);
+  @apply bg-canvas text-fg;
 }
 
 input,
@@ -23,12 +17,6 @@ input::placeholder,
 textarea::placeholder {
   color: color-mix(in srgb, currentColor 45%, transparent);
   opacity: 1;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  html {
-    scroll-behavior: smooth;
-  }
 }
 
 @layer utilities {

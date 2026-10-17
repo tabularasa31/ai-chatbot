@@ -1,8 +1,9 @@
 "use client";
 import { useEffect } from "react";
 import { api } from "@/lib/api";
-import type { UserHints, WindowWithChat9Widget } from "@/types/chat9-widget";
+import type { UserHints } from "@/types/chat9-widget";
 import { ensureLoaderScript } from "@/lib/widget-embed";
+import { BRAND_VIOLET } from "@/lib/brand";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
 
@@ -21,7 +22,7 @@ export function DashboardWidgetLoader({
     let cancelled = false;
 
     function startWithHints(hints: UserHints | null) {
-      const w = window as WindowWithChat9Widget;
+      const w = window;
       if (!w.Chat9Widget) return;
       if (w.Chat9Widget.isStarted()) {
         // Already mounted from a prior effect (StrictMode double-mount, or a
@@ -31,6 +32,7 @@ export function DashboardWidgetLoader({
       }
       w.Chat9Widget.start({
         apiBase: window.location.origin,
+        color: BRAND_VIOLET,
         topClearance: TOP_CLEARANCE,
         ...(hints ? { userHints: hints } : {}),
       });
@@ -54,7 +56,7 @@ export function DashboardWidgetLoader({
       cancelled = true;
       // stop() is the soft teardown — script and Chat9Widget stay registered
       // so the next mount can call start() again without re-downloading.
-      const w = window as WindowWithChat9Widget;
+      const w = window;
       w.Chat9Widget?.stop();
     };
   }, [email]);

@@ -19,8 +19,7 @@ export default function OpengraphImage() {
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          background:
-            "linear-gradient(135deg, #0A0A0F 0%, #11131B 55%, #1A1030 100%)",
+          background: "#0A0A0F",
           padding: "80px",
           fontFamily: "sans-serif",
         }}
@@ -58,26 +57,11 @@ export default function OpengraphImage() {
               maxWidth: 900,
             }}
           >
-            Your support mate, always on.
+            Answer support questions from your own documentation
           </div>
           <div style={{ color: "#A9A3BA", fontSize: 34, maxWidth: 880 }}>
-            Turn your docs into a 24/7 AI support agent.
+            Upload files or add your docs site, paste one snippet, and hand off to your team when the bot cannot answer.
           </div>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            gap: "16px",
-            color: "#5EC8FF",
-            fontSize: 28,
-          }}
-        >
-          <span>Works 24/7</span>
-          <span style={{ color: "#3A3A52" }}>•</span>
-          <span>Daily reports</span>
-          <span style={{ color: "#3A3A52" }}>•</span>
-          <span>Understands context</span>
         </div>
       </div>
     ),

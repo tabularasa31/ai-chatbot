@@ -18,7 +18,7 @@ const SETTINGS_TABS: readonly SectionLinkTab<SettingsTabId>[] = [
 function OwnerOnlyNotice() {
   return (
     <div className="mt-4 space-y-2">
-      <p className="text-ui text-fg-muted">Only the account owner can open Settings.</p>
+      <p className="text-ui text-fg-muted">Only the tenant owner can open Settings.</p>
       <Link
         href="/inbox"
         className="inline-flex h-11 items-center rounded-control text-ui font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"

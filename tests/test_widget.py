@@ -1025,6 +1025,100 @@ def test_widget_greeting_is_stateless_until_first_message(
     assert llm_down.json()["text"].startswith("I'm the Greeting Locale Tenant assistant")
 
 
+def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    fake_redis: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One LLM call per tenant, product name and language (root plus known script);
+    unknown roots, empty completions and LLM failures are never cached; a tenant
+    over its weekly generation budget costs no further LLM call."""
+    from backend.chat.handlers import greeting as greeting_module
+
+    client_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-greeting-cache@example.com", "Greeting Cache Tenant"
+    )
+    llm = mock_openai_client.chat.completions.create
+    russian = "Привет! Я помощник Greeting Cache Tenant. Задайте вопрос."
+    german = "Hallo! Ich bin der Assistent von Greeting Cache Tenant. Stellen Sie Ihre Frage."
+    llm.return_value = _chat_completion_response(russian, total_tokens=9)
+
+    def cached_greetings() -> set[str]:
+        return {key for key in fake_redis if key.startswith("widget:greeting:")}
+
+    def greet(locale: str, bot_id: str = bot_public_id) -> str:
+        response = tenant.get(f"/widget/greeting?bot_id={bot_id}&locale={locale}")
+        assert response.status_code == 200
+        return response.json()["text"]
+
+    assert greet("ru-RU") == russian
+    assert greet("ru-UA") == russian
+    assert llm.call_count == 1
+    assert len(cached_greetings()) == 1
+
+    assert greet("zz-ZZ").startswith("I'm the Greeting Cache Tenant assistant")
+    assert llm.call_count == 1
+
+    traditional = "您好！我是 Greeting Cache Tenant 的助理。請提出您的問題。"
+    llm.return_value = _chat_completion_response(traditional, total_tokens=9)
+    assert greet("zh-Hant-TW") == traditional
+    assert greet("zh-Hant") == traditional
+    assert llm.call_count == 2
+    assert "zh-Hant" in llm.call_args.kwargs["messages"][0]["content"]
+    llm.return_value = _chat_completion_response(russian, total_tokens=9)
+    assert greet("zh-TW") == russian
+    assert greet("zh") == russian
+    assert llm.call_count == 3
+    assert greet("zh-Zzzx") == russian
+    assert llm.call_count == 3
+    assert len(cached_greetings()) == 3
+
+    budget_key = f"widget:greeting-budget:{client_uuid}"
+    default_cap = greeting_module.WIDGET_GREETING_WEEKLY_GENERATION_CAP
+    monkeypatch.setattr(
+        greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", int(fake_redis[budget_key])
+    )
+    assert greet("zh-Hans-CN") == russian
+    assert greet("fr-FR").startswith("I'm the Greeting Cache Tenant assistant")
+    assert llm.call_count == 3
+    monkeypatch.setattr(greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", default_cap)
+
+    other_client_uuid, other_bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-greeting-cache-other@example.com", "Greeting Cache Tenant"
+    )
+    assert other_client_uuid != client_uuid
+    assert greet("ru-RU", other_bot_public_id) == russian
+    assert llm.call_count == 4
+    assert len(cached_greetings()) == 4
+
+    db_session.get(Tenant, client_uuid).name = "Renamed Tenant"
+    db_session.commit()
+    assert greet("ru-RU") == russian
+    assert llm.call_count == 5
+
+    fake_redis.clear()
+    llm.return_value = _chat_completion_response("", total_tokens=9)
+    assert greet("de-DE").startswith("I'm the Renamed Tenant assistant")
+    llm.return_value = _chat_completion_response(german, total_tokens=9)
+    llm.side_effect = RuntimeError("llm down")
+    assert greet("de-DE").startswith("I'm the Renamed Tenant assistant")
+    assert not cached_greetings()
+    llm.side_effect = None
+    assert greet("de-DE") == german
+    assert llm.call_count == 8
+
+    async def _redis_down(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(greeting_module.redis_mod, "cache_get", _redis_down)
+    monkeypatch.setattr(greeting_module.redis_mod, "incr_with_ttl", _redis_down)
+    monkeypatch.setattr(greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", 0)
+    assert greet("de-DE") == german
+    assert llm.call_count == 9
+
+
 def test_widget_chat_uses_context(
     mock_openai_client: Mock,
     tenant: TestClient,

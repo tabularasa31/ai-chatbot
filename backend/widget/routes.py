@@ -290,6 +290,7 @@ async def widget_greeting(
     product_name = await widget_product_name(tenant=tenant, db=db)
     await db.close()
     greeting = await greet_widget_visitor(
+        tenant_id=str(tenant.id),
         product_name=product_name,
         locale=sanitize_locale(locale),
         api_key=tenant.openai_api_key,

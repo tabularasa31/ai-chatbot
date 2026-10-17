@@ -724,6 +724,7 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
         metrics_tenant_id=run.tenant_public_id,
         metrics_bot_id=run.bot_public_id,
         prior_messages=prior_messages,
+        forbid_ticket_offer=is_first_user_turn(run.chat),
     )
 
     _lang_retry_ms = 0   # set below if the language-mismatch retry fires
@@ -818,29 +819,37 @@ async def run_generation(run: PipelineRun) -> ChatPipelineResult:
                     "retry_ms": _lang_retry_ms,
                 }
             )
-    if llm_offered_ticket and is_first_user_turn(run.chat):
-        (
-            raw_answer,
-            _retry_tokens,
-            _retry_in,
-            _retry_out,
-            llm_offered_ticket,
-            llm_needs_human,
-            llm_clarifying,
-            llm_checklist,
-        ) = await async_generate_answer(
-            run.question,
-            retrieval.chunk_texts,
-            response_language=language_context.response_language,
-            stream_callback=None,
-            forbid_ticket_offer=True,
-            **_generate_kwargs,
-        )
-        tokens_used += _retry_tokens
-        _input_toks += _retry_in
-        _output_toks += _retry_out
-        if trace is not None:
-            trace.update(metadata={"first_turn_offer_regenerated": True})
+    if llm_offered_ticket and _generate_kwargs["forbid_ticket_offer"]:
+        try:
+            (
+                _retry_answer,
+                _retry_tokens,
+                _retry_in,
+                _retry_out,
+                _retry_offered_ticket,
+                _retry_needs_human,
+                _retry_clarifying,
+                _retry_checklist,
+            ) = await async_generate_answer(
+                run.question,
+                retrieval.chunk_texts,
+                response_language=_expected_lang or language_context.response_language,
+                stream_callback=None,
+                **_generate_kwargs,
+            )
+        except Exception:
+            logger.warning("first-turn offer regeneration failed", exc_info=True)
+        else:
+            raw_answer = _retry_answer
+            tokens_used += _retry_tokens
+            _input_toks += _retry_in
+            _output_toks += _retry_out
+            llm_offered_ticket = _retry_offered_ticket
+            llm_needs_human = _retry_needs_human
+            llm_clarifying = _retry_clarifying
+            llm_checklist = _retry_checklist
+            if trace is not None:
+                trace.update(metadata={"first_turn_offer_regenerated": True})
 
     llm_ms = int((perf_counter() - llm_start) * 1000)
     record_stage_ms(trace, "llm_ms", llm_ms)

@@ -792,9 +792,16 @@ def test_system_ticket_offer_waits_for_second_user_turn(
     marked_generation = mock_openai_client.chat.completions.create.side_effect
     plain_generation = _chat_completion_side_effect(plain_answer)
 
+    generation_prompts: list[str] = []
+
     def _generation(*args: object, **kwargs: object) -> object:
-        regenerating = "HANDOFF (this turn)" in str(kwargs.get("messages"))
-        return (plain_generation if regenerating else marked_generation)(*args, **kwargs)
+        prompt = str(kwargs.get("messages"))
+        if "TARGET REPLY LANGUAGE" not in prompt:
+            return marked_generation(*args, **kwargs)
+        generation_prompts.append(prompt)
+        return (marked_generation if len(generation_prompts) == 1 else plain_generation)(
+            *args, **kwargs
+        )
 
     mock_openai_client.chat.completions.create.side_effect = _generation
     escalation_openai_override(decision="yes")
@@ -819,6 +826,9 @@ def test_system_ticket_offer_waits_for_second_user_turn(
     db_session.refresh(chat)
     offer = pre_confirm_fallback_result("initial").message_to_user
     assert (offer in first["text"]) is offer_expected
+    assert all("HANDOFF (this turn)" in prompt for prompt in generation_prompts) is (
+        not offer_expected
+    )
     if not offer_expected:
         assert first["text"] == plain_answer
     assert chat.escalation_pre_confirm_pending is offer_expected

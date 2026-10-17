@@ -77,7 +77,6 @@ export function IdentityKeySection() {
   }
 
   async function rotate() {
-    setFailure(null);
     try {
       await issueKey();
     } catch (err) {

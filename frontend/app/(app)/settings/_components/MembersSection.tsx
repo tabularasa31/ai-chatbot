@@ -29,41 +29,39 @@ export function MembersSection() {
 
   return (
     <SettingsSection title="Members" meta={members?.length}>
-      <div>
-        {members ? (
-          <>
-            <ul className="divide-y divide-line">
-              {members.map((member) => (
-                <li key={member.id} className="flex min-h-11 items-center gap-3 py-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="break-all text-ui text-fg">{member.email}</p>
-                    <p className="text-caption text-fg-muted">{roleText(member)}</p>
-                  </div>
-                  {member.role !== "owner" && (
-                    <Button variant="secondary" onClick={() => setRemoving(member)}>
-                      Remove
-                    </Button>
-                  )}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 text-caption text-fg-muted">
-              The owner can&apos;t be removed. To close the tenant, delete it on the Bot tab.
-            </p>
-            {onlyOwner && <p className="mt-3 text-ui text-fg-muted">Just you so far. Invite a colleague above.</p>}
-          </>
-        ) : error ? (
-          <LoadError message="Couldn't load the team." onRetry={() => mutate()} />
-        ) : (
-          <SkeletonRegion>
-            {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-              <div key={index} className="flex min-h-11 items-center py-2">
-                <Skeleton className="w-64 max-w-full" />
-              </div>
+      {members ? (
+        <>
+          <ul className="divide-y divide-line">
+            {members.map((member) => (
+              <li key={member.id} className="flex min-h-11 items-center gap-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="break-all text-ui text-fg">{member.email}</p>
+                  <p className="text-caption text-fg-muted">{roleText(member)}</p>
+                </div>
+                {member.role !== "owner" && (
+                  <Button variant="secondary" onClick={() => setRemoving(member)}>
+                    Remove
+                  </Button>
+                )}
+              </li>
             ))}
-          </SkeletonRegion>
-        )}
-      </div>
+          </ul>
+          <p className="text-caption text-fg-muted">
+            The owner can&apos;t be removed. To close the tenant, delete it on the Bot tab.
+          </p>
+          {onlyOwner && <p className="text-ui text-fg-muted">Just you so far. Invite a colleague above.</p>}
+        </>
+      ) : error ? (
+        <LoadError message="Couldn't load the team." onRetry={() => mutate()} />
+      ) : (
+        <SkeletonRegion>
+          {Array.from({ length: SKELETON_ROWS }, (_, index) => (
+            <div key={index} className="flex min-h-11 items-center py-2">
+              <Skeleton className="w-64 max-w-full" />
+            </div>
+          ))}
+        </SkeletonRegion>
+      )}
       {removing && (
         <ConfirmDialog
           title={removing.status === "pending" ? `Cancel the invite for ${removing.email}?` : `Remove ${removing.email}?`}

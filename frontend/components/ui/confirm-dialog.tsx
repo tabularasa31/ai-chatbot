@@ -12,7 +12,7 @@ type ConfirmDialogProps = {
   confirmLabel: string;
   tone: "primary" | "destructive";
   failureMessage: string;
-  /** The user must type this exactly (case-sensitive; surrounding spaces in what they type are ignored) before the confirm button enables. */
+  /** The user must type this exactly (case-sensitive; surrounding spaces are ignored on both sides) before the confirm button enables. */
   confirmText?: string;
   onConfirm: () => Promise<void>;
   onClose: () => void;
@@ -80,7 +80,7 @@ export function ConfirmDialog({
             variant={tone}
             offset="surface"
             busy={busy}
-            disabled={confirmText !== undefined && typed.trim() !== confirmText}
+            disabled={confirmText !== undefined && typed.trim() !== confirmText.trim()}
             onClick={() => void confirm()}
           >
             {confirmLabel}

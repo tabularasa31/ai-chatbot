@@ -5,7 +5,7 @@ import { type Components } from "react-markdown";
 import "highlight.js/styles/github-dark.css";
 import { ArrowUp, Check, Copy, ExternalLink, Info, Loader2, TriangleAlert, X } from "lucide-react";
 import { ActionButton } from "./ActionButton";
-import { cn, withUtm } from "./utils";
+import { cn, deriveStorageUserId, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { MarkdownBody } from "./MarkdownBody";
@@ -53,7 +53,8 @@ interface ChatWidgetProps {
   locale?: string | null;
   compact?: boolean;
   /** Untrusted personalization hints from the tenant frontend. Triggers
-   *  a session-init call so the backend can attach them to the chat. */
+   *  a session-init call to resume the identified visitor's chat; they are
+   *  sent again with the first message, which is what creates it. */
   hints?: UserHints | null;
   /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
@@ -161,16 +162,6 @@ function sessionUpdatedAtStorageKey(botId: string, userId?: string | null): stri
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-// Storage-key discriminator derived from hints. Lets us namespace localStorage
-// per visitor so one browser shared between accounts doesn't bleed history
-// across them. Falls back to email-based synthetic id matching the backend.
-function deriveStorageUserId(hints: UserHints | null | undefined): string | null {
-  if (!hints) return null;
-  if (hints.user_id && hints.user_id.trim()) return hints.user_id.trim();
-  if (hints.email && hints.email.trim()) return `hint:${hints.email.trim()}`;
-  return null;
 }
 
 function clearStoredSession(botId: string, userId?: string | null): void {
@@ -397,7 +388,6 @@ export function ChatWidget({
   }), [locale, maybeOpenLinkSafety]);
 
   const storageUserId = deriveStorageUserId(hints);
-  const hasHints = Boolean(hints);
   const hintsRef = useRef(hints);
   useLayoutEffect(() => {
     hintsRef.current = hints;
@@ -407,11 +397,14 @@ export function ChatWidget({
     const userId = storageUserId;
     const sessionHints = hintsRef.current;
     userIdRef.current = userId;
+    let cancelled = false;
 
     setSessionHydrated(false);
     setHistoryLoaded(false);
     setActiveTicket(null);
     setHandoffState("bot");
+    setMessages([]);
+    setStreamingText("");
     cursorRef.current = null;
 
     // Purge the legacy shared-key session (pre-user-scoped namespacing) so stale
@@ -419,29 +412,34 @@ export function ChatWidget({
     if (userId) clearStoredSession(botId);
 
     const stored = readStoredSession(botId, userId);
+    setSessionId(stored);
 
-    if (sessionHints && !stored) {
+    if (userId && !stored) {
       fetch(`${apiBase}/widget/session/init`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bot_id: botId, user_hints: sessionHints }),
       })
         .then((r) => r.json())
-        .then((data: { session_id?: string }) => {
-          if (data.session_id) {
-            persistSession(botId, data.session_id, userId);
-            setSessionId(data.session_id);
-          }
+        .then((data: { session_id: string | null }) => {
+          if (cancelled || !data.session_id) return;
+          persistSession(botId, data.session_id, userId);
+          setSessionId(data.session_id);
         })
         .catch(() => {
-          // fall through to anonymous session
+          // the first message creates the session
         })
-        .finally(() => setSessionHydrated(true));
+        .finally(() => {
+          if (!cancelled) setSessionHydrated(true);
+        });
     } else {
-      setSessionId(stored);
       setSessionHydrated(true);
     }
-  }, [botId, storageUserId, hasHints, apiBase]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [botId, storageUserId, apiBase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -512,6 +510,7 @@ export function ChatWidget({
       body: JSON.stringify({
         message,
         locale: localeParam,
+        user_hints: attemptSessionId ? undefined : hintsRef.current,
       }),
     });
 
@@ -874,6 +873,7 @@ export function ChatWidget({
     userMessage: string,
     { appendUserBubble }: { appendUserBubble: boolean },
   ) => {
+    const userId = userIdRef.current;
     setLoading(true);
     setStreamingText("");
     setStatusStage(null);
@@ -900,7 +900,7 @@ export function ChatWidget({
       let detail = payload.detail;
       let code = apiErrorCode(detail);
       if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
-        clearStoredSession(botId, userIdRef.current);
+        clearStoredSession(botId, userId);
         setSessionId(null);
         setStreamingText("");
         setStatusStage(null);
@@ -926,7 +926,7 @@ export function ChatWidget({
       if (payload.outcome === "llm_unavailable" && payload.failure_state) {
         if (payload.session_id) {
           setSessionId(payload.session_id);
-          persistSession(botId, payload.session_id, userIdRef.current);
+          persistSession(botId, payload.session_id, userId);
         }
         setMessages((prev) => [
           ...prev,
@@ -947,7 +947,7 @@ export function ChatWidget({
 
       applyAssistantMessage(data);
       setSessionId(data.session_id);
-      persistSession(botId, data.session_id, userIdRef.current);
+      persistSession(botId, data.session_id, userId);
     } catch (error) {
       console.error("Chat9: chat request failed", error);
       appendSendError("error_send", userMessage);

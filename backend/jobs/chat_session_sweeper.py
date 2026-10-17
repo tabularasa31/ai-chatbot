@@ -91,9 +91,9 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
 
     Returns the number of sessions for which an event was emitted. Chats with
     at least one ``Message`` emit ``chat_session_ended outcome=timeout``;
-    empty chats — /widget/session/init creates a Chat per widget mount before
-    the user writes anything, observed 154 mounts per real session in prod —
-    are stamped silently. Both branches set ``session_ended_event_at`` so the
+    empty chats — only anonymous /widget/session/init (the eval client) creates
+    one before the user writes anything; the widget creates a chat with the
+    first message — are stamped silently. Both branches set ``session_ended_event_at`` so the
     row drops out of the partial index ``ix_chats_sweeper_pending`` and is
     excluded from the next pass; otherwise the empty-chat backlog would
     accumulate in the index unbounded as widget impressions add up.

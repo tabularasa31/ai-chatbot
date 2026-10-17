@@ -133,11 +133,14 @@ def _post_widget_chat(
     message: str,
     session_id: str | None = None,
     locale: str | None = None,
+    user_hints: dict | None = None,
 ) -> object:
     query = f"/widget/chat?bot_id={bot_public_id}"
     if session_id:
         query += f"&session_id={session_id}"
-    resp = tenant.post(query, json={"message": message, "locale": locale})
+    resp = tenant.post(
+        query, json={"message": message, "locale": locale, "user_hints": user_hints}
+    )
     return _SSEResponse(resp)
 
 
@@ -386,26 +389,47 @@ def test_widget_chat_session_id_validation(
     assert r.json()["detail"]["code"] == expected_code
 
 
-def test_widget_chat_hints_session_increments_user_session_turns(
+@pytest.mark.parametrize(
+    "hints,signed,expect_resume",
+    [
+        pytest.param({"user_id": "ext-42", "email": "user@example.com"}, False, True, id="unsigned_user_id"),
+        pytest.param({"user_id": "ext-42", "email": "user@example.com"}, True, True, id="signed_user_id"),
+        pytest.param({"email": "visitor@example.com"}, False, False, id="email_only_never_resumes"),
+    ],
+)
+def test_widget_identified_visitor_conversation_starts_with_first_message(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
+    hints: dict,
+    signed: bool,
+    expect_resume: bool,
 ) -> None:
+    """Opening the widget as an identified visitor creates nothing: init only
+    resumes. The first message creates the one chat and contact session, bound
+    to the same verified identity init would have used; a second device then
+    resumes it by user_id (never by email alone)."""
     client_uuid, bot_public_id = _setup_widget_tenant(
-        tenant, db_session, "widget-user-session-turns@example.com"
+        tenant, db_session, f"widget-lazy-{signed}-{expect_resume}@example.com"
     )
     _seed_rag_chunk(db_session, client_uuid)
+    if signed:
+        secret = "tenant-widget-secret"
+        db_session.query(Tenant).filter(Tenant.id == client_uuid).update(
+            {"widget_identity_secret": encrypt_value(secret)}
+        )
+        db_session.commit()
+        hints = {
+            **hints,
+            "user_hash": hmac.new(secret.encode(), b"ext-42", hashlib.sha256).hexdigest(),
+        }
+    init_payload = {"bot_id": bot_public_id, "user_hints": hints}
 
-    init_resp = tenant.post(
-        "/widget/session/init",
-        json={
-            "bot_id": bot_public_id,
-            "user_hints": {"user_id": "ext-42", "email": "user@example.com"},
-        },
-    )
-    assert init_resp.status_code == 200
-    assert init_resp.json()["mode"] == "hints"
-    session_id = init_resp.json()["session_id"]
+    opened = tenant.post("/widget/session/init", json=init_payload)
+    assert opened.status_code == 200
+    assert opened.json() == {"session_id": None, "mode": "hints", "resumed": False}
+    assert db_session.query(Chat).filter(Chat.tenant_id == client_uuid).count() == 0
+    assert db_session.query(ContactSession).filter(ContactSession.tenant_id == client_uuid).count() == 0
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
     mock_openai_client.chat.completions.create.return_value.choices = [
@@ -413,62 +437,42 @@ def test_widget_chat_hints_session_increments_user_session_turns(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    r = _post_widget_chat(
-        tenant,
-        bot_public_id,
-        message="widget support",
-        session_id=session_id,
-    )
-    assert r.status_code == 200
+    first = _post_widget_chat(tenant, bot_public_id, message="widget support", user_hints=hints)
+    assert first.status_code == 200
+    session_id = first.json()["session_id"]
 
-    row = (
+    chat = db_session.query(Chat).filter(Chat.tenant_id == client_uuid).one()
+    assert str(chat.session_id) == session_id
+    expected_user_id = hints.get("user_id") or f"hint:{hints['email']}"
+    assert chat.user_context["user_id"] == expected_user_id
+    assert chat.user_context.get("identity_verified") is (True if signed else None)
+    assert "user_hash" not in chat.user_context
+    contact = (
         db_session.query(ContactSession)
-        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "ext-42")
-        .first()
+        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == expected_user_id)
+        .one()
     )
-    assert row is not None
-    assert row.conversation_turns == 1
+    assert contact.conversation_turns == 1
+
+    other_device = tenant.post("/widget/session/init", json=init_payload)
+    assert other_device.json()["resumed"] is expect_resume
+    assert other_device.json()["session_id"] == (session_id if expect_resume else None)
 
 
-@pytest.mark.parametrize(
-    "hints,expected_mode,expect_resume",
-    [
-        pytest.param({"user_id": "ext-99"}, "hints", True, id="identified_user_resumes"),
-        pytest.param(None, "anonymous", False, id="anonymous_always_new"),
-        pytest.param({"email": "visitor@example.com"}, "hints", False, id="email_only_never_resumes"),
-    ],
-)
-def test_widget_session_init_resume_modes(
+def test_widget_anonymous_session_init_always_starts_a_new_session(
     tenant: TestClient,
     db_session: Session,
-    hints: dict | None,
-    expected_mode: str,
-    expect_resume: bool,
 ) -> None:
-    """Session resume on repeat /widget/session/init depends on the hint
-    kind: a stable user_id resumes the open session; no hints (anonymous)
-    or an email-only hint (too guessable to safely reattach) always start
-    a fresh one."""
-    _, bot_public_id = _setup_widget_tenant(
-        tenant, db_session, f"widget-resume-{expected_mode}-{expect_resume}@example.com"
-    )
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-anon-init@example.com")
     payload = {"bot_id": bot_public_id}
-    if hints is not None:
-        payload["user_hints"] = hints
 
     first = tenant.post("/widget/session/init", json=payload)
-    assert first.status_code == 200
-    assert first.json()["mode"] == expected_mode
-    assert first.json()["resumed"] is False
-    first_session = first.json()["session_id"]
-
     second = tenant.post("/widget/session/init", json=payload)
-    assert second.status_code == 200
-    assert second.json()["resumed"] is expect_resume
-    if expect_resume:
-        assert second.json()["session_id"] == first_session
-    else:
-        assert second.json()["session_id"] != first_session
+
+    assert first.json()["mode"] == "anonymous"
+    assert first.json()["session_id"] and second.json()["session_id"]
+    assert second.json()["resumed"] is False
+    assert second.json()["session_id"] != first.json()["session_id"]
 
 
 def test_widget_session_init_strict_tenant_verifies_user_hash(
@@ -490,22 +494,13 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
 
     valid_hash = hmac.new(secret.encode(), b"victim-1", hashlib.sha256).hexdigest()
 
-    # Establishes the victim's verified session.
-    verified = tenant.post(
-        "/widget/session/init",
-        json={
-            "bot_id": bot_public_id,
-            "user_hints": {"user_id": "victim-1", "user_hash": valid_hash, "name": "Victim Name"},
-        },
-    )
-    assert verified.status_code == 200
-    assert verified.json()["resumed"] is False
-    victim_session_id = verified.json()["session_id"]
+    # The victim's first message establishes the verified session.
+    victim_hints = {"user_id": "victim-1", "user_hash": valid_hash, "name": "Victim Name"}
+    victim_first = _post_widget_chat(tenant, bot_public_id, message="hi", user_hints=victim_hints)
+    victim_session_id = victim_first.json()["session_id"]
     victim_chat = db_session.query(Chat).filter(Chat.session_id == uuid.UUID(victim_session_id)).first()
     assert victim_chat.user_context["identity_verified"] is True
     assert "user_hash" not in victim_chat.user_context
-
-    _post_widget_chat(tenant, bot_public_id, message="hi", session_id=victim_session_id)
     victim_contact = (
         db_session.query(ContactSession)
         .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "victim-1")
@@ -523,13 +518,14 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     )
     assert attacker_no_hash.status_code == 200
     assert attacker_no_hash.json()["resumed"] is False
-    assert attacker_no_hash.json()["session_id"] != victim_session_id
-    _post_widget_chat(
+    assert attacker_no_hash.json()["session_id"] is None
+    attacker_turn = _post_widget_chat(
         tenant,
         bot_public_id,
         message="attacker message",
-        session_id=attacker_no_hash.json()["session_id"],
+        user_hints={"user_id": "victim-1"},
     )
+    assert attacker_turn.json()["session_id"] != victim_session_id
     db_session.refresh(victim_contact)
     assert victim_contact.name == "Victim Name"
     assert victim_contact.conversation_turns == 1
@@ -544,7 +540,19 @@ def test_widget_session_init_strict_tenant_verifies_user_hash(
     )
     assert attacker_wrong_hash.status_code == 200
     assert attacker_wrong_hash.json()["resumed"] is False
-    assert attacker_wrong_hash.json()["session_id"] != victim_session_id
+    assert attacker_wrong_hash.json()["session_id"] is None
+    wrong_hash_hints = {"user_id": "stranger-1", "user_hash": "0" * 64}
+    wrong_hash_turn = _post_widget_chat(tenant, bot_public_id, message="hi", user_hints=wrong_hash_hints)
+    wrong_hash_chat = (
+        db_session.query(Chat).filter(Chat.session_id == uuid.UUID(wrong_hash_turn.json()["session_id"])).one()
+    )
+    assert wrong_hash_chat.user_context["identity_verified"] is False
+    assert (
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "stranger-1")
+        .count()
+        == 0
+    )
 
     # Correct hash resumes the verified session.
     legit = tenant.post(

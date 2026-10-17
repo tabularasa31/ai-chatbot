@@ -246,7 +246,7 @@ jobs:
           NEXT_PUBLIC_API_URL: https://ci.invalid
 
   frontend-widget:
-    name: Frontend widget (test + build + bundle budget)
+    name: Frontend widget (build + bundle budget)
     needs: changes
     if: needs.changes.outputs.frontend-widget == 'true'
     runs-on: ubuntu-latest

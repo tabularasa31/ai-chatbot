@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
@@ -159,7 +159,7 @@ class ResolvedLanguageContext:
 class LocalizationResult:
     text: str
     tokens_used: int = 0
-    generated: bool = False
+    generated: bool = field(default=False, compare=False)
 
 
 def _threshold() -> float:

@@ -323,8 +323,8 @@ export function ChatWidget({
   const linkOpenerRef = useRef<HTMLElement | null>(null);
   const modalOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  // The identity the greeting was last requested for: each identity is asked
-  // at most once, so no history refresh can trigger a second request.
+  // The last identity asked; the stored marker covers earlier ones, so no
+  // history refresh can trigger a second request.
   const greetingRequestedForRef = useRef<string | null>(null);
   // True once the visitor has sent a message; a greeting that arrives
   // afterwards is dropped rather than shown after it.
@@ -609,9 +609,10 @@ export function ChatWidget({
       botId,
       userId,
       locale: greetingLocale(hints?.locale, localeParam),
+      isCurrent: () => userIdRef.current === userId,
     });
-    setGreetingPending(false);
-    if (text && !visitorSentRef.current && userIdRef.current === userId) applyAssistantMessage({ text });
+    if (greetingRequestedForRef.current === (userId ?? "")) setGreetingPending(false);
+    if (text && !visitorSentRef.current) applyAssistantMessage({ text });
   }, [apiBase, applyAssistantMessage, botId, hints?.locale, localeParam]);
 
   useEffect(() => {

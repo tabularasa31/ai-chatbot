@@ -46,18 +46,21 @@ function hasText(body: unknown): body is { text: string } {
  * The marker is set before the request so a second tab opened meanwhile does
  * not greet too, and cleared again when the request fails. Resolves to null
  * when already greeted or on failure. The request is a read: it never creates
- * a session or a conversation.
+ * a session or a conversation. When isCurrent() is false by the time the text
+ * arrives, the visitor never sees it, so the marker is cleared and null returned.
  */
 export async function greetOnce({
   apiBase,
   botId,
   userId,
   locale,
+  isCurrent,
 }: {
   apiBase: string;
   botId: string;
   userId?: string | null;
   locale?: string;
+  isCurrent: () => boolean;
 }): Promise<string | null> {
   if (hasBeenGreeted(botId, userId)) return null;
   markGreeted(botId, userId);
@@ -68,6 +71,10 @@ export async function greetOnce({
     if (!res.ok) throw new Error(`Greeting error: ${res.status}`);
     const body: unknown = await res.json();
     if (!hasText(body)) throw new Error("Greeting response has no text");
+    if (!isCurrent()) {
+      clearGreeted(botId, userId);
+      return null;
+    }
     return body.text;
   } catch (error) {
     clearGreeted(botId, userId);

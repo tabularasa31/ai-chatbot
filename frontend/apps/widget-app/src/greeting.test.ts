@@ -18,7 +18,7 @@ class MemoryStorage {
 const storage = new MemoryStorage();
 Object.assign(globalThis, { window: { localStorage: storage } });
 
-const params = { apiBase: "https://api.example.com", botId: "ch_bot", locale: "fr-FR" };
+const params = { apiBase: "https://api.example.com", botId: "ch_bot", locale: "fr-FR", isCurrent: () => true };
 
 function stubFetch(respond: () => Promise<Response>) {
   return mock.method(globalThis, "fetch", (_input: string | URL | Request, _init?: RequestInit) => respond());
@@ -62,6 +62,13 @@ describe("greetOnce", () => {
     assert.equal(first, "Hello, how can I help?");
     assert.equal(second, null);
     assert.equal(fetchMock.mock.callCount(), 1);
+  });
+
+  test("a response that arrives after the identity changed is dropped and leaves the identity ungreeted", async () => {
+    stubFetch(greeting);
+
+    assert.equal(await greetOnce({ ...params, userId: "alice", isCurrent: () => false }), null);
+    assert.equal(hasBeenGreeted("ch_bot", "alice"), false);
   });
 
   test("the marker is scoped to the identity", async () => {

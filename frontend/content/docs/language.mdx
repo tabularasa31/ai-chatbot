@@ -78,7 +78,7 @@ If your tenant frontend already knows the visitor's preferred language (for exam
 
 ### From the widget integration — `Accept-Language` / `locale` query
 
-For anonymous sessions, the widget passes the browser's locale automatically. You don't need to do anything for the common case. If you want to override the browser locale in a specific deployment context, you can pass `locale` in the request to `POST /widget/session/init` or as a query parameter to `POST /widget/chat`.
+For anonymous sessions, the widget passes the browser's locale automatically. You don't need to do anything for the common case. If you want to override the browser locale in a specific deployment context, you can pass `locale` as a query parameter to `POST /widget/chat`.
 
 ## Edge cases worth knowing
 

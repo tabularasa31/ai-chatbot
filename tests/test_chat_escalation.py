@@ -743,6 +743,107 @@ def test_checklist_reply_holds_handoff_until_user_reports_result(
 
 
 @pytest.mark.escalation
+@pytest.mark.parametrize(
+    ("reason", "prior_user_turn", "offer_expected"),
+    [
+        pytest.param("needs_human", False, False, id="needs_human_first_turn"),
+        pytest.param("offered_ticket", False, False, id="offered_ticket_first_turn"),
+        pytest.param("user_complaint", False, False, id="user_complaint_first_turn"),
+        pytest.param("needs_human", True, True, id="needs_human_second_turn"),
+    ],
+)
+def test_system_ticket_offer_waits_for_second_user_turn(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    relevance_guard_category,
+    escalation_openai_override,
+    reason: str,
+    prior_user_turn: bool,
+    offer_expected: bool,
+) -> None:
+    """The bot never ends its first reply with a ticket offer or arms the
+    pre-confirm gate; from the second user turn the offer is appended and a
+    plain "yes" is read as consent."""
+    from backend.escalation.openai_escalation import pre_confirm_fallback_result
+    from backend.models import EscalationTicket, Message, MessageRole, TenantProfile
+
+    api_key, tenant_id = _register_tenant_with_key(
+        tenant, db_session, email=f"first-turn-{reason}-{prior_user_turn}@example.com", name="First Turn"
+    )
+    chat = _make_chat(db_session, tenant_id)
+    if prior_user_turn:
+        db_session.add_all(
+            [
+                Message(chat_id=chat.id, role=MessageRole.user, content="My domain is stuck"),
+                Message(chat_id=chat.id, role=MessageRole.assistant, content="Which step fails?"),
+            ]
+        )
+        db_session.commit()
+    plain_answer = "Check the DNS records."
+    marker = {
+        "needs_human": " <needs_human/>",
+        "offered_ticket": " Want me to open a ticket? <offered_ticket/>",
+    }.get(reason, "")
+    _seed_rag_answer(
+        mock_openai_client, db_session, tenant_id, answer=f"{plain_answer}{marker}"
+    )
+    marked_generation = mock_openai_client.chat.completions.create.side_effect
+    plain_generation = _chat_completion_side_effect(plain_answer)
+
+    generation_prompts: list[str] = []
+
+    def _generation(*args: object, **kwargs: object) -> object:
+        prompt = str(kwargs.get("messages"))
+        if "TARGET REPLY LANGUAGE" not in prompt:
+            return marked_generation(*args, **kwargs)
+        generation_prompts.append(prompt)
+        return (marked_generation if len(generation_prompts) == 1 else plain_generation)(
+            *args, **kwargs
+        )
+
+    mock_openai_client.chat.completions.create.side_effect = _generation
+    escalation_openai_override(decision="yes")
+    if reason == "user_complaint":
+        db_session.query(TenantProfile).filter_by(tenant_id=tenant_id).update(
+            {"product_name": "Acme"}
+        )
+        db_session.commit()
+        relevance_guard_category("support_complaint")
+    no_request = HumanRequestResult(human_request=False, message_has_request_content=True)
+    monkeypatch.setattr(
+        "backend.chat.service.detect_human_request",
+        _human_request_sequence(no_request, no_request),
+    )
+
+    [first] = drive(
+        tenant,
+        api_key,
+        chat.session_id,
+        "They have not answered me for two weeks already, what is going on",
+    )
+    db_session.refresh(chat)
+    offer = pre_confirm_fallback_result("initial").message_to_user
+    assert (offer in first["text"]) is offer_expected
+    assert all("HANDOFF (this turn)" in prompt for prompt in generation_prompts) is (
+        not offer_expected
+    )
+    assert any("still append it" in prompt for prompt in generation_prompts) is offer_expected
+    if not offer_expected:
+        assert first["text"] == plain_answer
+    assert chat.escalation_pre_confirm_pending is offer_expected
+
+    drive(tenant, api_key, chat.session_id, "yes")
+    assert (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.tenant_id == tenant_id)
+        .count()
+        == int(offer_expected)
+    )
+
+
+@pytest.mark.escalation
 def test_implied_human_request_without_content_on_fresh_chat_falls_through_to_rag(
     mock_openai_client: Mock,
     tenant: TestClient,

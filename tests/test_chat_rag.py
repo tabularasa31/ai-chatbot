@@ -47,6 +47,7 @@ from backend.models import (
     DocumentType,
     Embedding,
     EscalationTrigger,
+    Message,
     MessageRole,
     QuickAnswer,
     SourceSchedule,
@@ -2335,9 +2336,14 @@ async def test_needs_human_marker_still_offers_the_handoff(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A dead-end reply gets its offer on the first zero-chunk turn regardless."""
+    """A dead-end reply gets its offer on a zero-chunk turn regardless, from the second user turn."""
     tenant_id, api_key = _nodocs_setup(tenant, db_session, "nodocs-needs-human@example.com")
     session_id = uuid.uuid4()
+    chat = Chat(tenant_id=tenant_id, session_id=session_id)
+    db_session.add(chat)
+    db_session.commit()
+    db_session.add(Message(chat_id=chat.id, role=MessageRole.user, content="hello there"))
+    db_session.commit()
     events = _nodocs_patch_common(monkeypatch)
     _nodocs_patch_pipeline(monkeypatch, llm_needs_human=True)
 

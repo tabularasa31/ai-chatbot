@@ -165,6 +165,9 @@ export const brandThemeExtend = {
     pop: "var(--shadow-pop)",
     overlay: "var(--shadow-overlay)",
   },
+  maxWidth: {
+    measure: "34rem",
+  },
 } satisfies NonNullable<Config["theme"]>;
 
 function fumadocsScheme(scheme: Scheme) {
@@ -193,8 +196,6 @@ export const fumadocsPreset = {
   light: fumadocsScheme("light"),
   dark: fumadocsScheme("dark"),
 };
-
-const PROSE_MEASURE = "65ch";
 
 const proseColors = {
   "--tw-prose-body": "theme('colors.fg')",
@@ -240,7 +241,7 @@ export const docsTypography = {
       proseColors,
       {
         lineHeight: "1.5rem",
-        "p, li, dd, blockquote, h1, h2, h3, h4": { maxWidth: PROSE_MEASURE },
+        "p, li, dd, blockquote, h1, h2, h3, h4": { maxWidth: brandThemeExtend.maxWidth.measure },
         p: { marginTop: "1rem", marginBottom: "1rem" },
         li: { marginTop: "0.25rem", marginBottom: "0.25rem" },
         ...proseHeadings,

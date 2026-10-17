@@ -28,7 +28,7 @@ Weights: 400 regular (body), 500 medium (labels, buttons, nav, table headers), 6
 | `text-display` | 36 / 44, 600, from 768px (24/32 below) | marketing/blog page title only |
 
 Heading map: display = marketing/blog H1; h1 = H1 everywhere else; h2 = H2; H3 and below = `text-body` 600. Headings of one level never differ between screens.
-Body line length 45-75 characters: prose containers use `max-w-prose` (65ch).
+Body line length 45-75 characters: prose containers use `max-w-measure` (34rem measure; 65ch overshoots in Geist).
 Tables, amounts, counters, dates in columns: `tabular-nums`; numeric columns right-aligned, header aligned the same way.
 
 ## 3. Spacing, radius, elevation
@@ -226,7 +226,7 @@ lucide-react only (already used in dashboard and widget). Sizes 16 (inline with 
 | Dashboard | compact | `text-ui` 14/20, titles `text-h1` | content `max-w-6xl` (1152), forms/settings column `max-w-2xl` (672) | navbar 48px, sidebar 208px, section gap 32, in-section gap 16; desktop only (from 1024px), narrower widths not designed yet. Sidebar follows the active scheme; menu: section 9 |
 | Auth | comfortable | `text-body` | card `max-w-md` (448) | left-aligned form; centering only for short success/confirmation screens |
 | Marketing + blog | airy | `text-body`, `text-display` | container `max-w-6xl`, prose `max-w-prose` | layout, sections and copy of the landing are decided by the later redesign under the CoC; this system supplies tokens only. No hero/feature-grid defaults |
-| Docs | reading | `text-body` | fumadocs layout, p/li/dd/blockquote/headings capped at 65ch on every page (OpenAPI pages included) | fumadocs preset fed from this file; prose rules come from `docsTypography` in `tailwind-brand.ts`; `docs.css` is geometry only (no colours, no `!important`): sidebar rows, TOC links, search trigger and dialog rows 44px; no dark chrome; generated OpenAPI text (e.g. caps "PUBLIC") is content and left as is |
+| Docs | reading | `text-body` | fumadocs layout, p/li/dd/blockquote/headings capped at the 34rem measure on every page (OpenAPI pages included) | fumadocs preset fed from this file; prose rules come from `docsTypography` in `tailwind-brand.ts`; `docs.css` is geometry only (no colours, no `!important`): sidebar rows, TOC links, search trigger and dialog rows 44px; no dark chrome; generated OpenAPI text (e.g. caps "PUBLIC") is content and left as is |
 | Widget | compact | `text-ui`, input 16/24 | fills the iframe | always light (light token values only, ignores the scheme cookie and the visitor's system setting), no snippet option; user bubble `brand-subtle`, assistant `surface-alt`, operator bubble `brand-subtle` + 1px `line` and a "Operator" caption (distinct from the bot by design), error bubble `danger-subtle`; send/close targets 44px; header is `surface` with a `line` divider |
 
 Breakpoints (Tailwind defaults): sm 640, md 768, lg 1024, xl 1280. Everything except the dashboard works from 320px with no horizontal scroll; single column below 640.

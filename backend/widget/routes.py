@@ -279,13 +279,14 @@ async def widget_greeting(
 ) -> WidgetGreetingResponse:
     """Opening welcome for a visitor who has not written yet.
 
-    Stateless: no chat, session or trace is created.
+    Stateless: no chat, session or trace is created. Without an OpenAI key the
+    English text is returned.
     """
     _bot, tenant = await _bot_tenant_or_error(
         db,
-        get_bot_and_tenant_for_widget_chat,
+        get_bot_and_tenant_for_widget_session,
         bot_id,
-        no_openai_detail=OPENAI_KEY_NOT_CONFIGURED_MESSAGE,
+        no_openai_detail="Bot not available",
     )
     greeting = await greet_widget_visitor(
         tenant=tenant, locale=sanitize_locale(locale), db=db

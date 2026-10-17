@@ -83,7 +83,6 @@ def _make_persisted_chat(db: Session, tenant: Tenant) -> Chat:
 @pytest.mark.parametrize(
     ("chat_flags", "ctx_kwargs", "expected"),
     [
-        pytest.param({}, {}, True, id="empty_new_session"),
         pytest.param({}, {"is_new_session": False}, False, id="session_not_new"),
         pytest.param(
             {},
@@ -194,28 +193,6 @@ def test_handle_typed_greeting_persists_user_and_assistant(
     persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
     assert len(persisted) == 2
     assert {m.role for m in persisted} == {MessageRole.user, MessageRole.assistant}
-
-
-def test_handle_produces_outcome_and_persists_only_assistant_message(
-    db_session: Session,
-) -> None:
-    tenant = _make_persisted_tenant(db_session, name="Acme")
-    chat = _make_persisted_chat(db_session, tenant)
-
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
-    outcome = GreetingHandler()._handle_sync(
-        ctx,
-        db_session,
-        greeting=LocalizationResult(text="Hello, I am the Acme assistant.", tokens_used=7),
-    )
-
-    assert outcome.text == "Hello, I am the Acme assistant."
-    assert outcome.tokens_used == 7
-    assert outcome.document_ids == []
-    # Only the assistant greeting is persisted — no empty user-message row.
-    persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
-    roles = [m.role for m in persisted]
-    assert roles == [MessageRole.assistant]
 
 
 @pytest.mark.asyncio

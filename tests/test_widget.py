@@ -1002,6 +1002,13 @@ def test_widget_greeting_is_stateless_until_first_message(
     assert db_session.query(Chat).filter(Chat.tenant_id == client_uuid).count() == 1
     langfuse_client.trace.assert_called()
 
+    db_session.get(Tenant, client_uuid).openai_api_key = None
+    db_session.commit()
+    no_key = tenant.get(f"/widget/greeting?bot_id={bot_public_id}&locale=fr-FR")
+
+    assert no_key.status_code == 200
+    assert no_key.json()["text"].startswith("I'm the Greeting Locale Tenant assistant")
+
 
 def test_widget_chat_uses_context(
     mock_openai_client: Mock,

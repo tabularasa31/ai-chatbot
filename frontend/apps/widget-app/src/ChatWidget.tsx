@@ -53,7 +53,8 @@ interface ChatWidgetProps {
   locale?: string | null;
   compact?: boolean;
   /** Untrusted personalization hints from the tenant frontend. Triggers
-   *  a session-init call so the backend can attach them to the chat. */
+   *  a session-init call to resume the identified visitor's chat; they are
+   *  sent again with the first message, which is what creates it. */
   hints?: UserHints | null;
   /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
@@ -512,6 +513,7 @@ export function ChatWidget({
       body: JSON.stringify({
         message,
         locale: localeParam,
+        user_hints: attemptSessionId ? undefined : hintsRef.current,
       }),
     });
 

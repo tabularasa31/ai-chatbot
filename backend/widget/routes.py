@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -34,10 +35,7 @@ from backend.chat.service import (
 from backend.chat.streaming import (
     _CitationStreamFilter,
 )
-from backend.contact_sessions.service import (
-    start_user_session,
-    sync_user_session_identity,
-)
+from backend.contact_sessions.service import sync_user_session_identity
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value
@@ -144,13 +142,14 @@ class WidgetSessionInitRequest(BaseModel):
 
 
 class WidgetSessionInitResponse(BaseModel):
-    session_id: uuid.UUID
+    session_id: uuid.UUID | None
     mode: Literal["hints", "anonymous"]
     resumed: bool = False
 
 
 class WidgetChatRequest(BaseModel):
     message: str | None = None
+    user_hints: dict[str, Any] | None = None
     locale: str | None = Field(default=None, max_length=64)
 
 
@@ -298,6 +297,85 @@ async def widget_greeting(
     return WidgetGreetingResponse(text=greeting.text)
 
 
+@dataclass(frozen=True)
+class WidgetIdentity:
+    mode: Literal["hints", "anonymous"]
+    user_context: dict | None
+    resume_eligible: bool
+    strict_tenant: bool
+
+
+def _resolve_widget_identity(
+    tenant: Tenant, user_hints: dict[str, Any] | None, locale: str | None
+) -> WidgetIdentity:
+    """Turn untrusted tenant-supplied hints into a verified `user_context`.
+
+    A tenant with a `widget_identity_secret` is strict: `user_hash` must verify
+    the client-supplied `user_id`, otherwise the id is kept for personalization
+    only and is never resumable. Shared by session init and the first chat turn
+    so both apply identical verification.
+    """
+    tenant_secret = None
+    strict_tenant = bool(tenant.widget_identity_secret)
+    if tenant.widget_identity_secret:
+        try:
+            tenant_secret = decrypt_value(tenant.widget_identity_secret)
+        except Exception:
+            # Corrupted ciphertext must not 500 a public endpoint. Stay
+            # strict with no valid secret — never fall back to legacy
+            # (unverified) resume, that would reopen the hole this guards.
+            logger.error("widget_session_init_secret_decrypt_failed")
+
+    mode: Literal["hints", "anonymous"] = "anonymous"
+    user_context: dict | None = None
+    # Only an explicit user_id is eligible for cross-device resume. An email is
+    # too guessable to safely reattach to another visitor's live conversation
+    # over a public endpoint, so the synthesized hint:<email> id never resumes.
+    resume_eligible = False
+
+    hints = sanitize_user_hints(user_hints) if user_hints else None
+    if hints:
+        user_hash = hints.pop("user_hash", None)
+        resume_eligible = "user_id" in hints
+        identity_verified = False
+        if strict_tenant and resume_eligible:
+            identity_verified = (
+                verify_user_hash(tenant_secret, hints["user_id"], user_hash)
+                if tenant_secret is not None
+                else False
+            )
+            if not identity_verified:
+                resume_eligible = False
+        # Synthesize a stable user_id when hints carry only an email so
+        # ContactSession keying works (its contact_id == user_context.user_id).
+        if "user_id" not in hints and "email" in hints:
+            hints["user_id"] = f"hint:{hints['email']}"
+        user_context = apply_identity_context_patch(
+            {"user_id": hints["user_id"]} if "user_id" in hints else {},
+            hints,
+            browser_locale=locale,
+        )
+        # A strict tenant always records verification explicitly, verified
+        # or not — a legacy tenant leaves the key absent.
+        if strict_tenant:
+            user_context["identity_verified"] = identity_verified
+        mode = "hints"
+        logger.info(
+            "widget_identity_hints",
+            extra={"hint_field_count": len(hints)},
+        )
+
+    if user_context is None and locale is not None:
+        user_context = {"browser_locale": locale}
+
+    return WidgetIdentity(
+        mode=mode,
+        user_context=user_context,
+        resume_eligible=resume_eligible,
+        strict_tenant=strict_tenant,
+    )
+
+
 @widget_router.post("/session/init", response_model=WidgetSessionInitResponse)
 @limiter.limit("10/minute", key_func=widget_init_rate_limit_key)
 async def widget_session_init(
@@ -318,68 +396,14 @@ async def widget_session_init(
         reject_log_event="widget_session_init_rejected",
     )
 
-    tenant_secret = None
-    strict_tenant = bool(tenant.widget_identity_secret)
-    if tenant.widget_identity_secret:
-        try:
-            tenant_secret = decrypt_value(tenant.widget_identity_secret)
-        except Exception:
-            # Corrupted ciphertext must not 500 a public endpoint. Stay
-            # strict with no valid secret — never fall back to legacy
-            # (unverified) resume, that would reopen the hole this guards.
-            logger.error("widget_session_init_secret_decrypt_failed")
-
-    session_id = uuid.uuid4()
-    mode: Literal["hints", "anonymous"] = "anonymous"
     locale = sanitize_locale(body.locale)
-    user_context: dict | None = None
-    # Only an explicit user_id is eligible for cross-device resume. An email is
-    # too guessable to safely reattach to another visitor's live conversation
-    # over a public endpoint, so the synthesized hint:<email> id never resumes.
-    resume_eligible = False
-    identity_verified = False
-
-    if body.user_hints:
-        hints = sanitize_user_hints(body.user_hints)
-        if hints:
-            user_hash = hints.pop("user_hash", None)
-            resume_eligible = "user_id" in hints
-            # A strict tenant (has a widget_identity_secret) only resumes when
-            # user_hash verifies the client-supplied user_id; otherwise the
-            # user_id is kept for personalization only, on a fresh session.
-            if strict_tenant and resume_eligible:
-                identity_verified = (
-                    verify_user_hash(tenant_secret, hints["user_id"], user_hash)
-                    if tenant_secret is not None
-                    else False
-                )
-                if not identity_verified:
-                    resume_eligible = False
-            # Synthesize a stable user_id when hints carry only an email so
-            # ContactSession keying works (its contact_id == user_context.user_id).
-            if "user_id" not in hints and "email" in hints:
-                hints["user_id"] = f"hint:{hints['email']}"
-            user_context = apply_identity_context_patch(
-                {"user_id": hints["user_id"]} if "user_id" in hints else {},
-                hints,
-                browser_locale=locale,
-            )
-            # A strict tenant always records verification explicitly, verified
-            # or not — a legacy tenant leaves the key absent.
-            if strict_tenant:
-                user_context["identity_verified"] = identity_verified
-            mode = "hints"
-            logger.info(
-                "widget_session_init_hints",
-                extra={"hint_field_count": len(hints)},
-            )
-
-    if user_context is None and locale is not None:
-        user_context = {"browser_locale": locale}
+    identity = _resolve_widget_identity(tenant, body.user_hints, locale)
+    user_context = identity.user_context
+    strict_tenant = identity.strict_tenant
 
     # Identified users resume their most recent session so history survives
     # cleared localStorage and follows them across devices.
-    if resume_eligible and user_context and user_context.get("user_id"):
+    if identity.resume_eligible and user_context and user_context.get("user_id"):
 
         def _resume_existing(s):
             filters = [
@@ -422,40 +446,33 @@ async def widget_session_init(
         if resumed_session_id is not None:
             logger.info("widget_session_init_resumed")
             return WidgetSessionInitResponse(
-                session_id=resumed_session_id, mode=mode, resumed=True
+                session_id=resumed_session_id, mode="hints", resumed=True
             )
+
+    if identity.mode == "hints":
+        return WidgetSessionInitResponse(session_id=None, mode="hints", resumed=False)
+
+    session_id = uuid.uuid4()
 
     # Always persist the session row so the returned session_id can be used
     # in the next /widget/chat call without hitting session_not_found.
     # Stamp bot_id up front to skip the lazy backfill in widget_chat.
     def _create_session(s):
-        chat = Chat(
-            tenant_id=tenant.id,
-            bot_id=_bot.id,
-            session_id=session_id,
-            user_context=user_context,
-        )
-        s.add(chat)
-        s.flush()
-        # For a strict tenant, an unverified user_id must not open a contact
-        # session — it would collide with the real visitor's record.
-        if (
-            mode == "hints"
-            and user_context
-            and user_context.get("user_id")
-            and (not strict_tenant or identity_verified)
-        ):
-            start_user_session(
-                s,
+        s.add(
+            Chat(
                 tenant_id=tenant.id,
+                bot_id=_bot.id,
+                session_id=session_id,
                 user_context=user_context,
-                started_at=chat.created_at,
             )
+        )
         s.commit()
 
     await run_sync(db, _create_session)
 
-    return WidgetSessionInitResponse(session_id=session_id, mode=mode, resumed=False)
+    return WidgetSessionInitResponse(
+        session_id=session_id, mode="anonymous", resumed=False
+    )
 
 
 @widget_router.post(
@@ -507,6 +524,7 @@ async def widget_chat(
         no_openai_detail=OPENAI_KEY_NOT_CONFIGURED_MESSAGE,
     )
 
+    minted_user_context: dict | None = None
     if session_id:
         sid = _parse_uuid(
             session_id,
@@ -538,6 +556,10 @@ async def widget_chat(
             )
     else:
         sid = uuid.uuid4()
+        if body is not None and body.user_hints:
+            minted_user_context = _resolve_widget_identity(
+                tenant, body.user_hints, locale_hint
+            ).user_context
 
     if not resolved_message:
         logger.info(
@@ -566,7 +588,7 @@ async def widget_chat(
         question=resolved_message,
         session_id=sid,
         api_key=tenant.openai_api_key,
-        user_context=None,
+        user_context=minted_user_context,
         browser_locale=locale_hint,
         disclosure_config=_bot.disclosure_config if isinstance(_bot.disclosure_config, dict) else None,
         bot_id=_bot.id,

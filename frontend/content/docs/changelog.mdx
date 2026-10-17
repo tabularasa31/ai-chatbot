@@ -24,6 +24,21 @@ The Chat9 website and blog have a new design.
 
 **What to do:** nothing. See [Dashboard Features](/docs/dashboard-features) for where each setting lives.
 
+## 2026-10-17 — Widget: new look and dark theme
+
+The chat window and the chat button have been redesigned for every widget.
+
+- New `theme` option: add `theme: "dark"` to `Chat9Widget.start()` for dark sites. Without it the widget stays light.
+- The header shows a neutral **Assistant** name, without an online status.
+- A close button in the header, and Escape closes the chat. On phones the chat opens full screen.
+- When something goes wrong, the chat says what happened in plain words and offers **Try again**; your visitor's message is kept.
+- Source links show the site name as text instead of a site icon, so the widget no longer requests icons from Google.
+- The chat button is a flat violet circle by default; the `color` option still overrides it.
+
+**Who it affects:** your visitors, on every site with the widget.
+
+**What to do:** nothing. Set `theme: "dark"` if your site is dark. See the options in [Embedding the widget](/docs/embedding-the-widget#configuration).
+
 ## 2026-10-16 — Dark dashboard menu and top bar
 
 The dashboard menu and top bar are dark again, in both the light and dark themes, so they stand apart from the page. In the dark theme, the page area is a little lighter than before.

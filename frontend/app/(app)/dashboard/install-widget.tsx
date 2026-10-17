@@ -9,11 +9,13 @@ import {
   BubbleOptions,
   InlineOptions,
   PlacementChoice,
+  ThemeChoice,
   type BubblePosition,
   type Placement,
+  type WidgetTheme,
 } from "./widget-options";
 
-const DEFAULT_COLOR = "#a855f7";
+const DEFAULT_COLOR = "#7C3AED";
 const DEFAULT_POSITION: BubblePosition = "right";
 const DEFAULT_TARGET_ID = "chat9-widget";
 
@@ -26,8 +28,10 @@ export function InstallWidget({ botId }: { botId: string }) {
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [position, setPosition] = useState<BubblePosition>(DEFAULT_POSITION);
   const [targetId, setTargetId] = useState(DEFAULT_TARGET_ID);
+  const [theme, setTheme] = useState<WidgetTheme>("light");
 
   const containerId = targetId || DEFAULT_TARGET_ID;
+  const themeConfig: Record<string, string> = theme === "dark" ? { theme } : {};
 
   const snippet =
     placement === "bubble"
@@ -36,11 +40,12 @@ export function InstallWidget({ botId }: { botId: string }) {
           extraConfig: {
             ...(color !== DEFAULT_COLOR ? { color } : {}),
             ...(position !== DEFAULT_POSITION ? { position } : {}),
+            ...themeConfig,
           },
         })
       : buildEmbedSnippet({
           botId,
-          extraConfig: { mode: "inline", target: containerId },
+          extraConfig: { mode: "inline", target: containerId, ...themeConfig },
           extraHtml: `<div id="${containerId}"></div>`,
         });
 
@@ -58,7 +63,7 @@ export function InstallWidget({ botId }: { botId: string }) {
 
       <PlacementChoice placement={placement} onChange={setPlacement} />
 
-      <section>
+      <section className="space-y-4">
         {placement === "bubble" ? (
           <BubbleOptions
             color={color}
@@ -69,6 +74,7 @@ export function InstallWidget({ botId }: { botId: string }) {
         ) : (
           <InlineOptions targetId={targetId} onTargetIdChange={setTargetId} />
         )}
+        <ThemeChoice theme={theme} onChange={setTheme} />
       </section>
 
       <section>

@@ -15,6 +15,8 @@ The loader passes everything via URL query params on the iframe's `src`:
 | `botId` | yes | Public bot identifier (`ch_…`) |
 | `apiBase` | yes | Origin of the dashboard API (e.g. `https://getchat9.live`). No trailing slash. All `/widget/*` and `/api/widget-*` calls are prefixed with this. |
 | `parentOrigin` | recommended | Origin of the embedding page; required for the postMessage identity handshake. Without it the widget falls back to anonymous mode. |
+| `theme` | optional | `light` (default) or `dark`; set on `<html data-theme>` before first paint. |
+| `mode` | optional | `bubble` or `inline`. Only `bubble` shows the header close button and handles Escape. |
 | `locale` | optional | BCP-47 locale for UI strings; defaults to `navigator.language`. |
 | `siteUrl` | optional | Marketing-site URL for the "Powered by Chat9" footer link. Defaults to `https://getchat9.live`. |
 

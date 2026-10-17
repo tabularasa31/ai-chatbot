@@ -2,7 +2,7 @@
 
 Scope: marketing site + blog, auth pages, tenant dashboard, embeddable chat widget, client docs (fumadocs).
 Every screen uses only the values below; no value is invented per screen.
-Site, auth, dashboard and docs support two colour schemes (light, dark), chosen as in 4.1. The widget is light only. Tokens below are scheme-independent names; each has a light and a dark value (the widget uses the light value).
+Site, auth, dashboard and docs support two colour schemes (light, dark), chosen as in 4.1. The widget follows the tenant's `theme` embed option (`light` default, `dark`), never the visitor's system setting or the scheme cookie. Tokens below are scheme-independent names; each has a light and a dark value.
 
 Contrast figures were computed by hand with the WCAG 2.x relative-luminance formula. Re-verify with a tool when a token changes.
 
@@ -44,7 +44,7 @@ Radius (override Tailwind `borderRadius`, semantic names so existing `rounded-*`
 | `rounded-control` | 8 | buttons, inputs, selects, nav rows |
 | `rounded-surface` | 12 | cards, modals, drawer, banners, widget panel |
 | `rounded-bubble` | 16 | chat message bubbles |
-| `rounded-full` | 9999 | avatars, count badges, icon buttons |
+| `rounded-full` | 9999 | avatars, count badges, icon buttons, widget composer pill, send, close and launcher |
 
 Elevation: shadows only for things that float. Cards, sections, banners, auth card, header: no shadow.
 
@@ -156,7 +156,7 @@ Contrast (text >= 4.5, UI >= 3):
 
 ## 5. Tailwind mapping
 
-Implementation shape: CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (not in the widget build); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The nine chrome keys are one scheme-independent table (`CHROME_COLORS`) emitted on `:root` by `chromeTokensPlugin`, which only the dashboard config registers; the widget build does not emit them. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). The `nd-*` palette is not used.
+Implementation shape: CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (the widget build emits both sets, dark under `html[data-theme="dark"]`, chosen by the `theme` URL param; its dark surfaces are one step lighter than the dashboard's: surface `#222233`, surface-alt `#2B2B3F`, input fill `#1A1A26`, line `#3A3A50`, line-strong `#7C7793`, fg-faint `#9B95AD`, brand-subtle `#2D2552`, danger-subtle `#432227`, info-subtle `#183246`); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The nine chrome keys are one scheme-independent table (`CHROME_COLORS`) emitted on `:root` by `chromeTokensPlugin`, which only the dashboard config registers; the widget build does not emit them. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). The `nd-*` palette is not used.
 
 Fumadocs variable -> token: `background`=canvas, `foreground`=fg, `muted`=surface-alt, `muted-foreground`=fg-muted, `card`/`popover`=surface, `border`=line, `primary`=brand, `primary-foreground`=brand-on, `secondary`=surface-alt, `accent`=brand-subtle, `accent-foreground`=fg, `ring`=focus.
 
@@ -280,10 +280,10 @@ lucide-react only (already used in dashboard and widget). Sizes 16 (inline with 
 | Auth | comfortable | `text-body` | card `max-w-md` (448) | left-aligned form; centering only for short success/confirmation screens |
 | Marketing + blog | airy | `text-body`, `text-display` | container `max-w-6xl`, prose `max-w-measure` | layout, sections and copy of the landing are decided by the later redesign under the CoC; this system supplies tokens only. No hero/feature-grid defaults |
 | Docs | reading | `text-body` | fumadocs layout, prose 65ch | fumadocs preset fed from this file |
-| Widget | compact | `text-ui`, input 16/24 | fills the iframe | always light (light token values only, ignores the scheme cookie and the visitor's system setting), no snippet option; user bubble `brand-subtle`, assistant `surface-alt`, operator bubble `brand-subtle` + 1px `line` and a "Operator" caption (distinct from the bot by design), error bubble `danger-subtle`; send/close targets 44px; header is `surface` with a `line` divider |
+| Widget | compact | `text-ui`, input 16/24 | fills the iframe; 400x600 default, full screen below 480px | both themes (tenant `theme` option, default light, `html[data-theme]` set from the URL before first paint); header `surface` with a `line` divider, name "Assistant" and a 44px close button, no avatar, no status; pill composer (`rounded-full`, `line-strong` border) with a round 44px send; user bubble `brand-subtle`, assistant `surface-alt` and operator `brand-subtle` carry a 1px `line` hairline (deliberate exception: the fill step alone is 1.1-1.3:1), operator adds an "Operator" caption, error bubble `danger-subtle` with Try again; code blocks always dark (`#0A0A0F`); sources are text links with the host, no favicons; safe-area insets on phones |
 
 Breakpoints (Tailwind defaults): sm 640, md 768, lg 1024, xl 1280. Everything except the dashboard works from 320px with no horizontal scroll; single column below 640.
-Widget colour: the fixed violet `brand` (light values); tenants cannot set a colour and no option is planned (Decision 4). Embed options stay `position` and `locale`.
+Widget colour: the panel always uses `brand`; the launcher is flat `#7C3AED` (both themes) unless the tenant sets `color`, then its glyph is white or `#0A0A0F`, whichever contrasts more. Embed options: `mode, color, position, target, topClearance, theme, userHints`.
 
 ## 9. Navigation (dashboard)
 
@@ -308,9 +308,9 @@ Settings tab strip (SectionTabs, shared with the Knowledge tabs; see 6): Bot (/s
 ## 10. Decisions
 
 1. Colour scheme: System by default plus manual System / Light / Dark switch, remembered in a cookie, one setting for site, auth, dashboard and docs (4.1).
-2. Widget: always light; no dark tokens, no snippet option.
+2. Widget theme: chosen by the tenant with the `theme` embed option (`light` default, `dark`); no `auto`, no system-setting following. Supersedes "always light" (customer decision 2026-10-17). Old snippets render light.
 3. Dashboard navigation: the grouped menu of section 9, with "Gap Analyzer" named "Doc gaps".
-4. No tenant brand colour: the accent is the fixed violet everywhere, including the widget; nothing is built for an override.
+4. Accent: the fixed violet everywhere in the product UI. The widget launcher keeps the existing tenant `color` option (default `#7C3AED`); the panel never takes tenant colour.
 5. Logo: the mark is unchanged (`#E879F9`/`#38BDF8`). Asset requirement: a variant for light backgrounds (same shapes; mark colours darkened until each part reaches 3:1 on `canvas` and `surface`, wordmark in `fg`), selected by scheme in marketing header, auth and docs; the dashboard sidebar and top bar are always dark chrome and use the original mark (8.03 / 9.22). Not drawn yet.
 6. Targets: 44px minimum everywhere, including the dashboard; density comes from 14px type and spacing, not from smaller controls.
 7. Typeface: keep the bundled Geist Sans + Geist Mono for site, auth, dashboard and docs; the widget uses the system font stack (section 1).

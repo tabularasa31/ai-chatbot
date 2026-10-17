@@ -14,7 +14,7 @@ export function OptionsReference({ placement }: { placement: Placement }) {
       {placement === "bubble" ? (
         <>
           <div>
-            <Code>color</Code> — button color, e.g. <Code>#a855f7</Code>
+            <Code>color</Code> — button color, e.g. <Code>#7C3AED</Code> (default)
           </div>
           <div>
             <Code>position</Code> — <Code>right</Code> or <Code>left</Code> (default: right)
@@ -30,6 +30,9 @@ export function OptionsReference({ placement }: { placement: Placement }) {
           </div>
         </>
       )}
+      <div>
+        <Code>theme</Code> — <Code>light</Code> or <Code>dark</Code> (default: light)
+      </div>
       <div>
         <Code>userHints</Code> — optional personalization (<Code>name</Code>, <Code>email</Code>,{" "}
         <Code>locale</Code>, <Code>plan_tier</Code>). Untrusted: use for greetings and escalation routing only.

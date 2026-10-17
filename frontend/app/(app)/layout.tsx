@@ -16,7 +16,7 @@ export default async function AppLayout({
       <ForcedLightScheme />
       <Navbar initialEmail={session?.email ?? null} />
       <Sidebar />
-      <main className="ml-52 min-h-screen px-8 pb-8 pt-20 text-fg">
+      <main className="ml-52 flex min-h-screen flex-col px-8 pb-8 pt-20 text-fg">
         <ShellBanner />
         {children}
       </main>

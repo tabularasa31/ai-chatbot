@@ -1,204 +1,201 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { api, type AdminTenantMetricsItem, type AdminMetricsSummary } from "@/lib/api";
-import { PageLoader } from "@/components/ui/page-loader";
-import { useClientMe } from "@/hooks/useApi";
+import type { AdminMetricsSummary, AdminTenantMetricsItem } from "@/lib/api";
+import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
+import { LoadError } from "@/components/ui/load-error";
+import { cn } from "@/components/ui/utils";
+import { useAdminMetrics, useClientMe } from "@/hooks/useApi";
+
+const SKELETON_ROWS = 5;
+
+type Column = {
+  header: string;
+  value: (tenant: AdminTenantMetricsItem) => ReactNode;
+  numeric?: boolean;
+  sticky?: boolean;
+  cellClassName?: (tenant: AdminTenantMetricsItem) => string | undefined;
+};
+
+const count = (header: string, value: (tenant: AdminTenantMetricsItem) => number): Column => ({
+  header,
+  numeric: true,
+  value: (tenant) => value(tenant).toLocaleString(),
+});
+
+const COLUMNS: readonly Column[] = [
+  { header: "Public ID", sticky: true, value: (t) => t.public_id, cellClassName: () => "font-mono font-medium text-fg" },
+  {
+    header: "Owner email",
+    value: (t) =>
+      t.owner_email ? (
+        <span className="block max-w-64 truncate" title={t.owner_email}>
+          {t.owner_email}
+        </span>
+      ) : (
+        "—"
+      ),
+  },
+  count("Users", (t) => t.users_count),
+  count("Documents", (t) => t.documents_count),
+  count("Embedded", (t) => t.embedded_documents_count),
+  count("Sessions", (t) => t.chat_sessions_count),
+  count("Visitor messages", (t) => t.messages_user_count),
+  count("Bot messages", (t) => t.messages_assistant_count),
+  count("Tokens", (t) => t.tokens_used_chat),
+  {
+    header: "OpenAI key",
+    value: (t) => (t.has_openai_key ? "Yes" : "No"),
+    cellClassName: (t) => (t.has_openai_key ? "text-fg" : undefined),
+  },
+];
+
+const HEADER_CELL_CLASS = "px-4 py-2 align-bottom text-caption font-medium text-fg-muted";
+const CELL_CLASS = "px-4 py-2 text-ui text-fg-muted";
+const STICKY_CELL_CLASS = "sticky left-0 bg-canvas";
+const STICKY_EDGE_CLASS = "group-data-[scrolled]/scroll:shadow-[inset_-1px_0_0_rgb(var(--c-line))]";
+
+function isForbidden(error: unknown) {
+  return error instanceof Error && (error.message.includes("403") || error.message.includes("Admin only"));
+}
+
+function Totals({ summary }: { summary: AdminMetricsSummary }) {
+  const totals = [
+    { label: "Tenants", value: summary.total_tenants },
+    { label: "Active tenants", value: summary.active_tenants },
+    { label: "Documents", value: summary.total_documents },
+    { label: "Chat sessions", value: summary.total_chat_sessions },
+    { label: "Messages", value: summary.total_messages_user + summary.total_messages_assistant },
+    { label: "Chat tokens", value: summary.total_tokens_chat },
+  ];
+  return (
+    <dl className="grid grid-cols-3 gap-6 lg:grid-cols-6">
+      {totals.map(({ label, value }) => (
+        <div key={label}>
+          <dt className="text-caption font-medium text-fg-muted">{label}</dt>
+          <dd className="text-h2 tabular-nums text-fg">{value.toLocaleString()}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function TenantRow({ tenant }: { tenant: AdminTenantMetricsItem }) {
+  return (
+    <tr className="group h-10 border-t border-line hover:bg-surface-alt">
+      {COLUMNS.map((column) => (
+        <td
+          key={column.header}
+          className={cn(
+            CELL_CLASS,
+            column.numeric && "text-right tabular-nums",
+            column.sticky && cn(STICKY_CELL_CLASS, STICKY_EDGE_CLASS, "group-hover:bg-surface-alt"),
+            column.cellClassName?.(tenant),
+          )}
+        >
+          {column.value(tenant)}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function TenantsTable({ tenants }: { tenants: AdminTenantMetricsItem[] }) {
+  const [scrolled, setScrolled] = useState(false);
+  return (
+    <div
+      role="region"
+      aria-label="Per-tenant metrics"
+      tabIndex={0}
+      data-scrolled={scrolled || undefined}
+      onScroll={(e) => setScrolled(e.currentTarget.scrollLeft > 0)}
+      className="group/scroll overflow-x-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+    >
+      <table className="min-w-full">
+        <thead>
+          <tr className="border-b border-line text-left">
+            {COLUMNS.map((column) => (
+              <th
+                key={column.header}
+                scope="col"
+                className={cn(HEADER_CELL_CLASS, column.numeric && "text-right", column.sticky && cn(STICKY_CELL_CLASS, STICKY_EDGE_CLASS))}
+              >
+                {column.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {tenants.map((tenant) => (
+            <TenantRow key={tenant.tenant_id} tenant={tenant} />
+          ))}
+          {tenants.length === 0 && (
+            <tr className="border-t border-line">
+              <td colSpan={COLUMNS.length} className={cn(CELL_CLASS, "h-10")}>
+                No tenants yet.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MetricsSkeleton() {
+  return (
+    <DeferredSkeleton>
+      <div className="space-y-8">
+        <div className="grid grid-cols-3 gap-6 lg:grid-cols-6">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="h-12 rounded-tag bg-surface-alt" />
+          ))}
+        </div>
+        <div className="space-y-2">
+          {Array.from({ length: SKELETON_ROWS }, (_, index) => (
+            <div key={index} className="h-10 rounded-tag bg-surface-alt" />
+          ))}
+        </div>
+      </div>
+    </DeferredSkeleton>
+  );
+}
 
 export default function AdminMetricsPage() {
   const router = useRouter();
   const { data: client, isLoading: clientLoading } = useClientMe();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [summary, setSummary] = useState<AdminMetricsSummary | null>(null);
-  const [clients, setClients] = useState<AdminTenantMetricsItem[]>([]);
-  const [forbidden, setForbidden] = useState(false);
   const isAdmin = clientLoading ? null : client?.is_admin ?? false;
+  const { data, error, isLoading, mutate } = useAdminMetrics(isAdmin === true);
+  const forbidden = isForbidden(error);
 
   useEffect(() => {
-    if (clientLoading) return;
-    if (!isAdmin) {
-      setLoading(false);
-      return;
-    }
-    async function load() {
-      try {
-        const [summaryData, clientsData] = await Promise.all([
-          api.admin.getSummary(),
-          api.admin.getTenants(),
-        ]);
-        setSummary(summaryData);
-        setClients(clientsData);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "";
-        if (msg.includes("403") || msg.includes("Admin only")) {
-          setForbidden(true);
-          return;
-        }
-        setError(msg || "Failed to load metrics, please try again.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [clientLoading, isAdmin]);
-
-  useEffect(() => {
-    if (loading) return;
     if (isAdmin === false || forbidden) {
       router.replace("/dashboard");
     }
-  }, [loading, isAdmin, forbidden, router]);
-
-  if (loading) {
-    return (
-      <PageLoader textClassName="text-slate-600" />
-    );
-  }
+  }, [isAdmin, forbidden, router]);
 
   if (!isAdmin || forbidden) {
     return null;
   }
 
-  if (error) {
-    return (
-      <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
-        {error}
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-8">
-      <h1 className="text-2xl font-semibold text-slate-800">Platform metrics</h1>
-
-      {/* Summary cards */}
-      <section>
-        <h2 className="text-lg font-medium text-slate-700 mb-4">Platform summary</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow p-4 border border-slate-200">
-            <div className="text-2xl font-bold text-slate-800">
-              {summary?.total_tenants ?? 0}
-            </div>
-            <div className="text-sm text-slate-600">Total clients</div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 border border-slate-200">
-            <div className="text-2xl font-bold text-slate-800">
-              {summary?.active_tenants ?? 0}
-            </div>
-            <div className="text-sm text-slate-600">Active clients</div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 border border-slate-200">
-            <div className="text-2xl font-bold text-slate-800">
-              {summary?.total_documents ?? 0}
-            </div>
-            <div className="text-sm text-slate-600">Total documents</div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 border border-slate-200">
-            <div className="text-2xl font-bold text-slate-800">
-              {summary?.total_chat_sessions ?? 0}
-            </div>
-            <div className="text-sm text-slate-600">Chat sessions</div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 border border-slate-200">
-            <div className="text-2xl font-bold text-slate-800">
-              {(summary?.total_messages_user ?? 0) + (summary?.total_messages_assistant ?? 0)}
-            </div>
-            <div className="text-sm text-slate-600">Total messages</div>
-          </div>
-          <div className="bg-white rounded-lg shadow p-4 border border-slate-200">
-            <div className="text-2xl font-bold text-slate-800">
-              {summary?.total_tokens_chat ?? 0}
-            </div>
-            <div className="text-sm text-slate-600">Tokens (chat)</div>
-          </div>
-        </div>
-      </section>
-
-      {/* Clients table */}
-      <section>
-        <h2 className="text-lg font-medium text-slate-700 mb-4">Per-client metrics</h2>
-        <div className="bg-white rounded-lg shadow border border-slate-200 overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200">
-            <thead className="bg-slate-50">
-              <tr>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-600 uppercase">
-                  Public ID
-                </th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-600 uppercase">
-                  Email
-                </th>
-                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
-                  Users
-                </th>
-                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
-                  Docs
-                </th>
-                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
-                  Embedded
-                </th>
-                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
-                  Sessions
-                </th>
-                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
-                  User msgs
-                </th>
-                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
-                  Asst msgs
-                </th>
-                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
-                  Tokens
-                </th>
-                <th scope="col" className="px-4 py-3 text-center text-xs font-medium text-slate-600 uppercase">
-                  OpenAI key
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {clients.map((c) => (
-                <tr key={c.tenant_id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 text-sm text-slate-800 font-medium">{c.public_id}</td>
-                  <td className="px-4 py-3 text-sm text-slate-600">{c.owner_email ?? "—"}</td>
-                  <td className="px-4 py-3 text-sm text-slate-600 text-right">
-                    {c.users_count}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-600 text-right">
-                    {c.documents_count}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-600 text-right">
-                    {c.embedded_documents_count}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-600 text-right">
-                    {c.chat_sessions_count}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-600 text-right">
-                    {c.messages_user_count}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-600 text-right">
-                    {c.messages_assistant_count}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-600 text-right">
-                    {c.tokens_used_chat}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-center">
-                    {c.has_openai_key ? (
-                      <span className="text-green-600">Yes</span>
-                    ) : (
-                      <span className="text-slate-400">No</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {clients.length === 0 && (
-            <div className="px-4 py-8 text-center text-slate-500 text-sm">
-              No clients yet
-            </div>
-          )}
-        </div>
-      </section>
+    <div className="space-y-8" aria-busy={isLoading}>
+      <h1 className="text-h1 text-fg">Platform metrics</h1>
+      {error && <LoadError message="Couldn't load platform metrics." onRetry={() => mutate()} />}
+      {isLoading && <MetricsSkeleton />}
+      {data && (
+        <>
+          <section className="space-y-4">
+            <h2 className="text-h2 text-fg">Totals</h2>
+            <Totals summary={data.summary} />
+          </section>
+          <section className="space-y-4">
+            <h2 className="text-h2 text-fg">Per-tenant metrics</h2>
+            <TenantsTable tenants={data.tenants} />
+          </section>
+        </>
+      )}
     </div>
   );
 }

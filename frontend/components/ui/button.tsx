@@ -7,6 +7,7 @@ const FOCUS_RING_BASE = "focus-visible:outline-none focus-visible:ring-2 focus-v
 export const FOCUS_RING = {
   canvas: `${FOCUS_RING_BASE} focus-visible:ring-offset-canvas`,
   surface: `${FOCUS_RING_BASE} focus-visible:ring-offset-surface`,
+  chrome: "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-accent focus-visible:ring-offset-2 focus-visible:ring-offset-chrome",
 } as const;
 
 const VARIANTS = {

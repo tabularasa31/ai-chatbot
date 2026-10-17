@@ -28,36 +28,49 @@ export function greetingLocale(
   return hintLocale?.trim() || browserLocale;
 }
 
+function clearGreeted(botId: string, userId?: string | null): void {
+  try {
+    window.localStorage.removeItem(greetedStorageKey(botId, userId));
+  } catch {
+    // Nothing was stored, so there is nothing to clear.
+  }
+}
+
+function hasText(body: unknown): body is { text: string } {
+  return typeof body === "object" && body !== null && "text" in body
+    && typeof body.text === "string" && body.text.trim() !== "";
+}
+
 /**
- * Fetches the welcome text for a browser that has not been greeted yet and
- * records that it was. Resolves to null when already greeted or when the
- * request fails; a failure leaves the marker unset so a later visit retries.
- * The request is a read: it never creates a session or a conversation.
+ * Fetches the welcome text for a browser that has not been greeted yet.
+ * The marker is set before the request so a second tab opened meanwhile does
+ * not greet too, and cleared again when the request fails. Resolves to null
+ * when already greeted or on failure. The request is a read: it never creates
+ * a session or a conversation.
  */
 export async function greetOnce({
   apiBase,
   botId,
   userId,
   locale,
-  fetchImpl = fetch,
 }: {
   apiBase: string;
   botId: string;
   userId?: string | null;
   locale?: string;
-  fetchImpl?: typeof fetch;
 }): Promise<string | null> {
   if (hasBeenGreeted(botId, userId)) return null;
+  markGreeted(botId, userId);
   const params = new URLSearchParams({ bot_id: botId });
   if (locale) params.set("locale", locale);
   try {
-    const res = await fetchImpl(`${apiBase}/widget/greeting?${params}`);
+    const res = await fetch(`${apiBase}/widget/greeting?${params}`);
     if (!res.ok) throw new Error(`Greeting error: ${res.status}`);
-    const { text } = (await res.json()) as { text?: unknown };
-    if (typeof text !== "string" || !text.trim()) throw new Error("Greeting response has no text");
-    markGreeted(botId, userId);
-    return text;
+    const body: unknown = await res.json();
+    if (!hasText(body)) throw new Error("Greeting response has no text");
+    return body.text;
   } catch (error) {
+    clearGreeted(botId, userId);
     console.error("Chat9: greeting failed", error);
     return null;
   }

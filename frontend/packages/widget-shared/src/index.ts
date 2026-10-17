@@ -29,8 +29,8 @@ export type Chat9StartConfig = {
 // the conversation). The third state is derived server-side, never stored.
 export type HandoffState = "bot" | "waiting" | "live";
 
-// Shared shape of a completed widget turn — used both for the non-streaming
-// (greeting) response and the accumulated payload of a streamed reply.
+// Shared shape of a completed widget turn: the accumulated payload of a
+// streamed reply, or the JSON error body of a failed one.
 export type WidgetTurnPayload = {
   detail?: unknown;
   text?: string;

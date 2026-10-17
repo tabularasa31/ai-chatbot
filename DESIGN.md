@@ -28,7 +28,7 @@ Weights: 400 regular (body), 500 medium (labels, buttons, nav, table headers), 6
 | `text-display` | 36 / 44, 600, from 768px (24/32 below) | marketing/blog page title only |
 
 Heading map: display = marketing/blog H1; h1 = H1 everywhere else; h2 = H2; H3 and below = `text-body` 600. Headings of one level never differ between screens.
-Body line length 45-75 characters: prose containers use `max-w-prose` (65ch).
+Body line length 45-75 characters: prose containers on marketing and blog use `max-w-measure` (34rem, about 70-75 characters in Geist; `max-w-prose` at 65ch measured 88-96 characters because Geist is narrow).
 Tables, amounts, counters, dates in columns: `tabular-nums`; numeric columns right-aligned, header aligned the same way.
 
 ## 3. Spacing, radius, elevation
@@ -136,7 +136,7 @@ Dark in both schemes, same values in both; the working area keeps its scheme. On
 
 | Token | Hex | Use |
 |---|---|---|
-| `chrome` | `#0A0A0F` | fill of sidebar and top bar |
+| `chrome` | `#0A0A0F` | fill of sidebar and top bar; also the dark plate behind artwork drawn for dark backgrounds (blog covers) |
 | `chrome-fg` | `#FAF5FF` | wordmark, hover text |
 | `chrome-fg-muted` | `#A9A3BA` | inactive nav, e-mail, inactive switch icons |
 | `chrome-line` | `#2E2E3E` | dividers, quiet badge fill (decorative, exempt) |
@@ -252,6 +252,16 @@ Markdown message (`ui/markdown-message.tsx`, new): renders assistant and operato
 
 SettingsShell (`app/(app)/settings/_components/SettingsShell.tsx`): H1 "Settings" (`text-h1`), 16px below it the SectionTabs strip (Bot | Widget | Team | Seats), 24px below that the tab content, in a left-aligned `max-w-2xl` column. Needed because the four tabs live in two route trees (`/settings/**`, `/widget-settings`) that a single layout cannot cover, and so the strip and H1 stay on screen while a tab loads or fails. It also holds the owner gate: a non-owner sees the H1, "Only the tenant owner can open Settings." and a "Back to Inbox" link, with no tabs and without mounting the tab content (no owner-only requests fire). Tab content starts at `text-h2`; a tab name is never repeated as an H1.
 
+Marketing shell (`components/marketing/`, new): `MarketingShell` wraps every site and blog page (opts into the scheme, skip link, header, `<main id="content">`, footer); `SiteHeader` is static, 64px, text links Docs / Blog / Sign in (Dashboard when signed in) with a 44px menu button below 768 (`aria-expanded`, `aria-controls`, Escape closes and returns focus); `SiteFooter` carries the links and the one `ThemeSwitch` of the site. Reason: the old Navigation was sticky with blur, had 28px targets and no skip link; nothing shared fit.
+
+DefinitionRows: `<ol>`/`<ul>` of rows, title (`text-body` 600) in columns 1-4 and text in 5-12 from 768, stacked below, `divide-y line`, `py-6`. Used for setup steps and conditions on the landing page. Reason: replaces the identical-card feature grid with rows whose content differs.
+
+CodeSnippet: `surface-alt` block, Geist Mono `text-ui`, horizontal scroll inside itself (focusable, `aria-label`), secondary Copy button via `ui/copy-button`. Reason: `CodeBlockWithCopy` is dashboard-only (primary button, no scroll focus).
+
+DemoSlot: bordered `surface` box (`h-demo` = 480 below 640, 560 from 640) holding the inline widget; skeleton after 200ms, error with Reload page after a failed or 10s-late loader; not rendered when no bot id is configured. Reason: the old block swallowed loader errors and showed an environment variable name to visitors.
+
+BlogPostRow / BlogPostList: one row per post, meta line, title as the only link (stretched `::after`), excerpt, `divide-y line`, hover `surface-alt`. Tags are not shown. Reason: replaces the three-column card grid with a card, tags and a duplicate "Read article" link per post.
+
 States for any data region (list, table, document list, inbox, analytics):
 - Loading: nothing for the first 200ms, then skeleton blocks of the final layout in `surface-alt`, no shimmer; `aria-busy`. A whole-page spinner is not used; inline `Loader2` only for buttons and refetch.
 - Empty: left-aligned statement of what is missing in plain words (`text-ui`, `fg-muted`) plus the one action that fixes it, if it exists. No illustration, no dashed box. Centering only when the empty region is the whole page body.
@@ -268,7 +278,7 @@ lucide-react only (already used in dashboard and widget). Sizes 16 (inline with 
 |---|---|---|---|---|
 | Dashboard | compact | `text-ui` 14/20, titles `text-h1` | content `max-w-6xl` (1152), forms/settings column `max-w-2xl` (672) | navbar 48px, sidebar 208px, section gap 32, in-section gap 16; desktop only (from 1024px), narrower widths not designed yet. Sidebar and top bar are dark chrome in both schemes (4.2); menu: section 9 |
 | Auth | comfortable | `text-body` | card `max-w-md` (448) | left-aligned form; centering only for short success/confirmation screens |
-| Marketing + blog | airy | `text-body`, `text-display` | container `max-w-6xl`, prose `max-w-prose` | layout, sections and copy of the landing are decided by the later redesign under the CoC; this system supplies tokens only. No hero/feature-grid defaults |
+| Marketing + blog | airy | `text-body`, `text-display` | container `max-w-6xl`, prose `max-w-measure` | layout, sections and copy of the landing are decided by the later redesign under the CoC; this system supplies tokens only. No hero/feature-grid defaults |
 | Docs | reading | `text-body` | fumadocs layout, prose 65ch | fumadocs preset fed from this file |
 | Widget | compact | `text-ui`, input 16/24 | fills the iframe | always light (light token values only, ignores the scheme cookie and the visitor's system setting), no snippet option; user bubble `brand-subtle`, assistant `surface-alt`, operator bubble `brand-subtle` + 1px `line` and a "Operator" caption (distinct from the bot by design), error bubble `danger-subtle`; send/close targets 44px; header is `surface` with a `line` divider |
 

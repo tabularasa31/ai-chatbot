@@ -24,7 +24,7 @@ export default function DocsSectionLayout({ children }: { children: ReactNode })
             defaultOpenLevel: 1,
             collapsible: false,
             components: { Item: SidebarPageLink },
-            footer: <ThemeMenu />,
+            footer: <ThemeMenu className="-ml-0.5" />,
           }}
           containerProps={{ className: 'min-h-screen' }}
         >

@@ -38,7 +38,7 @@ export function Navbar({
         <LogoMark size={18} tile={false} />
         <span className="text-body font-semibold leading-none text-chrome-fg">Chat9</span>
       </Link>
-      <div className="flex items-center gap-4">
+      <div className="flex min-w-0 items-center gap-4">
         {userEmail && (
           <span title={userEmail} className="max-w-72 truncate text-ui text-chrome-fg-muted">
             {userEmail}

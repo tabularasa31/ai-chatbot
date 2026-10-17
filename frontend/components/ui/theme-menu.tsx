@@ -44,7 +44,7 @@ const SURFACES = {
     visual:
       "text-fg-muted group-hover:bg-surface-alt group-hover:text-fg group-active:bg-surface-alt group-aria-expanded:bg-surface-alt group-aria-expanded:text-fg group-focus-visible:ring-2 group-focus-visible:ring-focus group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-canvas",
     menu: "border-line bg-surface dark:bg-surface-alt",
-    item: "text-fg hover:bg-surface-alt focus-visible:bg-surface-alt focus-visible:ring-focus dark:hover:bg-line dark:focus-visible:bg-line",
+    item: "text-fg hover:bg-surface-alt focus-visible:bg-surface-alt focus-visible:ring-focus dark:hover:bg-canvas dark:focus-visible:bg-canvas",
     checked: "text-brand",
   },
   chrome: {
@@ -105,9 +105,7 @@ export function ThemeMenu({
       align: fittingAlign(box, menu.current.offsetWidth, align),
     });
     items.current[selected]?.focus();
-    // Runs when the menu opens only: a scheme change while open must not move focus.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, side, align]);
+  }, [open, side, align, selected]);
 
   useEffect(() => {
     if (!open) return;

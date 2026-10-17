@@ -42,7 +42,7 @@ export function AuthCard({ centered, className, children, ...card }: AuthCardPro
         >
           {children}
         </div>
-        <ThemeMenu className="mt-4 -ml-3" />
+        <ThemeMenu className="mt-4 -ml-3.5" />
       </div>
     </div>
   );

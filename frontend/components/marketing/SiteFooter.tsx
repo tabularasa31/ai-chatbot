@@ -35,7 +35,7 @@ export function SiteFooter() {
         </div>
         <div className="mt-6 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-caption text-fg-muted">© 2026 Chat9</p>
-          <ThemeMenu className="-ml-3 sm:ml-0 sm:-mr-3" align="end" />
+          <ThemeMenu className="-ml-3.5 sm:ml-0 sm:-mr-3.5" align="end" />
         </div>
       </div>
     </footer>

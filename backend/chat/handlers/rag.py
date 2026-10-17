@@ -35,6 +35,7 @@ from backend.chat.events import _emit_chat_turn_event
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.persistence import _persist_turn_with_response_language
 from backend.chat.post_turn import _trigger_log_analysis_threshold, _try_ingest_gap_signal
+from backend.chat.steps.refusal import is_first_user_turn
 from backend.chat.types import (
     ChatPipelineResult,
 )
@@ -737,8 +738,17 @@ class RagHandler(PipelineHandler):
         # answers the clarification while the gate reads it as consent to open
         # a ticket.
         _handoff_offer_appended = False
+        # A visitor who has not yet said a word is never offered a ticket by
+        # the system; they can always ask for a person themselves.
+        _first_user_turn = is_first_user_turn(chat)
+        _handoff_offer_suppressed_first_turn = (
+            _first_user_turn
+            and not chat.escalation_pre_confirm_pending
+            and bool(result.llm_needs_human or result.llm_offered_ticket)
+        )
         if (
-            not chat.escalation_pre_confirm_pending
+            not _first_user_turn
+            and not chat.escalation_pre_confirm_pending
             and result.llm_needs_human
             and not result.llm_offered_ticket
             and not result.llm_clarifying
@@ -811,7 +821,8 @@ class RagHandler(PipelineHandler):
         # being read as acceptance of the ticket offer. The marker is
         # machine-emitted, so this works in any response language.
         if (
-            not escalate
+            not _first_user_turn
+            and not escalate
             and not chat.escalation_pre_confirm_pending
             and result.llm_offered_ticket
         ):
@@ -911,6 +922,7 @@ class RagHandler(PipelineHandler):
                     "clarify_asked": _clarify_asked,
                     "llm_needs_human": bool(result.llm_needs_human),
                     "handoff_offer_appended": _handoff_offer_appended,
+                    "handoff_offer_suppressed_first_turn": _handoff_offer_suppressed_first_turn,
                     # Loop-detection signals (always emitted so dashboards can
                     # distinguish "not evaluated" from "evaluated false").
                     **_decision.loop_trace_dict(_turn_ctx),

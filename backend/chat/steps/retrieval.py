@@ -29,6 +29,7 @@ from backend.chat.events import (
 from backend.chat.steps.refusal import (
     build_pre_confirm_escalation_result,
     build_reject_result,
+    is_first_user_turn,
 )
 from backend.chat.types import (
     ChatPipelineResult,
@@ -464,7 +465,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
         # Category routing mirrors the main guard site: a support
         # complaint gets the escalation offer, a social turn a polite
         # acknowledgement — neither should fall into the off-topic reject.
-        if relevance_reason == CATEGORY_SUPPORT_COMPLAINT:
+        if relevance_reason == CATEGORY_SUPPORT_COMPLAINT and not is_first_user_turn(run.chat):
             from backend.escalation.openai_escalation import pre_confirm_fallback_result
 
             complaint_fallback = pre_confirm_fallback_result("support_complaint")

@@ -32,7 +32,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.chat.events import _emit_quick_answer_lookup_event
 from backend.chat.followup import build_dialog_context
-from backend.chat.steps.refusal import build_reject_result
+from backend.chat.steps.refusal import build_reject_result, is_first_user_turn
 from backend.chat.types import (
     ChatPipelineResult,
     PipelineRun,
@@ -690,7 +690,7 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
         # in a refusal — offer the escalation handoff instead. The empty
         # retrieval context routes _handle_sync through the same
         # pre-confirm arming path as the consecutive-zero-hits escalation.
-        if guard_reason == CATEGORY_SUPPORT_COMPLAINT:
+        if guard_reason == CATEGORY_SUPPORT_COMPLAINT and not is_first_user_turn(run.chat):
             from backend.chat.steps.refusal import build_pre_confirm_escalation_result
             from backend.escalation.openai_escalation import pre_confirm_fallback_result
             from backend.models import EscalationTrigger

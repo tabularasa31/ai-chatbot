@@ -7,7 +7,7 @@ import { ArrowRight, Loader2 } from "lucide-react";
 import type { AnalyticsPeriod, AnalyticsSummaryResponse } from "@/lib/api";
 import { useAnalyticsSummary } from "@/hooks/useApi";
 import { buttonClasses } from "@/components/ui/button";
-import { DeferredSkeleton } from "@/components/ui/deferred-skeleton";
+import { SkeletonRegion } from "@/components/ui/skeleton";
 import { LoadError } from "@/components/ui/load-error";
 import { SectionTabs, sectionTabId } from "@/components/ui/section-tabs";
 
@@ -116,7 +116,7 @@ function MetricList({ rows }: { rows: MetricRow[] }) {
 
 function MetricListSkeleton() {
   return (
-    <DeferredSkeleton>
+    <SkeletonRegion>
       <div className="max-w-3xl">
         {Array.from({ length: SKELETON_ROWS }, (_, index) => (
           <div key={index} className="flex items-center gap-4 border-t border-line py-4 first:border-t-0">
@@ -126,7 +126,7 @@ function MetricListSkeleton() {
           </div>
         ))}
       </div>
-    </DeferredSkeleton>
+    </SkeletonRegion>
   );
 }
 

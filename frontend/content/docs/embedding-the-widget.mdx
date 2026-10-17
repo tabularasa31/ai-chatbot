@@ -29,7 +29,8 @@ All options are arguments to `Chat9Widget.start()`:
 <script>
   Chat9Widget.start({
     mode: "bubble",          // "bubble" | "inline"
-    color: "#a855f7",
+    theme: "light",          // "light" | "dark"
+    color: "#7C3AED",
     position: "right",       // "right" | "left"
     target: "chat9-widget",  // inline mode only — id of the host element
     userHints: {
@@ -45,13 +46,14 @@ All options are arguments to `Chat9Widget.start()`:
 |---|---|---|
 | `mode` | `"bubble"` | `"bubble"` or `"inline"` |
 | `target` | — | DOM element id for inline mode |
-| `color` | violet gradient | Bubble background color (`#RGB`, `#RRGGBB`) |
+| `theme` | `"light"` | `"light"` or `"dark"`; the whole chat window follows it |
+| `color` | `"#7C3AED"` | Bubble background color (`#RGB`, `#RRGGBB`) |
 | `position` | `"right"` | `"right"` or `"left"` |
 | `topClearance` | `0` | px reserved at the viewport top (e.g. height of a fixed navbar) |
 | `userHints` | — | See [userHints](#userhints) |
 
 **Modes:**
-- **Bubble** — floating button, bottom corner of the page.
+- **Bubble** — floating button, bottom corner of the page. The window has a close button in its header, and Escape closes it. On phones it opens full screen.
 - **Inline** — renders inside a container you provide. Add `<div id="chat9-widget"></div>` where you want the widget.
 
 ### Routing from Russia
@@ -122,7 +124,7 @@ Because `start`, `stop`, and `setHints` are explicit, the widget can survive a f
 
 ```js
 // At app startup, mount the widget anonymously:
-Chat9Widget.start({ color: "#a855f7" });
+Chat9Widget.start({ color: "#7C3AED" });
 
 // Once the user logs in:
 Chat9Widget.setHints({
@@ -143,12 +145,12 @@ Chat9Widget.stop();           // hide the widget completely
 
 // Re-login after stop():
 Chat9Widget.start({
-  color: "#a855f7",
+  color: "#7C3AED",
   userHints: { user_id: user.id, email: user.email }
 });
 ```
 
-Substitute your own brand color in `color` (any `#RGB`/`#RRGGBB`) — or omit it for the default violet gradient. All other options listed in [Configuration](#configuration) are supported here too.
+Substitute your own brand color in `color` (any `#RGB`/`#RRGGBB`) — or omit it for the default violet. All other options listed in [Configuration](#configuration) are supported here too.
 
 `setHints()` updates a running widget in-place — you do **not** need to `stop` and `start` to change identity.
 

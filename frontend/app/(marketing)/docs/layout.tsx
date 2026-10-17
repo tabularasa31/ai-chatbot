@@ -11,8 +11,8 @@ import './docs.css';
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {
   return (
     <RootProvider theme={{ enabled: false }}>
-      <SchemeSurface />
-      <div className="bg-canvas text-fg">
+      <SchemeSurface>
+      <div className="text-fg">
         <DocsLayout
           tree={source.pageTree}
           nav={{
@@ -31,6 +31,7 @@ export default function DocsSectionLayout({ children }: { children: ReactNode })
           {children}
         </DocsLayout>
       </div>
+      </SchemeSurface>
     </RootProvider>
   );
 }

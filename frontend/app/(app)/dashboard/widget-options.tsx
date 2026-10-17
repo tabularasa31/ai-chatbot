@@ -3,10 +3,16 @@ import { RadioOption } from "./radio-option";
 
 export type Placement = "bubble" | "inline";
 export type BubblePosition = "right" | "left";
+export type WidgetTheme = "light" | "dark";
 
 const POSITIONS: { value: BubblePosition; label: string }[] = [
   { value: "right", label: "Bottom right" },
   { value: "left", label: "Bottom left" },
+];
+
+const THEMES: { value: WidgetTheme; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
 ];
 
 type PlacementChoiceProps = {
@@ -28,6 +34,32 @@ export function PlacementChoice({ placement, onChange }: PlacementChoiceProps) {
         <span className="font-medium">Inline widget</span>
         <span className="text-fg-muted">Embedded inside a container on the page.</span>
       </RadioOption>
+    </fieldset>
+  );
+}
+
+type ThemeChoiceProps = {
+  theme: WidgetTheme;
+  onChange: (theme: WidgetTheme) => void;
+};
+
+export function ThemeChoice({ theme, onChange }: ThemeChoiceProps) {
+  return (
+    <fieldset>
+      <legend className="mb-2 text-ui font-medium text-fg">Theme</legend>
+      <div className="flex gap-3">
+        {THEMES.map(({ value, label }) => (
+          <RadioOption
+            key={value}
+            name="theme"
+            checked={theme === value}
+            onSelect={() => onChange(value)}
+            className="font-medium"
+          >
+            {label}
+          </RadioOption>
+        ))}
+      </div>
     </fieldset>
   );
 }

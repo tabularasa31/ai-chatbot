@@ -6,6 +6,7 @@ import {
   SYSTEM_SANS,
   brandThemeExtend,
   brandTokensPlugin,
+  chromeTokensPlugin,
   docsTypography,
   fumadocsPreset,
 } from "./tailwind-brand";
@@ -40,6 +41,6 @@ const config: Config = {
       typography: docsTypography,
     },
   },
-  plugins: [brandTokensPlugin(["light", "dark"])],
+  plugins: [brandTokensPlugin(["light", "dark"]), chromeTokensPlugin()],
 };
 export default config;

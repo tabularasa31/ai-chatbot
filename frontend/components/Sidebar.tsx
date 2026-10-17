@@ -15,7 +15,9 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useClientMe, useInboxSummary } from "@/hooks/useApi";
+import { FOCUS_RING } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/count-badge";
+import { ThemeSwitch } from "@/components/ui/theme-switch";
 import { cn } from "@/components/ui/utils";
 
 type BadgeKey = "inbox" | "gaps";
@@ -69,8 +71,11 @@ function NavLink({
       aria-current={active ? "page" : undefined}
       className={cn(
         "flex h-11 items-center gap-3 rounded-control px-3 text-ui font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
-        active ? "bg-brand-subtle text-brand" : "text-fg-muted hover:bg-surface-alt hover:text-fg",
+        FOCUS_RING.chrome,
+        "focus-visible:ring-inset focus-visible:ring-offset-0",
+        active
+          ? "bg-chrome-active text-chrome-accent shadow-chrome-selected"
+          : "text-chrome-fg-muted hover:bg-chrome-hover hover:text-chrome-fg",
       )}
     >
       <Icon size={16} aria-hidden="true" className="shrink-0" />
@@ -110,7 +115,7 @@ export function Sidebar() {
     (!item.ownerOnly || isOwner) && (!item.adminOnly || isAdmin);
 
   return (
-    <aside className="fixed bottom-0 left-0 top-12 flex w-52 flex-col border-r border-line bg-surface p-3">
+    <aside className="fixed bottom-0 left-0 top-12 flex w-52 flex-col border-r border-chrome-line bg-chrome p-3">
       <nav aria-label="Main" className="flex flex-1 flex-col gap-6">
         {NAV_GROUPS.map((group) => ({ key: group[0].href, items: group.filter(isVisible) }))
           .filter(({ items }) => items.length > 0)
@@ -127,6 +132,9 @@ export function Sidebar() {
             </div>
           ))}
       </nav>
+      <div className="border-t border-chrome-line pt-3">
+        <ThemeSwitch surface="chrome" />
+      </div>
     </aside>
   );
 }

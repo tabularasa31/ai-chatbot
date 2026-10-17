@@ -1,3 +1,118 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  html[data-theme="dark"] {
+    color-scheme: dark;
+    --c-surface: 34 34 51;
+    --c-surface-alt: 43 43 63;
+    --c-canvas: 26 26 38;
+    --c-line: 58 58 80;
+    --c-line-strong: 124 119 147;
+    --c-fg: 250 245 255;
+    --c-fg-muted: 169 163 186;
+    --c-fg-faint: 155 149 173;
+    --c-brand: 167 139 250;
+    --c-brand-hover: 196 181 253;
+    --c-brand-active: 139 92 246;
+    --c-brand-on: 10 10 15;
+    --c-brand-subtle: 45 37 82;
+    --c-focus: 167 139 250;
+    --c-danger: 248 113 113;
+    --c-danger-subtle: 67 34 39;
+    --c-info: 56 189 248;
+    --c-info-subtle: 24 50 70;
+    --shadow-overlay: 0 16px 40px rgb(0 0 0 / 0.5);
+  }
+
+  body {
+    @apply bg-surface font-sans text-fg;
+  }
+
+  :focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-focus;
+  }
+}
+
+@layer components {
+  .pad-x {
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+
+  .pad-x-compact {
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+
+  .header-bar {
+    height: calc(4rem + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .pad-b-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .md-body {
+    @apply min-w-0 text-ui text-fg;
+    overflow-wrap: anywhere;
+  }
+  .md-body > :first-child {
+    @apply mt-0;
+  }
+  .md-body > :last-child {
+    @apply mb-0;
+  }
+  .md-body :is(p, ul, ol, blockquote, hr) {
+    @apply my-2;
+  }
+  .md-body :is(ul, ol) {
+    @apply pl-6;
+  }
+  .md-body ul {
+    list-style: disc;
+  }
+  .md-body ol {
+    list-style: decimal;
+  }
+  .md-body li {
+    @apply my-1;
+  }
+  .md-body :is(h1, h2, h3, h4, h5, h6) {
+    @apply mb-2 mt-4 text-body font-semibold;
+  }
+  .md-body blockquote {
+    @apply border-l-2 border-line-strong pl-4 text-fg-muted;
+  }
+  .md-body hr {
+    @apply border-line;
+  }
+  .md-body a {
+    @apply text-brand underline;
+  }
+  .md-body table {
+    @apply w-full text-ui;
+  }
+  .md-body :is(th, td) {
+    @apply border-b border-line px-3 py-2 text-left;
+  }
+  .md-body th {
+    @apply font-medium;
+  }
+  .md-body :not(pre) > code {
+    @apply rounded-tag bg-surface-alt px-1 py-0.5 font-mono text-caption ring-1 ring-inset ring-line;
+  }
+  .md-body :not(pre) > code::before,
+  .md-body :not(pre) > code::after {
+    content: none;
+  }
+  .md-body pre code.hljs {
+    @apply bg-transparent p-0 font-mono text-chrome-fg;
+  }
+}

@@ -8,6 +8,9 @@ import { LogoMark } from "@/components/Logo";
 import { Button, FOCUS_RING } from "@/components/ui/button";
 import { useAuthUser } from "@/hooks/useApi";
 
+const LOGOUT_CLASSES =
+  "border-chrome-line-strong bg-transparent text-chrome-fg hover:bg-chrome-hover active:bg-chrome-hover";
+
 export function Navbar({
   initialEmail = null,
 }: {
@@ -25,22 +28,22 @@ export function Navbar({
   }
 
   return (
-    <header className="fixed left-0 right-0 top-0 z-50 flex h-12 items-center justify-between border-b border-line bg-surface px-6">
+    <header className="fixed left-0 right-0 top-0 z-50 flex h-12 items-center justify-between border-b border-chrome-line bg-chrome px-6">
       <Link
         href="/dashboard"
         aria-label="Chat9 home"
-        className={`flex h-11 items-center gap-2 rounded-control ${FOCUS_RING.surface}`}
+        className={`flex h-11 items-center gap-2 rounded-control ${FOCUS_RING.chrome}`}
       >
         <LogoMark size={18} tile={false} />
-        <span className="text-body font-semibold leading-none text-fg">Chat9</span>
+        <span className="text-body font-semibold leading-none text-chrome-fg">Chat9</span>
       </Link>
       <div className="flex items-center gap-4">
         {userEmail && (
-          <span title={userEmail} className="max-w-72 truncate text-ui text-fg-muted">
+          <span title={userEmail} className="max-w-72 truncate text-ui text-chrome-fg-muted">
             {userEmail}
           </span>
         )}
-        <Button variant="secondary" offset="surface" onClick={handleLogout}>
+        <Button variant="secondary" offset="chrome" className={LOGOUT_CLASSES} onClick={handleLogout}>
           <LogOut size={16} aria-hidden="true" />
           Log out
         </Button>

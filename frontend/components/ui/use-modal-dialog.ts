@@ -1,0 +1,51 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+
+type ModalDialogOptions = {
+  onClose: () => void;
+  /** While false, Escape and scrim clicks keep the dialog open. */
+  canClose?: boolean;
+  /** Where focus goes on close when the element that opened the dialog is gone. */
+  fallbackFocus?: () => HTMLElement | null;
+};
+
+/**
+ * Opens the native `<dialog>` as modal on mount and closes it on unmount.
+ * Returns focus to the opener, or to `fallbackFocus` when the opener no longer exists.
+ */
+export function useModalDialog({ onClose, canClose = true, fallbackFocus }: ModalDialogOptions) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const latest = useRef({ onClose, canClose, fallbackFocus });
+  latest.current = { onClose, canClose, fallbackFocus };
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const closeOnScrimClick = (event: MouseEvent) => {
+      if (event.target === dialog && latest.current.canClose) latest.current.onClose();
+    };
+    // A "close" event queued by an earlier effect run's cleanup (StrictMode) arrives
+    // after the dialog was re-opened; only a close that left it closed is a real one.
+    const handleClose = () => {
+      if (dialog.open) return;
+      if (latest.current.canClose) latest.current.onClose();
+      else dialog.showModal();
+    };
+
+    dialog.showModal();
+    dialog.addEventListener("click", closeOnScrimClick);
+    dialog.addEventListener("close", handleClose);
+    return () => {
+      dialog.removeEventListener("click", closeOnScrimClick);
+      dialog.removeEventListener("close", handleClose);
+      dialog.close();
+      const target = opener?.isConnected ? opener : latest.current.fallbackFocus?.();
+      target?.focus();
+    };
+  }, []);
+
+  return ref;
+}

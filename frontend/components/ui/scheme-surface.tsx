@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
 import { resolveScheme } from "@/lib/scheme";
 
-export function SchemeSurface() {
-  useEffect(() => {
-    resolveScheme();
-  }, []);
-  return <span hidden data-scheme-surface />;
+/** Re-applies the stored scheme on mount: client navigation from the still-light docs left `<html>` without `dark`. */
+export function SchemeSurface({ children }: { children: ReactNode }) {
+  useLayoutEffect(resolveScheme, []);
+  return (
+    <div data-scheme-surface className="min-h-screen bg-canvas">
+      {children}
+    </div>
+  );
 }

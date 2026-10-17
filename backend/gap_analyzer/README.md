@@ -169,7 +169,7 @@ This module is intentionally introduced in two thin layers:
   newly discovered gaps.
 - Archive UX now exposes an explicit `archived` filter:
   - Mode A `archived` maps to dismissed topics
-  - Mode B `archived` maps to closed plus dismissed clusters
+  - Mode B `archived` maps to closed, dismissed, inactive and resolved clusters
 - Archive presentation remains source-specific:
   - linked archived Mode B items do not suppress active Mode A topics
   - active-list suppression still applies only when linked Mode B is active

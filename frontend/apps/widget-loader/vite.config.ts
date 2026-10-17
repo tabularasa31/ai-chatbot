@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 // <script src=".../widget.js"> tag. No globals exported (extend: false +
 // `name` placeholder satisfied by rollup but unused at runtime).
 export default defineConfig({
+  esbuild: { charset: "ascii" },
   build: {
     outDir: "dist",
     emptyOutDir: true,

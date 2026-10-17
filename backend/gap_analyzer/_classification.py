@@ -70,7 +70,12 @@ def _mode_b_status_matches_filter(status_filter: ModeBStatusFilter, status: GapC
         # ``drafting`` / ``in_review`` filter values.
         return status in {GapClusterStatus.active, GapClusterStatus.drafting, GapClusterStatus.in_review}
     if status_filter == "archived":
-        return status in {GapClusterStatus.closed, GapClusterStatus.dismissed, GapClusterStatus.inactive}
+        return status in {
+            GapClusterStatus.closed,
+            GapClusterStatus.dismissed,
+            GapClusterStatus.inactive,
+            GapClusterStatus.resolved,
+        }
     if status_filter == "closed":
         return status == GapClusterStatus.closed
     if status_filter == "dismissed":

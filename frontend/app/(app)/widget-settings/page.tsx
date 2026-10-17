@@ -1,175 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import { useActiveBot, useClientMe } from "@/hooks/useApi";
-import WidgetIdentityKeyCard from "./WidgetIdentityKeyCard";
-import { CopyButton } from "@/components/ui/copy-button";
+import { BotRequired } from "../settings/_components/BotRequired";
 import { SettingsShell } from "../settings/_components/SettingsShell";
-
-function WidgetSettingsPanel() {
-  const {
-    activeBot: defaultBot,
-    isLoading: loading,
-    isValidating,
-    error: loadError,
-    mutate: mutateBots,
-  } = useActiveBot();
-  const { data: client, mutate: mutateClient } = useClientMe();
-  const [error, setError] = useState("");
-  const [settingsBusy, setSettingsBusy] = useState(false);
-  const [linkSafetyEnabled, setLinkSafetyEnabled] = useState(false);
-  const [allowedDomainsInput, setAllowedDomainsInput] = useState("");
-  const [settingsSavedOk, setSettingsSavedOk] = useState(false);
-  const [seededBotId, setSeededBotId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (loadError) setError(loadError instanceof Error ? loadError.message : "Failed to load");
-  }, [loadError]);
-
-  // Seed the editable fields once the active bot's revalidation settles, and
-  // only once per bot id — a warm cache must not leave stale values, and a
-  // later background revalidation must not clobber in-progress edits.
-  useEffect(() => {
-    if (!defaultBot || isValidating) return;
-    if (seededBotId === defaultBot.id) return;
-    setSeededBotId(defaultBot.id);
-    setLinkSafetyEnabled(defaultBot.link_safety_enabled ?? false);
-    setAllowedDomainsInput((defaultBot.allowed_domains ?? []).join("\n"));
-  }, [defaultBot, isValidating, seededBotId]);
-
-  function parseAllowedDomains(): string[] {
-    return allowedDomainsInput
-      .split(/[\n,]/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
-  async function saveLinkSafetySettings() {
-    if (!defaultBot) return;
-    setSettingsBusy(true);
-    setSettingsSavedOk(false);
-    setError("");
-    try {
-      const updated = await api.bots.update(defaultBot.id, {
-        link_safety_enabled: linkSafetyEnabled,
-        allowed_domains: parseAllowedDomains(),
-      });
-      await mutateBots((bots) => bots?.map((b) => (b.id === updated.id ? updated : b)), {
-        revalidate: false,
-      });
-      setAllowedDomainsInput((updated.allowed_domains ?? []).join("\n"));
-      setSettingsSavedOk(true);
-      setTimeout(() => setSettingsSavedOk(false), 2500);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save widget settings");
-    } finally {
-      setSettingsBusy(false);
-    }
-  }
-
-  if (loading || (defaultBot && seededBotId !== defaultBot.id)) {
-    return <p className="text-slate-600">Loading…</p>;
-  }
-
-  return (
-    <div className="space-y-8">
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 text-red-800 px-4 py-3 text-sm">
-          {error}
-        </div>
-      )}
-
-      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-        <div>
-          <h2 className="text-base font-semibold text-slate-800">Bot ID</h2>
-          <p className="text-slate-500 text-sm mt-1">
-            Use this public bot ID in the widget snippet&apos;s{" "}
-            <code className="text-slate-800">data-bot-id</code> attribute.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <code className="text-xs break-all bg-slate-50 border border-slate-200 text-slate-900 font-mono rounded px-3 py-2 flex-1 min-w-0">
-            {defaultBot?.public_id ?? "—"}
-          </code>
-          {defaultBot?.public_id && (
-            <CopyButton text={defaultBot.public_id} label="Copy" variant="secondary" />
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Content</p>
-          <h2 className="mt-1 text-base font-semibold text-slate-800">Link Safety</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Ask visitors to confirm before opening links outside your allowed domains.
-          </p>
-        </div>
-
-        <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-          <span>
-            <span id="link-safety-enabled-label" className="block text-sm font-medium text-slate-800">
-              Enable Link Safety modal
-            </span>
-            <span className="block text-xs text-slate-500">
-              Markdown links and source links are checked before opening.
-            </span>
-          </span>
-          <input
-            id="link-safety-enabled"
-            type="checkbox"
-            aria-labelledby="link-safety-enabled-label"
-            checked={linkSafetyEnabled}
-            onChange={(e) => setLinkSafetyEnabled(e.target.checked)}
-            className="h-5 w-5 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Deploy</p>
-            <label htmlFor="allowed-domains" className="mt-1 block text-sm font-medium text-slate-800">
-              Allowed domains
-            </label>
-          </div>
-          <textarea
-            id="allowed-domains"
-            value={allowedDomainsInput}
-            onChange={(e) => setAllowedDomainsInput(e.target.value)}
-            rows={4}
-            placeholder={"example.com\nhelp.example.com"}
-            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-          />
-          <p className="text-xs text-slate-500">
-            One domain per line or comma separated. Subdomains are allowed automatically.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            disabled={!defaultBot || settingsBusy}
-            onClick={saveLinkSafetySettings}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {settingsBusy ? "Saving…" : "Save settings"}
-          </button>
-          {settingsSavedOk && <span className="text-sm text-emerald-600">Saved</span>}
-        </div>
-      </section>
-
-      {client && (
-        <WidgetIdentityKeyCard hasKey={client.has_widget_identity_secret} onKeyChange={() => mutateClient()} />
-      )}
-    </div>
-  );
-}
+import { BotIdSection } from "./_components/BotIdSection";
+import { IdentityKeySection } from "./_components/IdentityKeySection";
+import { LinkSafetySection } from "./_components/LinkSafetySection";
 
 export default function WidgetSettingsPage() {
   return (
     <SettingsShell active="widget">
-      <WidgetSettingsPanel />
+      <div className="flex flex-col gap-8">
+        <BotRequired>
+          <BotIdSection />
+          <LinkSafetySection />
+        </BotRequired>
+        <IdentityKeySection />
+      </div>
     </SettingsShell>
   );
 }

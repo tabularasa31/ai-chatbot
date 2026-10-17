@@ -29,6 +29,7 @@
 #nd-subnav button,
 #nd-tocnav button,
 #nd-toc a,
+[data-toc-popover] a,
 [data-search-full],
 [data-search] {
   @apply focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus;
@@ -50,7 +51,8 @@
   @apply text-ui;
 }
 
-#nd-toc a {
+#nd-toc a,
+[data-toc-popover] a {
   @apply flex min-h-11 items-center py-0 text-ui;
 }
 

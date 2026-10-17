@@ -361,9 +361,8 @@ declare global {
         return;
       }
 
-      // Inline mode reuses the container slot from targetEl. We wrap in our own
-      // synthetic container so stop() can do a clean .remove() without nuking
-      // sibling content the host page may have placed in targetEl.
+      // The target's content is replaced by our own wrapper so stop() can remove
+      // the widget with a single .remove().
       const inlineContainer = document.createElement("div");
       inlineContainer.id = "chat9-widget-container";
       inlineContainer.style.cssText = "width:100%;height:100%;";
@@ -375,8 +374,9 @@ declare global {
       const hostSized = inlineContainer.offsetHeight > 0;
       if (!hostSized) inlineContainer.style.height = "auto";
 
+      const frameHeight = hostSized ? "100%" : `${DEFAULT_PANEL_HEIGHT}px`;
       const inlineFrame = makeIframe(true);
-      inlineFrame.style.cssText = `width:100%;height:${hostSized ? "100%" : `${DEFAULT_PANEL_HEIGHT}px`};border:none;display:block;border-radius:12px;overflow:hidden;`;
+      inlineFrame.style.cssText = `width:100%;height:${frameHeight};border:none;display:block;border-radius:12px;overflow:hidden;`;
       inlineContainer.appendChild(inlineFrame);
 
       // Synthetic resizeOverlay for type-uniformity with bubble mode (unused).

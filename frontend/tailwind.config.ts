@@ -7,6 +7,7 @@ import {
   brandThemeExtend,
   brandTokensPlugin,
   chromeTokensPlugin,
+  docsTypography,
   fumadocsPreset,
 } from "./tailwind-brand";
 
@@ -37,8 +38,9 @@ const config: Config = {
         ...brandThemeExtend.colors,
         nd: ND_BRAND_COLORS,
       },
+      typography: docsTypography,
     },
   },
-  plugins: [require("@tailwindcss/typography"), brandTokensPlugin(["light", "dark"]), chromeTokensPlugin()],
+  plugins: [brandTokensPlugin(["light", "dark"]), chromeTokensPlugin()],
 };
 export default config;

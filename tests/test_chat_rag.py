@@ -3000,50 +3000,6 @@ async def test_process_chat_message_returns_plain_answer_when_model_asks_to_clar
     assert outcome.tokens_used == 3
 
 @pytest.mark.asyncio
-async def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from backend.models import Tenant
-
-    token = register_and_verify_user(tenant, db_session, email="locale-fallback@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Locale Fallback Tenant"},
-    )
-    set_client_openai_key(tenant, token)
-    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
-    assert client_row is not None
-
-    captured_kwargs: dict[str, object] = {}
-
-    async def fake_generate_greeting_in_language_result(**kwargs: object) -> LocalizationResult:
-        captured_kwargs.update(kwargs)
-        return LocalizationResult(text="Bonjour", tokens_used=4)
-
-    monkeypatch.setattr(
-        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
-        fake_generate_greeting_in_language_result,
-    )
-
-    outcome = await run_chat_turn(
-        client_row.id,
-        "",
-        uuid.uuid4(),
-        db_session,
-        api_key="sk-test",
-        user_context={"locale": "fr-FR"},
-        browser_locale="de-DE",
-    )
-
-    assert outcome.text == "Bonjour"
-    assert outcome.tokens_used == 4
-    assert captured_kwargs["target_language"] == "fr-FR"
-
-
-@pytest.mark.asyncio
 async def test_complete_escalation_openai_turn_localizes_fallback_to_question_language(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -57,7 +57,7 @@ Yes. The widget is plain JavaScript and works on any website — React, Vue, pla
 Yes. The widget maintains session continuity — users can ask follow-up questions and the bot will understand the context.
 
 **What happens before the user asks the first real question?**
-When the widget starts a brand-new empty conversation, Chat9 can show a default greeting instead of an error. That greeting starts from English and is localized from the available locale hint. If the user resumes an existing conversation from the last 24 hours, the greeting is not repeated.
+The widget shows a default greeting the first time a visitor opens it in a browser. It is shown once per browser, ever (per bot, and per identified user when `user_id`/`email` is passed), so a returning visitor is not greeted again, even when a new conversation starts after a week without messages. The greeting uses `userHints.locale` if you set one, otherwise the browser language, otherwise English. Opening the widget does not start a conversation, and the greeting is not saved into it: the conversation starts with the visitor's first message.
 
 **Can the bot ask follow-up questions?**
 Yes. If the retrieval confidence is too low to give a reliable answer, Chat9 may ask one short clarification question instead of guessing. The bot asks at most one clarifying question per conversation — after that it either gives a best-effort answer with a caveat or escalates to your support team.

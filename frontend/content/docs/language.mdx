@@ -16,7 +16,7 @@ Chat9 is language-agnostic. End users can write in any language and the bot repl
 
 ### 1. The default greeting (before any message is typed)
 
-When the widget opens a fresh session, Chat9 can show a default greeting before the user has typed anything. At this point there is no user message to detect a language from, so Chat9 picks the greeting's language using a fixed chain:
+The first time a visitor opens the widget in a browser (per bot, and per identified user when `user_id`/`email` is passed), Chat9 shows a default greeting before the user has typed anything. At this point there is no user message to detect a language from, so Chat9 picks the greeting's language using a fixed chain:
 
 1. **`userHints.locale`** — if you passed `userHints` to `Chat9Widget.start({...})` (or to `Chat9Widget.setHints({...})`) and included a `locale`, that wins. It's the strongest signal because your own system told us about this specific visitor.
 2. **Browser locale** — the `Accept-Language` header from the user's browser, or the `locale` you optionally passed when calling `POST /widget/session/init`.

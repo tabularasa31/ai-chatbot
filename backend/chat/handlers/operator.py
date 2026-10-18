@@ -223,23 +223,20 @@ class OperatorHandler(PipelineHandler):
             # is not made to send a second message to wake the bot up.
             return None
 
-        # Empty bootstrap turns carry no visitor message to hand on. Claim the
-        # turn anyway — the bot must stay muted — but persist nothing.
-        if ctx.question_text:
-            _persist_user_only_turn(
-                sync_db,
-                chat=chat,
-                tenant_id=ctx.tenant_id,
-                user_content=ctx.question,
-            )
-            _monitor_injection(ctx, chat)
-            # The other half of the e-mail lane. An operator answering from
-            # their mailbox has no console to watch, so the visitor's reply
-            # has to be pushed to them; without it the handoff is one-way and
-            # the operator waits for an answer that arrived somewhere they
-            # cannot see. Runs after the persist (which commits), so a mail
-            # failure cannot cost the visitor their message.
-            notify_support_of_visitor_turn(chat.id, sync_db)
+        _persist_user_only_turn(
+            sync_db,
+            chat=chat,
+            tenant_id=ctx.tenant_id,
+            user_content=ctx.question,
+        )
+        _monitor_injection(ctx, chat)
+        # The other half of the e-mail lane. An operator answering from
+        # their mailbox has no console to watch, so the visitor's reply
+        # has to be pushed to them; without it the handoff is one-way and
+        # the operator waits for an answer that arrived somewhere they
+        # cannot see. Runs after the persist (which commits), so a mail
+        # failure cannot cost the visitor their message.
+        notify_support_of_visitor_turn(chat.id, sync_db)
 
         if ctx.trace is not None:
             ctx.trace.update(

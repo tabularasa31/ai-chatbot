@@ -26,10 +26,7 @@ from backend.chat.handlers.rag import RagHandler
 from backend.chat.language import (
     ResolvedLanguageContext,
 )
-from backend.chat.language_context import (
-    _is_bootstrap_question,
-    _resolve_chat_language_context,
-)
+from backend.chat.language_context import _resolve_chat_language_context
 from backend.chat.pii import redact
 from backend.chat.pipeline import (
     async_run_chat_pipeline,
@@ -99,7 +96,6 @@ async def _ensure_chat_async(
     chat = result.scalars().first()
 
     rotated_from: Chat | None = None
-    prior_session_language: str | None = None
     if chat is not None and should_rotate(chat):
         # Serialize concurrent rotation: lock the stale row, then re-read the
         # latest chat. If a parallel request rotated while we waited on the
@@ -127,15 +123,6 @@ async def _ensure_chat_async(
         effective_user_ctx = visitor_identity_context(rotated_from.user_context)
     elif user_context:
         effective_user_ctx = dict(user_context)
-    if rotated_from is not None:
-        # Carry the language the visitor last spoke in across the rotation
-        # boundary. The fresh Chat row has no last_response_language of its own,
-        # so this is the only bridge that lets a bootstrap re-greeting answer in
-        # the returning visitor's established language instead of English. Kept
-        # as a standalone statement so it does not sever the user_context
-        # if/elif chain above.
-        prior_session_language = rotated_from.last_response_language
-
     if not chat:
         uc: dict | None = dict(effective_user_ctx) if effective_user_ctx else None
         if browser_locale:
@@ -201,7 +188,7 @@ async def _ensure_chat_async(
 
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
-    return chat, effective_user_ctx, prior_session_language
+    return chat, effective_user_ctx
 
 
 async def _build_handler_context_async(
@@ -380,6 +367,9 @@ async def async_process_chat_message(
     """
     _turn_started_at = perf_counter()
 
+    if not question.strip():
+        raise ValueError("Question is required")
+
     # Tenant is near-static; a per-process TTL cache collapses this DB hop into
     # a memory read on the hot path (item 1 of the chat-latency plan). A miss
     # loads from DB and populates the cache; tenant-update routes invalidate it.
@@ -396,22 +386,19 @@ async def async_process_chat_message(
     redacted_question = redact(question).redacted_text
 
     # The human-request and intent classifiers overlap the chat setup and the
-    # answer-cache lookup below; an exact cache hit abandons them. A bootstrap
-    # turn (widget open) carries an empty question and nothing to classify.
+    # answer-cache lookup below; an exact cache hit abandons them.
     _hrc_start = perf_counter()
-    classifier_task: asyncio.Future[tuple[Any, Any]] | None = None
-    if redacted_question.strip():
-        classifier_task = asyncio.gather(
-            detect_human_request(redacted_question, api_key, tenant_id),
-            classify_question_intent(redacted_question, api_key, tenant_id),
-        )
-        classifier_task.add_done_callback(_discard_task_result)
+    classifier_task: asyncio.Future[tuple[Any, Any]] = asyncio.gather(
+        detect_human_request(redacted_question, api_key, tenant_id),
+        classify_question_intent(redacted_question, api_key, tenant_id),
+    )
+    classifier_task.add_done_callback(_discard_task_result)
 
     trace = begin_trace(
         name="rag-query",
         session_id=str(session_id),
         tenant_id=str(tenant_id),
-        input=redacted_question or None,
+        input=redacted_question,
         metadata={"tenant_id": str(tenant_id), "session_id": str(session_id)},
         tags=[f"tenant:{tenant_id}"],
     )
@@ -421,7 +408,7 @@ async def async_process_chat_message(
         name="chat_setup",
         input={"session_id": str(session_id), "has_bot_id": bot_id is not None},
     )
-    chat, effective_user_ctx, prior_session_language = await _ensure_chat_async(
+    chat, effective_user_ctx = await _ensure_chat_async(
         db, tenant_id, session_id, bot_id, user_context, browser_locale
     )
     # Bind tenant_row to the now-active session. It is detached either by the
@@ -464,10 +451,6 @@ async def async_process_chat_message(
             current_turn_text=question_text,
             tenant_row=tenant_row,
             tenant_profile=tenant_profile,
-            is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
-            bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
-            browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
-            prior_session_language=prior_session_language,
             chat=chat,
             db=s,
         ),
@@ -504,7 +487,7 @@ async def async_process_chat_message(
             # key: at trace level it collided with retrieval "best_confidence_score"
             # (written by the RAG handler) and made per-trace confidence analytics
             # ambiguous. Omitted entirely — not written as 0.0 — when detection did
-            # not run this turn (locked follow-ups, bootstrap), so those turns stop
+            # not run this turn (locked follow-ups), so those turns stop
             # registering as false-negative zero-confidence detections.
             **(
                 {
@@ -521,9 +504,6 @@ async def async_process_chat_message(
         },
         user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
     )
-
-    if not question_text and not is_new_session:
-        raise ValueError("Question is required")
 
     handler_ctx = await _build_handler_context_async(
         db=db,
@@ -567,9 +547,8 @@ async def async_process_chat_message(
     if cached_result is not None:
         handler_ctx.extras["_pipeline_result"] = cached_result
         handler_ctx.message_has_request_content = True
-        if classifier_task is not None:
-            classifier_task.cancel()
-    elif classifier_task is not None:
+        classifier_task.cancel()
+    else:
         human_request_result, question_intent = await classifier_task
         handler_ctx.explicit_human_request = human_request_result.human_request
         handler_ctx.human_request_explicit = human_request_result.human_request_explicit

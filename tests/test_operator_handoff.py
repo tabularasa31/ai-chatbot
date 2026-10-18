@@ -407,39 +407,6 @@ def test_a_released_turn_is_recorded_once_by_the_ordinary_guard(
     assert len(injection_events) == 1
 
 
-def test_a_bootstrap_turn_records_nothing(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """No visitor message, no guard invocation, no row.
-
-    A blank message against an existing session is refused outright
-    (422) — it never reaches the pipeline, so there is nothing to record.
-    """
-    ws = _make_workspace(tenant, db_session, email="boot@example.com", name="Boot Co")
-    _seed_knowledge(db_session, ws.tenant_id)
-    _arm_openai(mock_openai_client)
-    chat = _make_chat(
-        db_session,
-        ws.tenant_id,
-        operator_state=OperatorState.live,
-        operator_joined_at=_utcnow(),
-    )
-
-    resp = post_chat_message(
-        tenant, bot_public_id=ws.bot_public_id, question="   ", session_id=str(chat.session_id)
-    )
-    assert resp.status_code == 422, resp.text
-
-    db_session.expire_all()
-    assert _roles(db_session, chat.id) == []
-    # Waiting out the full window before asserting emptiness: the write is a
-    # detached task, so checking immediately would pass on a loaded runner even
-    # if a row were on its way.
-    assert _await_guard_events(db_session, chat.id, timeout=1.5) == []
-
-
 def test_live_chat_outranks_the_escalation_fsm_in_the_router() -> None:
     """OperatorHandler must sit ahead of EscalationStateMachine.
 

@@ -33,8 +33,6 @@ from backend.chat.handlers.rag import (
     REJECT_REASON_TURN_OUTCOME,
 )
 from backend.chat.persistence import (
-    _persist_assistant_message,
-    _persist_assistant_message_with_response_language,
     _persist_operator_message,
     _persist_turn,
     _persist_turn_with_response_language,
@@ -165,31 +163,6 @@ def test_non_assistant_messages_never_get_turn_outcome(db_session: Session, pers
     message = persist(db_session, chat)
     assert message.role == expected_role
     assert message.turn_outcome is None
-
-
-def test_assistant_only_message_infers_from_escalation_state(db_session: Session) -> None:
-    """``_persist_assistant_message`` (the bootstrap-greeting path) has no
-    document ids at all; absent an active escalation state it defaults to
-    unanswered, and an armed pre-confirm gate still wins."""
-    plain_chat = _make_chat(db_session)
-    _persist_assistant_message(
-        db_session, plain_chat, plain_chat.tenant_id, "Welcome! Ask me anything.", 4
-    )
-    plain_reply = plain_chat.messages[-1]
-    assert plain_reply.turn_outcome == TurnOutcome.unanswered.value
-
-    escalating_chat = _make_chat(db_session, escalation_pre_confirm_pending=True)
-    _persist_assistant_message_with_response_language(
-        db=db_session,
-        chat=escalating_chat,
-        tenant_id=escalating_chat.tenant_id,
-        response_language="en",
-        resolution_reason="detected",
-        assistant_content="Shall I open a ticket for you?",
-        extra_tokens=4,
-    )
-    escalating_reply = escalating_chat.messages[-1]
-    assert escalating_reply.turn_outcome == TurnOutcome.escalation.value
 
 
 @pytest.mark.parametrize(

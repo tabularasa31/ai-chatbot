@@ -235,53 +235,28 @@ def test_widget_config_link_safety_disabled_then_enabled(
     assert enabled_data["link_safety_labels"]["body"] == "You are going to {hostname}. Continue?"
 
 
+@pytest.mark.parametrize("idle_minutes", [1, 45], ids=["active_session", "idle_past_rotation"])
 def test_widget_chat_empty_message_returns_422(
-    tenant: TestClient,
-    db_session: Session,
+    tenant: TestClient, db_session: Session, idle_minutes: int
 ) -> None:
-    client_uuid, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-greeting@example.com")
-    existing_chat = Chat(
-        tenant_id=client_uuid,
-        session_id=uuid.uuid4(),
-        user_context={},
+    """An empty message is never a greeting request, even after idle rotation."""
+    client_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, f"widget-empty-{idle_minutes}@example.com"
     )
-    db_session.add(existing_chat)
-    db_session.commit()
+    session_id = uuid.uuid4()
+    _make_session_chat(
+        db_session,
+        client_uuid,
+        session_id=session_id,
+        idle_minutes=idle_minutes,
+        messages=[("user", "old question")],
+    )
 
-    r = _post_widget_chat(
-        tenant,
-        bot_public_id,
-        message="",
-        session_id=str(existing_chat.session_id),
-    )
+    r = _post_widget_chat(tenant, bot_public_id, message="", session_id=str(session_id))
+
     assert r.status_code == 422
     assert r.json()["detail"]["code"] == "message_required"
-
-
-def test_widget_chat_empty_message_bootstraps_new_session(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-bootstrap@example.com")
-
-    async def _fake_async_process(*args, **kwargs):
-        return ChatTurnOutcome(
-            text="Hello from bootstrap",
-            document_ids=[],
-            tokens_used=0,
-        )
-
-    monkeypatch.setattr(
-        "backend.widget.routes.async_process_chat_message",
-        _fake_async_process,
-    )
-
-    r = _post_widget_chat(tenant, bot_public_id, message="")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["text"] == "Hello from bootstrap"
-    assert data["session_id"]
+    assert db_session.query(Chat).filter(Chat.session_id == session_id).count() == 1
 
 
 def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
@@ -805,8 +780,7 @@ def _pin_idle_timeout(monkeypatch):
     The shipped default is now 7 days (a returning visitor keeps their
     conversation within a widget session instead of being re-greeted). 1800s
     was the prior default every test here was written against, so pinning it
-    is a no-op for non-rotation tests while keeping the ``conversation_rotated``
-    boundary tests exercising the mechanism at a fixed threshold.
+    is a no-op for non-rotation tests while keeping the boundary tests exercising the mechanism at a fixed threshold.
     """
     from backend.core.config import settings
 
@@ -855,65 +829,32 @@ def _make_session_chat(
     return chat
 
 
-@pytest.mark.parametrize(
-    "chats,expected",
-    [
-        pytest.param(
-            [
-                (120, [("user", "old question"), ("assistant", "old answer")], {}),
-                (1, [("user", "new question")], {}),
-            ],
-            {
-                "messages": ["old question", "old answer", "new question"],
-                "boundary_indices": [2],
-                "conversation_rotated": False,
-            },
-            id="recent_followup_no_rotation",
-        ),
-        pytest.param(
-            [(45, [("user", "old question"), ("assistant", "old answer")], {})],
-            {"conversation_rotated": True, "boundary_indices": []},
-            id="idle_past_threshold_flags_rotation",
-        ),
-        pytest.param(
-            [(45, [("assistant", "Hi, how can I help?")], {})],
-            {
-                "conversation_rotated": False,
-                "messages": ["Hi, how can I help?"],
-            },
-            id="greeting_only_idle_does_not_flag_rotation",
-        ),
-    ],
-)
-def test_widget_history_rotation_flags(
-    tenant: TestClient, db_session: Session, chats: list, expected: dict
+def test_widget_history_marks_conversation_boundaries(
+    tenant: TestClient, db_session: Session
 ) -> None:
-    """/widget/history computes conversation_rotated / boundary_indices from
-    idle time and message content, across the failure modes that decide
-    whether a returning visitor is re-greeted."""
+    """/widget/history reports where a newer conversation begins."""
     tenant_uuid, bot_public_id = _setup_widget_tenant(
-        tenant, db_session, f"widget-rot-hist-{expected.get('conversation_rotated')}@example.com"
+        tenant, db_session, "widget-rot-hist@example.com"
     )
     session_id = uuid.uuid4()
-    for idle_minutes, messages, extra_fields in chats:
+    for idle_minutes, messages in [
+        (120, [("user", "old question"), ("assistant", "old answer")]),
+        (1, [("user", "new question")]),
+    ]:
         _make_session_chat(
             db_session,
             tenant_uuid,
             session_id=session_id,
             idle_minutes=idle_minutes,
             messages=messages,
-            **extra_fields,
         )
 
     r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
 
     assert r.status_code == 200
     data = r.json()
-    if "messages" in expected:
-        assert [m["content"] for m in data["messages"]] == expected["messages"]
-    assert data["conversation_rotated"] is expected["conversation_rotated"]
-    if "boundary_indices" in expected:
-        assert data["boundary_indices"] == expected["boundary_indices"]
+    assert [m["content"] for m in data["messages"]] == ["old question", "old answer", "new question"]
+    assert data["boundary_indices"] == [2]
 
 
 @pytest.mark.parametrize(
@@ -956,42 +897,6 @@ def test_widget_history_uses_session_gate(
     r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
 
     assert r.status_code == expected_status
-
-
-def test_widget_chat_empty_message_allowed_when_rotation_pending(
-    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The widget re-greets a returning visitor by POSTing an empty message
-    # with the existing session; mid-conversation empty messages still 422.
-    tenant_uuid, bot_public_id = _setup_widget_tenant(
-        tenant, db_session, "widget-rot-greet@example.com"
-    )
-    session_id = uuid.uuid4()
-    _make_session_chat(
-        db_session,
-        tenant_uuid,
-        session_id=session_id,
-        idle_minutes=45,
-        messages=[("user", "old question")],
-    )
-
-    async def _fake_async_process(*args, **kwargs):
-        return ChatTurnOutcome(
-            text="Fresh greeting",
-            document_ids=[],
-            tokens_used=0,
-        )
-
-    monkeypatch.setattr(
-        "backend.widget.routes.async_process_chat_message",
-        _fake_async_process,
-    )
-
-    r = _post_widget_chat(
-        tenant, bot_public_id, message="", session_id=str(session_id)
-    )
-    assert r.status_code == 200
-    assert r.json()["text"] == "Fresh greeting"
 
 
 # ---------------------------------------------------------------------------
@@ -1052,45 +957,158 @@ def test_widget_chat_success_persists_messages(
     assert user_message.content == "What is the answer?"
 
 
-@pytest.mark.escalation
-def test_widget_chat_empty_question_greets_in_locale_then_422s_on_repeat(
+def test_widget_greeting_is_stateless_until_first_message(
     mock_openai_client: Mock,
+    mock_langfuse: Mock,
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bootstrap turn (empty first message, real pipeline):
+    """The welcome is localized to the browser locale and leaves no chat,
+    session or trace; the conversation starts with the visitor's first message."""
+    from backend.core.config import settings
+    from backend.observability.service import get_observability
 
-    * skips the human-request / support-contact classifier LLM calls (task
-      86ey7x2p6 measured ~2s of pure greeting latency from them).
-    * returns the tenant's default greeting localized to the browser locale.
-    * a second empty message on the same (already-started) session is
-      rejected — it is not a valid follow-up question.
-    """
-    _, bot_public_id = _setup_widget_tenant(
-        tenant, db_session, "widget-empty-locale@example.com", "Greeting Locale Tenant"
+    client_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-greeting-stateless@example.com", "Greeting Locale Tenant"
     )
-
-    def _fail_classifier(*args, **kwargs):
-        raise AssertionError("classifier LLM call must be skipped on bootstrap turns")
-
-    monkeypatch.setattr("backend.chat.service.detect_human_request", _fail_classifier)
-    monkeypatch.setattr("backend.chat.service.classify_question_intent", _fail_classifier)
-
+    _seed_rag_chunk(db_session, client_uuid)
+    monkeypatch.setattr(settings, "langfuse_host", "http://langfuse.test")
+    monkeypatch.setattr(settings, "langfuse_public_key", "pk-test")
+    monkeypatch.setattr(settings, "langfuse_secret_key", "sk-test")
+    get_observability().init()
+    langfuse_client = mock_langfuse.return_value
     mock_openai_client.chat.completions.create.return_value = _chat_completion_response(
         "Je suis l'assistant Greeting Locale Tenant. Posez votre question.", total_tokens=9
     )
 
-    r = _post_widget_chat(tenant, bot_public_id, message="", locale="fr-FR")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["text"] == "Je suis l'assistant Greeting Locale Tenant. Posez votre question."
-    session_id = data["session_id"]
+    greeting = tenant.get(f"/widget/greeting?bot_id={bot_public_id}&locale=fr-FR")
 
-    second = _post_widget_chat(
-        tenant, bot_public_id, message="", session_id=session_id, locale="fr-FR"
+    assert greeting.status_code == 200
+    assert greeting.json() == {
+        "text": "Je suis l'assistant Greeting Locale Tenant. Posez votre question."
+    }
+    assert db_session.query(Chat).filter(Chat.tenant_id == client_uuid).count() == 0
+    langfuse_client.trace.assert_not_called()
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "The answer is 42", total_tokens=50
     )
-    assert second.status_code == 422
+    reply = _post_widget_chat(tenant, bot_public_id, message="What is the answer?")
+
+    assert reply.status_code == 200
+    assert db_session.query(Chat).filter(Chat.tenant_id == client_uuid).count() == 1
+    langfuse_client.trace.assert_called()
+
+    db_session.get(Tenant, client_uuid).openai_api_key = None
+    db_session.commit()
+    no_key = tenant.get(f"/widget/greeting?bot_id={bot_public_id}&locale=fr-FR")
+
+    assert no_key.status_code == 200
+    assert no_key.json()["text"].startswith("I'm the Greeting Locale Tenant assistant")
+
+    db_session.get(Tenant, client_uuid).openai_api_key = encrypt_value("sk-test")
+    db_session.commit()
+    mock_openai_client.chat.completions.create.side_effect = RuntimeError("llm down")
+    llm_down = tenant.get(f"/widget/greeting?bot_id={bot_public_id}&locale=fr-FR")
+
+    assert llm_down.status_code == 200
+    assert llm_down.json()["text"].startswith("I'm the Greeting Locale Tenant assistant")
+
+
+def test_widget_greeting_is_cached_per_tenant_product_and_language_root(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    fake_redis: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One LLM call per tenant, product name and language (root plus known script);
+    unknown roots, empty completions and LLM failures are never cached; a tenant
+    over its weekly generation budget costs no further LLM call."""
+    from backend.chat.handlers import greeting as greeting_module
+
+    client_uuid, bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-greeting-cache@example.com", "Greeting Cache Tenant"
+    )
+    llm = mock_openai_client.chat.completions.create
+    russian = "Привет! Я помощник Greeting Cache Tenant. Задайте вопрос."
+    german = "Hallo! Ich bin der Assistent von Greeting Cache Tenant. Stellen Sie Ihre Frage."
+    llm.return_value = _chat_completion_response(russian, total_tokens=9)
+
+    def cached_greetings() -> set[str]:
+        return {key for key in fake_redis if key.startswith("widget:greeting:")}
+
+    def greet(locale: str, bot_id: str = bot_public_id) -> str:
+        response = tenant.get(f"/widget/greeting?bot_id={bot_id}&locale={locale}")
+        assert response.status_code == 200
+        return response.json()["text"]
+
+    assert greet("ru-RU") == russian
+    assert greet("ru-UA") == russian
+    assert llm.call_count == 1
+    assert len(cached_greetings()) == 1
+
+    assert greet("zz-ZZ").startswith("I'm the Greeting Cache Tenant assistant")
+    assert llm.call_count == 1
+
+    traditional = "您好！我是 Greeting Cache Tenant 的助理。請提出您的問題。"
+    llm.return_value = _chat_completion_response(traditional, total_tokens=9)
+    assert greet("zh-Hant-TW") == traditional
+    assert greet("zh-Hant") == traditional
+    assert llm.call_count == 2
+    assert "zh-Hant" in llm.call_args.kwargs["messages"][0]["content"]
+    llm.return_value = _chat_completion_response(russian, total_tokens=9)
+    assert greet("zh-TW") == russian
+    assert greet("zh") == russian
+    assert llm.call_count == 3
+    assert greet("zh-Zzzx") == russian
+    assert llm.call_count == 3
+    assert len(cached_greetings()) == 3
+
+    budget_key = f"widget:greeting-budget:{client_uuid}"
+    default_cap = greeting_module.WIDGET_GREETING_WEEKLY_GENERATION_CAP
+    monkeypatch.setattr(
+        greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", int(fake_redis[budget_key])
+    )
+    assert greet("zh-Hans-CN") == russian
+    assert greet("fr-FR").startswith("I'm the Greeting Cache Tenant assistant")
+    assert llm.call_count == 3
+    monkeypatch.setattr(greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", default_cap)
+
+    other_client_uuid, other_bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-greeting-cache-other@example.com", "Greeting Cache Tenant"
+    )
+    assert other_client_uuid != client_uuid
+    assert greet("ru-RU", other_bot_public_id) == russian
+    assert llm.call_count == 4
+    assert len(cached_greetings()) == 4
+
+    db_session.get(Tenant, client_uuid).name = "Renamed Tenant"
+    db_session.commit()
+    assert greet("ru-RU") == russian
+    assert llm.call_count == 5
+
+    fake_redis.clear()
+    llm.return_value = _chat_completion_response("", total_tokens=9)
+    assert greet("de-DE").startswith("I'm the Renamed Tenant assistant")
+    llm.return_value = _chat_completion_response(german, total_tokens=9)
+    llm.side_effect = RuntimeError("llm down")
+    assert greet("de-DE").startswith("I'm the Renamed Tenant assistant")
+    assert not cached_greetings()
+    llm.side_effect = None
+    assert greet("de-DE") == german
+    assert llm.call_count == 8
+
+    async def _redis_down(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(greeting_module.redis_mod, "cache_get", _redis_down)
+    monkeypatch.setattr(greeting_module.redis_mod, "incr_with_ttl", _redis_down)
+    monkeypatch.setattr(greeting_module, "WIDGET_GREETING_WEEKLY_GENERATION_CAP", 0)
+    assert greet("de-DE") == german
+    assert llm.call_count == 9
 
 
 def test_widget_chat_uses_context(

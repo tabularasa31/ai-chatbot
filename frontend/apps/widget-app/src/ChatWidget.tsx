@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type Components } from "react-markdown";
 import "highlight.js/styles/github-dark.css";
 import { ArrowUp, Check, Copy, ExternalLink, Info, Loader2, TriangleAlert, X } from "lucide-react";
@@ -10,7 +10,6 @@ import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { MarkdownBody } from "./MarkdownBody";
 import {
-  appendSystemMarker,
   createErrorMessage,
   createLlmUnavailableMessage,
   createSystemMessage,
@@ -22,6 +21,7 @@ import {
   type WidgetSource,
   type WidgetTurnPayload,
 } from "@chat9/widget-shared";
+import { greetingLocale, greetOnce, hasBeenGreeted, markGreeted } from "./greeting";
 import { t as tString } from "./strings";
 
 export type ChatWidgetBelowAssistantContext = {
@@ -323,14 +323,11 @@ export function ChatWidget({
   const linkOpenerRef = useRef<HTMLElement | null>(null);
   const modalOpenRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  // The greeting request in flight, resolving to the session it opened (null on
-  // failure). A visitor's first message waits for it so both share one session.
-  const greetingInFlightRef = useRef<Promise<string | null> | null>(null);
-  // Set once the automatic greeting has been requested: an empty conversation
-  // is greeted exactly once, however often the effect re-runs.
-  const greetingRequestedRef = useRef(false);
-  // True once the visitor has sent a message since the greeting was requested;
-  // a greeting that arrives afterwards is dropped rather than shown after it.
+  // The last identity asked; the stored marker covers earlier ones, so no
+  // history refresh can trigger a second request.
+  const greetingRequestedForRef = useRef<string | null>(null);
+  // True once the visitor has sent a message; a greeting that arrives
+  // afterwards is dropped rather than shown after it.
   const visitorSentRef = useRef(false);
   // Tracks the storage user_id derived from the current hints so other effects can use it.
   const userIdRef = useRef<string | null>(null);
@@ -399,13 +396,20 @@ export function ChatWidget({
     ),
   }), [locale, maybeOpenLinkSafety]);
 
+  const storageUserId = deriveStorageUserId(hints);
+  const hasHints = Boolean(hints);
+  const hintsRef = useRef(hints);
+  useLayoutEffect(() => {
+    hintsRef.current = hints;
+  }, [hints]);
+
   useEffect(() => {
-    const userId = deriveStorageUserId(hints);
+    const userId = storageUserId;
+    const sessionHints = hintsRef.current;
     userIdRef.current = userId;
 
     setSessionHydrated(false);
     setHistoryLoaded(false);
-    greetingRequestedRef.current = false;
     setActiveTicket(null);
     setHandoffState("bot");
     cursorRef.current = null;
@@ -416,11 +420,11 @@ export function ChatWidget({
 
     const stored = readStoredSession(botId, userId);
 
-    if (hints && !stored) {
+    if (sessionHints && !stored) {
       fetch(`${apiBase}/widget/session/init`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bot_id: botId, user_hints: hints }),
+        body: JSON.stringify({ bot_id: botId, user_hints: sessionHints }),
       })
         .then((r) => r.json())
         .then((data: { session_id?: string }) => {
@@ -437,7 +441,7 @@ export function ChatWidget({
       setSessionId(stored);
       setSessionHydrated(true);
     }
-  }, [botId, hints, apiBase]);
+  }, [botId, storageUserId, hasHints, apiBase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -598,61 +602,18 @@ export function ChatWidget({
     return { res, payload };
   }, [botId, localeParam, apiBase]);
 
-  // attemptSessionId is null for a brand-new session; after conversation
-  // rotation it carries the existing session so the greeting opens the new
-  // conversation server-side instead of minting another session.
-  const fetchGreeting = useCallback(async (attemptSessionId: string | null = null) => {
-    const { res, payload } = await requestWidgetTurn({
-      message: "",
-      attemptSessionId,
-    });
-    if (!res.ok) {
-      throw new Error(formatApiDetail(payload.detail, `API error: ${res.status}`));
-    }
-    const data = payload as {
-      text: string;
-      session_id: string;
-      ticket_number?: string | null;
-      sources?: WidgetSource[];
-    };
-    // Marking history loaded keeps a late history fetch from overwriting the visitor's bubble.
-    if (visitorSentRef.current) setHistoryLoaded(true);
-    else applyAssistantMessage(data);
-    setSessionId(data.session_id);
-    persistSession(botId, data.session_id, userIdRef.current);
-    return data.session_id;
-  }, [applyAssistantMessage, botId, requestWidgetTurn]);
-
-  const appendGreetingError = useCallback((error: unknown) => {
-    console.error("Chat9: greeting failed", error);
-    if (visitorSentRef.current) return;
-    setMessages((prev) => [
-      ...prev,
-      createErrorMessage(tString(localeParam, "error_greeting"), { kind: "greeting" }),
-    ]);
-  }, [localeParam]);
-
-  const requestGreeting = useCallback((attemptSessionId: string | null) => {
-    visitorSentRef.current = false;
+  const requestGreeting = useCallback(async (userId: string | null) => {
     setGreetingPending(true);
-    const request = fetchGreeting(attemptSessionId)
-      .catch((error) => {
-        appendGreetingError(error);
-        return null;
-      })
-      .finally(() => {
-        greetingInFlightRef.current = null;
-        setGreetingPending(false);
-      });
-    greetingInFlightRef.current = request;
-    return request;
-  }, [appendGreetingError, fetchGreeting]);
-
-  const requestGreetingOnce = useCallback((attemptSessionId: string | null) => {
-    if (greetingRequestedRef.current) return;
-    greetingRequestedRef.current = true;
-    void requestGreeting(attemptSessionId);
-  }, [requestGreeting]);
+    const text = await greetOnce({
+      apiBase,
+      botId,
+      userId,
+      locale: greetingLocale(hints?.locale, localeParam),
+      isCurrent: () => userIdRef.current === userId,
+    });
+    if (greetingRequestedForRef.current === (userId ?? "")) setGreetingPending(false);
+    if (text && !visitorSentRef.current) applyAssistantMessage({ text });
+  }, [apiBase, applyAssistantMessage, botId, hints?.locale, localeParam]);
 
   useEffect(() => {
     if (!sessionHydrated || !sessionId || historyLoaded) return;
@@ -674,7 +635,6 @@ export function ChatWidget({
           messages: { id: string; role: string; content: string }[];
           ticket_number?: string | null;
           boundary_indices?: number[];
-          conversation_rotated?: boolean;
           handoff_state?: HandoffState;
           operator_label?: string;
         }>;
@@ -684,6 +644,7 @@ export function ChatWidget({
         if (data.handoff_state) setHandoffState(data.handoff_state);
         if (data.operator_label) setOperatorLabel(data.operator_label);
         if (data.messages.length > 0) {
+          markGreeted(botId, userIdRef.current);
           const boundaries = new Set(data.boundary_indices ?? []);
           const hydrated: ChatWidgetMessage[] = [];
           data.messages.forEach((m, index) => {
@@ -706,16 +667,6 @@ export function ChatWidget({
           setMessages(hydrated);
           if (data.ticket_number) setActiveTicket(data.ticket_number);
         }
-        if (data.conversation_rotated) {
-          // Returning visitor past the idle threshold: keep the old messages
-          // as read-only context, mark the boundary, and greet afresh — the
-          // greeting POST opens the new conversation server-side.
-          if (data.messages.length > 0) {
-            setMessages((prev) => appendSystemMarker(prev, "new_conversation"));
-          }
-          greetingRequestedRef.current = true;
-          void requestGreeting(sessionId);
-        }
       })
       .catch((error) => {
         if (cancelled) return;
@@ -732,13 +683,17 @@ export function ChatWidget({
         }
       });
     return () => { cancelled = true; };
-  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, localeParam, requestGreeting]);
+  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, localeParam]);
 
   useEffect(() => {
     const waitingForHistory = sessionId !== null && !historyLoaded;
-    if (!sessionHydrated || waitingForHistory || loading || messages.length > 0) return;
-    requestGreetingOnce(sessionId);
-  }, [historyLoaded, loading, messages.length, requestGreetingOnce, sessionHydrated, sessionId]);
+    if (!isOpen || !sessionHydrated || waitingForHistory || loading || messages.length > 0) return;
+    const userId = userIdRef.current;
+    const identity = userId ?? "";
+    if (greetingRequestedForRef.current === identity || hasBeenGreeted(botId, userId)) return;
+    greetingRequestedForRef.current = identity;
+    void requestGreeting(userId);
+  }, [botId, historyLoaded, isOpen, loading, messages.length, requestGreeting, sessionHydrated, sessionId]);
 
   // How often to ask whether a human has written. The ladder is the whole
   // point: a conversation the bot is handling is not polled at all, one
@@ -924,11 +879,11 @@ export function ChatWidget({
     setStatusStage(null);
     if (appendUserBubble) {
       visitorSentRef.current = true;
-      setMessages((prev) => [
-        ...prev.filter((m) => !(m.type === "error" && m.retry.kind === "greeting")),
-        createTextMessage("user", userMessage),
-      ]);
+      setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
     }
+    // A session minted by this message has no history to load, and loading it
+    // would replace the bubbles already on screen.
+    if (!sessionId) setHistoryLoaded(true);
 
     const handleChunk = (partial: string) => {
       setStreamingText(partial);
@@ -936,17 +891,15 @@ export function ChatWidget({
     };
 
     try {
-      const greetedSessionId = greetingInFlightRef.current ? await greetingInFlightRef.current : null;
-      const attemptSessionId = sessionId ?? greetedSessionId;
       let { res, payload } = await requestWidgetTurn({
         message: userMessage,
-        attemptSessionId,
+        attemptSessionId: sessionId,
         onChunk: handleChunk,
         onStatus: setStatusStage,
       });
       let detail = payload.detail;
       let code = apiErrorCode(detail);
-      if (!res.ok && attemptSessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
+      if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
         clearStoredSession(botId, userIdRef.current);
         setSessionId(null);
         setStreamingText("");
@@ -1124,12 +1077,10 @@ export function ChatWidget({
       void sendUserMessage(error.retry.message, { appendUserBubble: false });
     } else if (error.retry.kind === "escalate") {
       void handleLlmUnavailableEscalate(error.retry.messageId);
-    } else if (error.retry.kind === "history") {
+    } else {
       setHistoryLoaded(false);
-    } else if (!visitorSentRef.current && !greetingInFlightRef.current) {
-      void requestGreeting(sessionId);
     }
-  }, [handleLlmUnavailableEscalate, requestGreeting, sendUserMessage, sessionId]);
+  }, [handleLlmUnavailableEscalate, sendUserMessage]);
 
   useEffect(() => {
     if (!isOpen || !onClose || modalOpenRef.current) return;

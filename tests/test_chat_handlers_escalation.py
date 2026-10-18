@@ -30,7 +30,7 @@ def _make_language_context() -> ResolvedLanguageContext:
         confidence=1.0,
         is_reliable=True,
         response_language="en",
-        response_language_resolution_reason="bootstrap_default_english",
+        response_language_resolution_reason="detected",
         escalation_language="en",
         escalation_language_source="default",
     )

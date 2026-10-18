@@ -22,11 +22,6 @@ from backend.support_config import public_support_config_dict
 logger = logging.getLogger(__name__)
 
 
-def _is_bootstrap_question(text: str) -> bool:
-    """Return True when text is empty/whitespace-only — the canonical bootstrap turn test."""
-    return not text.strip()
-
-
 def _load_recent_user_turn_texts(
     db: Session,
     chat: Chat,
@@ -196,10 +191,6 @@ def _resolve_chat_language_context(
     current_turn_text: str,
     tenant_row: Tenant | None,
     tenant_profile: TenantProfile | None,
-    bootstrap_user_locale: str | None,
-    browser_locale: str | None,
-    is_bootstrap_turn: bool,
-    prior_session_language: str | None = None,
     chat: Chat | None = None,
     db: Session | None = None,
 ) -> ResolvedLanguageContext:
@@ -219,30 +210,23 @@ def _resolve_chat_language_context(
     )
     context = resolve_language_context(
         current_turn_text=current_turn_text,
-        is_bootstrap_turn=is_bootstrap_turn,
-        bootstrap_user_locale=bootstrap_user_locale,
-        browser_locale=browser_locale,
         tenant_escalation_language=(
             support_config.get("escalation_language")
             or getattr(tenant_profile, "escalation_language", None)
         ),
         previous_response_language=previous_response_language,
-        prior_session_language=prior_session_language,
         recent_user_turn_texts=recent_user_turn_texts,
         language_locked=bool(getattr(chat, "language_locked", False)) if chat is not None else False,
         tenant_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
         chat_id=str(chat.id) if chat is not None else None,
     )
     raw_detected_language = context.detected_language
-    if chat is not None and db is not None and not is_bootstrap_turn:
+    if chat is not None and db is not None:
         context = _apply_detected_language_session_fallback(db=db, chat=chat, context=context)
-    if not is_bootstrap_turn:
-        # Bootstrap turns carry no user text, so their detected_language is
-        # "unknown" by design — counting them would inflate the unknown rate.
-        _emit_detected_language_metric(
-            context=context,
-            raw_detected_language=raw_detected_language,
-            tenant_row=tenant_row,
-            chat=chat,
-        )
+    _emit_detected_language_metric(
+        context=context,
+        raw_detected_language=raw_detected_language,
+        tenant_row=tenant_row,
+        chat=chat,
+    )
     return context

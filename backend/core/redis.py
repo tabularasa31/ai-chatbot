@@ -23,7 +23,7 @@ import asyncio
 import logging
 import secrets
 from collections.abc import Callable, Coroutine
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from backend.core.config import settings
 
@@ -33,6 +33,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _client: Redis | None = None
+_INCR_WITH_TTL_LUA = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 or redis.call('TTL', KEYS[1]) == -1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+"""
+_BOUNDED_TIMEOUT_SEC = 0.3
 _RELEASE_LOCK_LUA = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
@@ -133,6 +141,17 @@ async def cache_set_with_ttl(key: str, value: str, ttl_seconds: int) -> bool:
         return False
 
 
+async def incr_with_ttl(key: str, ttl_seconds: int) -> int | None:
+    """Atomically increment a counter and make sure it expires. `None` on any error."""
+    if _client is None:
+        return None
+    try:
+        return int(await _client.eval(_INCR_WITH_TTL_LUA, 1, key, ttl_seconds))
+    except Exception as exc:
+        logger.debug("redis_incr_failed key=%s: %s", key, exc)
+        return None
+
+
 async def acquire_lock(key: str, ttl_seconds: int) -> str | None:
     """Acquire a TTL-bounded lock. Returns the token to pass to `release_lock`,
     or `None` if the lock is held by someone else / Redis is unavailable.
@@ -165,6 +184,15 @@ async def release_lock(key: str, token: str) -> bool:
 
 
 _T = TypeVar("_T")
+
+
+async def bounded(coro: Coroutine[Any, Any, _T], default: _T) -> _T:
+    """Await a Redis call under a short timeout; `default` on timeout or error."""
+    try:
+        return await asyncio.wait_for(coro, timeout=_BOUNDED_TIMEOUT_SEC)
+    except Exception:
+        logger.debug("redis_call_failed", exc_info=True)
+        return default
 
 
 def run_coro_sync(

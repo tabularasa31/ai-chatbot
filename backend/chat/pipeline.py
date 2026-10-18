@@ -46,7 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.chat.answer_cache import AnswerCacheScope
 from backend.chat.language import ResolvedLanguageContext
-from backend.chat.language_context import _is_bootstrap_question, _resolve_chat_language_context
+from backend.chat.language_context import _resolve_chat_language_context
 from backend.chat.steps import answer_cache, generate, pre_retrieval, retrieval
 from backend.chat.types import ChatPipelineResult, PipelineRun, QuestionIntentResult
 from backend.models import Chat, TenantProfile
@@ -86,9 +86,6 @@ async def async_run_chat_pipeline(
             current_turn_text=question,
             tenant_row=None,
             tenant_profile=None,
-            is_bootstrap_turn=_is_bootstrap_question(question),
-            bootstrap_user_locale=None,
-            browser_locale=None,
         )
 
     run = PipelineRun(

@@ -126,8 +126,9 @@
 │  - Renders the assistant message text plus optional      │
 │    inline clarification follow-up appended after a       │
 │    partial answer (no quick-reply buttons in v1)         │
-│  - Optional: POST /widget/session/init → session_id +   │
-│    mode (identified | anonymous) for HMAC user context   │
+│  - Identified visitors: POST /widget/session/init only   │
+│    resumes an existing session (session_id or null);     │
+│    the first POST /widget/chat creates the chat          │
 │  - POST /widget/chat (BFF) → FastAPI /widget/chat        │
 │                                                           │
 │  ↓                                                        │
@@ -281,7 +282,7 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 
 ### Authentication
 - Dashboard / private API calls use a JWT issued at login
-- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `bot_id` query parameter; optional identified-mode bootstrap uses `POST /widget/session/init` with `bot_id` plus a signed identity token
+- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `bot_id` query parameter; optional identified-mode resume uses `POST /widget/session/init` with `bot_id` plus a signed identity token (it returns the existing session or null and creates nothing; the first `POST /widget/chat` creates the chat)
 - Backend resolves the bot's tenant from `public_id`, then retrieves `tenant_id` and the tenant's OpenAI key
 - All queries filter by `tenant_id` (no data leaks between tenants)
 

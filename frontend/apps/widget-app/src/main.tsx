@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "preact/hooks";
 import "./styles.css";
 import { ChatWidget } from "./ChatWidget";
 import { t } from "./strings";
+import { deriveStorageUserId } from "./utils";
 import { accentOnRgb, parseHexColor, type UserHints, type WidgetTheme } from "@chat9/widget-shared";
 
 export type { UserHints };
@@ -201,7 +202,7 @@ function App() {
   // switch / logout), React remounts ChatWidget so per-conversation state
   // (messages, sessionId, ticket) resets cleanly instead of leaking from
   // the previous identity.
-  const identityKey = hints?.user_id ?? hints?.email ?? "anon";
+  const identityKey = deriveStorageUserId(hints) ?? "anon";
 
   return (
     <div className="flex h-screen w-full">

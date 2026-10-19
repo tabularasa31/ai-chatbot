@@ -51,7 +51,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
@@ -90,13 +90,11 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     """Report chats inactive past the threshold via chat_session_ended.
 
     Returns the number of sessions for which an event was emitted. Chats with
-    at least one ``Message`` emit ``chat_session_ended outcome=timeout``;
-    empty chats — only anonymous /widget/session/init (the eval client) creates
-    one before the user writes anything; the widget creates a chat with the
-    first message — are stamped silently. Both branches set ``session_ended_event_at`` so the
-    row drops out of the partial index ``ix_chats_sweeper_pending`` and is
-    excluded from the next pass; otherwise the empty-chat backlog would
-    accumulate in the index unbounded as widget impressions add up.
+    at least one visitor message emit ``chat_session_ended outcome=timeout``;
+    chats without one (rows from before a chat was created lazily with the
+    first message, or holding only a greeting) are stamped silently. Both branches set
+    ``session_ended_event_at`` so the row drops out of the partial index
+    ``ix_chats_sweeper_pending`` and is excluded from the next pass.
 
     Chats a human operator currently holds (``OperatorState.live``) are
     skipped for the same reason ``auto_close_stale_tickets`` skips them:
@@ -109,25 +107,17 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     whose operator really has gone is already back in ``bot`` by the time this
     pass looks at it.
 
-    Two idle windows, read at call time so tests can override settings:
-
-    * Chats with messages use ``conversation_idle_timeout_seconds`` — the same
-      knob as lazy conversation rotation (backend/chat/rotation.py), so
-      analytics and behavior share one definition of an ended conversation.
-    * Message-less mount chats use ``empty_chat_idle_timeout_seconds`` (short).
-      They never emit an event, so reaping them early only stamps the marker to
-      drop them from ``ix_chats_sweeper_pending``; decoupling keeps that index
-      small even when the conversation window is raised to days.
+    The idle window is ``conversation_idle_timeout_seconds`` — the same knob as
+    lazy conversation rotation (backend/chat/rotation.py), so analytics and
+    behavior share one definition of an ended conversation. It is read at call
+    time so tests can override settings.
     """
     reference = now or _utcnow()
-    long_cutoff = reference - timedelta(
-        seconds=settings.conversation_idle_timeout_seconds
-    )
-    empty_cutoff = reference - timedelta(
-        seconds=settings.empty_chat_idle_timeout_seconds
-    )
+    cutoff = reference - timedelta(seconds=settings.conversation_idle_timeout_seconds)
     has_messages_exists = (
-        select(Message.id).where(Message.chat_id == Chat.id).exists()
+        select(Message.id)
+        .where(Message.chat_id == Chat.id, Message.role == MessageRole.user)
+        .exists()
     )
     rows = (
         db.query(Chat, has_messages_exists.label("has_messages"))
@@ -135,10 +125,7 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
         .filter(
             Chat.session_ended_event_at.is_(None),
             Chat.operator_state != OperatorState.live,
-            or_(
-                and_(has_messages_exists, Chat.updated_at < long_cutoff),
-                and_(~has_messages_exists, Chat.updated_at < empty_cutoff),
-            ),
+            Chat.updated_at < cutoff,
         )
         .order_by(Chat.updated_at)
         .limit(_MAX_SESSIONS_PER_SWEEP)
@@ -172,8 +159,7 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
             continue
         if not has_messages:
             # Empty chat: marker set so it exits the partial index, but no
-            # analytics event — emitting would inflate the funnel with
-            # widget-impressions a real user never participated in.
+            # analytics event — a real user never participated in it.
             continue
         # Emit only after the marker is durably committed: a crash mid-pass can
         # then never re-find this chat, so the event is at-most-once (no

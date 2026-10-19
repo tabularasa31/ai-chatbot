@@ -6,7 +6,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
-from backend.evals.client import ChatClient
+from backend.evals.client import ChatClient, ChatResponse
 from backend.evals.dataset import Dataset, GoldenCase
 from backend.evals.judge import AnthropicJudge
 from backend.evals.metrics import MetricResult, run_deterministic_metrics
@@ -46,6 +46,12 @@ def run(config: RunnerConfig) -> RunReport:
     )
 
 
+def _chain_break_reason(response: ChatResponse) -> str:
+    if response.error:
+        return f"chat error: code={response.error.get('code')} msg={response.error.get('message')}"
+    return "missing session_id"
+
+
 def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
     is_chain = bool(case.turns)
     messages = case.messages
@@ -53,23 +59,6 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
     turns_trace: list[TurnTrace] = []
     total_latency_ms = 0
     escalation_offered_at_turn: int | None = None
-
-    if is_chain:
-        try:
-            session_id = config.chat.start_session()
-        except Exception as exc:
-            logger.warning("eval_case_session_init_failed id=%s err=%s", case.id, exc)
-            return CaseResult(
-                case_id=case.id,
-                category=case.category,
-                lang=case.lang,
-                input=" | ".join(messages),
-                output="",
-                latency_ms=0,
-                metrics=[],
-                error=f"session init failed: {exc}",
-                turns_trace=[],
-            )
 
     last_response = None
     for turn_idx, message in enumerate(messages, start=1):
@@ -89,6 +78,7 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
                 turns_trace=turns_trace,
             )
         last_response = chat_response
+        session_id = chat_response.session_id
         total_latency_ms += chat_response.latency_ms
         # Either the offer is pending the user's yes/no, or the handoff already
         # happened this turn — an explicit human request mints the ticket without
@@ -106,6 +96,19 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
         )
         if offered and escalation_offered_at_turn is None:
             escalation_offered_at_turn = turn_idx
+        is_final_turn = turn_idx == len(messages)
+        if not is_final_turn and (chat_response.error or session_id is None):
+            return CaseResult(
+                case_id=case.id,
+                category=case.category,
+                lang=case.lang,
+                input=" | ".join(messages),
+                output=chat_response.text,
+                latency_ms=total_latency_ms,
+                metrics=[],
+                error=f"turn {turn_idx}: {_chain_break_reason(chat_response)}",
+                turns_trace=turns_trace,
+            )
 
     assert last_response is not None  # messages is always >= 1 by validator
     output = last_response.text

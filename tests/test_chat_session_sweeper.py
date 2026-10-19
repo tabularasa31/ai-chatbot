@@ -27,17 +27,10 @@ from backend.models.enums import MessageRole
 
 @pytest.fixture(autouse=True)
 def _pin_idle_timeout(monkeypatch):
-    """Pin both sweep thresholds to 30 min for these tests.
-
-    The shipped conversation window is 7 days (shared with rotation); empty
-    mount chats are reaped on a separate short window. These tests exercise the
-    sweep *mechanism* at a single fixed threshold; the decoupled behavior is
-    covered explicitly by ``test_empty_chat_reaped_on_short_window_...``.
-    """
+    """Pin the sweep threshold to 30 min; the shipped window is 7 days."""
     from backend.core.config import settings
 
     monkeypatch.setattr(settings, "conversation_idle_timeout_seconds", 1800)
-    monkeypatch.setattr(settings, "empty_chat_idle_timeout_seconds", 1800)
 
 
 def _make_tenant(db: Session) -> Tenant:
@@ -53,7 +46,7 @@ def _make_chat(
     tenant: Tenant,
     *,
     age_minutes: int,
-    with_message: bool = True,
+    first_message_role: MessageRole | None = MessageRole.user,
 ) -> Chat:
     created = _utcnow() - timedelta(minutes=age_minutes + 5)
     last_activity = _utcnow() - timedelta(minutes=age_minutes)
@@ -66,8 +59,8 @@ def _make_chat(
     db.add(chat)
     db.commit()
     db.refresh(chat)
-    if with_message:
-        db.add(Message(chat_id=chat.id, role=MessageRole.user, content="hi"))
+    if first_message_role is not None:
+        db.add(Message(chat_id=chat.id, role=first_message_role, content="hi"))
         db.commit()
     return chat
 
@@ -79,12 +72,9 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     - a fresh (non-idle) chat is left untouched
     - an idle chat with messages is swept: emitted once, marker set,
       duration_ms matches its real activity window
-    - an idle *empty* mount chat (no messages) is marked but never emitted.
-      /widget/session/init creates a Chat row on every widget mount before the
-      user writes anything; emitting chat_session_ended for those inflated the
-      funnel with widget-impressions (observed 154 "sessions" per 1 real turn).
-      The has_messages check must also correlate per row, not just "any
-      message exists anywhere" (that bug would emit for the empty chat too)
+    - an idle chat with no visitor message (empty, or greeting-only) is marked
+      but never emitted. The check must correlate per row, not just "any
+      message exists anywhere" (that bug would emit for these chats too)
     - a chat already carrying the marker is not re-swept/re-emitted
     - the marker write does not disturb updated_at — it is an analytics
       write, not activity, and rotation must still see the swept chat's real
@@ -94,7 +84,10 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     fresh = _make_chat(db_session, tenant, age_minutes=5)
     active = _make_chat(db_session, tenant, age_minutes=90)
     active_last_activity = active.updated_at
-    empty = _make_chat(db_session, tenant, age_minutes=90, with_message=False)
+    empty = _make_chat(db_session, tenant, age_minutes=90, first_message_role=None)
+    greeting_only = _make_chat(
+        db_session, tenant, age_minutes=90, first_message_role=MessageRole.assistant
+    )
     already_reported = _make_chat(db_session, tenant, age_minutes=90)
     already_reported.session_ended_event_at = already_reported.updated_at
     db_session.commit()
@@ -127,7 +120,9 @@ def test_sweep_cycle_marks_and_emits_correctly_across_mixed_chats(
     )
 
     db_session.refresh(empty)
+    db_session.refresh(greeting_only)
     assert empty.session_ended_event_at is not None
+    assert greeting_only.session_ended_event_at is not None
 
 
 def test_sweep_is_capped_and_drains_oldest_first(
@@ -152,42 +147,6 @@ def test_sweep_is_capped_and_drains_oldest_first(
     assert count == 2
     swept_sessions = {c["session_id"] for c in captured}
     assert swept_sessions == {str(oldest.session_id), str(middle.session_id)}
-
-
-def test_empty_chat_reaped_on_short_window_message_chat_kept(
-    db_session: Session, monkeypatch
-) -> None:
-    """Decoupled windows: an idle empty mount chat is reaped on the short
-    empty-chat window while a message-bearing conversation in the same idle
-    range is kept for the long conversation window (returning-visitor
-    continuity). Guards against empty mount chats lingering in
-    ix_chats_sweeper_pending for days once the conversation window is raised."""
-    from backend.core.config import settings
-
-    monkeypatch.setattr(settings, "conversation_idle_timeout_seconds", 7 * 24 * 3600)
-    monkeypatch.setattr(settings, "empty_chat_idle_timeout_seconds", 1800)
-
-    tenant = _make_tenant(db_session)
-    # 45 min idle: past the 30-min empty window, well within the 7-day one.
-    empty = _make_chat(db_session, tenant, age_minutes=45, with_message=False)
-    conversation = _make_chat(db_session, tenant, age_minutes=45, with_message=True)
-
-    captured: list[dict] = []
-    monkeypatch.setattr(
-        chat_session_sweeper,
-        "_emit_chat_session_ended_event",
-        lambda **kwargs: captured.append(kwargs),
-    )
-
-    count = sweep_inactive_chats(db_session)
-
-    # Empty chat reaped (marker set, no event); conversation left pending.
-    assert count == 0
-    assert captured == []
-    db_session.refresh(empty)
-    db_session.refresh(conversation)
-    assert empty.session_ended_event_at is not None
-    assert conversation.session_ended_event_at is None
 
 
 # ---------------------------------------------------------------------------

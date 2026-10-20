@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import ipaddress
 import uuid
 from collections.abc import Callable
 
@@ -12,6 +14,9 @@ from starlette.requests import Request
 
 from backend.core.config import settings
 
+EDGE_SECRET_HEADER = "x-chat9-edge-secret"
+VISITOR_IP_HEADER = "x-chat9-visitor-ip"
+
 # When set (by tests only), `/widget/chat` rate limiting uses this identity instead of IP.
 _widget_public_rate_limit_key_override: Callable[[Request], str] | None = None
 
@@ -20,17 +25,51 @@ _widget_public_rate_limit_key_override: Callable[[Request], str] | None = None
 _owner_jwt_rate_limit_key_override: Callable[[Request], str] | None = None
 
 
+def _valid_ip(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return None
+
+
+def _from_edge_proxy(request: Request) -> bool:
+    secret = settings.edge_proxy_secret
+    presented = request.headers.get(EDGE_SECRET_HEADER)
+    if not secret or not presented:
+        return False
+    return hmac.compare_digest(presented.encode(), secret.encode())
+
+
+def client_ip(request: Request) -> str:
+    """The address rate limits are keyed on.
+
+    The socket peer is Railway's internal proxy, never the visitor, so the
+    connecting address comes from X-Real-IP, which Railway's edge overwrites on
+    every request. When that address is one of our own proxies (the dashboard's
+    /widget routes, the RU edge), the proxy proves itself with the shared edge
+    secret and names the visitor; without the secret the visitor header is
+    ignored, so a caller cannot choose its own bucket.
+    """
+    if _from_edge_proxy(request):
+        visitor = _valid_ip(request.headers.get(VISITOR_IP_HEADER))
+        if visitor:
+            return visitor
+    return _valid_ip(request.headers.get("x-real-ip")) or get_remote_address(request)
+
+
 def _widget_rate_limit_ip(request: Request) -> str:
     if _widget_public_rate_limit_key_override is not None:
         return _widget_public_rate_limit_key_override(request)
-    return get_remote_address(request)
+    return client_ip(request)
 
 
 def _key_func(request):
     """Use unique key in test mode to avoid rate limiting tests."""
     if settings.environment == "test":
         return str(uuid.uuid4())
-    return get_remote_address(request)
+    return client_ip(request)
 
 
 def widget_public_rate_limit_key(request: Request) -> str:
@@ -121,7 +160,7 @@ def owner_jwt_rate_limit_key(request: Request) -> str:
         user_id = decode_access_token(raw_token)
         if user_id:
             return f"owner:{user_id}"
-    return f"ip:{get_remote_address(request)}"
+    return f"ip:{client_ip(request)}"
 
 
 def hash_ip_for_logs(ip: str | None) -> str:

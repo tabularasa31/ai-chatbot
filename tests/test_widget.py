@@ -471,6 +471,51 @@ def test_widget_anonymous_session_init_creates_no_chat(
     assert db_session.query(Chat).filter(Chat.tenant_id == client_uuid).count() == 0
 
 
+@pytest.mark.parametrize(
+    ("route_through", "second_visitor_served"),
+    [
+        ("railway_edge", True),
+        ("our_proxy", True),
+        ("forged_proxy_claim", False),
+    ],
+)
+def test_widget_rate_limit_is_per_visitor_address(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    route_through: str,
+    second_visitor_served: bool,
+) -> None:
+    """Visitors are limited one by one, not as a crowd behind a shared hop:
+    a visitor arriving straight through Railway's edge is keyed by X-Real-IP,
+    one arriving through our own proxy by the address the proxy names, and a
+    caller naming an address without the edge secret cannot pick a fresh
+    bucket for itself."""
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "edge_proxy_secret", "edge-secret")
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, f"widget-rl-{route_through}@example.com")
+
+    def headers(visitor_ip: str) -> dict[str, str]:
+        if route_through == "railway_edge":
+            return {"X-Real-IP": visitor_ip}
+        secret = "edge-secret" if route_through == "our_proxy" else "guessed"
+        return {
+            "X-Real-IP": "198.51.100.7",
+            "X-Chat9-Visitor-IP": visitor_ip,
+            "X-Chat9-Edge-Secret": secret,
+        }
+
+    def init(visitor_ip: str) -> int:
+        return tenant.post(
+            "/widget/session/init", json={"bot_id": bot_public_id}, headers=headers(visitor_ip)
+        ).status_code
+
+    assert [init("203.0.113.10") for _ in range(10)] == [200] * 10
+    assert init("203.0.113.10") == 429
+    assert init("203.0.113.20") == (200 if second_visitor_served else 429)
+
+
 def test_widget_session_init_strict_tenant_verifies_user_hash(
     tenant: TestClient,
     db_session: Session,

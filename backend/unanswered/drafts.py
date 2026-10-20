@@ -12,7 +12,6 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +39,7 @@ from backend.unanswered.service import (
     GroupStateConflictError,
     group_query,
     group_response,
+    is_generating,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,6 @@ UNANSWERED_QUEUE_FAQ_SOURCE = "unanswered_queue"
 DEFAULT_LANGUAGE = "en"
 QUESTION_SAMPLE_SIZE = 5
 GUARD_ATTEMPTS = 2
-GENERATION_LOCK_TTL = timedelta(minutes=2)
 LLM_TIMEOUT_SECONDS = 30.0
 
 _DRAFT_SYSTEM = (
@@ -204,6 +203,7 @@ def _draft_response(group: UnansweredGroup) -> DraftResponse:
         answer=group.draft_answer or "",
         language=group.draft_language or DEFAULT_LANGUAGE,
         version=group.draft_version,
+        generating=is_generating(group),
     )
 
 
@@ -293,6 +293,8 @@ async def save_draft(
     """Stores the member's own text; the first save of a group without a draft is version 0."""
     group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
     _require_editable(group)
+    if is_generating(group):
+        raise DraftGeneratingError
     _require_version(group, version)
     _apply_draft(
         group,
@@ -303,21 +305,18 @@ async def save_draft(
     return _draft_response(group)
 
 
-async def _claim_generation(
-    db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
+async def _begin_generation(
+    db: AsyncSession, group: UnansweredGroup, *, language: str
 ) -> _GenerationInput:
-    group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
-    _require_editable(group)
-    now = _utcnow()
-    since = group.draft_generating_since
-    if since is not None and now - since < GENERATION_LOCK_TTL:
+    """Takes the group's generation marker and commits it; the group must be locked."""
+    if is_generating(group):
         raise DraftGeneratingError
     request = _GenerationInput(
-        api_key=await _api_key(db, tenant_id),
+        api_key=await _api_key(db, group.tenant_id),
         questions=await _sample_questions(db, group.id),
-        language=await _draft_language(db, tenant_id),
+        language=language,
     )
-    group.draft_generating_since = now
+    group.draft_generating_since = _utcnow()
     await db.commit()
     return request
 
@@ -331,28 +330,58 @@ async def _release_generation(
     await db.commit()
 
 
+async def _finish_generation(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    group_id: uuid.UUID,
+    claimed_version: int,
+    request: _GenerationInput,
+    produce: Callable[[], Awaitable[DraftContent]],
+) -> DraftResponse:
+    """Stores the produced content unless the group moved on while the model worked.
+
+    The marker is released on every other outcome, cancellation included.
+    """
+    try:
+        content = await _guarded(produce, tenant_id=tenant_id, api_key=request.api_key)
+        group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
+        _require_editable(group)
+        _require_version(group, claimed_version)
+    except BaseException:
+        await _release_generation(db, tenant_id=tenant_id, group_id=group_id)
+        raise
+    _apply_draft(group, content, language=request.language)
+    await db.commit()
+    return _draft_response(group)
+
+
 async def generate_draft(*, tenant_id: uuid.UUID, group_id: uuid.UUID) -> DraftResponse:
     """Replaces the group's draft with a freshly generated one.
 
     Owns its session so that it can run to completion after the client is gone.
-    Raises ``DraftGeneratingError`` while another generation is in flight,
-    ``NoOpenAIKeyError`` without a tenant key, ``DraftGenerationError`` when the
-    model fails and ``DraftRejectedError`` when the injection guard blocks both
-    attempts; the stored draft is untouched in the failure cases.
+    Raises ``DraftGeneratingError`` while another generation or refinement is in
+    flight, ``NoOpenAIKeyError`` without a tenant key, ``DraftGenerationError`` when
+    the model fails and ``DraftRejectedError`` when the injection guard blocks both
+    attempts. If the draft changed or the group was answered meanwhile the result
+    is discarded with ``DraftVersionConflictError`` / ``GroupStateConflictError``;
+    the stored draft is untouched in all failure cases.
     """
     async with core_db.AsyncSessionLocal() as db:
-        request = await _claim_generation(db, tenant_id=tenant_id, group_id=group_id)
-        try:
-            content = await _guarded(
-                lambda: _generate_content(request), tenant_id=tenant_id, api_key=request.api_key
-            )
-        except Exception:
-            await _release_generation(db, tenant_id=tenant_id, group_id=group_id)
-            raise
         group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
-        _apply_draft(group, content, language=request.language)
-        await db.commit()
-        return _draft_response(group)
+        _require_editable(group)
+        claimed_version = group.draft_version
+        request = await _begin_generation(
+            db, group, language=await _draft_language(db, tenant_id)
+        )
+        return await _finish_generation(
+            db,
+            tenant_id=tenant_id,
+            group_id=group_id,
+            claimed_version=claimed_version,
+            request=request,
+            produce=lambda: _generate_content(request),
+        )
 
 
 async def refine_draft(
@@ -360,8 +389,9 @@ async def refine_draft(
 ) -> DraftResponse:
     """Revises the current draft per ``instructions``; owns its session like ``generate_draft``.
 
-    Raises ``DraftVersionConflictError`` if the draft changed while the model
-    was working, so a concurrent edit is never overwritten.
+    Takes the same marker as generation, so refinements and generations of one group
+    never overlap. Raises ``DraftVersionConflictError`` if the draft changed before or
+    while the model was working, so a concurrent edit is never overwritten.
     """
     async with core_db.AsyncSessionLocal() as db:
         group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
@@ -370,25 +400,17 @@ async def refine_draft(
         if group.draft_answer is None:
             raise NoDraftError
         current = DraftContent(question=group.draft_question or "", answer=group.draft_answer)
-        language = group.draft_language or DEFAULT_LANGUAGE
-        request = _GenerationInput(
-            api_key=await _api_key(db, tenant_id),
-            questions=await _sample_questions(db, group.id),
-            language=language,
+        request = await _begin_generation(
+            db, group, language=group.draft_language or DEFAULT_LANGUAGE
         )
-        await db.rollback()
-
-        content = await _guarded(
-            lambda: _refine_content(request, current=current, instructions=instructions),
+        return await _finish_generation(
+            db,
             tenant_id=tenant_id,
-            api_key=request.api_key,
+            group_id=group_id,
+            claimed_version=version,
+            request=request,
+            produce=lambda: _refine_content(request, current=current, instructions=instructions),
         )
-
-        group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
-        _require_version(group, version)
-        _apply_draft(group, content, language=language)
-        await db.commit()
-        return _draft_response(group)
 
 
 async def _embed_faq_question(question: str, api_key: str) -> list[float]:

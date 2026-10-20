@@ -30,6 +30,7 @@ from backend.unanswered.schemas import (
 )
 
 WINDOW = timedelta(days=30)
+GENERATION_LOCK_TTL = timedelta(minutes=2)
 
 
 class GroupNotFoundError(Exception):
@@ -38,6 +39,12 @@ class GroupNotFoundError(Exception):
 
 class GroupStateConflictError(Exception):
     pass
+
+
+def is_generating(group: UnansweredGroup) -> bool:
+    """A generation marker older than the TTL is a crashed run, not work in flight."""
+    since = group.draft_generating_since
+    return since is not None and _utcnow() - since < GENERATION_LOCK_TTL
 
 
 def _visible_groups(
@@ -155,6 +162,7 @@ async def _to_responses(
             reopened_after_answer=g.reopened_after_answer,
             faq_id=g.faq_id,
             has_draft=g.draft_answer is not None,
+            generating=is_generating(g),
             dismiss_reason=g.dismiss_reason,
         )
         for g in groups

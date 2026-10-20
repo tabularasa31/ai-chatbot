@@ -23,6 +23,7 @@ class UnansweredGroupResponse(BaseModel):
     reopened_after_answer: bool
     faq_id: uuid.UUID | None
     has_draft: bool
+    generating: bool
     dismiss_reason: UnansweredDismissReason | None
 
 
@@ -50,6 +51,7 @@ class DraftResponse(BaseModel):
     answer: str
     language: str
     version: int
+    generating: bool
 
 
 class DraftSaveRequest(BaseModel):

@@ -8,19 +8,18 @@ Draft generation and refinement run detached from the request: the member may
 close the drawer while the model works and the draft is still stored.
 """
 
-from __future__ import annotations
-
 import asyncio
 import uuid
 from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth.middleware import require_member, require_owner
 from backend.core.db import get_async_db
+from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import UnansweredGroupStatus, User
 from backend.unanswered import drafts, service
 from backend.unanswered.schemas import (
@@ -36,6 +35,7 @@ from backend.unanswered.schemas import (
 )
 
 MAX_PAGE_SIZE = 50
+DRAFT_MODEL_RATE_LIMIT = "10/minute"
 
 unanswered_router = APIRouter(prefix="/api/v1/knowledge/unanswered", tags=["knowledge"])
 
@@ -142,7 +142,10 @@ async def get_unanswered_draft(group_id: uuid.UUID, member: Member, db: Db) -> D
 
 
 @unanswered_router.post("/{group_id}/draft", response_model=DraftResponse)
-async def generate_unanswered_draft(group_id: uuid.UUID, member: Member) -> DraftResponse:
+@limiter.limit(DRAFT_MODEL_RATE_LIMIT, key_func=owner_jwt_rate_limit_key)
+async def generate_unanswered_draft(
+    request: Request, group_id: uuid.UUID, member: Member
+) -> DraftResponse:
     with _draft_http_errors():
         return await _complete_without_client(
             drafts.generate_draft(tenant_id=member.tenant_id, group_id=group_id)
@@ -164,8 +167,9 @@ async def save_unanswered_draft(
 
 
 @unanswered_router.post("/{group_id}/draft/refine", response_model=DraftResponse)
+@limiter.limit(DRAFT_MODEL_RATE_LIMIT, key_func=owner_jwt_rate_limit_key)
 async def refine_unanswered_draft(
-    group_id: uuid.UUID, payload: DraftRefineRequest, member: Member
+    request: Request, group_id: uuid.UUID, payload: DraftRefineRequest, member: Member
 ) -> DraftResponse:
     with _draft_http_errors():
         return await _complete_without_client(

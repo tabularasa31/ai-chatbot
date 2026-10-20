@@ -25,7 +25,9 @@ from backend.models import (
     UnansweredReason,
     User,
 )
+from backend.core.limiter import set_owner_jwt_rate_limit_key_override
 from backend.models.base import _utcnow
+from backend.unanswered.service import GENERATION_LOCK_TTL
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -337,6 +339,8 @@ def test_faq_reviewed_never_carries_question_or_answer_text(
 
 UNANSWERED = "/api/v1/knowledge/unanswered"
 
+DRAFT_RATE_LIMIT_BURST = 10
+
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
@@ -493,6 +497,7 @@ def test_unanswered_group_shape(tenant: TestClient, db_session: Session) -> None
             "reopened_after_answer": True,
             "faq_id": str(faq.id),
             "has_draft": True,
+            "generating": False,
             "dismiss_reason": None,
         }
     ]
@@ -651,6 +656,7 @@ def test_unanswered_draft_journey_from_generation_to_publish(
         "answer": "Use the export button.",
         "language": "de",
         "version": 1,
+        "generating": False,
     }
     prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
     assert "how do I export?" in prompt
@@ -747,20 +753,138 @@ def test_unanswered_draft_needs_a_tenant_openai_key(
     assert saved.status_code == 200
 
 
+@pytest.mark.parametrize("operation", ["generate", "refine", "save"])
 def test_unanswered_generation_in_flight_is_refused(
-    tenant: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session, operation: str
 ) -> None:
-    token, client = _create_client(tenant, db_session, email="unanswered-busy@example.com")
+    token, client = _create_client(tenant, db_session, email=f"unanswered-busy-{operation}@example.com")
     group = _seed_group(
         db_session,
         client.id,
         [(1, "busy", UnansweredReason.unanswered)],
         draft_generating_since=_utcnow(),
     )
+    _seed_draft(db_session, group)
+    url = _draft_url(group)
+
+    if operation == "generate":
+        resp = tenant.post(url, headers=_auth(token))
+    elif operation == "refine":
+        resp = tenant.post(
+            f"{url}/refine", json={"instructions": "shorter", "version": 1}, headers=_auth(token)
+        )
+    else:
+        resp = tenant.put(
+            url, json={"question": "Q", "answer": "A", "version": 1}, headers=_auth(token)
+        )
+
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "draft_generating")
+
+
+@pytest.mark.parametrize(
+    ("marker_age", "generating"),
+    [
+        pytest.param(timedelta(seconds=5), True, id="fresh_marker"),
+        pytest.param(GENERATION_LOCK_TTL + timedelta(seconds=5), False, id="expired_marker"),
+    ],
+)
+def test_unanswered_reports_generation_in_progress_until_the_marker_expires(
+    tenant: TestClient, db_session: Session, marker_age: timedelta, generating: bool
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-progress@example.com")
+    group = _seed_group(
+        db_session,
+        client.id,
+        [(1, "progress", UnansweredReason.unanswered)],
+        draft_generating_since=_utcnow() - marker_age,
+    )
+    _seed_draft(db_session, group)
+
+    listed = tenant.get(UNANSWERED, headers=_auth(token)).json()["items"]
+    draft = tenant.get(_draft_url(group), headers=_auth(token)).json()
+
+    assert (listed[0]["generating"], draft["generating"]) == (generating, generating)
+
+
+def _change_draft_while_model_works(db: Session, group: UnansweredGroup, mock_openai_client, reply):
+    def concurrent_change(*args: object, **kwargs: object) -> Mock:
+        db.refresh(group)
+        group.draft_question, group.draft_answer = "Newer question?", "Newer answer."
+        group.draft_version += 1
+        db.commit()
+        return reply
+
+    mock_openai_client.chat.completions.create.side_effect = concurrent_change
+
+
+def test_unanswered_generation_does_not_overwrite_a_draft_saved_meanwhile(
+    tenant: TestClient, db_session: Session, mock_openai_client
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-lost-update@example.com")
+    group = _seed_group(db_session, client.id, [(1, "race", UnansweredReason.unanswered)])
+    _model_replies(mock_openai_client, "Generated?", "Generated.")
+    reply = mock_openai_client.chat.completions.create.return_value
+    _change_draft_while_model_works(db_session, group, mock_openai_client, reply)
 
     resp = tenant.post(_draft_url(group), headers=_auth(token))
 
-    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "draft_generating")
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "stale_version")
+    assert resp.json()["detail"]["draft"]["answer"] == "Newer answer."
+    kept = tenant.get(_draft_url(group), headers=_auth(token)).json()
+    assert (kept["answer"], kept["version"], kept["generating"]) == ("Newer answer.", 1, False)
+
+
+def test_unanswered_generation_does_not_replace_the_draft_of_a_group_published_meanwhile(
+    tenant: TestClient, db_session: Session, mock_openai_client
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-published@example.com")
+    group = _seed_group(db_session, client.id, [(1, "race", UnansweredReason.unanswered)])
+    _seed_draft(db_session, group)
+    _model_replies(mock_openai_client, "Refined?", "Refined.")
+    reply = mock_openai_client.chat.completions.create.return_value
+
+    def publish_meanwhile(*args: object, **kwargs: object) -> Mock:
+        db_session.refresh(group)
+        group.status = UnansweredGroupStatus.answered
+        db_session.commit()
+        return reply
+
+    mock_openai_client.chat.completions.create.side_effect = publish_meanwhile
+
+    resp = tenant.post(_draft_url(group), headers=_auth(token))
+
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "group_answered")
+    db_session.refresh(group)
+    assert (group.draft_answer, group.draft_generating_since) == ("Saved answer.", None)
+
+
+@pytest.mark.parametrize("operation", ["draft", "draft/refine"])
+def test_unanswered_model_calls_are_rate_limited_per_member(
+    tenant: TestClient, db_session: Session, operation: str
+) -> None:
+    token, client = _create_client(
+        tenant, db_session, email=f"unanswered-rate-{operation.replace('/', '-')}@example.com"
+    )
+    group = _seed_group(
+        db_session,
+        client.id,
+        [(1, "flood", UnansweredReason.unanswered)],
+        draft_generating_since=_utcnow(),
+    )
+    _seed_draft(db_session, group)
+    url = f"{UNANSWERED}/{group.id}/{operation}"
+    body = {"instructions": "shorter", "version": 1}
+
+    set_owner_jwt_rate_limit_key_override(lambda _request: "member-under-test")
+    try:
+        statuses = [
+            tenant.post(url, json=body, headers=_auth(token)).status_code
+            for _ in range(DRAFT_RATE_LIMIT_BURST + 1)
+        ]
+    finally:
+        set_owner_jwt_rate_limit_key_override(None)
+
+    assert statuses == [409] * DRAFT_RATE_LIMIT_BURST + [429]
 
 
 @pytest.mark.parametrize(

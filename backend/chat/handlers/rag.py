@@ -41,8 +41,9 @@ from backend.chat.types import (
 )
 from backend.core.config import settings
 from backend.escalation.openai_escalation import render_pre_confirm_text
-from backend.models import Chat, EscalationTrigger, MessageRole, TurnOutcome
+from backend.models import Chat, EscalationTrigger, Message, MessageRole, TurnOutcome
 from backend.observability import record_stage_ms
+from backend.unanswered.capture import UnansweredTurn, capture_unanswered_turn
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,26 @@ REJECT_REASON_TURN_OUTCOME: dict[str, TurnOutcome] = {
     "social": TurnOutcome.social,
     "social_question": TurnOutcome.social,
 }
+
+
+_UNANSWERED_TURN_KEY = "_unanswered_turn"
+
+
+def _stash_unanswered_turn(
+    ctx: HandlerContext,
+    user_message: Message,
+    assistant_message: Message,
+    escalation_offer_reason: str | None,
+) -> None:
+    ctx.extras[_UNANSWERED_TURN_KEY] = UnansweredTurn(
+        tenant_id=ctx.tenant_id,
+        chat_id=ctx.chat.id,
+        user_message_id=user_message.id,
+        assistant_message_id=assistant_message.id,
+        question=user_message.content,
+        turn_outcome=assistant_message.turn_outcome,
+        escalation_offer_reason=escalation_offer_reason,
+    )
 
 
 def _turn_outcome_for(result: ChatPipelineResult) -> TurnOutcome | None:
@@ -280,6 +301,9 @@ class RagHandler(PipelineHandler):
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
         outcome = await self._in_sync(ctx, self._handle_sync)
         await self._store_answer_cache(ctx, outcome)
+        turn = ctx.extras.get(_UNANSWERED_TURN_KEY)
+        if turn is not None:
+            await capture_unanswered_turn(ctx.async_db, turn)
         return outcome
 
     async def _store_answer_cache(self, ctx: HandlerContext, outcome: ChatTurnOutcome) -> None:
@@ -362,6 +386,7 @@ class RagHandler(PipelineHandler):
                 set_rephrase_flag=(result.reject_reason == "rephrase"),
                 turn_outcome=_turn_outcome_for(result),
             )
+            _stash_unanswered_turn(ctx, user_message, assistant_message, None)
             _try_ingest_gap_signal(
                 chat=chat,
                 tenant_id=ctx.tenant_id,
@@ -598,6 +623,8 @@ class RagHandler(PipelineHandler):
         # retries escalation once OpenAI recovers, rather than restarting from
         # a fresh "first rephrase" prompt.
         _escalation_render_failed_on_zero_hits = False
+        # Trigger of the handoff offer this very reply makes, if any.
+        offer_reason: str | None = None
         # True once the handoff offer has taken the place of the generated
         # reply, so the user never saw what the model wrote.
         _reply_replaced_by_handoff = False
@@ -683,6 +710,7 @@ class RagHandler(PipelineHandler):
                 )
                 answer = esc.message_to_user
                 _reply_replaced_by_handoff = True
+                offer_reason = esc_trigger.value
                 tokens_used = tokens_used + esc.tokens_used
                 # The reply is now the generic handoff question, not a RAG
                 # answer — drop the retrieved sources so we don't persist or
@@ -805,6 +833,7 @@ class RagHandler(PipelineHandler):
             }
             ctx.db.add(chat)
             _handoff_offer_appended = True
+            offer_reason = EscalationTrigger.llm_self_offer.value
             logger.info(
                 "Appended handoff offer from LLM needs-human marker "
                 "(decide=%s, escalate=False) chat_id=%s",
@@ -829,6 +858,7 @@ class RagHandler(PipelineHandler):
                 ),
             }
             ctx.db.add(chat)
+            offer_reason = EscalationTrigger.llm_self_offer.value
             logger.info(
                 "Armed escalation_pre_confirm_pending from LLM-offered ticket "
                 "(decide=%s, escalate=False) chat_id=%s",
@@ -857,7 +887,9 @@ class RagHandler(PipelineHandler):
             extra_tokens=tokens_used,
             language_context=ctx.language_context,
             trace=ctx.trace,
+            escalation_offer_reason=offer_reason,
         )
+        _stash_unanswered_turn(ctx, user_message, assistant_message, offer_reason)
         _try_ingest_gap_signal(
             chat=chat,
             tenant_id=ctx.tenant_id,

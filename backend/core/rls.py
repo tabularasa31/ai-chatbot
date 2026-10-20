@@ -60,7 +60,6 @@ TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "gap_doc_topics",
     "gap_questions",
     "guard_events",
-    "log_analysis_state",
     "message_embeddings",
     "operator_sessions",
     "pii_events",

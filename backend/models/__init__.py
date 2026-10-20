@@ -51,7 +51,7 @@ from backend.models.knowledge_queue import UnansweredGroup, UnansweredQuestion
 from backend.models.operator import OperatorSession
 from backend.models.pii import PiiEvent
 from backend.models.tenant import Bot, Tenant
-from backend.models.tenant_profile import LogAnalysisState, TenantFaq, TenantProfile
+from backend.models.tenant_profile import TenantFaq, TenantProfile
 
 __all__ = [
     "AnswerCacheEntry",
@@ -84,7 +84,6 @@ __all__ = [
     "GapSource",
     "GuardEvent",
     "InboundEmailReceipt",
-    "LogAnalysisState",
     "Message",
     "MessageEmbedding",
     "MessageRole",

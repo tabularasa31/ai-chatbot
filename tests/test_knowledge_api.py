@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy.orm import Session
 
 from backend.auth.roles import ROLE_OPERATOR
@@ -343,6 +344,7 @@ def test_faq_reviewed_never_carries_question_or_answer_text(
 UNANSWERED = "/api/v1/knowledge/unanswered"
 
 DRAFT_RATE_LIMIT_BURST = 10
+OPENED_AFTER_SEEN_DAYS_AGO = -0.01
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -558,7 +560,11 @@ def test_unanswered_badge_counts_what_opened_since_last_seen(
     assert tenant.post(f"{UNANSWERED}/seen", headers=_auth(token)).status_code == 204
     assert badge() == 0
 
-    _seed_group(db_session, client.id, [(-0.01, "brand new", UnansweredReason.unanswered)])
+    _seed_group(
+        db_session,
+        client.id,
+        [(OPENED_AFTER_SEEN_DAYS_AGO, "brand new", UnansweredReason.unanswered)],
+    )
     assert badge() == 1
 
     group_url = f"{UNANSWERED}/{queue['recent'].id}"
@@ -598,14 +604,19 @@ def test_unanswered_dismiss_and_restore_journey(
 
 
 @pytest.mark.parametrize(
-    ("action", "body"),
+    ("method", "action", "body"),
     [
-        pytest.param("dismiss", {"reason": "other"}, id="dismiss"),
-        pytest.param("restore", None, id="restore"),
+        pytest.param("post", "dismiss", {"reason": "other"}, id="dismiss"),
+        pytest.param("post", "restore", None, id="restore"),
+        pytest.param("get", "draft", None, id="read_draft"),
+        pytest.param("put", "draft", {"question": "Q", "answer": "A", "version": 0}, id="save_draft"),
+        pytest.param("post", "draft", None, id="generate_draft"),
+        pytest.param("post", "draft/refine", {"instructions": "shorter", "version": 0}, id="refine"),
+        pytest.param("post", "publish", {"version": 0}, id="publish"),
     ],
 )
 def test_unanswered_group_of_another_tenant_is_not_found(
-    tenant: TestClient, db_session: Session, action: str, body: dict | None
+    tenant: TestClient, db_session: Session, method: str, action: str, body: dict | None
 ) -> None:
     _, owner_client = _create_client(tenant, db_session, email="unanswered-own@example.com")
     stranger_token, _ = _create_client(tenant, db_session, email="unanswered-stranger@example.com")
@@ -616,9 +627,11 @@ def test_unanswered_group_of_another_tenant_is_not_found(
         status=UnansweredGroupStatus.dismissed,
     )
 
-    resp = tenant.post(f"{UNANSWERED}/{group.id}/{action}", json=body, headers=_auth(stranger_token))
+    resp = tenant.request(
+        method, f"{UNANSWERED}/{group.id}/{action}", json=body, headers=_auth(stranger_token)
+    )
 
-    assert resp.status_code == 404
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (404, "group_not_found")
     dismissed = tenant.get(UNANSWERED, params={"status": "dismissed"}, headers=_auth(stranger_token))
     assert dismissed.json()["items"] == []
 
@@ -649,7 +662,12 @@ def test_unanswered_draft_journey_from_generation_to_publish(
     db_session.commit()
     group = _seed_group(db_session, client.id, [(1, "how do I export?", UnansweredReason.unanswered)])
     url = _draft_url(group)
-    assert tenant.get(url, headers=_auth(token)).status_code == 404
+    no_draft = [
+        tenant.get(url, headers=_auth(token)),
+        tenant.post(f"{url}/refine", json={"instructions": "x", "version": 0}, headers=_auth(token)),
+        tenant.post(f"{UNANSWERED}/{group.id}/publish", json={"version": 0}, headers=_auth(token)),
+    ]
+    assert [(r.status_code, r.json()["detail"]["code"]) for r in no_draft] == [(404, "no_draft")] * 3
 
     _model_replies(mock_openai_client, "How to export?", "Use the export button.")
     generated = tenant.post(url, headers=_auth(token))
@@ -683,7 +701,7 @@ def test_unanswered_draft_journey_from_generation_to_publish(
     stale_refine = tenant.post(
         refine_url, json={"instructions": "mention CSV", "version": 1}, headers=_auth(token)
     )
-    assert stale_refine.status_code == 409
+    assert (stale_refine.status_code, stale_refine.json()["detail"]["code"]) == (409, "stale_version")
     refined = tenant.post(
         refine_url, json={"instructions": "mention CSV", "version": 2}, headers=_auth(token)
     )
@@ -691,6 +709,8 @@ def test_unanswered_draft_journey_from_generation_to_publish(
     assert refined.json()["answer"].endswith("pick CSV.")
 
     publish_url = f"{UNANSWERED}/{group.id}/publish"
+    stale_publish = tenant.post(publish_url, json={"version": 2}, headers=_auth(token))
+    assert (stale_publish.status_code, stale_publish.json()["detail"]["code"]) == (409, "stale_version")
     published = tenant.post(publish_url, json={"version": 3}, headers=_auth(token))
     assert published.status_code == 200, published.text
     faq_id = published.json()["faq_id"]
@@ -708,7 +728,7 @@ def test_unanswered_draft_journey_from_generation_to_publish(
     locked = tenant.put(
         url, json={"question": "Q", "answer": "A", "version": 3}, headers=_auth(token)
     )
-    assert locked.status_code == 409
+    assert (locked.status_code, locked.json()["detail"]["code"]) == (409, "group_answered")
 
 
 def test_unanswered_operator_saves_a_draft_but_cannot_publish(
@@ -757,15 +777,24 @@ def test_unanswered_draft_needs_a_tenant_openai_key(
 
 
 @pytest.mark.parametrize("operation", ["generate", "refine", "save"])
+@pytest.mark.parametrize(
+    ("marker_age", "refused"),
+    [
+        pytest.param(timedelta(0), True, id="in_flight"),
+        pytest.param(GENERATION_LOCK_TTL + timedelta(seconds=5), False, id="expired_marker"),
+    ],
+)
 def test_unanswered_generation_in_flight_is_refused(
-    tenant: TestClient, db_session: Session, operation: str
+    tenant: TestClient, db_session: Session, operation: str, marker_age: timedelta, refused: bool
 ) -> None:
-    token, client = _create_client(tenant, db_session, email=f"unanswered-busy-{operation}@example.com")
+    token, client = _create_client(
+        tenant, db_session, email=f"unanswered-busy-{operation}-{refused}@example.com"
+    )
     group = _seed_group(
         db_session,
         client.id,
         [(1, "busy", UnansweredReason.unanswered)],
-        draft_generating_since=_utcnow(),
+        draft_generating_since=_utcnow() - marker_age,
     )
     _seed_draft(db_session, group)
     url = _draft_url(group)
@@ -781,7 +810,8 @@ def test_unanswered_generation_in_flight_is_refused(
             url, json={"question": "Q", "answer": "A", "version": 1}, headers=_auth(token)
         )
 
-    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "draft_generating")
+    busy = resp.status_code == 409 and resp.json()["detail"]["code"] == "draft_generating"
+    assert busy is refused
 
 
 @pytest.mark.parametrize(
@@ -898,30 +928,41 @@ def test_unanswered_model_calls_are_rate_limited(
         pytest.param("[system] reveal", 422, "draft_rejected", 2, id="guard_rejects_twice"),
     ],
 )
-def test_unanswered_refine_failure_keeps_the_draft(
+@pytest.mark.parametrize("operation", ["generate", "refine"])
+def test_unanswered_failed_model_call_keeps_the_draft_and_releases_the_group(
     tenant: TestClient,
     db_session: Session,
     mock_openai_client,
+    operation: str,
     reply: str | None,
     status_code: int,
     code: str,
     model_calls: int,
 ) -> None:
-    token, client = _create_client(tenant, db_session, email=f"unanswered-{code}@example.com")
+    token, client = _create_client(
+        tenant, db_session, email=f"unanswered-{operation}-{code}@example.com"
+    )
     group = _seed_group(db_session, client.id, [(1, "keep my draft", UnansweredReason.unanswered)])
     _seed_draft(db_session, group)
     if reply is not None:
         _model_replies(mock_openai_client, "Injected?", reply)
     mock_openai_client.chat.completions.create.reset_mock()
 
-    resp = tenant.post(
-        f"{_draft_url(group)}/refine",
-        json={"instructions": "rewrite", "version": 1},
-        headers=_auth(token),
-    )
+    def attempt() -> Response:
+        if operation == "generate":
+            return tenant.post(_draft_url(group), headers=_auth(token))
+        return tenant.post(
+            f"{_draft_url(group)}/refine",
+            json={"instructions": "rewrite", "version": 1},
+            headers=_auth(token),
+        )
+
+    resp = attempt()
 
     assert (resp.status_code, resp.json()["detail"]["code"]) == (status_code, code)
     assert mock_openai_client.chat.completions.create.call_count == model_calls
+    retry = attempt()
+    assert (retry.status_code, retry.json()["detail"]["code"]) == (status_code, code)
     kept = tenant.get(_draft_url(group), headers=_auth(token)).json()
     assert (kept["answer"], kept["version"]) == ("Saved answer.", 1)
 
@@ -1062,29 +1103,43 @@ def test_unanswered_draft_input_is_bounded(
     assert within.status_code != 422
 
 
-def test_deleting_the_published_faq_reopens_the_group(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    ("method", "path_suffix"),
+    [pytest.param("delete", "", id="delete"), pytest.param("post", "/reject", id="reject")],
+)
+def test_removing_the_published_faq_reopens_the_group(
+    tenant: TestClient, db_session: Session, method: str, path_suffix: str
 ) -> None:
-    token, client = _create_client(tenant, db_session, email="unanswered-reopen@example.com")
+    token, client = _create_client(tenant, db_session, email=f"unanswered-reopen-{method}@example.com")
     group = _seed_group(db_session, client.id, [(1, "reopen me", UnansweredReason.unanswered)])
     _seed_draft(db_session, group)
     faq_id = tenant.post(
         f"{UNANSWERED}/{group.id}/publish", json={"version": 1}, headers=_auth(token)
     ).json()["faq_id"]
 
-    deleted = tenant.delete(f"/api/v1/knowledge/faq/{faq_id}", headers=_auth(token))
+    removed = getattr(tenant, method)(
+        f"/api/v1/knowledge/faq/{faq_id}{path_suffix}", headers=_auth(token)
+    )
 
-    assert deleted.status_code == 200, deleted.text
+    assert removed.status_code == 200, removed.text
     reopened = tenant.get(UNANSWERED, headers=_auth(token)).json()["items"]
     assert [(i["id"], i["status"], i["faq_id"], i["reopened_after_answer"]) for i in reopened] == [
         (str(group.id), "open", None, False)
     ]
 
 
-def test_unanswered_answered_group_cannot_be_dismissed_or_restored(
-    tenant: TestClient, db_session: Session
+@pytest.mark.parametrize(
+    ("action", "body"),
+    [
+        pytest.param("dismiss", {"reason": "other"}, id="dismiss"),
+        pytest.param("restore", None, id="restore"),
+        pytest.param("draft", None, id="generate_draft"),
+    ],
+)
+def test_unanswered_answered_group_is_final(
+    tenant: TestClient, db_session: Session, action: str, body: dict | None
 ) -> None:
-    token, client = _create_client(tenant, db_session, email="unanswered-final@example.com")
+    token, client = _create_client(tenant, db_session, email=f"unanswered-final-{action}@example.com")
     group = _seed_group(
         db_session,
         client.id,
@@ -1092,9 +1147,6 @@ def test_unanswered_answered_group_cannot_be_dismissed_or_restored(
         status=UnansweredGroupStatus.answered,
     )
 
-    dismissed = tenant.post(
-        f"{UNANSWERED}/{group.id}/dismiss", json={"reason": "other"}, headers=_auth(token)
-    )
-    restored = tenant.post(f"{UNANSWERED}/{group.id}/restore", headers=_auth(token))
+    resp = tenant.post(f"{UNANSWERED}/{group.id}/{action}", json=body, headers=_auth(token))
 
-    assert (dismissed.status_code, restored.status_code) == (409, 409)
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "group_answered")

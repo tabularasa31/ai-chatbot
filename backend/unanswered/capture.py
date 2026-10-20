@@ -206,9 +206,11 @@ async def _distinct_chats_after(
     ]
     if until is not None:
         conditions.append(UnansweredQuestion.created_at <= until)
-    return await db.scalar(
-        select(func.count(func.distinct(UnansweredQuestion.chat_id))).where(*conditions)
-    )
+    return (
+        await db.execute(
+            select(func.count(func.distinct(UnansweredQuestion.chat_id))).where(*conditions)
+        )
+    ).scalar_one()
 
 
 async def _reopen_if_due(db: AsyncSession, group: UnansweredGroup, now: datetime) -> None:

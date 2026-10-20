@@ -190,9 +190,9 @@ class ChatPipelineResult:
     # stores it once the turn is persisted and the reply is still the pipeline
     # answer (no escalation or handoff replaced it).
     answer_cache_candidate: AnswerCacheCandidate | None = None
-    # True when a "rephrase" reply followed a trusted in-domain relevance
-    # verdict, i.e. the question is a real knowledge gap. Off-topic, complaint
-    # and fail-open (timeout / error / no profile) verdicts leave it False.
+    # Set on rephrase and low_retrieval rejects whose relevance verdict is
+    # relevant or no_profile, i.e. the question is a real knowledge gap. False
+    # on timeout / error / circuit-open and every other verdict.
     in_domain_unanswered: bool = False
     # Embedding of the redacted question the pipeline computed for retrieval;
     # None when the turn ended before (or without) embedding it.

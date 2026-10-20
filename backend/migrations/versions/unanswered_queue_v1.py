@@ -130,7 +130,13 @@ def upgrade() -> None:
                 ["assistant_message_id"], ["messages.id"], ondelete="CASCADE"
             ),
         )
-    for column in ("tenant_id", "group_id", "chat_id", "user_message_id"):
+    if not _has_index(_QUESTIONS, "ix_unanswered_questions_tenant_created"):
+        op.create_index(
+            "ix_unanswered_questions_tenant_created",
+            _QUESTIONS,
+            ["tenant_id", "created_at"],
+        )
+    for column in ("group_id", "chat_id", "user_message_id"):
         name = f"ix_unanswered_questions_{column}"
         if not _has_index(_QUESTIONS, name):
             op.create_index(name, _QUESTIONS, [column])

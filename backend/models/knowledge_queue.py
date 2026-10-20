@@ -10,7 +10,7 @@ from __future__ import annotations
 from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-from backend.models.base import Base, TenantScopedMixin, UUIDPKMixin, _utcnow
+from backend.models.base import Base, UUIDPKMixin, _utcnow
 from backend.models.enums import (
     UnansweredDismissReason,
     UnansweredGroupStatus,
@@ -60,8 +60,17 @@ class UnansweredGroup(UUIDPKMixin, Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
 
-class UnansweredQuestion(UUIDPKMixin, TenantScopedMixin, Base):
+class UnansweredQuestion(UUIDPKMixin, Base):
     __tablename__ = "unanswered_questions"
+    __table_args__ = (
+        Index("ix_unanswered_questions_tenant_created", "tenant_id", "created_at"),
+    )
+
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
 
     group_id = Column(
         PG_UUID(as_uuid=True),

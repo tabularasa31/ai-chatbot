@@ -13,9 +13,10 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.chat.language import locale_language_of
 from backend.chat.pii import redact_for_egress
 from backend.core import db as core_db
 from backend.core.config import settings
@@ -23,6 +24,7 @@ from backend.core.openai_client import get_async_openai_client
 from backend.core.openai_json import async_chat_json
 from backend.guards.injection_detector import async_detect_injection
 from backend.models import (
+    Document,
     Message,
     Tenant,
     TenantFaq,
@@ -35,11 +37,11 @@ from backend.models.base import _utcnow
 from backend.search.embedding import async_embed_query
 from backend.unanswered.schemas import DraftResponse, PublishResponse
 from backend.unanswered.service import (
-    GroupNotFoundError,
     GroupStateConflictError,
-    group_query,
+    get_group,
     group_response,
     is_generating,
+    set_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,11 +142,12 @@ async def _chat_draft(
         )
         question = (parsed.get("question") or "").strip()
         answer = (parsed.get("answer") or "").strip()
-        if not question or not answer:
-            raise ValueError(f"{operation}: response is missing question or answer")
     except Exception as exc:
         logger.exception("%s_failed", operation)
         raise DraftGenerationError from exc
+    if not question or not answer:
+        logger.error("%s_missing_question_or_answer", operation)
+        raise DraftGenerationError
     return DraftContent(question=question, answer=answer)
 
 
@@ -199,9 +202,9 @@ async def _guarded(
 
 def _draft_response(group: UnansweredGroup) -> DraftResponse:
     return DraftResponse(
-        question=group.draft_question or "",
-        answer=group.draft_answer or "",
-        language=group.draft_language or DEFAULT_LANGUAGE,
+        question=group.draft_question,
+        answer=group.draft_answer,
+        language=group.draft_language,
         version=group.draft_version,
         generating=is_generating(group),
     )
@@ -210,17 +213,8 @@ def _draft_response(group: UnansweredGroup) -> DraftResponse:
 async def _lock_group(
     db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
 ) -> UnansweredGroup:
-    """Row-locks the group (Postgres) and reloads it, so version checks see committed state."""
-    group = (
-        await db.execute(
-            group_query(tenant_id, group_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-    ).scalar_one_or_none()
-    if group is None:
-        raise GroupNotFoundError
-    return group
+    """Row-locks the group and reloads it, so version checks see committed state."""
+    return await get_group(db, tenant_id=tenant_id, group_id=group_id, for_update=True)
 
 
 def _require_editable(group: UnansweredGroup) -> None:
@@ -237,25 +231,42 @@ def _require_version(group: UnansweredGroup, version: int) -> None:
 
 async def _api_key(db: AsyncSession, tenant_id: uuid.UUID) -> str:
     tenant = await db.get(Tenant, tenant_id)
-    if tenant is None or not tenant.openai_api_key:
+    if not tenant.openai_api_key:
         raise NoOpenAIKeyError
     return tenant.openai_api_key
 
 
 async def _draft_language(db: AsyncSession, tenant_id: uuid.UUID) -> str:
-    """The tenant's configured output language (``escalation_language``) names the draft language."""
+    """The language most of the tenant's documents are in, else its ``escalation_language``."""
+    dominant_document_language = (
+        await db.execute(
+            select(Document.language)
+            .where(Document.tenant_id == tenant_id, Document.language.is_not(None))
+            .group_by(Document.language)
+            .order_by(func.count().desc(), Document.language)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
     profile = await db.get(TenantProfile, tenant_id)
-    language = ((profile.escalation_language if profile else None) or "").strip().lower()
-    return language or DEFAULT_LANGUAGE
+    configured = profile.escalation_language if profile else None
+    for raw in (dominant_document_language, configured):
+        locale = locale_language_of(raw)
+        if locale is not None:
+            return locale[1]
+    return DEFAULT_LANGUAGE
 
 
-async def _sample_questions(db: AsyncSession, group_id: uuid.UUID) -> list[str]:
+async def _sample_questions(
+    db: AsyncSession, tenant_id: uuid.UUID, group_id: uuid.UUID
+) -> list[str]:
     """Most recent captured questions of the group, redacted for the model."""
     texts = (
         await db.execute(
             select(Message.content)
             .join(UnansweredQuestion, UnansweredQuestion.user_message_id == Message.id)
-            .where(UnansweredQuestion.group_id == group_id)
+            .where(
+                UnansweredQuestion.group_id == group_id, UnansweredQuestion.tenant_id == tenant_id
+            )
             .order_by(UnansweredQuestion.created_at.desc(), UnansweredQuestion.id)
             .limit(QUESTION_SAMPLE_SIZE)
         )
@@ -274,9 +285,7 @@ def _apply_draft(group: UnansweredGroup, content: DraftContent, *, language: str
 async def get_draft(
     db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
 ) -> DraftResponse:
-    group = (await db.execute(group_query(tenant_id, group_id))).scalar_one_or_none()
-    if group is None:
-        raise GroupNotFoundError
+    group = await get_group(db, tenant_id=tenant_id, group_id=group_id)
     if group.draft_answer is None:
         raise NoDraftError
     return _draft_response(group)
@@ -313,7 +322,7 @@ async def _begin_generation(
         raise DraftGeneratingError
     request = _GenerationInput(
         api_key=await _api_key(db, group.tenant_id),
-        questions=await _sample_questions(db, group.id),
+        questions=await _sample_questions(db, group.tenant_id, group.id),
         language=language,
     )
     group.draft_generating_since = _utcnow()
@@ -399,10 +408,8 @@ async def refine_draft(
         _require_version(group, version)
         if group.draft_answer is None:
             raise NoDraftError
-        current = DraftContent(question=group.draft_question or "", answer=group.draft_answer)
-        request = await _begin_generation(
-            db, group, language=group.draft_language or DEFAULT_LANGUAGE
-        )
+        current = DraftContent(question=group.draft_question, answer=group.draft_answer)
+        request = await _begin_generation(db, group, language=group.draft_language)
         return await _finish_generation(
             db,
             tenant_id=tenant_id,
@@ -430,30 +437,32 @@ async def publish_draft(
     ``version`` the retry carries. The question is embedded first, under the group
     lock, because the bot only matches FAQ entries that have an embedding.
 
-    Raises ``NoOpenAIKeyError`` without a tenant key and ``FaqEmbeddingError`` when
-    embedding fails; in both cases nothing is published.
+    Raises ``NoOpenAIKeyError`` without a tenant key, ``DraftRejectedError`` when the
+    injection guard blocks the final text (it may have been edited by hand) and
+    ``FaqEmbeddingError`` when embedding fails; in every case nothing is published.
     """
     group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
     if group.faq_id is None:
         _require_version(group, version)
         if group.draft_answer is None:
             raise NoDraftError
-        question_embedding = await _embed_faq_question(
-            group.draft_question, await _api_key(db, tenant_id)
-        )
+        api_key = await _api_key(db, tenant_id)
+        final = DraftContent(question=group.draft_question, answer=group.draft_answer)
+        if not await _passes_injection_guard(final, tenant_id=tenant_id, api_key=api_key):
+            logger.warning("unanswered_publish_injection_detected tenant_id=%s", tenant_id)
+            raise DraftRejectedError
+        question_embedding = await _embed_faq_question(final.question, api_key)
         faq = TenantFaq(
             tenant_id=tenant_id,
-            question=group.draft_question,
+            question=final.question,
             question_embedding=question_embedding,
-            answer=group.draft_answer,
+            answer=final.answer,
             source=UNANSWERED_QUEUE_FAQ_SOURCE,
             approved=True,
         )
         db.add(faq)
         await db.flush()
         group.faq_id = faq.id
-        group.status = UnansweredGroupStatus.answered
-        group.dismiss_reason = None
-        group.status_changed_at = _utcnow()
+        set_status(group, status=UnansweredGroupStatus.answered, dismiss_reason=None)
         await db.commit()
     return PublishResponse(group=await group_response(db, group), faq_id=group.faq_id)

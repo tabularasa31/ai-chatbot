@@ -32,15 +32,9 @@ from backend.knowledge.schemas import (
     KnowledgeProfilePatchRequest,
     KnowledgeProfileResponse,
 )
-from backend.models import (
-    Tenant,
-    TenantFaq,
-    TenantProfile,
-    UnansweredGroup,
-    UnansweredGroupStatus,
-)
-from backend.models.base import _utcnow
+from backend.models import Tenant, TenantFaq, TenantProfile
 from backend.tenants.cache import invalidate_tenant
+from backend.unanswered.service import reopen_groups_answered_by
 
 knowledge_router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 
@@ -89,21 +83,6 @@ def _generate_faq_embedding_background(
         db.rollback()
     finally:
         db.close()
-
-
-def _reopen_groups_answered_by(db: Session, faq_id: uuid.UUID) -> None:
-    """A deleted FAQ entry no longer answers the questions it was published for."""
-    db.query(UnansweredGroup).filter(
-        UnansweredGroup.faq_id == faq_id,
-        UnansweredGroup.status == UnansweredGroupStatus.answered,
-    ).update(
-        {
-            UnansweredGroup.status: UnansweredGroupStatus.open,
-            UnansweredGroup.status_changed_at: _utcnow(),
-            UnansweredGroup.reopened_after_answer: False,
-        },
-        synchronize_session=False,
-    )
 
 
 @knowledge_router.get("/profile", response_model=KnowledgeProfileResponse)
@@ -287,7 +266,7 @@ def reject_faq(
 ) -> KnowledgeFaqRejectResponse:
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
     faq_source = faq.source
-    _reopen_groups_answered_by(db, faq.id)
+    reopen_groups_answered_by(db, tenant_id=tenant.id, faq_id=faq.id)
     db.delete(faq)
     db.commit()
     emit_faq_reviewed(
@@ -360,7 +339,7 @@ def delete_faq(
 ) -> KnowledgeFaqRejectResponse:
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
     faq_source = faq.source
-    _reopen_groups_answered_by(db, faq.id)
+    reopen_groups_answered_by(db, tenant_id=tenant.id, faq_id=faq.id)
     db.delete(faq)
     db.commit()
     emit_faq_reviewed(

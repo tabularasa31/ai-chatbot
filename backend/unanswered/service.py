@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import Select, case, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from backend.models import (
     Chat,
@@ -93,7 +94,7 @@ async def list_groups(
     ).scalar_one()
     has_conversations = (await db.execute(select(exists(tenant_chats)))).scalar_one()
     return UnansweredListResponse(
-        items=await _to_responses(db, groups[:limit], since),
+        items=await _to_responses(db, tenant_id, groups[:limit], since),
         next_offset=offset + limit if len(groups) > limit else None,
         tenant_conversations_30d=conversations_30d,
         tenant_has_conversations=has_conversations,
@@ -101,18 +102,19 @@ async def list_groups(
 
 
 async def _to_responses(
-    db: AsyncSession, groups: list[UnansweredGroup], since: datetime
+    db: AsyncSession, tenant_id: uuid.UUID, groups: list[UnansweredGroup], since: datetime
 ) -> list[UnansweredGroupResponse]:
     if not groups:
         return []
     ids = [g.id for g in groups]
+    own_questions = UnansweredQuestion.tenant_id == tenant_id
 
     recent_chat = case((UnansweredQuestion.created_at >= since, UnansweredQuestion.chat_id))
     conversations = dict(
         (
             await db.execute(
                 select(UnansweredQuestion.group_id, func.count(func.distinct(recent_chat)))
-                .where(UnansweredQuestion.group_id.in_(ids))
+                .where(UnansweredQuestion.group_id.in_(ids), own_questions)
                 .group_by(UnansweredQuestion.group_id)
             )
         ).all()
@@ -121,7 +123,7 @@ async def _to_responses(
     reasons: dict[uuid.UUID, set[UnansweredReason]] = {}
     for group_id, reason in await db.execute(
         select(UnansweredQuestion.group_id, UnansweredQuestion.reason)
-        .where(UnansweredQuestion.group_id.in_(ids))
+        .where(UnansweredQuestion.group_id.in_(ids), own_questions)
         .distinct()
     ):
         reasons.setdefault(group_id, set()).add(reason)
@@ -137,7 +139,7 @@ async def _to_responses(
             UnansweredQuestion.user_message_id.label("message_id"),
             newest_first.label("rank"),
         )
-        .where(UnansweredQuestion.group_id.in_(ids))
+        .where(UnansweredQuestion.group_id.in_(ids), own_questions)
         .subquery()
     )
     latest = {
@@ -188,24 +190,40 @@ async def mark_seen(db: AsyncSession, *, user_id: uuid.UUID) -> None:
     await db.commit()
 
 
-def group_query(tenant_id: uuid.UUID, group_id: uuid.UUID) -> Select[tuple[UnansweredGroup]]:
-    return select(UnansweredGroup).where(
+async def get_group(
+    db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID, for_update: bool = False
+) -> UnansweredGroup:
+    """Raises ``GroupNotFoundError`` for a missing or foreign group.
+
+    ``for_update`` row-locks the group (Postgres) and reloads it, so callers
+    checking versions see committed state.
+    """
+    query = select(UnansweredGroup).where(
         UnansweredGroup.id == group_id, UnansweredGroup.tenant_id == tenant_id
     )
-
-
-async def _get_group(
-    db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
-) -> UnansweredGroup:
-    group = (await db.execute(group_query(tenant_id, group_id))).scalar_one_or_none()
+    if for_update:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    group = (await db.execute(query)).scalar_one_or_none()
     if group is None:
         raise GroupNotFoundError
     return group
 
 
 async def group_response(db: AsyncSession, group: UnansweredGroup) -> UnansweredGroupResponse:
-    (response,) = await _to_responses(db, [group], _utcnow() - WINDOW)
+    (response,) = await _to_responses(db, group.tenant_id, [group], _utcnow() - WINDOW)
     return response
+
+
+def set_status(
+    group: UnansweredGroup,
+    *,
+    status: UnansweredGroupStatus,
+    dismiss_reason: UnansweredDismissReason | None,
+) -> None:
+    """Stamps the transition on ``group``; the caller commits."""
+    group.status = status
+    group.dismiss_reason = dismiss_reason
+    group.status_changed_at = _utcnow()
 
 
 async def _change_status(
@@ -215,11 +233,26 @@ async def _change_status(
     status: UnansweredGroupStatus,
     dismiss_reason: UnansweredDismissReason | None,
 ) -> UnansweredGroupResponse:
-    group.status = status
-    group.dismiss_reason = dismiss_reason
-    group.status_changed_at = _utcnow()
+    set_status(group, status=status, dismiss_reason=dismiss_reason)
     await db.commit()
     return await group_response(db, group)
+
+
+def reopen_groups_answered_by(db: Session, *, tenant_id: uuid.UUID, faq_id: uuid.UUID) -> None:
+    """A deleted FAQ entry no longer answers the questions it was published for."""
+    db.query(UnansweredGroup).filter(
+        UnansweredGroup.tenant_id == tenant_id,
+        UnansweredGroup.faq_id == faq_id,
+        UnansweredGroup.status == UnansweredGroupStatus.answered,
+    ).update(
+        {
+            UnansweredGroup.status: UnansweredGroupStatus.open,
+            UnansweredGroup.status_changed_at: _utcnow(),
+            UnansweredGroup.reopened_after_answer: False,
+            UnansweredGroup.faq_id: None,
+        },
+        synchronize_session=False,
+    )
 
 
 async def dismiss(
@@ -233,7 +266,7 @@ async def dismiss(
 
     Raises ``GroupNotFoundError`` for a foreign group, ``GroupStateConflictError`` for an answered one.
     """
-    group = await _get_group(db, tenant_id=tenant_id, group_id=group_id)
+    group = await get_group(db, tenant_id=tenant_id, group_id=group_id)
     if group.status == UnansweredGroupStatus.dismissed:
         return await group_response(db, group)
     if group.status != UnansweredGroupStatus.open:
@@ -250,7 +283,7 @@ async def restore(
 
     Raises ``GroupNotFoundError`` for a foreign group, ``GroupStateConflictError`` for an answered one.
     """
-    group = await _get_group(db, tenant_id=tenant_id, group_id=group_id)
+    group = await get_group(db, tenant_id=tenant_id, group_id=group_id)
     if group.status == UnansweredGroupStatus.open:
         return await group_response(db, group)
     if group.status != UnansweredGroupStatus.dismissed:

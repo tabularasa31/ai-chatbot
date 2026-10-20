@@ -42,7 +42,18 @@ class UnansweredDismissRequest(BaseModel):
     reason: UnansweredDismissReason
 
 
-NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+QUESTION_MAX_LENGTH = 1000
+ANSWER_MAX_LENGTH = 20000
+INSTRUCTIONS_MAX_LENGTH = 2000
+
+
+def _non_blank(max_length: int) -> StringConstraints:
+    return StringConstraints(strip_whitespace=True, min_length=1, max_length=max_length)
+
+
+Question = Annotated[str, _non_blank(QUESTION_MAX_LENGTH)]
+Answer = Annotated[str, _non_blank(ANSWER_MAX_LENGTH)]
+Instructions = Annotated[str, _non_blank(INSTRUCTIONS_MAX_LENGTH)]
 DraftVersion = Annotated[int, Field(ge=0)]
 
 
@@ -55,13 +66,13 @@ class DraftResponse(BaseModel):
 
 
 class DraftSaveRequest(BaseModel):
-    question: NonBlank
-    answer: NonBlank
+    question: Question
+    answer: Answer
     version: DraftVersion
 
 
 class DraftRefineRequest(BaseModel):
-    instructions: NonBlank
+    instructions: Instructions
     version: DraftVersion
 
 

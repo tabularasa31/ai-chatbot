@@ -58,7 +58,7 @@ _background_tasks: set[asyncio.Task] = set()
 
 
 @contextmanager
-def _draft_http_errors() -> Iterator[None]:
+def _http_errors() -> Iterator[None]:
     try:
         yield
     except drafts.DraftVersionConflictError as exc:
@@ -109,35 +109,23 @@ async def mark_unanswered_seen(member: Member, db: Db) -> Response:
 async def dismiss_unanswered(
     group_id: uuid.UUID, payload: UnansweredDismissRequest, member: Member, db: Db
 ) -> UnansweredGroupResponse:
-    try:
+    with _http_errors():
         return await service.dismiss(
             db, tenant_id=member.tenant_id, group_id=group_id, reason=payload.reason
         )
-    except service.GroupNotFoundError:
-        raise HTTPException(status_code=404, detail="Unanswered question not found") from None
-    except service.GroupStateConflictError:
-        raise HTTPException(
-            status_code=409, detail="An answered question cannot be dismissed"
-        ) from None
 
 
 @unanswered_router.post("/{group_id}/restore", response_model=UnansweredGroupResponse)
 async def restore_unanswered(
     group_id: uuid.UUID, member: Member, db: Db
 ) -> UnansweredGroupResponse:
-    try:
+    with _http_errors():
         return await service.restore(db, tenant_id=member.tenant_id, group_id=group_id)
-    except service.GroupNotFoundError:
-        raise HTTPException(status_code=404, detail="Unanswered question not found") from None
-    except service.GroupStateConflictError:
-        raise HTTPException(
-            status_code=409, detail="An answered question cannot be restored"
-        ) from None
 
 
 @unanswered_router.get("/{group_id}/draft", response_model=DraftResponse)
 async def get_unanswered_draft(group_id: uuid.UUID, member: Member, db: Db) -> DraftResponse:
-    with _draft_http_errors():
+    with _http_errors():
         return await drafts.get_draft(db, tenant_id=member.tenant_id, group_id=group_id)
 
 
@@ -146,7 +134,7 @@ async def get_unanswered_draft(group_id: uuid.UUID, member: Member, db: Db) -> D
 async def generate_unanswered_draft(
     request: Request, group_id: uuid.UUID, member: Member
 ) -> DraftResponse:
-    with _draft_http_errors():
+    with _http_errors():
         return await _complete_without_client(
             drafts.generate_draft(tenant_id=member.tenant_id, group_id=group_id)
         )
@@ -156,7 +144,7 @@ async def generate_unanswered_draft(
 async def save_unanswered_draft(
     group_id: uuid.UUID, payload: DraftSaveRequest, member: Member, db: Db
 ) -> DraftResponse:
-    with _draft_http_errors():
+    with _http_errors():
         return await drafts.save_draft(
             db,
             tenant_id=member.tenant_id,
@@ -171,7 +159,7 @@ async def save_unanswered_draft(
 async def refine_unanswered_draft(
     request: Request, group_id: uuid.UUID, payload: DraftRefineRequest, member: Member
 ) -> DraftResponse:
-    with _draft_http_errors():
+    with _http_errors():
         return await _complete_without_client(
             drafts.refine_draft(
                 tenant_id=member.tenant_id,
@@ -186,7 +174,7 @@ async def refine_unanswered_draft(
 async def publish_unanswered_draft(
     group_id: uuid.UUID, payload: PublishRequest, owner: Owner, db: Db
 ) -> PublishResponse:
-    with _draft_http_errors():
+    with _http_errors():
         return await drafts.publish_draft(
             db, tenant_id=owner.tenant_id, group_id=group_id, version=payload.version
         )

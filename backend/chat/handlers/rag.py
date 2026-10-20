@@ -56,6 +56,7 @@ REJECT_REASON_TURN_OUTCOME: dict[str, TurnOutcome] = {
     "social_question": TurnOutcome.social,
 }
 
+_NEEDS_IN_DOMAIN_VERDICT = frozenset({"rephrase", "low_retrieval"})
 
 _UNANSWERED_TURN_KEY = "_unanswered_turn"
 
@@ -387,7 +388,7 @@ class RagHandler(PipelineHandler):
                 set_rephrase_flag=(result.reject_reason == "rephrase"),
                 turn_outcome=_turn_outcome_for(result),
             )
-            if result.reject_reason != "rephrase" or result.in_domain_unanswered:
+            if result.reject_reason not in _NEEDS_IN_DOMAIN_VERDICT or result.in_domain_unanswered:
                 _stash_unanswered_turn(
                     ctx, user_message, assistant_message, result.question_vector, None
                 )

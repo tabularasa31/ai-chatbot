@@ -442,7 +442,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
                 tokens_as_output=True,
                 extras=extras,
             )
-            result.in_domain_unanswered = verdict_reason == VerdictReason.RELEVANT.value
+            result.in_domain_unanswered = _is_in_domain_verdict(verdict_reason)
             _emit_no_rag_hits_event(
                 outcome="soft_reply",
                 tenant_public_id=run.tenant_public_id,
@@ -570,35 +570,25 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
         raise
 
 
-async def _social_recheck_reject(
-    run: PipelineRun,
-    *,
-    retrieval: RetrievalContext,
-) -> ChatPipelineResult | None:
-    """Re-classify a guard-bypassed short query and, when it is a pure social
-    turn (thanks / farewell / bot-meta question), return the polite
-    acknowledgement instead of a knowledge-base-miss reply.
+def _is_in_domain_verdict(reason: str | None) -> bool:
+    """A verdict under which a no-answer turn is a real knowledge gap.
 
-    Short queries (≤ ``SHORT_QUERY_WORD_LIMIT`` words) skip the pre-retrieval
-    relevance guard, so a mid-dialogue "thanks" arrives at the retrieval-quality
-    guards with no category verdict. ``zero_hits_fast_path`` already runs this
-    re-check on empty retrieval; this mirrors it for the low-retrieval path
-    (retrieval returned only sub-threshold hits — the more common shape for a
-    bare social turn, which still embeds against *some* chunks). Both routes
-    then emit the same closing acknowledgement rather than a "couldn't help /
-    rephrase" refusal. The check passes ``dialog_context`` so a short *answer*
-    to the bot's own question ("да есть") is read as an on-topic continuation,
-    not social, and falls through to the normal reject.
+    ``no_profile`` counts: the tenant has no profile for the guard to judge
+    against, so every question is treated as theirs. Timeout / error /
+    circuit-open rendered no judgment and do not count.
+    """
+    return reason in (VerdictReason.RELEVANT.value, VerdictReason.NO_PROFILE.value)
 
-    Returns None when the turn didn't bypass the guard or isn't social — the
-    caller then proceeds with its normal reject.
 
-    No ``no_rag_hits`` event is emitted here: that event is defined for the
-    strict zero-hits path only (see ``backend/chat/events.py``), and this
-    branch runs precisely because retrieval returned populated-but-sub-threshold
-    hits. The social outcome stays observable via ``reject_reason="social"`` on
-    the result — matching the pre-retrieval relevance-guard social path, which
-    likewise emits no extra event.
+async def _short_query_recheck_reason(run: PipelineRun) -> str | None:
+    """Re-classify a query that bypassed the pre-retrieval relevance guard.
+
+    Short queries (≤ ``SHORT_QUERY_WORD_LIMIT`` words) skip that guard, so a
+    mid-dialogue "thanks" arrives at the retrieval-quality guards with no
+    category verdict. ``dialog_context`` is passed so a short *answer* to the
+    bot's own question is read as an on-topic continuation, not social.
+
+    Returns None when the turn did not bypass the guard.
     """
     state = run.state
     if not state.guard_bypassed_short_query:
@@ -614,10 +604,26 @@ async def _social_recheck_reject(
         dialog_context=state.guard_dialog_context,
         chat_id=str(run.chat_id) if run.chat_id is not None else None,
     )
-    reason = verdict.reason.value
+    return verdict.reason.value
+
+
+async def _social_reject(
+    run: PipelineRun, *, retrieval: RetrievalContext, reason: str
+) -> ChatPipelineResult | None:
+    """Polite acknowledgement for a pure social turn (thanks / farewell /
+    bot-meta question) that retrieved only sub-threshold hits — the more common
+    shape for a bare social turn, which still embeds against *some* chunks.
+    ``zero_hits_fast_path`` gives the same acknowledgement on empty retrieval,
+    so neither route emits a "couldn't help / rephrase" refusal.
+
+    Returns None when ``reason`` is not a social category.
+
+    No ``no_rag_hits`` event is emitted here: that event is defined for the
+    strict zero-hits path only (see ``backend/chat/events.py``). The social
+    outcome stays observable via ``reject_reason="social"`` on the result.
+    """
     if reason not in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
         return None
-
     return await build_reject_result(
         run,
         reject_reason="social_question" if reason == CATEGORY_SOCIAL_QUESTION else "social",
@@ -650,16 +656,21 @@ async def low_retrieval_guard(run: PipelineRun) -> ChatPipelineResult | None:
         and all(sim is not None for sim in retrieval.vector_similarities)
         and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
     ):
-        # A short mid-dialogue social turn ("thanks") bypassed the relevance
-        # guard and retrieved only sub-threshold hits — give it the same polite
-        # acknowledgement the zero-hits path does, not a low-retrieval refusal.
-        social = await _social_recheck_reject(run, retrieval=retrieval)
-        if social is not None:
-            return social
-        return await build_reject_result(
+        verdict_reason = state.relevance_guard_reason
+        recheck_reason = await _short_query_recheck_reason(run)
+        if recheck_reason is not None:
+            verdict_reason = recheck_reason
+            # A short mid-dialogue social turn ("thanks") bypassed the relevance
+            # guard — give it the zero-hits path's polite acknowledgement.
+            social = await _social_reject(run, retrieval=retrieval, reason=recheck_reason)
+            if social is not None:
+                return social
+        result = await build_reject_result(
             run,
             reject_reason="low_retrieval",
             retrieval=retrieval,
             include_question=True,
         )
+        result.in_domain_unanswered = _is_in_domain_verdict(verdict_reason)
+        return result
     return None

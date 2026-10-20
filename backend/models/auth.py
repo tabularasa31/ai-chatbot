@@ -38,6 +38,9 @@ class User(UUIDPKMixin, TimestampMixin, Base):
     # NULL is a workspace's own founding owner, who administers without a seat
     # and takes one only to answer from the console themselves.
     seat_granted_at = Column(DateTime, nullable=True)
+    # When this member last opened the Knowledge "Unanswered" queue; NULL means
+    # never. Drives the per-member new-items badge.
+    knowledge_queue_seen_at = Column(DateTime, nullable=True)
 
     tenant = relationship(
         "Tenant",

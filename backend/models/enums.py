@@ -179,3 +179,24 @@ class EscalationPhase(str, enum.Enum):
     handoff_ask_email = "handoff_ask_email"
     email_parse_failed = "email_parse_failed"
     followup_awaiting_yes_no = "followup_awaiting_yes_no"
+
+
+class UnansweredGroupStatus(str, enum.Enum):
+    open = "open"
+    answered = "answered"
+    dismissed = "dismissed"
+
+
+class UnansweredDismissReason(str, enum.Enum):
+    not_our_product = "not_our_product"
+    should_not_answer = "should_not_answer"
+    other = "other"
+
+
+class UnansweredReason(str, enum.Enum):
+    """Why the bot's reply counted as unanswered; the last three are ``EscalationTrigger`` values."""
+
+    unanswered = "unanswered"
+    llm_self_offer = "llm_self_offer"
+    low_similarity = "low_similarity"
+    no_documents = "no_documents"

@@ -32,6 +32,9 @@ from backend.models.enums import (
     SourceSchedule,
     SourceStatus,
     TurnOutcome,
+    UnansweredDismissReason,
+    UnansweredGroupStatus,
+    UnansweredReason,
 )
 from backend.models.gap import (
     GapAnalyzerJob,
@@ -44,6 +47,7 @@ from backend.models.gap import (
 from backend.models.guard import GuardEvent
 from backend.models.jobs import BackgroundJob, BackgroundJobStatus
 from backend.models.knowledge import Document, Embedding, QuickAnswer, UrlSource, UrlSourceRun
+from backend.models.knowledge_queue import UnansweredGroup, UnansweredQuestion
 from backend.models.operator import OperatorSession
 from backend.models.pii import PiiEvent
 from backend.models.tenant import Bot, Tenant
@@ -97,6 +101,11 @@ __all__ = [
     "TenantFaq",
     "TenantProfile",
     "TurnOutcome",
+    "UnansweredDismissReason",
+    "UnansweredGroup",
+    "UnansweredGroupStatus",
+    "UnansweredQuestion",
+    "UnansweredReason",
     "UrlSource",
     "UrlSourceRun",
     "User",

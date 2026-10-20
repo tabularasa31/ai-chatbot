@@ -574,17 +574,6 @@ class Settings(BaseSettings):
         description="Wall-clock timeout (seconds) for LLM / cross-encoder reranking; falls back to heuristic on breach.",
     )
 
-    # ── Phase 4: Chat-log analysis ─────────────────────────────────────────
-    # Messages fetched per analysis job run
-    log_analysis_batch_size: int = Field(1000, alias="LOG_ANALYSIS_BATCH_SIZE")
-    # Cosine similarity threshold for message clustering
-    log_cluster_similarity_threshold: float = Field(
-        0.82, alias="LOG_CLUSTER_SIMILARITY_THRESHOLD"
-    )
-    # Minimum messages in a cluster to generate a FAQ candidate
-    log_cluster_min_size: int = Field(3, alias="LOG_CLUSTER_MIN_SIZE")
-    # Maximum FAQ candidates created per job run
-    max_faq_per_run: int = Field(20, alias="MAX_FAQ_PER_RUN")
     faq_direct_threshold: float = Field(0.92, alias="FAQ_DIRECT_THRESHOLD")
     faq_context_threshold: float = Field(0.70, alias="FAQ_CONTEXT_THRESHOLD")
     faq_context_max_items: int = Field(2, alias="FAQ_CONTEXT_MAX_ITEMS", ge=1)
@@ -597,16 +586,6 @@ class Settings(BaseSettings):
         alias="FAQ_MATCH_TIMEOUT_SEC",
         description="Wall-clock timeout (seconds) for the FAQ vector lookup; degrades to rag_only on breach.",
     )
-    # Hours between cron-triggered analysis runs
-    log_analysis_cron_hours: int = Field(24, alias="LOG_ANALYSIS_CRON_HOURS")
-    # Threshold: number of new messages that triggers an analysis job
-    log_analysis_threshold_messages: int = Field(
-        100, alias="LOG_ANALYSIS_THRESHOLD_MESSAGES"
-    )
-    # Minimum cluster size for alias extraction
-    alias_min_cluster_size: int = Field(5, alias="ALIAS_MIN_CLUSTER_SIZE")
-    # Minimum lexical diversity for alias extraction (0-1)
-    alias_min_diversity: float = Field(0.6, alias="ALIAS_MIN_DIVERSITY")
     # Days after which unused message embeddings are deleted
     log_embeddings_retention_days: int = Field(
         90, alias="LOG_EMBEDDINGS_RETENTION_DAYS"

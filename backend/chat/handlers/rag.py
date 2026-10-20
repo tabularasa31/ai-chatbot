@@ -35,7 +35,7 @@ from backend.chat.events import _emit_chat_turn_event
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language_context import is_first_user_turn
 from backend.chat.persistence import _persist_turn_with_response_language
-from backend.chat.post_turn import _trigger_log_analysis_threshold, _try_ingest_gap_signal
+from backend.chat.post_turn import _try_ingest_gap_signal
 from backend.chat.types import (
     ChatPipelineResult,
 )
@@ -910,9 +910,6 @@ class RagHandler(PipelineHandler):
             was_escalated=bool(escalate),
             language=ctx.language_context.response_language,
         )
-
-        # Phase 4: fire-and-forget threshold check — never blocks the response.
-        _trigger_log_analysis_threshold(ctx.tenant_id, ctx.api_key)
 
         faq_match = result.faq_match
         if ctx.trace is not None:

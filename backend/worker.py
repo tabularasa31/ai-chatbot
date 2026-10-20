@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # this list; ARQ does not auto-discover.
 _JOB_MODULES: tuple[str, ...] = (
     "backend.jobs._smoke",
-    "backend.jobs.analyze_chat_logs",
     "backend.jobs.crawl_url",
+    "backend.jobs.embedding_retention",
     "backend.jobs.knowledge_extraction",
     "backend.jobs.langfuse_retention",
     "backend.jobs.workspace_purge",

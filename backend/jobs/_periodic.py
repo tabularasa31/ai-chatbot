@@ -22,8 +22,6 @@ unguarded, so we never trade a rare skipped run for a duplicate run.
 
 from __future__ import annotations
 
-import asyncio
-import functools
 import logging
 import os
 import threading
@@ -41,19 +39,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
-
-_LLM_SEMAPHORE_LIMIT = 3
-
-
-@functools.cache
-def llm_semaphore(module: str) -> asyncio.Semaphore:
-    """Return one shared asyncio.Semaphore(3) per caller module, created lazily.
-
-    ``@functools.cache`` keys on ``module``, so each job module gets its own
-    singleton (max 3 concurrent LLM calls) that binds to whichever event loop
-    is running the first time it's requested, rather than at import time.
-    """
-    return asyncio.Semaphore(_LLM_SEMAPHORE_LIMIT)
 
 
 def daily_lock_spec(

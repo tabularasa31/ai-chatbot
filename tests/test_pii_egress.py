@@ -285,43 +285,6 @@ def test_escalation_transcript_for_openai_masks_stored_originals() -> None:
     assert "[EMAIL]" in msgs[0]["content"]
 
 
-def test_log_analysis_job_masks_messages_before_embedding(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    """The Phase 4 job embeds stored turns — that is an OpenAI call too."""
-    from backend.jobs.analyze_chat_logs import _load_messages
-
-    token = register_and_verify_user(tenant, db_session, email="egress-job@example.com")
-    cl_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Egress Job Tenant"},
-    )
-    tenant_id = uuid.UUID(cl_resp.json()["id"])
-
-    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
-    db_session.add(chat)
-    db_session.commit()
-    db_session.refresh(chat)
-    db_session.add(
-        Message(
-            chat_id=chat.id,
-            role=MessageRole.user,
-            content=QUESTION_WITH_PII,
-            # Stored naive-UTC, like the chat pipeline writes them.
-            created_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=5),
-        )
-    )
-    db_session.commit()
-
-    rows = _load_messages(db_session, tenant_id, None, 50)
-
-    assert rows
-    assert SECRET_EMAIL not in rows[0].content
-    assert "[EMAIL]" in rows[0].content
-
-
 # ── Migration backfill ────────────────────────────────────────────────────────
 
 def _legacy_messages_engine() -> sa.Engine:

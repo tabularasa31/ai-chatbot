@@ -79,21 +79,3 @@ def _start_mode_b_followup(tenant_id: uuid.UUID) -> None:
         job_kind=GapJobKind.mode_b,
         trigger="chat_signal",
     )
-
-
-def _trigger_log_analysis_threshold(
-    tenant_id: uuid.UUID,
-    api_key: str,
-) -> None:
-    import threading
-
-    def _run() -> None:
-        try:
-            from backend.jobs.analyze_chat_logs import (
-                increment_and_check_threshold,
-            )
-            increment_and_check_threshold(tenant_id=tenant_id, api_key=api_key)
-        except Exception:
-            logger.debug("Log analysis threshold check failed", exc_info=True)
-
-    threading.Thread(target=_run, daemon=True).start()

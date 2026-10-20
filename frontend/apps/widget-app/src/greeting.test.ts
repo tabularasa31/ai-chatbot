@@ -41,9 +41,50 @@ describe("greetOnce", () => {
     assert.equal(text, "Hello, how can I help?");
     assert.equal(fetchMock.mock.callCount(), 1);
     const [url, init] = fetchMock.mock.calls[0].arguments;
-    assert.equal(url, "https://api.example.com/widget/greeting?bot_id=ch_bot&locale=fr-FR");
+    assert.equal(url, "https://api.example.com/widget/greeting?bot_id=ch_bot&locale=fr-Latn-FR");
     assert.equal(init, undefined);
     assert.deepEqual([...storage.items.keys()], ["chat9:ch_bot:greeted"]);
+  });
+
+  test("a zh-TW browser is greeted in Traditional Chinese because the request carries the script", async () => {
+    const fetchMock = stubFetch(greeting);
+
+    await greetOnce({ ...params, locale: "zh-TW" });
+
+    const [url] = fetchMock.mock.calls[0].arguments;
+    assert.equal(new URL(String(url)).searchParams.get("locale"), "zh-Hant-TW");
+  });
+
+  test("a tenant hint written with an underscore (zh_TW) also gets the script", async () => {
+    const fetchMock = stubFetch(greeting);
+
+    await greetOnce({ ...params, locale: "zh_TW" });
+
+    const [url] = fetchMock.mock.calls[0].arguments;
+    assert.equal(new URL(String(url)).searchParams.get("locale"), "zh-Hant-TW");
+  });
+
+  test("a tag Intl.Locale rejects is sent unchanged", async () => {
+    const fetchMock = stubFetch(greeting);
+
+    await greetOnce({ ...params, locale: "not a locale!" });
+
+    const [url] = fetchMock.mock.calls[0].arguments;
+    assert.equal(new URL(String(url)).searchParams.get("locale"), "not a locale!");
+  });
+
+  test("a browser without Intl.Locale sends the tag unchanged", async () => {
+    const fetchMock = stubFetch(greeting);
+    const original = Intl.Locale;
+    Object.assign(Intl, { Locale: undefined });
+    try {
+      await greetOnce({ ...params, locale: "zh-TW" });
+    } finally {
+      Object.assign(Intl, { Locale: original });
+    }
+
+    const [url] = fetchMock.mock.calls[0].arguments;
+    assert.equal(new URL(String(url)).searchParams.get("locale"), "zh-TW");
   });
 
   test("makes no request once the marker is set", async () => {

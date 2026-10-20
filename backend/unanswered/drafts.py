@@ -41,6 +41,7 @@ from backend.unanswered.service import (
     get_group,
     group_response,
     is_generating,
+    lock_group,
     set_status,
 )
 
@@ -210,13 +211,6 @@ def _draft_response(group: UnansweredGroup) -> DraftResponse:
     )
 
 
-async def _lock_group(
-    db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
-) -> UnansweredGroup:
-    """Row-locks the group and reloads it, so version checks see committed state."""
-    return await get_group(db, tenant_id=tenant_id, group_id=group_id, for_update=True)
-
-
 def _require_editable(group: UnansweredGroup) -> None:
     if group.status == UnansweredGroupStatus.answered:
         raise GroupStateConflictError
@@ -300,7 +294,7 @@ async def save_draft(
     version: int,
 ) -> DraftResponse:
     """Stores the member's own text; the first save of a group without a draft is version 0."""
-    group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
+    group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
     _require_editable(group)
     if is_generating(group):
         raise DraftGeneratingError
@@ -318,8 +312,6 @@ async def _begin_generation(
     db: AsyncSession, group: UnansweredGroup, *, language: str
 ) -> _GenerationInput:
     """Takes the group's generation marker and commits it; the group must be locked."""
-    if is_generating(group):
-        raise DraftGeneratingError
     request = _GenerationInput(
         api_key=await _api_key(db, group.tenant_id),
         questions=await _sample_questions(db, group.tenant_id, group.id),
@@ -334,7 +326,7 @@ async def _release_generation(
     db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
 ) -> None:
     await db.rollback()
-    group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
+    group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
     group.draft_generating_since = None
     await db.commit()
 
@@ -354,7 +346,7 @@ async def _finish_generation(
     """
     try:
         content = await _guarded(produce, tenant_id=tenant_id, api_key=request.api_key)
-        group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
+        group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
         _require_editable(group)
         _require_version(group, claimed_version)
     except BaseException:
@@ -377,8 +369,10 @@ async def generate_draft(*, tenant_id: uuid.UUID, group_id: uuid.UUID) -> DraftR
     the stored draft is untouched in all failure cases.
     """
     async with core_db.AsyncSessionLocal() as db:
-        group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
+        group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
         _require_editable(group)
+        if is_generating(group):
+            raise DraftGeneratingError
         claimed_version = group.draft_version
         request = await _begin_generation(
             db, group, language=await _draft_language(db, tenant_id)
@@ -403,11 +397,13 @@ async def refine_draft(
     while the model was working, so a concurrent edit is never overwritten.
     """
     async with core_db.AsyncSessionLocal() as db:
-        group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
+        group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
         _require_editable(group)
         _require_version(group, version)
         if group.draft_answer is None:
             raise NoDraftError
+        if is_generating(group):
+            raise DraftGeneratingError
         current = DraftContent(question=group.draft_question, answer=group.draft_answer)
         request = await _begin_generation(db, group, language=group.draft_language)
         return await _finish_generation(
@@ -422,7 +418,9 @@ async def refine_draft(
 
 async def _embed_faq_question(question: str, api_key: str) -> list[float]:
     try:
-        return await async_embed_query(question, api_key=api_key)
+        return await async_embed_query(
+            question, api_key=api_key, timeout=LLM_TIMEOUT_SECONDS, max_attempts=1
+        )
     except Exception as exc:
         logger.exception("unanswered_publish_embedding_failed")
         raise FaqEmbeddingError from exc
@@ -441,7 +439,7 @@ async def publish_draft(
     injection guard blocks the final text (it may have been edited by hand) and
     ``FaqEmbeddingError`` when embedding fails; in every case nothing is published.
     """
-    group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
+    group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
     if group.faq_id is None:
         _require_version(group, version)
         if group.draft_answer is None:

@@ -190,23 +190,37 @@ async def mark_seen(db: AsyncSession, *, user_id: uuid.UUID) -> None:
     await db.commit()
 
 
-async def get_group(
-    db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID, for_update: bool = False
-) -> UnansweredGroup:
-    """Raises ``GroupNotFoundError`` for a missing or foreign group.
-
-    ``for_update`` row-locks the group (Postgres) and reloads it, so callers
-    checking versions see committed state.
-    """
-    query = select(UnansweredGroup).where(
+def _group_query(tenant_id: uuid.UUID, group_id: uuid.UUID) -> Select[tuple[UnansweredGroup]]:
+    return select(UnansweredGroup).where(
         UnansweredGroup.id == group_id, UnansweredGroup.tenant_id == tenant_id
     )
-    if for_update:
-        query = query.with_for_update().execution_options(populate_existing=True)
+
+
+async def _one_group(db: AsyncSession, query: Select[tuple[UnansweredGroup]]) -> UnansweredGroup:
     group = (await db.execute(query)).scalar_one_or_none()
     if group is None:
         raise GroupNotFoundError
     return group
+
+
+async def get_group(
+    db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
+) -> UnansweredGroup:
+    """Raises ``GroupNotFoundError`` for a missing or foreign group."""
+    return await _one_group(db, _group_query(tenant_id, group_id))
+
+
+async def lock_group(
+    db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
+) -> UnansweredGroup:
+    """Like ``get_group``, but row-locks the group (Postgres) and reloads it, so callers
+    checking versions see committed state."""
+    return await _one_group(
+        db,
+        _group_query(tenant_id, group_id)
+        .with_for_update()
+        .execution_options(populate_existing=True),
+    )
 
 
 async def group_response(db: AsyncSession, group: UnansweredGroup) -> UnansweredGroupResponse:

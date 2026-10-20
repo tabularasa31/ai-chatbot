@@ -30,7 +30,7 @@ export function greetingLocale(
 
 function maximizeLocale(tag: string): string {
   try {
-    return new Intl.Locale(tag).maximize().toString();
+    return new Intl.Locale(tag.replaceAll("_", "-")).maximize().toString();
   } catch {
     return tag;
   }

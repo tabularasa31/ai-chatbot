@@ -55,20 +55,36 @@ describe("greetOnce", () => {
     assert.equal(new URL(String(url)).searchParams.get("locale"), "zh-Hant-TW");
   });
 
-  test("a tag Intl.Locale rejects, or a browser without Intl.Locale, is sent unchanged", async () => {
+  test("a tenant hint written with an underscore (zh_TW) also gets the script", async () => {
+    const fetchMock = stubFetch(greeting);
+
+    await greetOnce({ ...params, locale: "zh_TW" });
+
+    const [url] = fetchMock.mock.calls[0].arguments;
+    assert.equal(new URL(String(url)).searchParams.get("locale"), "zh-Hant-TW");
+  });
+
+  test("a tag Intl.Locale rejects is sent unchanged", async () => {
+    const fetchMock = stubFetch(greeting);
+
+    await greetOnce({ ...params, locale: "not a locale!" });
+
+    const [url] = fetchMock.mock.calls[0].arguments;
+    assert.equal(new URL(String(url)).searchParams.get("locale"), "not a locale!");
+  });
+
+  test("a browser without Intl.Locale sends the tag unchanged", async () => {
     const fetchMock = stubFetch(greeting);
     const original = Intl.Locale;
+    Object.assign(Intl, { Locale: undefined });
     try {
-      await greetOnce({ ...params, locale: "not a locale!" });
-      Object.assign(Intl, { Locale: undefined });
-      storage.items.clear();
       await greetOnce({ ...params, locale: "zh-TW" });
     } finally {
       Object.assign(Intl, { Locale: original });
     }
 
-    const sent = fetchMock.mock.calls.map(({ arguments: [url] }) => new URL(String(url)).searchParams.get("locale"));
-    assert.deepEqual(sent, ["not a locale!", "zh-TW"]);
+    const [url] = fetchMock.mock.calls[0].arguments;
+    assert.equal(new URL(String(url)).searchParams.get("locale"), "zh-TW");
   });
 
   test("makes no request once the marker is set", async () => {

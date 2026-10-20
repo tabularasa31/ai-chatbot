@@ -54,6 +54,15 @@ class Settings(BaseSettings):
         description="SQLAlchemy max_overflow per engine. Hard cap = db_pool_size + db_max_overflow.",
     )
     redis_url: str | None = Field(None, alias="REDIS_URL")
+    edge_proxy_secret: str | None = Field(
+        None,
+        alias="EDGE_PROXY_SECRET",
+        description=(
+            "Shared with our own proxies in front of the API (the dashboard's /widget "
+            "routes, the RU edge). A request carrying it may name the visitor's address "
+            "for rate limiting; without it that claim is ignored."
+        ),
+    )
     environment: str = Field("development", alias="ENVIRONMENT")
     jwt_secret: str = Field(..., alias="JWT_SECRET")
     openai_api_key: str | None = Field(None, alias="OPENAI_API_KEY")

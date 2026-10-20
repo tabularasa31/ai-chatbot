@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { visitorHeaders } from "@/lib/widget-proxy";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -29,7 +30,7 @@ export async function POST(request: NextRequest) {
 
   const res = await fetch(`${API_URL}/widget/chat?${params}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...visitorHeaders(request), "Content-Type": "application/json" },
     body: JSON.stringify({ message, locale }),
     cache: "no-store",
   });

@@ -13,7 +13,6 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 logger = logging.getLogger(__name__)
 RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS = 60
@@ -24,7 +23,7 @@ from backend.auth.routes import auth_router
 from backend.bots.routes import bots_router
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.core.config import settings
-from backend.core.limiter import hash_ip_for_logs, limiter
+from backend.core.limiter import client_ip, hash_ip_for_logs, limiter
 from backend.core.queue import close_pool as close_queue_pool
 from backend.core.queue import set_main_loop
 from backend.core.redis import init_redis, redis_ping, shutdown_redis
@@ -142,7 +141,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
         extra={
             "route": request.url.path,
             "tenant_id": request.query_params.get("tenant_id") or "unknown",
-            "ip_hash": hash_ip_for_logs(get_remote_address(request)),
+            "ip_hash": hash_ip_for_logs(client_ip(request)),
         },
     )
     response = _rate_limit_exceeded_handler(request, exc)

@@ -10,6 +10,21 @@ in a PR, and then apply it on the VM — never edit the VM copy by hand.
 The VM also hosts unrelated sites in their own files under `sites-available/`.
 Touching them must not touch this file, and the reverse.
 
+## Edge secret
+
+The API keys its rate limits on the visitor's address, and from Railway's side
+every request through here comes from this VM. The `api-ru` location passes the
+visitor's address in `X-Chat9-Visitor-IP` and proves it with the API's
+`EDGE_PROXY_SECRET`, which lives outside the repo in
+`/etc/nginx/chat9-edge-secret.conf` (root-owned, mode 600):
+
+```nginx
+proxy_set_header X-Chat9-Edge-Secret "<EDGE_PROXY_SECRET>";
+```
+
+Create that file before applying a config that includes it; `nginx -t` refuses
+the config without it.
+
 ## Apply
 
 ```bash

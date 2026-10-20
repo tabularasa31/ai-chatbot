@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import ipaddress
+import logging
 import uuid
 from collections.abc import Callable
 
@@ -12,6 +15,11 @@ from starlette.requests import Request
 
 from backend.core.config import settings
 
+logger = logging.getLogger(__name__)
+
+EDGE_SECRET_HEADER = "x-chat9-edge-secret"
+VISITOR_IP_HEADER = "x-chat9-visitor-ip"
+
 # When set (by tests only), `/widget/chat` rate limiting uses this identity instead of IP.
 _widget_public_rate_limit_key_override: Callable[[Request], str] | None = None
 
@@ -20,17 +28,62 @@ _widget_public_rate_limit_key_override: Callable[[Request], str] | None = None
 _owner_jwt_rate_limit_key_override: Callable[[Request], str] | None = None
 
 
+def _address_key(value: str | None) -> str | None:
+    """Normalize an address into a bucket. IPv6 is keyed by its /64: one
+    subscriber usually holds the whole prefix and could otherwise rotate
+    through it to get a fresh bucket per request."""
+    if not value:
+        return None
+    try:
+        ip = ipaddress.ip_address(value.strip().split("%", 1)[0])
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.IPv6Network((ip, 64), strict=False))
+    return str(ip)
+
+
+def _from_edge_proxy(request: Request) -> bool:
+    presented = request.headers.get(EDGE_SECRET_HEADER)
+    if not presented:
+        return False
+    secret = settings.edge_proxy_secret
+    if secret and hmac.compare_digest(presented.encode(), secret.encode()):
+        return True
+    logger.warning("edge_proxy_secret_mismatch", extra={"secret_configured": bool(secret)})
+    return False
+
+
+def client_ip(request: Request) -> str:
+    """The address rate limits are keyed on.
+
+    The socket peer is Railway's internal proxy, never the visitor, so the
+    connecting address comes from X-Real-IP, which Railway's edge overwrites on
+    every request. When that address is one of our own proxies (the dashboard's
+    /widget routes, the RU edge), the proxy proves itself with the shared edge
+    secret and names the visitor; without the secret the visitor header is
+    ignored, so a caller cannot choose its own bucket.
+    """
+    if _from_edge_proxy(request):
+        visitor = _address_key(request.headers.get(VISITOR_IP_HEADER))
+        if visitor:
+            return visitor
+    return _address_key(request.headers.get("x-real-ip")) or get_remote_address(request)
+
+
 def _widget_rate_limit_ip(request: Request) -> str:
     if _widget_public_rate_limit_key_override is not None:
         return _widget_public_rate_limit_key_override(request)
-    return get_remote_address(request)
+    return client_ip(request)
 
 
 def _key_func(request):
     """Use unique key in test mode to avoid rate limiting tests."""
     if settings.environment == "test":
         return str(uuid.uuid4())
-    return get_remote_address(request)
+    return client_ip(request)
 
 
 def widget_public_rate_limit_key(request: Request) -> str:
@@ -121,12 +174,13 @@ def owner_jwt_rate_limit_key(request: Request) -> str:
         user_id = decode_access_token(raw_token)
         if user_id:
             return f"owner:{user_id}"
-    return f"ip:{get_remote_address(request)}"
+    return f"ip:{client_ip(request)}"
 
 
 def hash_ip_for_logs(ip: str | None) -> str:
+    # Keyed: a plain hash of a visitor address is reversed by hashing all of IPv4.
     value = (ip or "unknown").encode("utf-8")
-    return hashlib.sha256(value).hexdigest()[:8]
+    return hmac.new(settings.jwt_secret.encode("utf-8"), value, hashlib.sha256).hexdigest()[:8]
 
 
 def set_widget_public_rate_limit_key_override(

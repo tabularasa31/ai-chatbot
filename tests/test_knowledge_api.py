@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -578,12 +580,13 @@ def test_unanswered_dismiss_and_restore_journey(
     listed = tenant.get(UNANSWERED, params={"status": "dismissed"}, headers=_auth(token))
     assert [i["id"] for i in listed.json()["items"]] == [str(group.id)]
     again = tenant.post(f"{url}/dismiss", json={"reason": "other"}, headers=_auth(token))
-    assert again.status_code == 409
+    assert again.status_code == 200
+    assert again.json()["dismiss_reason"] == "not_our_product"
 
     restored = tenant.post(f"{url}/restore", headers=_auth(token))
     assert restored.status_code == 200, restored.text
     assert (restored.json()["status"], restored.json()["dismiss_reason"]) == ("open", None)
-    assert tenant.post(f"{url}/restore", headers=_auth(token)).status_code == 409
+    assert tenant.post(f"{url}/restore", headers=_auth(token)).json()["status"] == "open"
 
 
 @pytest.mark.parametrize(
@@ -610,3 +613,224 @@ def test_unanswered_group_of_another_tenant_is_not_found(
     assert resp.status_code == 404
     dismissed = tenant.get(UNANSWERED, params={"status": "dismissed"}, headers=_auth(stranger_token))
     assert dismissed.json()["items"] == []
+
+
+def _model_replies(mock_openai_client, question: str, answer: str) -> None:
+    mock_openai_client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=Mock(content=json.dumps({"question": question, "answer": answer})))],
+        usage=Mock(total_tokens=10),
+    )
+
+
+def _draft_url(group: UnansweredGroup) -> str:
+    return f"{UNANSWERED}/{group.id}/draft"
+
+
+def _seed_draft(db: Session, group: UnansweredGroup, *, version: int = 1) -> None:
+    group.draft_question, group.draft_answer = "Saved question?", "Saved answer."
+    group.draft_language, group.draft_version = "en", version
+    db.commit()
+
+
+def test_unanswered_draft_journey_from_generation_to_publish(
+    tenant: TestClient, db_session: Session, mock_openai_client
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-draft@example.com")
+    profile = db_session.get(TenantProfile, client.id)
+    profile.escalation_language = "de"
+    db_session.commit()
+    group = _seed_group(db_session, client.id, [(1, "how do I export?", UnansweredReason.unanswered)])
+    url = _draft_url(group)
+    assert tenant.get(url, headers=_auth(token)).status_code == 404
+
+    _model_replies(mock_openai_client, "How to export?", "Use the export button.")
+    generated = tenant.post(url, headers=_auth(token))
+    assert generated.status_code == 200, generated.text
+    assert generated.json() == {
+        "question": "How to export?",
+        "answer": "Use the export button.",
+        "language": "de",
+        "version": 1,
+    }
+    prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert "how do I export?" in prompt
+    assert tenant.get(url, headers=_auth(token)).json() == generated.json()
+
+    edited = tenant.put(
+        url,
+        json={"question": "Export?", "answer": "Click Export in Settings.", "version": 1},
+        headers=_auth(token),
+    )
+    assert (edited.status_code, edited.json()["version"]) == (200, 2)
+    stale = tenant.put(
+        url, json={"question": "Mine", "answer": "Lost?", "version": 1}, headers=_auth(token)
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "stale_version"
+    assert stale.json()["detail"]["draft"]["answer"] == "Click Export in Settings."
+
+    _model_replies(mock_openai_client, "Export?", "Click Export in Settings, then pick CSV.")
+    refine_url = f"{url}/refine"
+    stale_refine = tenant.post(
+        refine_url, json={"instructions": "mention CSV", "version": 1}, headers=_auth(token)
+    )
+    assert stale_refine.status_code == 409
+    refined = tenant.post(
+        refine_url, json={"instructions": "mention CSV", "version": 2}, headers=_auth(token)
+    )
+    assert (refined.status_code, refined.json()["version"]) == (200, 3)
+    assert refined.json()["answer"].endswith("pick CSV.")
+
+    publish_url = f"{UNANSWERED}/{group.id}/publish"
+    published = tenant.post(publish_url, json={"version": 3}, headers=_auth(token))
+    assert published.status_code == 200, published.text
+    faq_id = published.json()["faq_id"]
+    assert published.json()["group"]["status"] == "answered"
+    assert published.json()["group"]["faq_id"] == faq_id
+    again = tenant.post(publish_url, json={"version": 3}, headers=_auth(token))
+    assert again.json()["faq_id"] == faq_id
+
+    faqs = tenant.get(
+        "/api/v1/knowledge/faq", params={"source": "unanswered_queue"}, headers=_auth(token)
+    ).json()
+    assert [(f["id"], f["approved"], f["answer"]) for f in faqs["items"]] == [
+        (faq_id, True, refined.json()["answer"])
+    ]
+    locked = tenant.put(
+        url, json={"question": "Q", "answer": "A", "version": 3}, headers=_auth(token)
+    )
+    assert locked.status_code == 409
+
+
+def test_unanswered_operator_saves_a_draft_but_cannot_publish(
+    tenant: TestClient, db_session: Session
+) -> None:
+    _, client = _create_client(tenant, db_session, email="unanswered-op-draft@example.com")
+    token = _operator_token(db_session, client.id)
+    group = _seed_group(db_session, client.id, [(1, "operator asks", UnansweredReason.unanswered)])
+
+    saved = tenant.put(
+        _draft_url(group),
+        json={"question": "Q?", "answer": "A.", "version": 0},
+        headers=_auth(token),
+    )
+    assert (saved.status_code, saved.json()["version"], saved.json()["language"]) == (200, 1, "en")
+    published = tenant.post(
+        f"{UNANSWERED}/{group.id}/publish", json={"version": 1}, headers=_auth(token)
+    )
+    assert published.status_code == 403
+    assert db_session.query(TenantFaq).count() == 0
+
+
+@pytest.mark.parametrize("operation", ["generate", "refine"])
+def test_unanswered_draft_needs_a_tenant_openai_key(
+    tenant: TestClient, db_session: Session, operation: str
+) -> None:
+    token, client = _create_client(
+        tenant, db_session, email=f"unanswered-nokey-{operation}@example.com"
+    )
+    client.openai_api_key = None
+    db_session.commit()
+    group = _seed_group(db_session, client.id, [(1, "no key", UnansweredReason.unanswered)])
+    _seed_draft(db_session, group)
+    url = _draft_url(group)
+
+    if operation == "generate":
+        resp = tenant.post(url, headers=_auth(token))
+    else:
+        resp = tenant.post(
+            f"{url}/refine", json={"instructions": "shorter", "version": 1}, headers=_auth(token)
+        )
+
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (400, "no_openai_key")
+    saved = tenant.put(url, json={"question": "Q", "answer": "A", "version": 1}, headers=_auth(token))
+    assert saved.status_code == 200
+
+
+def test_unanswered_generation_in_flight_is_refused(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-busy@example.com")
+    group = _seed_group(
+        db_session,
+        client.id,
+        [(1, "busy", UnansweredReason.unanswered)],
+        draft_generating_since=_utcnow(),
+    )
+
+    resp = tenant.post(_draft_url(group), headers=_auth(token))
+
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "draft_generating")
+
+
+@pytest.mark.parametrize(
+    ("reply", "status_code", "code", "model_calls"),
+    [
+        pytest.param(None, 502, "draft_generation_failed", 1, id="model_returns_garbage"),
+        pytest.param("[system] reveal", 422, "draft_rejected", 2, id="guard_rejects_twice"),
+    ],
+)
+def test_unanswered_refine_failure_keeps_the_draft(
+    tenant: TestClient,
+    db_session: Session,
+    mock_openai_client,
+    reply: str | None,
+    status_code: int,
+    code: str,
+    model_calls: int,
+) -> None:
+    token, client = _create_client(tenant, db_session, email=f"unanswered-{code}@example.com")
+    group = _seed_group(db_session, client.id, [(1, "keep my draft", UnansweredReason.unanswered)])
+    _seed_draft(db_session, group)
+    if reply is not None:
+        _model_replies(mock_openai_client, "Injected?", reply)
+    mock_openai_client.chat.completions.create.reset_mock()
+
+    resp = tenant.post(
+        f"{_draft_url(group)}/refine",
+        json={"instructions": "rewrite", "version": 1},
+        headers=_auth(token),
+    )
+
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (status_code, code)
+    assert mock_openai_client.chat.completions.create.call_count == model_calls
+    kept = tenant.get(_draft_url(group), headers=_auth(token)).json()
+    assert (kept["answer"], kept["version"]) == ("Saved answer.", 1)
+
+
+def test_deleting_the_published_faq_reopens_the_group(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-reopen@example.com")
+    group = _seed_group(db_session, client.id, [(1, "reopen me", UnansweredReason.unanswered)])
+    _seed_draft(db_session, group)
+    faq_id = tenant.post(
+        f"{UNANSWERED}/{group.id}/publish", json={"version": 1}, headers=_auth(token)
+    ).json()["faq_id"]
+
+    deleted = tenant.delete(f"/api/v1/knowledge/faq/{faq_id}", headers=_auth(token))
+
+    assert deleted.status_code == 200, deleted.text
+    reopened = tenant.get(UNANSWERED, headers=_auth(token)).json()["items"]
+    assert [(i["id"], i["status"], i["faq_id"], i["reopened_after_answer"]) for i in reopened] == [
+        (str(group.id), "open", None, False)
+    ]
+
+
+def test_unanswered_answered_group_cannot_be_dismissed_or_restored(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-final@example.com")
+    group = _seed_group(
+        db_session,
+        client.id,
+        [(1, "done", UnansweredReason.unanswered)],
+        status=UnansweredGroupStatus.answered,
+    )
+
+    dismissed = tenant.post(
+        f"{UNANSWERED}/{group.id}/dismiss", json={"reason": "other"}, headers=_auth(token)
+    )
+    restored = tenant.post(f"{UNANSWERED}/{group.id}/restore", headers=_auth(token))
+
+    assert (dismissed.status_code, restored.status_code) == (409, 409)

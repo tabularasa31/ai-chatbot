@@ -180,19 +180,24 @@ async def mark_seen(db: AsyncSession, *, user_id: uuid.UUID) -> None:
     await db.commit()
 
 
+def group_query(tenant_id: uuid.UUID, group_id: uuid.UUID) -> Select[tuple[UnansweredGroup]]:
+    return select(UnansweredGroup).where(
+        UnansweredGroup.id == group_id, UnansweredGroup.tenant_id == tenant_id
+    )
+
+
 async def _get_group(
     db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
 ) -> UnansweredGroup:
-    group = (
-        await db.execute(
-            select(UnansweredGroup).where(
-                UnansweredGroup.id == group_id, UnansweredGroup.tenant_id == tenant_id
-            )
-        )
-    ).scalar_one_or_none()
+    group = (await db.execute(group_query(tenant_id, group_id))).scalar_one_or_none()
     if group is None:
         raise GroupNotFoundError
     return group
+
+
+async def group_response(db: AsyncSession, group: UnansweredGroup) -> UnansweredGroupResponse:
+    (response,) = await _to_responses(db, [group], _utcnow() - WINDOW)
+    return response
 
 
 async def _change_status(
@@ -206,8 +211,7 @@ async def _change_status(
     group.dismiss_reason = dismiss_reason
     group.status_changed_at = _utcnow()
     await db.commit()
-    (response,) = await _to_responses(db, [group], _utcnow() - WINDOW)
-    return response
+    return await group_response(db, group)
 
 
 async def dismiss(
@@ -217,8 +221,13 @@ async def dismiss(
     group_id: uuid.UUID,
     reason: UnansweredDismissReason,
 ) -> UnansweredGroupResponse:
-    """Raises ``GroupNotFoundError`` for a foreign group, ``GroupStateConflictError`` unless it is open."""
+    """Dismissing a dismissed group is a no-op.
+
+    Raises ``GroupNotFoundError`` for a foreign group, ``GroupStateConflictError`` for an answered one.
+    """
     group = await _get_group(db, tenant_id=tenant_id, group_id=group_id)
+    if group.status == UnansweredGroupStatus.dismissed:
+        return await group_response(db, group)
     if group.status != UnansweredGroupStatus.open:
         raise GroupStateConflictError
     return await _change_status(
@@ -229,8 +238,13 @@ async def dismiss(
 async def restore(
     db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
 ) -> UnansweredGroupResponse:
-    """Raises ``GroupNotFoundError`` for a foreign group, ``GroupStateConflictError`` unless it is dismissed."""
+    """Restoring an open group is a no-op.
+
+    Raises ``GroupNotFoundError`` for a foreign group, ``GroupStateConflictError`` for an answered one.
+    """
     group = await _get_group(db, tenant_id=tenant_id, group_id=group_id)
+    if group.status == UnansweredGroupStatus.open:
+        return await group_response(db, group)
     if group.status != UnansweredGroupStatus.dismissed:
         raise GroupStateConflictError
     return await _change_status(db, group, status=UnansweredGroupStatus.open, dismiss_reason=None)

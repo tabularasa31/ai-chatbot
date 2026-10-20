@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StringConstraints
 
 from backend.models import UnansweredDismissReason, UnansweredGroupStatus, UnansweredReason
 
@@ -38,3 +39,34 @@ class UnansweredBadgeResponse(BaseModel):
 
 class UnansweredDismissRequest(BaseModel):
     reason: UnansweredDismissReason
+
+
+NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+DraftVersion = Annotated[int, Field(ge=0)]
+
+
+class DraftResponse(BaseModel):
+    question: str
+    answer: str
+    language: str
+    version: int
+
+
+class DraftSaveRequest(BaseModel):
+    question: NonBlank
+    answer: NonBlank
+    version: DraftVersion
+
+
+class DraftRefineRequest(BaseModel):
+    instructions: NonBlank
+    version: DraftVersion
+
+
+class PublishRequest(BaseModel):
+    version: DraftVersion
+
+
+class PublishResponse(BaseModel):
+    group: UnansweredGroupResponse
+    faq_id: uuid.UUID

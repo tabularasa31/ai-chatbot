@@ -32,7 +32,14 @@ from backend.knowledge.schemas import (
     KnowledgeProfilePatchRequest,
     KnowledgeProfileResponse,
 )
-from backend.models import Tenant, TenantFaq, TenantProfile
+from backend.models import (
+    Tenant,
+    TenantFaq,
+    TenantProfile,
+    UnansweredGroup,
+    UnansweredGroupStatus,
+)
+from backend.models.base import _utcnow
 from backend.tenants.cache import invalidate_tenant
 
 knowledge_router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
@@ -82,6 +89,21 @@ def _generate_faq_embedding_background(
         db.rollback()
     finally:
         db.close()
+
+
+def _reopen_groups_answered_by(db: Session, faq_id: uuid.UUID) -> None:
+    """A deleted FAQ entry no longer answers the questions it was published for."""
+    db.query(UnansweredGroup).filter(
+        UnansweredGroup.faq_id == faq_id,
+        UnansweredGroup.status == UnansweredGroupStatus.answered,
+    ).update(
+        {
+            UnansweredGroup.status: UnansweredGroupStatus.open,
+            UnansweredGroup.status_changed_at: _utcnow(),
+            UnansweredGroup.reopened_after_answer: False,
+        },
+        synchronize_session=False,
+    )
 
 
 @knowledge_router.get("/profile", response_model=KnowledgeProfileResponse)
@@ -142,7 +164,7 @@ def list_knowledge_faq(
     tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
     approved: Literal["true", "false", "all"] = Query("all"),
-    source: Literal["docs", "logs", "swagger", "gap_analyzer", "all"] = Query("all"),
+    source: Literal["docs", "logs", "swagger", "gap_analyzer", "unanswered_queue", "all"] = Query("all"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> KnowledgeFaqListResponse:
@@ -265,6 +287,7 @@ def reject_faq(
 ) -> KnowledgeFaqRejectResponse:
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
     faq_source = faq.source
+    _reopen_groups_answered_by(db, faq.id)
     db.delete(faq)
     db.commit()
     emit_faq_reviewed(
@@ -337,6 +360,7 @@ def delete_faq(
 ) -> KnowledgeFaqRejectResponse:
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
     faq_source = faq.source
+    _reopen_groups_answered_by(db, faq.id)
     db.delete(faq)
     db.commit()
     emit_faq_reviewed(

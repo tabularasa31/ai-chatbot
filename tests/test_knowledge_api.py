@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Tenant, TenantFaq, TenantProfile
+from backend.auth.roles import ROLE_OPERATOR
+from backend.auth.service import create_token_for_user
+from backend.models import (
+    Chat,
+    Message,
+    MessageRole,
+    Tenant,
+    TenantFaq,
+    TenantProfile,
+    UnansweredDismissReason,
+    UnansweredGroup,
+    UnansweredGroupStatus,
+    UnansweredQuestion,
+    UnansweredReason,
+    User,
+)
+from backend.models.base import _utcnow
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -315,3 +331,282 @@ def test_faq_reviewed_never_carries_question_or_answer_text(
     for event in faq_events:
         for value in event["properties"].values():
             assert "secret" not in str(value)
+
+
+UNANSWERED = "/api/v1/knowledge/unanswered"
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _ago(days: float) -> datetime:
+    return _utcnow() - timedelta(days=days)
+
+
+def _operator_token(db: Session, tenant_id: uuid.UUID) -> str:
+    operator = User(
+        email="unanswered-operator@example.com",
+        password_hash="x",
+        role=ROLE_OPERATOR,
+        is_verified=True,
+        tenant_id=tenant_id,
+    )
+    db.add(operator)
+    db.commit()
+    return create_token_for_user(operator)[0]
+
+
+def _seed_chat(db: Session, tenant_id: uuid.UUID, *, days_ago: float) -> Chat:
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), created_at=_ago(days_ago))
+    db.add(chat)
+    db.commit()
+    return chat
+
+
+def _seed_group(
+    db: Session,
+    tenant_id: uuid.UUID,
+    asks: list[tuple[float, str, UnansweredReason]],
+    *,
+    status: UnansweredGroupStatus = UnansweredGroupStatus.open,
+    changed_days_ago: float | None = None,
+    **fields: object,
+) -> UnansweredGroup:
+    """One group whose questions were asked ``days_ago`` days back, each in its own chat."""
+    last_asked = min(days_ago for days_ago, _, _ in asks)
+    group = UnansweredGroup(
+        tenant_id=tenant_id,
+        status=status,
+        first_seen_at=_ago(max(days_ago for days_ago, _, _ in asks)),
+        last_asked_at=_ago(last_asked),
+        status_changed_at=_ago(last_asked if changed_days_ago is None else changed_days_ago),
+        **fields,
+    )
+    db.add(group)
+    db.commit()
+    for days_ago, text, reason in asks:
+        chat = _seed_chat(db, tenant_id, days_ago=days_ago)
+        question = Message(
+            chat_id=chat.id, role=MessageRole.user, content=text, created_at=_ago(days_ago)
+        )
+        reply = Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content="I don't know",
+            created_at=_ago(days_ago),
+        )
+        db.add_all([question, reply])
+        db.commit()
+        db.add(
+            UnansweredQuestion(
+                tenant_id=tenant_id,
+                group_id=group.id,
+                chat_id=chat.id,
+                user_message_id=question.id,
+                assistant_message_id=reply.id,
+                reason=reason,
+                created_at=_ago(days_ago),
+            )
+        )
+    db.commit()
+    return group
+
+
+def _seed_queue(db: Session, tenant_id: uuid.UUID) -> dict[str, UnansweredGroup]:
+    asked = UnansweredReason.unanswered
+    return {
+        "recent": _seed_group(db, tenant_id, [(1, "recent", asked)]),
+        "older": _seed_group(db, tenant_id, [(5, "older", asked)]),
+        "stale": _seed_group(db, tenant_id, [(40, "stale", asked)]),
+        "restored": _seed_group(db, tenant_id, [(40, "restored", asked)], changed_days_ago=0.1),
+        "answered": _seed_group(
+            db, tenant_id, [(60, "answered", asked)], status=UnansweredGroupStatus.answered
+        ),
+        "dismissed": _seed_group(
+            db,
+            tenant_id,
+            [(50, "dismissed", asked)],
+            status=UnansweredGroupStatus.dismissed,
+            dismiss_reason=UnansweredDismissReason.other,
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        pytest.param("open", ["recent", "older", "restored"], id="open_hides_stale_shows_restored"),
+        pytest.param("answered", ["answered"], id="answered_ignores_age"),
+        pytest.param("dismissed", ["dismissed"], id="dismissed_ignores_age"),
+    ],
+)
+def test_unanswered_list_per_status_newest_first(
+    tenant: TestClient, db_session: Session, status: str, expected: list[str]
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-list@example.com")
+    queue = _seed_queue(db_session, client.id)
+
+    resp = tenant.get(UNANSWERED, params={"status": status}, headers=_auth(token))
+
+    assert resp.status_code == 200, resp.text
+    assert [item["id"] for item in resp.json()["items"]] == [str(queue[n].id) for n in expected]
+
+
+def test_unanswered_group_shape(tenant: TestClient, db_session: Session) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-shape@example.com")
+    faq = _make_faq(db_session, client.id)
+    group = _seed_group(
+        db_session,
+        client.id,
+        [
+            (2, "first wording", UnansweredReason.unanswered),
+            (1, "middle wording", UnansweredReason.llm_self_offer),
+            (0.5, "latest wording", UnansweredReason.unanswered),
+            (45, "long ago", UnansweredReason.no_documents),
+        ],
+        draft_answer="Draft",
+        faq_id=faq.id,
+        reopened_after_answer=True,
+    )
+    latest = (
+        db_session.query(UnansweredQuestion)
+        .filter_by(group_id=group.id)
+        .order_by(UnansweredQuestion.created_at.desc())
+        .first()
+    )
+
+    body = tenant.get(UNANSWERED, headers=_auth(token)).json()
+
+    assert body["items"] == [
+        {
+            "id": str(group.id),
+            "status": "open",
+            "question": "latest wording",
+            "question_message_id": str(latest.user_message_id),
+            "chat_id": str(latest.chat_id),
+            "conversations_30d": 3,
+            "last_asked_at": body["items"][0]["last_asked_at"],
+            "reasons": ["llm_self_offer", "no_documents", "unanswered"],
+            "reopened_after_answer": True,
+            "faq_id": str(faq.id),
+            "has_draft": True,
+            "dismiss_reason": None,
+        }
+    ]
+    assert body["tenant_conversations_30d"] == 3
+    assert body["tenant_has_conversations"] is True
+
+
+def test_unanswered_list_paginates_and_caps_page_size(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-page@example.com")
+    queue = _seed_queue(db_session, client.id)
+
+    first = tenant.get(UNANSWERED, params={"limit": 2}, headers=_auth(token)).json()
+    second = tenant.get(UNANSWERED, params={"limit": 2, "offset": 2}, headers=_auth(token)).json()
+
+    assert (first["next_offset"], second["next_offset"]) == (2, None)
+    assert [i["id"] for i in first["items"] + second["items"]] == [
+        str(queue[n].id) for n in ("recent", "older", "restored")
+    ]
+    assert tenant.get(UNANSWERED, params={"limit": 51}, headers=_auth(token)).status_code == 422
+
+
+def test_unanswered_empty_state_fields(tenant: TestClient, db_session: Session) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-empty@example.com")
+
+    def read() -> dict:
+        return tenant.get(UNANSWERED, headers=_auth(token)).json()
+
+    assert read() == {
+        "items": [],
+        "next_offset": None,
+        "tenant_conversations_30d": 0,
+        "tenant_has_conversations": False,
+    }
+
+    _seed_chat(db_session, client.id, days_ago=90)
+    assert (read()["tenant_has_conversations"], read()["tenant_conversations_30d"]) == (True, 0)
+
+    _seed_chat(db_session, client.id, days_ago=1)
+    assert read()["tenant_conversations_30d"] == 1
+
+
+def test_unanswered_badge_counts_what_opened_since_last_seen(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-badge@example.com")
+    queue = _seed_queue(db_session, client.id)
+
+    def badge() -> int:
+        return tenant.get(f"{UNANSWERED}/badge", headers=_auth(token)).json()["new_count"]
+
+    assert badge() == 3
+
+    assert tenant.post(f"{UNANSWERED}/seen", headers=_auth(token)).status_code == 204
+    assert badge() == 0
+
+    _seed_group(db_session, client.id, [(-0.01, "brand new", UnansweredReason.unanswered)])
+    assert badge() == 1
+
+    group_url = f"{UNANSWERED}/{queue['recent'].id}"
+    tenant.post(f"{group_url}/dismiss", json={"reason": "other"}, headers=_auth(token))
+    assert badge() == 1
+    tenant.post(f"{group_url}/restore", headers=_auth(token))
+    assert badge() == 2
+
+
+@pytest.mark.parametrize("as_operator", [False, True], ids=["owner", "operator"])
+def test_unanswered_dismiss_and_restore_journey(
+    tenant: TestClient, db_session: Session, as_operator: bool
+) -> None:
+    owner_token, client = _create_client(tenant, db_session, email="unanswered-triage@example.com")
+    token = _operator_token(db_session, client.id) if as_operator else owner_token
+    group = _seed_group(db_session, client.id, [(1, "triage me", UnansweredReason.unanswered)])
+    url = f"{UNANSWERED}/{group.id}"
+
+    dismissed = tenant.post(
+        f"{url}/dismiss", json={"reason": "not_our_product"}, headers=_auth(token)
+    )
+    assert dismissed.status_code == 200, dismissed.text
+    assert (dismissed.json()["status"], dismissed.json()["dismiss_reason"]) == (
+        "dismissed",
+        "not_our_product",
+    )
+    listed = tenant.get(UNANSWERED, params={"status": "dismissed"}, headers=_auth(token))
+    assert [i["id"] for i in listed.json()["items"]] == [str(group.id)]
+    again = tenant.post(f"{url}/dismiss", json={"reason": "other"}, headers=_auth(token))
+    assert again.status_code == 409
+
+    restored = tenant.post(f"{url}/restore", headers=_auth(token))
+    assert restored.status_code == 200, restored.text
+    assert (restored.json()["status"], restored.json()["dismiss_reason"]) == ("open", None)
+    assert tenant.post(f"{url}/restore", headers=_auth(token)).status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("action", "body"),
+    [
+        pytest.param("dismiss", {"reason": "other"}, id="dismiss"),
+        pytest.param("restore", None, id="restore"),
+    ],
+)
+def test_unanswered_group_of_another_tenant_is_not_found(
+    tenant: TestClient, db_session: Session, action: str, body: dict | None
+) -> None:
+    _, owner_client = _create_client(tenant, db_session, email="unanswered-own@example.com")
+    stranger_token, _ = _create_client(tenant, db_session, email="unanswered-stranger@example.com")
+    group = _seed_group(
+        db_session,
+        owner_client.id,
+        [(1, "private", UnansweredReason.unanswered)],
+        status=UnansweredGroupStatus.dismissed,
+    )
+
+    resp = tenant.post(f"{UNANSWERED}/{group.id}/{action}", json=body, headers=_auth(stranger_token))
+
+    assert resp.status_code == 404
+    dismissed = tenant.get(UNANSWERED, params={"status": "dismissed"}, headers=_auth(stranger_token))
+    assert dismissed.json()["items"] == []

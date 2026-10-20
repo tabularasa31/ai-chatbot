@@ -4,7 +4,7 @@ These tests pin the contract the storage/egress split rests on:
 
 * messages and escalation tickets keep the ORIGINAL wording;
 * nothing raw reaches OpenAI — not the question, not the prompt history,
-  not the escalation transcript, not the background log-analysis job;
+  not the escalation transcript;
 * the support email renders the stored original — it is a human surface;
 * the migration that flips storage back to originals never blanks a row.
 
@@ -14,7 +14,7 @@ If the egress redaction is ever removed, the OpenAI assertions here fail.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import Mock
 
 import pytest

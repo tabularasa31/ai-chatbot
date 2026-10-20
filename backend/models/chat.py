@@ -31,7 +31,7 @@ from backend.models.enums import (
 
 
 class MessageEmbedding(Base):
-    """Embeddings for individual chat messages (Phase 4 — log analysis)."""
+    """Embeddings for individual chat messages, stored for unanswered-queue grouping."""
 
     __tablename__ = "message_embeddings"
 

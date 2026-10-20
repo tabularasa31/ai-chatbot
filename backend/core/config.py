@@ -149,7 +149,7 @@ class Settings(BaseSettings):
     extraction_model: str = Field(
         "gpt-4.1-mini",
         alias="EXTRACTION_MODEL",
-        description="OpenAI model for knowledge extraction, gap analysis, and alias extraction.",
+        description="OpenAI model for knowledge extraction and gap analysis.",
     )
     ner_model: str = Field(
         "gpt-4.1-mini",
@@ -590,12 +590,6 @@ class Settings(BaseSettings):
     log_embeddings_retention_days: int = Field(
         90, alias="LOG_EMBEDDINGS_RETENTION_DAYS"
     )
-    # Messages per embedding API call
-    embedding_batch_size: int = Field(100, alias="EMBEDDING_BATCH_SIZE")
-    # Seconds to sleep between embedding batches (rate limiting)
-    embedding_batch_delay_sec: float = Field(0.5, alias="EMBEDDING_BATCH_DELAY_SEC")
-    # Maximum job duration before timeout (seconds)
-    max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
 
     # ── Semantic query rewrite ─────────────────────────────────────────────
     # Timeout for the concurrent LLM rewrite call (runs alongside guard checks).

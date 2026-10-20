@@ -67,7 +67,6 @@ class TenantFaq(UUIDPKMixin, TenantScopedMixin, Base):
         nullable=True,
         index=True,
     )
-    # Phase 4: explainability fields (only populated for source='logs')
     cluster_size = Column(Integer, nullable=True)
     source_message_ids = Column(JSON, nullable=True)  # list of up to 10 message IDs
     created_at = Column(DateTime, nullable=False, default=_utcnow)

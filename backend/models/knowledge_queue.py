@@ -85,6 +85,7 @@ class UnansweredQuestion(UUIDPKMixin, TenantScopedMixin, Base):
         PG_UUID(as_uuid=True),
         ForeignKey("messages.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
         unique=True,
     )
     reason = Column(

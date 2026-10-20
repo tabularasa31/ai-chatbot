@@ -679,6 +679,7 @@ async def relevance_guard(run: PipelineRun) -> ChatPipelineResult | None:
         else state.guard_profile
     )
     state.guard_bypassed_short_query = guard_reason == "short_query_bypass"
+    state.relevance_guard_reason = guard_reason
     _rel_latency_s = perf_counter() - state.rel_started_at
     from backend.chat.events import emit_pipeline_span
 

@@ -43,6 +43,7 @@ from backend.guards.relevance_checker import (
     CATEGORY_SUPPORT_COMPLAINT,
     async_check_relevance_with_profile,
 )
+from backend.guards.types import VerdictReason
 from backend.observability import TraceHandle, record_stage_ms
 
 logger = logging.getLogger(__name__)
@@ -409,6 +410,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
 
     async def _route() -> ChatPipelineResult:
         if not is_consecutive:
+            verdict_reason = state.relevance_guard_reason
             # A short query bypassed the pre-retrieval guard (≤4 words), so
             # it never received a category verdict. Now that retrieval is
             # also empty, classify it once: a social turn or a bot-meta
@@ -428,6 +430,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
                     chat_id=str(run.chat_id) if run.chat_id is not None else None,
                 )
                 _short_reason = _short_verdict.reason.value
+                verdict_reason = _short_reason
                 if _short_reason in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
                     return await _social_no_hits_result(_short_reason)
 
@@ -439,6 +442,7 @@ async def zero_hits_fast_path(run: PipelineRun) -> ChatPipelineResult | None:
                 tokens_as_output=True,
                 extras=extras,
             )
+            result.in_domain_unanswered = verdict_reason == VerdictReason.RELEVANT.value
             _emit_no_rag_hits_event(
                 outcome="soft_reply",
                 tenant_public_id=run.tenant_public_id,

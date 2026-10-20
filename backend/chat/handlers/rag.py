@@ -386,7 +386,8 @@ class RagHandler(PipelineHandler):
                 set_rephrase_flag=(result.reject_reason == "rephrase"),
                 turn_outcome=_turn_outcome_for(result),
             )
-            _stash_unanswered_turn(ctx, user_message, assistant_message, None)
+            if result.reject_reason != "rephrase" or result.in_domain_unanswered:
+                _stash_unanswered_turn(ctx, user_message, assistant_message, None)
             _try_ingest_gap_signal(
                 chat=chat,
                 tenant_id=ctx.tenant_id,

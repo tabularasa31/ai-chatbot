@@ -190,6 +190,10 @@ class ChatPipelineResult:
     # stores it once the turn is persisted and the reply is still the pipeline
     # answer (no escalation or handoff replaced it).
     answer_cache_candidate: AnswerCacheCandidate | None = None
+    # True when a "rephrase" reply followed a trusted in-domain relevance
+    # verdict, i.e. the question is a real knowledge gap. Off-topic, complaint
+    # and fail-open (timeout / error / no profile) verdicts leave it False.
+    in_domain_unanswered: bool = False
 
 
 @dataclass
@@ -224,6 +228,7 @@ class PipelineState:
     # short bot-meta / social turn on the *first* turn instead of only catching
     # it on the second consecutive zero-hit turn's force check.
     guard_bypassed_short_query: bool = False
+    relevance_guard_reason: str | None = None
     profile: TenantProfile | None = None
     client_product_name: str | None = None
     topic_hint: str | None = None

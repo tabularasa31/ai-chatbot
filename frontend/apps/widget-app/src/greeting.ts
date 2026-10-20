@@ -28,6 +28,14 @@ export function greetingLocale(
   return hintLocale?.trim() || browserLocale;
 }
 
+function maximizeLocale(tag: string): string {
+  try {
+    return new Intl.Locale(tag).maximize().toString();
+  } catch {
+    return tag;
+  }
+}
+
 function clearGreeted(botId: string, userId?: string | null): void {
   try {
     window.localStorage.removeItem(greetedStorageKey(botId, userId));
@@ -48,6 +56,8 @@ function hasText(body: unknown): body is { text: string } {
  * when already greeted or on failure. The request is a read: it never creates
  * a session or a conversation. When isCurrent() is false by the time the text
  * arrives, the visitor never sees it, so the marker is cleared and null returned.
+ * The locale is sent with its likely script filled in (zh-TW becomes zh-Hant-TW)
+ * because the endpoint tells scripts apart only when they are explicit.
  */
 export async function greetOnce({
   apiBase,
@@ -65,7 +75,7 @@ export async function greetOnce({
   if (hasBeenGreeted(botId, userId)) return null;
   markGreeted(botId, userId);
   const params = new URLSearchParams({ bot_id: botId });
-  if (locale) params.set("locale", locale);
+  if (locale) params.set("locale", maximizeLocale(locale));
   try {
     const res = await fetch(`${apiBase}/widget/greeting?${params}`);
     if (!res.ok) throw new Error(`Greeting error: ${res.status}`);

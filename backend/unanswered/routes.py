@@ -51,6 +51,7 @@ _STATUS_AND_CODE: dict[type[Exception], tuple[int, str]] = {
     drafts.DraftGeneratingError: (409, "draft_generating"),
     drafts.DraftGenerationError: (502, "draft_generation_failed"),
     drafts.DraftRejectedError: (422, "draft_rejected"),
+    drafts.FaqEmbeddingError: (502, "faq_embedding_failed"),
 }
 
 _background_tasks: set[asyncio.Task] = set()

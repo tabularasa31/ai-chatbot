@@ -798,6 +798,51 @@ def test_unanswered_refine_failure_keeps_the_draft(
     assert (kept["answer"], kept["version"]) == ("Saved answer.", 1)
 
 
+def test_published_faq_answers_the_same_question_in_the_widget(
+    tenant: TestClient, db_session: Session, mock_openai_client
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-serve@example.com")
+    bot = tenant.post("/bots", json={"name": "Bot"}, headers=_auth(token))
+    assert bot.status_code == 201, bot.text
+    group = _seed_group(db_session, client.id, [(1, "serve me", UnansweredReason.unanswered)])
+    _seed_draft(db_session, group)
+    publish_url = f"{UNANSWERED}/{group.id}/publish"
+
+    published = tenant.post(publish_url, json={"version": 1}, headers=_auth(token))
+    assert published.status_code == 200, published.text
+    embedding_calls = mock_openai_client.embeddings.create.call_count
+    again = tenant.post(publish_url, json={"version": 1}, headers=_auth(token))
+    assert again.json()["faq_id"] == published.json()["faq_id"]
+    assert mock_openai_client.embeddings.create.call_count == embedding_calls
+
+    _model_replies(mock_openai_client, "not", "the model must not answer this")
+    chat = tenant.post(
+        f"/widget/chat?bot_id={bot.json()['public_id']}", json={"message": "Saved question?"}
+    )
+    assert chat.status_code == 200, chat.text
+    assert "Saved answer." in chat.text
+    assert "the model must not answer this" not in chat.text
+
+
+def test_publish_needs_a_tenant_openai_key_and_publishes_nothing(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-pub-nokey@example.com")
+    client.openai_api_key = None
+    db_session.commit()
+    group = _seed_group(db_session, client.id, [(1, "no key", UnansweredReason.unanswered)])
+    _seed_draft(db_session, group)
+
+    resp = tenant.post(
+        f"{UNANSWERED}/{group.id}/publish", json={"version": 1}, headers=_auth(token)
+    )
+
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (400, "no_openai_key")
+    assert db_session.query(TenantFaq).count() == 0
+    db_session.refresh(group)
+    assert (group.status, group.faq_id) == (UnansweredGroupStatus.open, None)
+
+
 def test_deleting_the_published_faq_reopens_the_group(
     tenant: TestClient, db_session: Session
 ) -> None:

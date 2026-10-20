@@ -33,6 +33,7 @@ from backend.models import (
     UnansweredQuestion,
 )
 from backend.models.base import _utcnow
+from backend.search.embedding import async_embed_query
 from backend.unanswered.schemas import DraftResponse, PublishResponse
 from backend.unanswered.service import (
     GroupNotFoundError,
@@ -88,6 +89,10 @@ class DraftGenerationError(Exception):
 
 
 class DraftRejectedError(Exception):
+    pass
+
+
+class FaqEmbeddingError(Exception):
     pass
 
 
@@ -386,22 +391,38 @@ async def refine_draft(
         return _draft_response(group)
 
 
+async def _embed_faq_question(question: str, api_key: str) -> list[float]:
+    try:
+        return await async_embed_query(question, api_key=api_key)
+    except Exception as exc:
+        logger.exception("unanswered_publish_embedding_failed")
+        raise FaqEmbeddingError from exc
+
+
 async def publish_draft(
     db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID, version: int
 ) -> PublishResponse:
     """Turns the draft into an approved FAQ entry and marks the group answered.
 
     Idempotent: a group that already has its FAQ returns it again, whatever
-    ``version`` the retry carries.
+    ``version`` the retry carries. The question is embedded first, under the group
+    lock, because the bot only matches FAQ entries that have an embedding.
+
+    Raises ``NoOpenAIKeyError`` without a tenant key and ``FaqEmbeddingError`` when
+    embedding fails; in both cases nothing is published.
     """
     group = await _lock_group(db, tenant_id=tenant_id, group_id=group_id)
     if group.faq_id is None:
         _require_version(group, version)
         if group.draft_answer is None:
             raise NoDraftError
+        question_embedding = await _embed_faq_question(
+            group.draft_question, await _api_key(db, tenant_id)
+        )
         faq = TenantFaq(
             tenant_id=tenant_id,
             question=group.draft_question,
+            question_embedding=question_embedding,
             answer=group.draft_answer,
             source=UNANSWERED_QUEUE_FAQ_SOURCE,
             approved=True,

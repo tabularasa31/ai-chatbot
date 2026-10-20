@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import logging
 import uuid
 from collections.abc import Callable
 
@@ -13,6 +14,8 @@ from slowapi.util import get_remote_address
 from starlette.requests import Request
 
 from backend.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 EDGE_SECRET_HEADER = "x-chat9-edge-secret"
 VISITOR_IP_HEADER = "x-chat9-visitor-ip"
@@ -25,21 +28,32 @@ _widget_public_rate_limit_key_override: Callable[[Request], str] | None = None
 _owner_jwt_rate_limit_key_override: Callable[[Request], str] | None = None
 
 
-def _valid_ip(value: str | None) -> str | None:
+def _address_key(value: str | None) -> str | None:
+    """Normalize an address into a bucket. IPv6 is keyed by its /64: one
+    subscriber usually holds the whole prefix and could otherwise rotate
+    through it to get a fresh bucket per request."""
     if not value:
         return None
     try:
-        return str(ipaddress.ip_address(value.strip()))
+        ip = ipaddress.ip_address(value.strip().split("%", 1)[0])
     except ValueError:
         return None
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.IPv6Network((ip, 64), strict=False))
+    return str(ip)
 
 
 def _from_edge_proxy(request: Request) -> bool:
-    secret = settings.edge_proxy_secret
     presented = request.headers.get(EDGE_SECRET_HEADER)
-    if not secret or not presented:
+    if not presented:
         return False
-    return hmac.compare_digest(presented.encode(), secret.encode())
+    secret = settings.edge_proxy_secret
+    if secret and hmac.compare_digest(presented.encode(), secret.encode()):
+        return True
+    logger.warning("edge_proxy_secret_mismatch", extra={"secret_configured": bool(secret)})
+    return False
 
 
 def client_ip(request: Request) -> str:
@@ -53,10 +67,10 @@ def client_ip(request: Request) -> str:
     ignored, so a caller cannot choose its own bucket.
     """
     if _from_edge_proxy(request):
-        visitor = _valid_ip(request.headers.get(VISITOR_IP_HEADER))
+        visitor = _address_key(request.headers.get(VISITOR_IP_HEADER))
         if visitor:
             return visitor
-    return _valid_ip(request.headers.get("x-real-ip")) or get_remote_address(request)
+    return _address_key(request.headers.get("x-real-ip")) or get_remote_address(request)
 
 
 def _widget_rate_limit_ip(request: Request) -> str:
@@ -164,8 +178,9 @@ def owner_jwt_rate_limit_key(request: Request) -> str:
 
 
 def hash_ip_for_logs(ip: str | None) -> str:
+    # Keyed: a plain hash of a visitor address is reversed by hashing all of IPv4.
     value = (ip or "unknown").encode("utf-8")
-    return hashlib.sha256(value).hexdigest()[:8]
+    return hmac.new(settings.jwt_secret.encode("utf-8"), value, hashlib.sha256).hexdigest()[:8]
 
 
 def set_widget_public_rate_limit_key_override(

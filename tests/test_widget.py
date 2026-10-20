@@ -472,29 +472,36 @@ def test_widget_anonymous_session_init_creates_no_chat(
 
 
 @pytest.mark.parametrize(
-    ("route_through", "second_visitor_served"),
+    ("route_through", "server_secret", "first", "second", "second_served"),
     [
-        ("railway_edge", True),
-        ("our_proxy", True),
-        ("forged_proxy_claim", False),
+        ("railway_edge", "edge-secret", "203.0.113.10", "203.0.113.20", True),
+        ("railway_edge", "edge-secret", "2001:db8:1:2::a", "2001:db8:1:2::b", False),
+        ("our_proxy", "edge-secret", "203.0.113.10", "203.0.113.20", True),
+        ("our_proxy", None, "203.0.113.10", "203.0.113.20", False),
+        ("forged_proxy_claim", "edge-secret", "203.0.113.10", "203.0.113.20", False),
     ],
+    ids=["direct", "direct_same_ipv6_64", "our_proxy", "our_proxy_secret_unset", "forged_claim"],
 )
 def test_widget_rate_limit_is_per_visitor_address(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     route_through: str,
-    second_visitor_served: bool,
+    server_secret: str | None,
+    first: str,
+    second: str,
+    second_served: bool,
 ) -> None:
     """Visitors are limited one by one, not as a crowd behind a shared hop:
-    a visitor arriving straight through Railway's edge is keyed by X-Real-IP,
-    one arriving through our own proxy by the address the proxy names, and a
-    caller naming an address without the edge secret cannot pick a fresh
+    a visitor arriving straight through Railway's edge is keyed by X-Real-IP
+    (an IPv6 visitor by its /64, so it cannot rotate through its own prefix),
+    one arriving through our own proxy by the address the proxy names. A caller
+    naming an address without the matching edge secret cannot pick a fresh
     bucket for itself."""
     from backend.core.config import settings
 
-    monkeypatch.setattr(settings, "edge_proxy_secret", "edge-secret")
-    _, bot_public_id = _setup_widget_tenant(tenant, db_session, f"widget-rl-{route_through}@example.com")
+    monkeypatch.setattr(settings, "edge_proxy_secret", server_secret)
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-rl-visitor@example.com")
 
     def headers(visitor_ip: str) -> dict[str, str]:
         if route_through == "railway_edge":
@@ -511,9 +518,9 @@ def test_widget_rate_limit_is_per_visitor_address(
             "/widget/session/init", json={"bot_id": bot_public_id}, headers=headers(visitor_ip)
         ).status_code
 
-    assert [init("203.0.113.10") for _ in range(10)] == [200] * 10
-    assert init("203.0.113.10") == 429
-    assert init("203.0.113.20") == (200 if second_visitor_served else 429)
+    assert [init(first) for _ in range(10)] == [200] * 10
+    assert init(first) == 429
+    assert init(second) == (200 if second_served else 429)
 
 
 def test_widget_session_init_strict_tenant_verifies_user_hash(

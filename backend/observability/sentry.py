@@ -88,6 +88,9 @@ def init_sentry() -> None:
         from sentry_sdk.integrations.fastapi import FastApiIntegration
         from sentry_sdk.integrations.logging import LoggingIntegration
         from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+        from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
+
+        from backend.core.limiter import EDGE_SECRET_HEADER, VISITOR_IP_HEADER
     except ImportError:
         logger.warning("sentry-sdk not installed; Sentry stays disabled")
         return
@@ -105,6 +108,9 @@ def init_sentry() -> None:
                 LoggingIntegration(event_level=logging.ERROR),
             ],
             before_send=_before_send,
+            event_scrubber=EventScrubber(
+                denylist=[*DEFAULT_DENYLIST, EDGE_SECRET_HEADER, VISITOR_IP_HEADER]
+            ),
         )
         sentry_sdk.set_user(None)
         _initialized = True

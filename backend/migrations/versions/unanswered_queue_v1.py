@@ -38,29 +38,19 @@ _CTX = "NULLIF(current_setting('app.tenant_id', true), '')"
 def _has_column(table: str, column: str) -> bool:
     if op.get_context().as_sql:
         return False
-    try:
-        cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
-    except Exception:
-        return False
-    return column in cols
+    return column in {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
 
 
 def _has_table(table: str) -> bool:
     if op.get_context().as_sql:
         return False
-    try:
-        return table in set(sa.inspect(op.get_bind()).get_table_names())
-    except Exception:
-        return False
+    return table in set(sa.inspect(op.get_bind()).get_table_names())
 
 
 def _has_index(table: str, name: str) -> bool:
     if op.get_context().as_sql:
         return False
-    try:
-        return name in {i["name"] for i in sa.inspect(op.get_bind()).get_indexes(table)}
-    except Exception:
-        return False
+    return name in {i["name"] for i in sa.inspect(op.get_bind()).get_indexes(table)}
 
 
 def _uuid() -> postgresql.UUID:

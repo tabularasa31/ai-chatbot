@@ -194,6 +194,9 @@ class ChatPipelineResult:
     # verdict, i.e. the question is a real knowledge gap. Off-topic, complaint
     # and fail-open (timeout / error / no profile) verdicts leave it False.
     in_domain_unanswered: bool = False
+    # Embedding of the redacted question the pipeline computed for retrieval;
+    # None when the turn ended before (or without) embedding it.
+    question_vector: list[float] | None = None
 
 
 @dataclass

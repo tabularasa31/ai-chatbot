@@ -110,7 +110,13 @@ async def async_run_chat_pipeline(
         question_intent=question_intent or QuestionIntentResult(),
         answer_cache_scope=answer_cache_scope,
     )
+    result = await _run_steps(run)
+    if run.state.variant_vectors:
+        result.question_vector = run.state.variant_vectors[0]
+    return result
 
+
+async def _run_steps(run: PipelineRun) -> ChatPipelineResult:
     # --- Pre-retrieval: guards, query plan, FAQ --------------------------
     await pre_retrieval.prepare_turn(run)
 
@@ -165,5 +171,5 @@ async def async_run_chat_pipeline(
     #
     # In SQLAlchemy 2.0, AsyncSession.close() leaves the session reusable — it
     # re-acquires a connection automatically when the handler writes the result.
-    await db.close()
+    await run.db.close()
     return await generate.run_generation(run)

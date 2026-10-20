@@ -6,9 +6,9 @@ the visitor accepted the offer is irrelevant: the knowledge gap exists either
 way. Explicit requests for a human and complaints are not knowledge gaps.
 
 Captured questions are clustered by the cosine similarity of their embeddings.
-The vector is the one the pipeline embedded for this very question, read back
-from the in-process embedding cache, so capture never calls the embeddings API;
-a turn whose vector is gone from the cache is captured into a group of its own.
+The vector is the one the pipeline embedded for this very (redacted) question
+and carried here on the turn, so capture never calls the embeddings API; a turn
+without a vector is captured into a group of its own.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.db import is_sqlite
@@ -32,8 +32,6 @@ from backend.models import (
     UnansweredReason,
 )
 from backend.models.base import _utcnow
-from backend.search import embedding_cache
-from backend.search.query_variants import expand_query
 from backend.utils.math import coerce_vector, cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -49,6 +47,7 @@ GROUPING_SIMILARITY = 0.85
 DISMISSED_REOPEN_CHATS = 5
 ANSWERED_REOPEN_CHATS = 2
 ANSWERED_REOPEN_WINDOW = timedelta(days=14)
+NEAREST_GROUP_SCAN_LIMIT = 2000
 
 
 @dataclass(frozen=True)
@@ -59,7 +58,7 @@ class UnansweredTurn:
     chat_id: uuid.UUID
     user_message_id: uuid.UUID
     assistant_message_id: uuid.UUID
-    question: str
+    question_vector: list[float] | None
     turn_outcome: str | None
     escalation_offer_reason: str | None
 
@@ -76,24 +75,39 @@ def capture_reason(turn: UnansweredTurn) -> UnansweredReason | None:
 async def capture_unanswered_turn(db: AsyncSession, turn: UnansweredTurn) -> None:
     """Record the turn in the unanswered queue; never raises.
 
-    Runs after the turn's own rows are committed, so a failure here is logged
-    and rolled back without touching the visitor's conversation.
+    Runs after the turn's own rows are committed, inside a savepoint, so a
+    failure here is logged and rolled back without touching the visitor's
+    conversation or the request session's loaded objects.
     """
     reason = capture_reason(turn)
     if reason is None:
         return
     try:
-        await _capture(db, turn, reason)
+        await _lock_tenant(db, turn.tenant_id)
+        async with db.begin_nested():
+            await _capture(db, turn, reason)
+        await db.commit()
     except Exception:
         logger.exception(
             "unanswered_capture_failed: tenant_id=%s assistant_message_id=%s",
             turn.tenant_id,
             turn.assistant_message_id,
         )
-        try:
-            await db.rollback()
-        except Exception:
-            logger.warning("unanswered_capture_rollback_failed", exc_info=True)
+
+
+async def _lock_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> None:
+    """Serialise captures of one tenant so concurrent turns cannot each open
+    a group for the same question. Released with the transaction.
+
+    SQLite has no advisory locks; ``BEGIN IMMEDIATE`` takes its write lock up
+    front, because a savepoint that reads first would hold a read lock and fail
+    at its first write whenever another connection is writing.
+    """
+    if is_sqlite(db):
+        await db.execute(text("BEGIN IMMEDIATE"))
+        return
+    key = int.from_bytes(tenant_id.bytes[:8], "big", signed=True)
+    await db.execute(select(func.pg_advisory_xact_lock(key)))
 
 
 async def _capture(db: AsyncSession, turn: UnansweredTurn, reason: UnansweredReason) -> None:
@@ -106,7 +120,7 @@ async def _capture(db: AsyncSession, turn: UnansweredTurn, reason: UnansweredRea
         return
 
     now = _utcnow()
-    vector = embedding_cache.get(expand_query(turn.question)[0])
+    vector = turn.question_vector
     group = await _nearest_group(db, turn.tenant_id, vector) if vector else None
     if group is None:
         group = UnansweredGroup(
@@ -139,17 +153,22 @@ async def _capture(db: AsyncSession, turn: UnansweredTurn, reason: UnansweredRea
     )
     await db.flush()
     await _reopen_if_due(db, group, now)
-    await db.commit()
 
 
 async def _nearest_group(
     db: AsyncSession, tenant_id: uuid.UUID, vector: list[float]
 ) -> UnansweredGroup | None:
-    """The tenant's group (any status) holding the question closest to ``vector``."""
-    in_tenant = (
-        select(UnansweredQuestion.group_id)
-        .join(MessageEmbedding, MessageEmbedding.message_id == UnansweredQuestion.user_message_id)
+    """The group (any status) holding the question closest to ``vector``, among
+    the tenant's ``NEAREST_GROUP_SCAN_LIMIT`` most recently captured questions."""
+    recent = (
+        select(UnansweredQuestion.group_id, UnansweredQuestion.user_message_id)
         .where(UnansweredQuestion.tenant_id == tenant_id)
+        .order_by(UnansweredQuestion.created_at.desc())
+        .limit(NEAREST_GROUP_SCAN_LIMIT)
+        .subquery()
+    )
+    in_tenant = select(recent.c.group_id).join(
+        MessageEmbedding, MessageEmbedding.message_id == recent.c.user_message_id
     )
     best_group_id: uuid.UUID | None = None
     best_similarity = 0.0
@@ -187,11 +206,8 @@ async def _distinct_chats_after(
     ]
     if until is not None:
         conditions.append(UnansweredQuestion.created_at <= until)
-    return int(
-        await db.scalar(
-            select(func.count(func.distinct(UnansweredQuestion.chat_id))).where(*conditions)
-        )
-        or 0
+    return await db.scalar(
+        select(func.count(func.distinct(UnansweredQuestion.chat_id))).where(*conditions)
     )
 
 

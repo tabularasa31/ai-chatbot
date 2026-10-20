@@ -64,6 +64,7 @@ def _stash_unanswered_turn(
     ctx: HandlerContext,
     user_message: Message,
     assistant_message: Message,
+    question_vector: list[float] | None,
     escalation_offer_reason: str | None,
 ) -> None:
     ctx.extras[_UNANSWERED_TURN_KEY] = UnansweredTurn(
@@ -71,7 +72,7 @@ def _stash_unanswered_turn(
         chat_id=ctx.chat.id,
         user_message_id=user_message.id,
         assistant_message_id=assistant_message.id,
-        question=user_message.content,
+        question_vector=question_vector,
         turn_outcome=assistant_message.turn_outcome,
         escalation_offer_reason=escalation_offer_reason,
     )
@@ -387,7 +388,9 @@ class RagHandler(PipelineHandler):
                 turn_outcome=_turn_outcome_for(result),
             )
             if result.reject_reason != "rephrase" or result.in_domain_unanswered:
-                _stash_unanswered_turn(ctx, user_message, assistant_message, None)
+                _stash_unanswered_turn(
+                    ctx, user_message, assistant_message, result.question_vector, None
+                )
             _try_ingest_gap_signal(
                 chat=chat,
                 tenant_id=ctx.tenant_id,
@@ -890,7 +893,9 @@ class RagHandler(PipelineHandler):
             trace=ctx.trace,
             escalation_offer_reason=offer_reason,
         )
-        _stash_unanswered_turn(ctx, user_message, assistant_message, offer_reason)
+        _stash_unanswered_turn(
+            ctx, user_message, assistant_message, result.question_vector, offer_reason
+        )
         _try_ingest_gap_signal(
             chat=chat,
             tenant_id=ctx.tenant_id,

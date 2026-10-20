@@ -15,8 +15,6 @@ import uuid
 import pytest
 from sqlalchemy.orm import Session
 
-from backend.search import embedding_cache
-from backend.search.query_variants import expand_query
 from backend.unanswered.capture import UnansweredTurn, capture_unanswered_turn
 
 pytestmark = pytest.mark.pgvector
@@ -29,13 +27,13 @@ def _unit(x: float, y: float) -> list[float]:
     return [x / norm, y / norm] + [0.0] * (_DIM - 2)
 
 
-def _turn(db: Session, tenant_id: uuid.UUID, question: str) -> UnansweredTurn:
+def _turn(db: Session, tenant_id: uuid.UUID, vector: list[float]) -> UnansweredTurn:
     from backend.models import Chat, Message, MessageRole
 
     chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db.add(chat)
     db.flush()
-    user = Message(chat_id=chat.id, role=MessageRole.user, content=question)
+    user = Message(chat_id=chat.id, role=MessageRole.user, content="question")
     assistant = Message(chat_id=chat.id, role=MessageRole.assistant, content="No answer")
     db.add_all([user, assistant])
     db.commit()
@@ -44,7 +42,7 @@ def _turn(db: Session, tenant_id: uuid.UUID, question: str) -> UnansweredTurn:
         chat_id=chat.id,
         user_message_id=user.id,
         assistant_message_id=assistant.id,
-        question=question,
+        question_vector=vector,
         turn_outcome="unanswered",
         escalation_offer_reason=None,
     )
@@ -72,9 +70,8 @@ async def test_question_joins_the_nearest_group_above_the_threshold(
     ]
     group_ids: list[uuid.UUID] = []
     for question, vector, expected_index in scenarios:
-        embedding_cache.put(expand_query(question)[0], vector)
         await capture_unanswered_turn(
-            pg_async_db_session, _turn(pg_db_session, tenant.id, question)
+            pg_async_db_session, _turn(pg_db_session, tenant.id, vector)
         )
         pg_db_session.expire_all()
         row = (

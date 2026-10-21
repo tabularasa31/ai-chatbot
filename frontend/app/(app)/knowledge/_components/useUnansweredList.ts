@@ -80,20 +80,22 @@ export function useUnansweredList(status: UnansweredStatus) {
     }
   }, [status, update]);
 
-  /** Returns the removed row's index, or -1 when the row is not in the current list. */
+  /** Index of the row in the current list, or -1 when it is not there. */
+  const indexOf = useCallback(
+    (id: string) => (latest.current.status === "ready" ? latest.current.items.findIndex((item) => item.id === id) : -1),
+    [],
+  );
+
   const remove = useCallback(
-    (id: string): number => {
+    (id: string) => {
       const prev = latest.current;
-      if (prev.status !== "ready") return -1;
-      const index = prev.items.findIndex((item) => item.id === id);
-      if (index === -1) return -1;
+      if (prev.status !== "ready" || !prev.items.some((item) => item.id === id)) return;
       removedIds.current.push(id);
       update(() => ({
         ...prev,
         items: prev.items.filter((item) => item.id !== id),
         nextOffset: prev.nextOffset === null ? null : prev.nextOffset - 1,
       }));
-      return index;
     },
     [update],
   );
@@ -108,5 +110,5 @@ export function useUnansweredList(status: UnansweredStatus) {
     [update],
   );
 
-  return { state, loadingMore, load, loadMore, remove, markDraftStored };
+  return { state, loadingMore, load, loadMore, indexOf, remove, markDraftStored };
 }

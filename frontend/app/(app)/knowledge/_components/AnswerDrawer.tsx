@@ -83,7 +83,7 @@ export function AnswerDrawer({
   const hasContent = question.trim() !== "" && answer.trim() !== "";
 
   useEffect(() => {
-    if (wasWaiting.current && phase.status === "ready" && hasDraft) {
+    if (wasWaiting.current && phase.status === "ready" && draft.draftApplied) {
       setAnnouncement(DRAFT_READY_ANNOUNCEMENT);
       const active = document.activeElement;
       if (!active || active === document.body || body.current?.closest("dialog")?.contains(active)) {
@@ -91,7 +91,7 @@ export function AnswerDrawer({
       }
     }
     wasWaiting.current = waiting;
-  }, [phase.status, waiting, hasDraft]);
+  }, [phase.status, waiting, draft.draftApplied]);
 
   function requestClose() {
     if (dirty) setConfirming("discard");

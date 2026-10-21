@@ -74,7 +74,7 @@ export function UnansweredSection({
   onShowChange: (show: UnansweredShow) => void;
 }) {
   const status = STATUS_BY_SHOW[show];
-  const { state, loadingMore, load, loadMore, remove, markDraftStored } = useUnansweredList(status);
+  const { state, loadingMore, load, loadMore, indexOf, remove, markDraftStored } = useUnansweredList(status);
   const [actionError, setActionError] = useState("");
   const [flashMessage, flash] = useFlash();
   const [choosingId, setChoosingId] = useState<string | null>(null);
@@ -122,7 +122,8 @@ export function UnansweredSection({
   }
 
   function removeFromList(group: UnansweredGroup, success: string) {
-    const index = remove(group.id);
+    const index = indexOf(group.id);
+    remove(group.id);
     if (index >= 0) pendingFocusIndex.current = index;
     setChoosingId(null);
     setAnswering(null);

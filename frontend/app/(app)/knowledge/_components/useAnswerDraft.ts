@@ -68,6 +68,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
   const [phase, setPhase] = useState<DraftPhase>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [server, setServer] = useState<UnansweredDraft | null>(null);
+  const [draftApplied, setDraftApplied] = useState(false);
   const [examples, setExamples] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
@@ -84,6 +85,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
 
   const applyDraft = useCallback((draft: UnansweredDraft) => {
     setServer(draft);
+    setDraftApplied(true);
     setExamples(draft.examples);
     setQuestion(draft.question);
     setAnswer(draft.answer);
@@ -132,6 +134,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
 
   function retryLoad() {
     setNotice(null);
+    setDraftApplied(false);
     setPhase({ status: "loading" });
     setAttempt((count) => count + 1);
   }
@@ -218,6 +221,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
     answer,
     instructions,
     canAskAgent: server !== null,
+    draftApplied,
     setQuestion,
     setAnswer,
     setInstructions,

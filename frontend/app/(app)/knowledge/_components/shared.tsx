@@ -17,6 +17,10 @@ const NAME_BUTTON_BASE_CLASS =
 export const NAME_BUTTON_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-canvas`;
 export const NAME_BUTTON_ON_BAND_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-surface-alt`;
 
+export function conversationsLabel(count: number): string {
+  return count === 1 ? "1 conversation" : `${count} conversations`;
+}
+
 export type KnowledgeTab = "documents" | "profile" | "faq" | "unanswered";
 
 export const KNOWLEDGE_TABS: readonly SectionTab<KnowledgeTab>[] = [

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { mutate as mutateGlobal } from "swr";
 import { api, type UnansweredDismissReason, type UnansweredGroup, type UnansweredStatus } from "@/lib/api";
 import { UNANSWERED_BADGE_KEY } from "@/hooks/useApi";
@@ -12,6 +12,8 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { LINK_CLASS } from "./link-class";
+import { conversationsLabel } from "./shared";
+import { useUnansweredList } from "./useUnansweredList";
 import { AnswerDrawer } from "./AnswerDrawer";
 import { UnansweredRow } from "./UnansweredRow";
 
@@ -31,24 +33,8 @@ const STATUS_BY_SHOW: Record<UnansweredShow, UnansweredStatus> = {
 
 const SKELETON_ROWS = 5;
 
-type ListState =
-  | { status: "loading" }
-  | { status: "error" }
-  | {
-      status: "ready";
-      items: UnansweredGroup[];
-      nextOffset: number | null;
-      tenantConversations30d: number;
-      tenantHasConversations: boolean;
-      refreshFailed: boolean;
-    };
-
 export function parseShow(value: string | null): UnansweredShow {
   return SHOW_OPTIONS.find((option) => option.value === value)?.value ?? "open";
-}
-
-function conversationsLabel(count: number): string {
-  return count === 1 ? "1 conversation" : `${count} conversations`;
 }
 
 function EmptyState({
@@ -88,48 +74,25 @@ export function UnansweredSection({
   onShowChange: (show: UnansweredShow) => void;
 }) {
   const status = STATUS_BY_SHOW[show];
-  const [state, setState] = useState<ListState>({ status: "loading" });
+  const { state, loadingMore, load, loadMore, remove, markDraftStored } = useUnansweredList(status);
   const [actionError, setActionError] = useState("");
   const [flashMessage, flash] = useFlash();
   const [choosingId, setChoosingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [answeringId, setAnsweringId] = useState<string | null>(null);
-  const latestRequest = useRef(0);
+  const [answering, setAnswering] = useState<UnansweredGroup | null>(null);
   const filter = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const pendingFocusIndex = useRef<number | null>(null);
 
   useEffect(() => {
     void mutateGlobal(UNANSWERED_BADGE_KEY, { new_count: 0 }, { revalidate: false });
-    api.unanswered.markSeen().catch(() => {});
+    api.unanswered.markSeen().catch(() => mutateGlobal(UNANSWERED_BADGE_KEY));
   }, []);
 
-  const load = useCallback(async () => {
-    const request = ++latestRequest.current;
-    try {
-      const data = await api.unanswered.list(status);
-      if (request !== latestRequest.current) return;
-      setState({
-        status: "ready",
-        items: data.items,
-        nextOffset: data.next_offset,
-        tenantConversations30d: data.tenant_conversations_30d,
-        tenantHasConversations: data.tenant_has_conversations,
-        refreshFailed: false,
-      });
-    } catch {
-      if (request !== latestRequest.current) return;
-      setState((prev) => (prev.status === "ready" ? { ...prev, refreshFailed: true } : { status: "error" }));
-    }
-  }, [status]);
-
   useEffect(() => {
-    setState({ status: "loading" });
     setChoosingId(null);
     setActionError("");
-    void load();
-  }, [load]);
+  }, [status]);
 
   useEffect(() => {
     const index = pendingFocusIndex.current;
@@ -139,22 +102,12 @@ export function UnansweredSection({
     (next ?? filter.current?.querySelector("select"))?.focus();
   }, [state]);
 
-  async function loadMore() {
-    if (state.status !== "ready" || state.nextOffset === null) return;
-    setLoadingMore(true);
+  async function showMore() {
     setActionError("");
-    try {
-      const data = await api.unanswered.list(status, state.nextOffset);
-      setState({ ...state, items: [...state.items, ...data.items], nextOffset: data.next_offset, refreshFailed: false });
-    } catch {
-      setState({ ...state, refreshFailed: true });
-    } finally {
-      setLoadingMore(false);
-    }
+    await loadMore();
   }
 
   async function leaveList(group: UnansweredGroup, action: () => Promise<unknown>, failure: string, success: string) {
-    if (state.status !== "ready") return;
     setBusyId(group.id);
     setActionError("");
     try {
@@ -169,24 +122,11 @@ export function UnansweredSection({
   }
 
   function removeFromList(group: UnansweredGroup, success: string) {
-    if (state.status !== "ready") return;
-    pendingFocusIndex.current = state.items.findIndex((item) => item.id === group.id);
+    const index = remove(group.id);
+    if (index >= 0) pendingFocusIndex.current = index;
     setChoosingId(null);
-    setAnsweringId(null);
-    setState({
-      ...state,
-      items: state.items.filter((item) => item.id !== group.id),
-      nextOffset: state.nextOffset === null ? null : state.nextOffset - 1,
-    });
+    setAnswering(null);
     flash(success);
-  }
-
-  function markDraftStored(id: string) {
-    setState((prev) =>
-      prev.status === "ready"
-        ? { ...prev, items: prev.items.map((item) => (item.id === id && !item.has_draft ? { ...item, has_draft: true } : item)) }
-        : prev,
-    );
   }
 
   function dismiss(group: UnansweredGroup, reason: UnansweredDismissReason) {
@@ -208,7 +148,6 @@ export function UnansweredSection({
   }
 
   const items = state.status === "ready" ? state.items : [];
-  const answering = items.find((item) => item.id === answeringId);
   const loadFailed = state.status === "error" || (state.status === "ready" && state.refreshFailed);
 
   return (
@@ -269,7 +208,7 @@ export function UnansweredSection({
               group={group}
               choosingReason={choosingId === group.id}
               busy={busyId === group.id}
-              onAnswer={() => setAnsweringId(group.id)}
+              onAnswer={() => setAnswering(group)}
               onChooseReason={() => setChoosingId(group.id)}
               onCancelReason={() => setChoosingId(null)}
               onDismiss={(reason) => void dismiss(group, reason)}
@@ -282,14 +221,14 @@ export function UnansweredSection({
       {answering && (
         <AnswerDrawer
           group={answering}
-          onClose={() => setAnsweringId(null)}
+          onClose={() => setAnswering(null)}
           onDraftStored={() => markDraftStored(answering.id)}
           onPublished={(published) => removeFromList(published, "Published. Find it under Answered.")}
         />
       )}
 
       {state.status === "ready" && state.nextOffset !== null && (
-        <Button variant="secondary" busy={loadingMore} onClick={() => void loadMore()}>
+        <Button variant="secondary" busy={loadingMore} onClick={() => void showMore()}>
           Show more
         </Button>
       )}

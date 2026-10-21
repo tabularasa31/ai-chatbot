@@ -19,6 +19,7 @@ import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { QuestionList } from "./QuestionList";
+import { conversationsLabel } from "./shared";
 import { DraftNotice } from "./DraftNotice";
 import { DraftProgress } from "./DraftProgress";
 import { useAnswerDraft } from "./useAnswerDraft";
@@ -36,10 +37,6 @@ const PUBLISH_FAILURES: Partial<Record<DraftErrorCode, string>> = {
 
 const ARIA_DISABLED_CLASS =
   "aria-disabled:cursor-not-allowed aria-disabled:bg-surface-alt aria-disabled:text-fg-faint aria-disabled:hover:bg-surface-alt";
-
-function conversationsLabel(count: number): string {
-  return count === 1 ? "1 conversation" : `${count} conversations`;
-}
 
 function FieldsSkeleton() {
   return (
@@ -267,7 +264,6 @@ export function AnswerDrawer({
           confirmLabel="Discard changes"
           cancelLabel="Keep editing"
           tone="destructive"
-          failureMessage="Couldn't close the panel. Try again."
           onConfirm={async () => onClose()}
           onClose={() => setConfirming(null)}
         />

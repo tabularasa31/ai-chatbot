@@ -7,12 +7,9 @@ import { parseApiDate } from "@/lib/format";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { LINK_CLASS } from "./link-class";
 import { DISMISS_REASON_LABELS, NotNeededForm } from "./NotNeededForm";
+import { conversationsLabel } from "./shared";
 
 type MetaPart = { text: string; warning?: boolean };
-
-function conversationsLabel(count: number): string {
-  return count === 1 ? "1 conversation" : `${count} conversations`;
-}
 
 function lastAskedLabel(iso: string): string {
   const date = parseApiDate(iso);

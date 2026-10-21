@@ -11,8 +11,7 @@ import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
-import { LINK_CLASS } from "./link-class";
-import { conversationsLabel } from "./shared";
+import { TEXT_LINK_CLASS, conversationsLabel } from "./shared";
 import { useUnansweredList } from "./useUnansweredList";
 import { AnswerDrawer } from "./AnswerDrawer";
 import { UnansweredRow } from "./UnansweredRow";
@@ -56,11 +55,9 @@ function EmptyState({
         {!hasConversations && " Install the widget on your site to start getting questions."}
       </p>
       {!hasConversations && (
-        <p className="pt-3 text-ui">
-          <Link href="/dashboard" className={LINK_CLASS}>
-            Install widget
-          </Link>
-        </p>
+        <Link href="/dashboard" className={TEXT_LINK_CLASS}>
+          Install widget
+        </Link>
       )}
     </div>
   );
@@ -182,7 +179,7 @@ export function UnansweredSection({
 
       {state.status === "loading" && (
         <SkeletonRegion>
-          <div className="divide-y divide-line border-y border-line">
+          <div className="border-t border-line">
             {Array.from({ length: SKELETON_ROWS }, (_, index) => (
               <div key={index} className="space-y-2 py-4">
                 <Skeleton className="h-6 w-2/3" />

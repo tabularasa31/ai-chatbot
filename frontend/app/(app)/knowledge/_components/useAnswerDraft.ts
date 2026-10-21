@@ -64,13 +64,14 @@ function loadFailureNotice(err: unknown): DraftNotice | null {
   }
 }
 
-export function useAnswerDraft(groupId: string, onStored: () => void) {
+export function useAnswerDraft(groupId: string, groupQuestion: string, onStored: () => void) {
   const [phase, setPhase] = useState<DraftPhase>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [server, setServer] = useState<UnansweredDraft | null>(null);
   const [draftApplied, setDraftApplied] = useState(false);
   const [examples, setExamples] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
+  const [prefilledQuestion, setPrefilledQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [instructions, setInstructions] = useState("");
   const [notice, setNotice] = useState<DraftNotice | null>(null);
@@ -78,7 +79,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
   const [pending, setPending] = useState<"save" | "refine" | null>(null);
   const keepTextOnReload = useRef(false);
 
-  const dirty = question !== (server?.question ?? "") || answer !== (server?.answer ?? "");
+  const dirty = question !== (server?.question ?? prefilledQuestion) || answer !== (server?.answer ?? "");
 
   const onStoredRef = useRef(onStored);
   onStoredRef.current = onStored;
@@ -124,13 +125,17 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
         const failure: DraftNotice | null =
           polling && draftErrorCode(err) === "no_draft" ? { kind: "generation_failed" } : loadFailureNotice(err);
         setNotice(failure);
+        if (failure) {
+          setQuestion(groupQuestion);
+          setPrefilledQuestion(groupQuestion);
+        }
         setPhase({ status: failure ? "ready" : "loadError" });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [groupId, attempt, applyDraft]);
+  }, [groupId, groupQuestion, attempt, applyDraft]);
 
   function retryLoad() {
     setNotice(null);

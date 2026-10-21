@@ -5,9 +5,8 @@ import { useEffect, useId, useRef } from "react";
 import type { UnansweredDismissReason, UnansweredGroup } from "@/lib/api";
 import { parseApiDate } from "@/lib/format";
 import { Button, buttonClasses } from "@/components/ui/button";
-import { LINK_CLASS } from "./link-class";
 import { DISMISS_REASON_LABELS, NotNeededForm } from "./NotNeededForm";
-import { conversationsLabel } from "./shared";
+import { TEXT_LINK_CLASS, conversationsLabel } from "./shared";
 
 type MetaPart = { text: string; warning?: boolean };
 
@@ -117,7 +116,7 @@ export function UnansweredRow({
             <Link
               href="/knowledge?tab=faq"
               aria-describedby={questionId}
-              className={`${LINK_CLASS} inline-flex h-11 items-center`}
+              className={TEXT_LINK_CLASS}
             >
               View FAQ entry
             </Link>

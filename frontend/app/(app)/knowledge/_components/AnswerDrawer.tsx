@@ -19,13 +19,16 @@ import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { QuestionList } from "./QuestionList";
-import { conversationsLabel } from "./shared";
+import { conversationsLabel, withLimit } from "./shared";
 import { DraftNotice } from "./DraftNotice";
 import { DraftProgress } from "./DraftProgress";
 import { useAnswerDraft } from "./useAnswerDraft";
 
 const ANSWER_ROWS = 12;
 const DRAFT_READY_ANNOUNCEMENT = "Draft ready. Review the question and answer.";
+
+const MISSING_CONTENT_REASON = "Add a question and an answer to save or publish.";
+const OPERATOR_REASON = "Only the tenant owner can publish. Your draft is kept for the owner.";
 
 const PUBLISH_FAILED = "Couldn't publish the answer. Try again.";
 
@@ -66,7 +69,7 @@ export function AnswerDrawer({
 }) {
   const { data: me } = useClientMe();
   const isOwner = me?.role === "owner";
-  const draft = useAnswerDraft(group.id, onDraftStored);
+  const draft = useAnswerDraft(group.id, group.question, onDraftStored);
   const [flashMessage, flash] = useFlash();
   const [confirming, setConfirming] = useState<"publish" | "discard" | null>(null);
   const [announcement, setAnnouncement] = useState("");
@@ -81,6 +84,10 @@ export function AnswerDrawer({
   const hasDraft = draft.canAskAgent;
   const noDraftYet = !hasDraft;
   const hasContent = question.trim() !== "" && answer.trim() !== "";
+  const ready = phase.status === "ready";
+  const missingContent = ready && !hasContent;
+  const operatorBlocked = me !== undefined && !isOwner;
+  const footerReason = missingContent ? MISSING_CONTENT_REASON : operatorBlocked ? OPERATOR_REASON : "";
 
   useEffect(() => {
     if (wasWaiting.current && phase.status === "ready" && draft.draftApplied) {
@@ -99,7 +106,7 @@ export function AnswerDrawer({
   }
 
   function requestPublish() {
-    if (isOwner) setConfirming("publish");
+    if (isOwner && hasContent) setConfirming("publish");
   }
 
   async function saveDraft() {
@@ -128,10 +135,10 @@ export function AnswerDrawer({
         <div ref={body} className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6">
           <section className="space-y-2">
             <h3 className="text-body font-semibold text-fg">Visitor questions</h3>
-            <QuestionList questions={draft.examples.length > 0 ? draft.examples : [group.question]} />
             <p className="text-caption tabular-nums text-fg-muted">
               {conversationsLabel(group.conversations_30d)} in the last 30 days
             </p>
+            <QuestionList questions={draft.examples.length > 0 ? draft.examples : [group.question]} />
           </section>
 
           {notice && (
@@ -166,7 +173,7 @@ export function AnswerDrawer({
               <Input
                 ref={questionInput}
                 label="Question visitors ask"
-                helper="The bot matches visitor questions to this."
+                helper={withLimit("The bot matches visitor questions to this.", question.length, DRAFT_QUESTION_MAX_LENGTH)}
                 maxLength={DRAFT_QUESTION_MAX_LENGTH}
                 value={question}
                 onChange={(e) => draft.setQuestion(e.target.value)}
@@ -175,15 +182,21 @@ export function AnswerDrawer({
                 mono
                 rows={ANSWER_ROWS}
                 label="Answer (Markdown)"
+                helper={withLimit(undefined, answer.length, DRAFT_ANSWER_MAX_LENGTH)}
                 maxLength={DRAFT_ANSWER_MAX_LENGTH}
                 value={answer}
                 onChange={(e) => draft.setAnswer(e.target.value)}
               />
-              <div className="space-y-3">
+              <section className="space-y-3">
+                <h3 className="text-body font-semibold text-fg">Ask agent</h3>
                 <Textarea
                   label="Instructions"
                   placeholder="For example: shorter, add an example, friendlier tone."
-                  helper="Replaces the current answer. Unsaved edits are lost."
+                  helper={withLimit(
+                    "Replaces the current answer. Unsaved edits are lost.",
+                    instructions.length,
+                    DRAFT_INSTRUCTIONS_MAX_LENGTH,
+                  )}
                   maxLength={DRAFT_INSTRUCTIONS_MAX_LENGTH}
                   rows={3}
                   value={instructions}
@@ -197,7 +210,7 @@ export function AnswerDrawer({
                 >
                   Ask agent
                 </Button>
-              </div>
+              </section>
             </>
           )}
 
@@ -218,7 +231,7 @@ export function AnswerDrawer({
 
         <footer className="flex items-center justify-between gap-4 border-t border-line px-6 py-4">
           <p id={reasonId} className="min-w-0 text-caption text-fg-muted">
-            {me && !isOwner && "Only the tenant owner can publish. Your draft is kept for the owner."}
+            {footerReason}
           </p>
           <div className="flex shrink-0 items-center gap-3">
             <FlashMessage message={flashMessage} />
@@ -226,7 +239,7 @@ export function AnswerDrawer({
               variant="secondary"
               offset="surface"
               busy={pending === "save"}
-              disabled={!hasContent || !dirty || pending === "refine"}
+              disabled={!ready || !hasContent || pending !== null}
               onClick={() => void saveDraft()}
             >
               Save draft
@@ -235,9 +248,9 @@ export function AnswerDrawer({
               variant="primary"
               offset="surface"
               className={ARIA_DISABLED_CLASS}
-              disabled={me === undefined || (isOwner && (!hasContent || waiting || pending !== null))}
-              aria-disabled={me && !isOwner ? true : undefined}
-              aria-describedby={me && !isOwner ? reasonId : undefined}
+              disabled={me === undefined || !ready || pending !== null}
+              aria-disabled={operatorBlocked || missingContent ? true : undefined}
+              aria-describedby={operatorBlocked || missingContent ? reasonId : undefined}
               onClick={requestPublish}
             >
               Publish to bot

@@ -805,11 +805,6 @@ def test_crawl_url_source_persists_quick_answers(
         "_run_tenant_knowledge_extraction_best_effort",
         lambda **kwargs: None,
     )
-    monkeypatch.setattr(
-        url_service,
-        "run_mode_a_for_tenant_when_queue_empty_best_effort",
-        lambda tenant_id: None,
-    )
     monkeypatch.setattr(db_session, "close", lambda: None)
     monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
 

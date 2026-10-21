@@ -239,7 +239,6 @@ def test_operator_reaches_the_inbox_the_logs_and_the_knowledge_reads(
     assert tenant.get("/documents", headers=headers).status_code == 200
     assert tenant.get("/api/v1/knowledge/faq", headers=headers).status_code == 200
     assert tenant.get("/api/v1/knowledge/profile", headers=headers).status_code == 200
-    assert tenant.get("/gap-analyzer", headers=headers).status_code == 200
 
     take = tenant.post(f"/operator/chats/{chat.id}/take", headers=headers)
     assert take.status_code == 200, take.text
@@ -329,31 +328,30 @@ def test_operator_may_still_read_the_support_settings(
     )
 
 
-def test_only_the_owner_may_publish_an_faq(
+def test_only_the_owner_may_publish_an_unanswered_draft(
     tenant: TestClient, db_session: Session
 ) -> None:
     ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
     op_token = _onboard_operator(tenant, db_session, ws, email="ops@acme.example.com")
-    gap_id = uuid.uuid4()
+    group_id = uuid.uuid4()
+    base = "/api/v1/knowledge/unanswered"
 
     assert (
         tenant.post(
-            f"/gap-analyzer/mode_b/{gap_id}/publish", headers=_auth(op_token)
+            f"{base}/{group_id}/publish", json={"version": 0}, headers=_auth(op_token)
         ).status_code
         == 403
     )
     # The owner is let through the role gate: what stops them is the missing
-    # draft, not the role.
+    # group, not the role.
     owner_attempt = tenant.post(
-        f"/gap-analyzer/mode_b/{gap_id}/publish", headers=ws.auth
+        f"{base}/{group_id}/publish", json={"version": 0}, headers=ws.auth
     )
-    assert owner_attempt.status_code != 403, owner_attempt.text
+    assert owner_attempt.status_code == 404, owner_attempt.text
 
-    # Preparing a draft is not publishing — an operator may still do that.
+    # Preparing a draft is not publishing — an operator may still read one.
     assert (
-        tenant.get(
-            f"/gap-analyzer/mode_b/{gap_id}/draft", headers=_auth(op_token)
-        ).status_code
+        tenant.get(f"{base}/{group_id}/draft", headers=_auth(op_token)).status_code
         != 403
     )
 

@@ -35,7 +35,6 @@ from backend.chat.events import _emit_chat_turn_event
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language_context import is_first_user_turn
 from backend.chat.persistence import _persist_turn_with_response_language
-from backend.chat.post_turn import _try_ingest_gap_signal
 from backend.chat.types import (
     ChatPipelineResult,
 )
@@ -392,21 +391,6 @@ class RagHandler(PipelineHandler):
                 _stash_unanswered_turn(
                     ctx, user_message, assistant_message, result.question_vector, None
                 )
-            _try_ingest_gap_signal(
-                chat=chat,
-                tenant_id=ctx.tenant_id,
-                session_id=ctx.session_id,
-                user_message=user_message,
-                assistant_message=assistant_message,
-                question_text=ctx.redacted_question,
-                answer_confidence=(
-                    result.retrieval.best_confidence_score if result.retrieval is not None else None
-                ),
-                was_rejected=result.is_reject,
-                had_fallback=False,
-                was_escalated=False,
-                language=ctx.language_context.response_language,
-            )
             source_map = {
                 "injection": "guard_reject_injection",
                 "not_relevant": "guard_reject_not_relevant",
@@ -896,19 +880,6 @@ class RagHandler(PipelineHandler):
         )
         _stash_unanswered_turn(
             ctx, user_message, assistant_message, result.question_vector, offer_reason
-        )
-        _try_ingest_gap_signal(
-            chat=chat,
-            tenant_id=ctx.tenant_id,
-            session_id=ctx.session_id,
-            user_message=user_message,
-            assistant_message=assistant_message,
-            question_text=ctx.redacted_question,
-            answer_confidence=retrieval.best_confidence_score,
-            was_rejected=False,
-            had_fallback=False,
-            was_escalated=bool(escalate),
-            language=ctx.language_context.response_language,
         )
 
         faq_match = result.faq_match

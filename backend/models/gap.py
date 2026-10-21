@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import uuid
 
 from pgvector.sqlalchemy import Vector
@@ -19,15 +20,48 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-from backend.gap_analyzer.enums import (
-    GapClusterStatus,
-    GapDismissReason,
-    GapDocTopicStatus,
-    GapJobKind,
-    GapJobStatus,
-    GapSource,
-)
 from backend.models.base import Base, _utcnow
+
+
+class GapSource(str, enum.Enum):
+    mode_a = "mode_a"
+    mode_b = "mode_b"
+
+
+class GapJobKind(str, enum.Enum):
+    mode_a = "mode_a"
+    mode_b = "mode_b"
+    mode_b_weekly_reclustering = "mode_b_weekly_reclustering"
+
+
+class GapJobStatus(str, enum.Enum):
+    queued = "queued"
+    in_progress = "in_progress"
+    retry = "retry"
+    completed = "completed"
+    failed = "failed"
+
+
+class GapClusterStatus(str, enum.Enum):
+    active = "active"
+    dismissed = "dismissed"
+    closed = "closed"
+    inactive = "inactive"
+    drafting = "drafting"
+    in_review = "in_review"
+    resolved = "resolved"
+
+
+class GapDocTopicStatus(str, enum.Enum):
+    active = "active"
+    closed = "closed"
+
+
+class GapDismissReason(str, enum.Enum):
+    feature_request = "feature_request"
+    not_relevant = "not_relevant"
+    already_covered = "already_covered"
+    other = "other"
 
 
 class GapCluster(Base):

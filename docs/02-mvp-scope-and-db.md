@@ -19,7 +19,7 @@
 - Chat history logging with sessions; optional `userHints` personalization (untrusted)
 - Feedback system (👍/👎 + optional ideal answer)
 - Manual escalation → tickets dashboard
-- Gap Analyzer (Mode A docs-gap + Mode B user-signal clustering)
+- Unanswered queue (grouped unanswered questions with draft answers)
 - Token usage tracking per tenant
 - Debug mode (show which chunks were used)
 - Admin metrics + PII-event audit log

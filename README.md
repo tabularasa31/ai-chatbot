@@ -20,7 +20,6 @@ Chat9 is a multi-tenant SaaS in production: a company (a *tenant*) connects its 
 <table>
   <tr>
     <td><img src="docs/screenshots/knowledge.png" alt="Knowledge Hub: files and crawled documentation sites"></td>
-    <td><img src="docs/screenshots/gap-analyzer.png" alt="Gap Analyzer: documentation gaps and failed-question clusters"></td>
   </tr>
 </table>
 
@@ -34,7 +33,7 @@ Chat9 is a multi-tenant SaaS in production: a company (a *tenant*) connects its 
 - **Grounded answers** — hybrid retrieval over the tenant's corpus; the bot answers only from sources, asks one focused question when a detail is missing, and cites what it used
 - **Any language** — replies follow the visitor's language; there are no per-language rules anywhere in the pipeline
 - **Human handoff** — the bot offers a ticket when it cannot answer; operators take the chat live from the inbox, the bot stays muted while a human holds it, and replies by e-mail return to the conversation
-- **Gap Analyzer** — finds under-covered topics in the docs and clusters questions the bot failed on into a backlog, with draft articles to close each gap
+- **Unanswered queue** — clusters questions the bot could not answer into a backlog, with LLM draft answers the owner can publish as FAQ entries
 - **Identified sessions** — optional HMAC-signed visitor identity from the tenant's backend
 - **Bring your own OpenAI key** — each tenant's key is encrypted at rest; token cost stays with the tenant
 
@@ -86,7 +85,7 @@ backend/            FastAPI app, one folder per domain (routes.py + service.py +
   guards/           injection and relevance guards
   escalation/       handoff state machine
   operator/         live operator takeover
-  gap_analyzer/     documentation-gap detection
+  unanswered/       unanswered-question queue and draft answers
   evals/            answer-quality eval CLI
   migrations/       Alembic
 frontend/           Next.js dashboard and marketing site
@@ -168,7 +167,6 @@ GitHub Actions ([`.github/workflows/`](.github/workflows/)) run lint, the test s
 ## Documentation
 
 - [`docs/04-features.md`](docs/04-features.md) — feature specs and expected behaviour
-- [`docs/09-gap-analyzer.md`](docs/09-gap-analyzer.md) — Gap Analyzer design
 - [`docs/07-observability-rollout.md`](docs/07-observability-rollout.md) — tracing, errors and product metrics
 - [`AGENTS.md`](AGENTS.md) — architecture conventions and deployment safety rules
 

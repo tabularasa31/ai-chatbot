@@ -1,11 +1,3 @@
-from backend.gap_analyzer.enums import (
-    GapClusterStatus,
-    GapDismissReason,
-    GapDocTopicStatus,
-    GapJobKind,
-    GapJobStatus,
-    GapSource,
-)
 from backend.models.auth import User
 from backend.models.base import Base
 from backend.models.chat import (
@@ -39,10 +31,16 @@ from backend.models.enums import (
 from backend.models.gap import (
     GapAnalyzerJob,
     GapCluster,
+    GapClusterStatus,
     GapDismissal,
+    GapDismissReason,
     GapDocTopic,
+    GapDocTopicStatus,
+    GapJobKind,
+    GapJobStatus,
     GapQuestion,
     GapQuestionMessageLink,
+    GapSource,
 )
 from backend.models.guard import GuardEvent
 from backend.models.jobs import BackgroundJob, BackgroundJobStatus

@@ -120,7 +120,7 @@ Optional targeted pgvector hybrid retrieval checks:
 pytest -q -m pgvector tests/pgvector_tests/test_search_pgvector.py -k "hybrid or isolation"
 ```
 
-If Gap Analyzer ANN plans still fall back to sequential scans after a fresh bootstrapping import,
+If ANN plans still fall back to sequential scans after a fresh bootstrapping import,
 rebuild the IVFFlat indexes once the tables contain enough data for useful centroids:
 
 ```bash

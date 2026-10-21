@@ -77,25 +77,6 @@ def clear_pre_confirm_render_cache() -> Generator[None, None, None]:
     _PRE_CONFIRM_RENDER_CACHE.clear()
 
 
-@pytest.fixture(autouse=True)
-def reset_gap_analyzer_job_runner_state() -> Generator[None, None, None]:
-    import backend.gap_analyzer.jobs as gap_jobs
-
-    gap_jobs._shutdown_event.clear()
-    gap_jobs._clear_active_job()
-    gap_jobs._job_runner_state = gap_jobs._GapJobRunnerState()
-    try:
-        yield
-    finally:
-        gap_jobs._shutdown_event.set()
-        thread = gap_jobs._job_runner_state.current_thread()
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=1.0)
-        gap_jobs._clear_active_job()
-        gap_jobs._job_runner_state = gap_jobs._GapJobRunnerState()
-        gap_jobs._shutdown_event.clear()
-
-
 @pytest.fixture(scope="function")
 def engine() -> Generator[Engine, None, None]:
     """Создаёт движок SQLite для тестов."""
@@ -383,8 +364,6 @@ def mock_openai_client():
          patch("backend.chat.steps.generate.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.unanswered.drafts.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True), \
-         patch("backend.gap_analyzer.prompts.get_openai_client", return_value=mock_client), \
-         patch("backend.gap_analyzer.orchestrator.get_openai_client", return_value=mock_client), \
          patch("backend.knowledge.routes.get_openai_client", return_value=mock_client), \
          patch("backend.tenant_knowledge.extract_tenant_knowledge.get_openai_client", return_value=mock_client), \
          patch("backend.tenant_knowledge.faq_service.get_openai_client", return_value=mock_client), \

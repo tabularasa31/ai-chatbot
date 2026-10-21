@@ -335,7 +335,6 @@ def _patch_process_chat_dependencies(
         "backend.chat.service.async_run_chat_pipeline",
         _fake_async_pipeline,
     )
-    monkeypatch.setattr("backend.chat.handlers.rag._try_ingest_gap_signal", lambda **kwargs: None)
     monkeypatch.setattr(
         "backend.chat.language.detect_language",
         _detect_from_map(detection_map),

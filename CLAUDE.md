@@ -89,7 +89,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 | `backend/chunkers/` | Per-content-type chunkers (markdown/html/pdf/plaintext) + registry; see its README to add a new type |
 | `backend/guards/` | Injection detection (2-level) + relevance guard — gate on every chat turn |
 | `backend/observability/` | Langfuse trace helpers, Sentry, PostHog metrics formatters |
-| `backend/gap_analyzer/` | Gap Analyzer orchestration (see AGENTS.md for full layout) |
+| `backend/unanswered/` | Unanswered queue: capture, grouping, drafts, owner-only publish |
 | `backend/evals/` | Automated answer-quality eval CLI: golden dataset → chat → metrics + Anthropic-as-judge. See `docs/06-developer-test-runbook.md` § Eval pipeline. |
 | `backend/operator/` | Live operator handoff — take / answer / release a chat, with the bot muted while a human holds it. One ingestion seam (`ingest_from_operator`) for every channel; `sessions.py` records each operator-served stretch as an `operator_sessions` row and emits `operator_session_ended` when it closes |
 | `backend/knowledge/` | Tenant knowledge profile extraction and topics API |

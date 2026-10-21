@@ -19,47 +19,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Widget | Standalone Vite + Preact build at `frontend/apps/widget-app`, deployed to `widget.getchat9.live/v1/` on its own Vercel project. Loader at `frontend/apps/widget-loader` (TS → IIFE) is co-deployed at `widget.getchat9.live/widget.js`. The dashboard exposes `/widget/{chat,escalate,history,messages,config}` API proxy routes that the widget-app calls cross-origin via the CORS middleware in `frontend/middleware.ts`. `history` bootstraps a conversation on mount; `messages` is the cursor endpoint (`after_message_id`) the widget polls while a human is answering — resolved by position rather than by timestamp, and shaped so it can become a long-poll or SSE stream later without the client changing. Both report a derived `handoff_state` (`bot` | `waiting` | `live`) that drives the poll cadence: silent under `bot`, ~20 s while a request waits, ~2.5 s while live, nothing in a hidden tab, immediate on focus. |
 | Observability | Langfuse (LLM tracing), PostHog (product analytics), Sentry (errors) — see `backend/observability/` |
 
-Gap Analyzer is implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
-
-- `Mode A` — documentation-side gap discovery from the indexed corpus, with deterministic sampling, hash-based no-op skips, coverage gating, dismissal persistence, and Swagger/OpenAPI sources excluded from this document-analysis path
-- `Mode B` — user-question clustering from low-confidence / fallback / rejected / escalated chat signals, with incremental clustering, periodic full reclustering, inactive archive aging, and Mode A ↔ Mode B linking/dedupe on the read side
-
-Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with claim/retry state. The dashboard/API surface includes `GET /gap-analyzer`, `GET /gap-analyzer/summary`, `POST /gap-analyzer/recalculate`, dismiss/reactivate, and draft-generation endpoints. Linked active Mode B items are the primary surface; archive views stay source-specific.
-
-**Package layout** (`backend/gap_analyzer/`):
-
-| File / dir | Role |
-|---|---|
-| `orchestrator.py` | `GapAnalyzerOrchestrator` — thin shell, delegates to pipelines |
-| `repository.py` | `SqlAlchemyGapAnalyzerRepository` — thin proxy, delegates to `_repo/` |
-| `_repo/` | Persistence subpackage (focused ops modules, see below) |
-| `pipelines/mode_a.py` | Mode A coverage pipeline helpers |
-| `pipelines/mode_b.py` | Mode B clustering state machine |
-| `pipelines/link_sync.py` | Mode A ↔ Mode B vector link sync |
-| `pipelines/drafts.py` | Markdown draft builders |
-| `read_models.py` | Response-shape builders (DB rows → API objects) |
-| `_math.py` | Pure vector/token math (no I/O) |
-| `_classification.py` | Gap classification and status helpers |
-| `routes.py`, `schemas.py`, `enums.py`, `events.py`, `domain.py`, `prompts.py`, `jobs.py` | Standard domain slices |
-
-`_repo/` submodules (all imported only through `repository.py`):
-
-| Submodule | Contents |
-|---|---|
-| `records.py` | Public dataclass records (no internal deps) |
-| `capabilities.py` | Dialect capabilities, enum/value helpers, shared utils |
-| `bm25_cache.py` | Thread-safe BM25 LRU/TTL cache + `_load_or_cache_bm25_corpus` |
-| `job_queue_helpers.py` | Constants and pure helpers for job-queue logic |
-| `job_retry.py` | Retry policy: effective max attempts, delay with jitter |
-| `signals.py` | GapQuestion signal ingestion (Phase 2) |
-| `mode_a.py` | Mode A persistence: corpus chunks, dismissals, replace-topics |
-| `mode_b.py` | Mode B persistence: clusters, question embeddings, per-tenant vector/BM25 retrieval |
-| `job_queue.py` | Job CRUD: enqueue / claim / finalize / lease management |
-| `summary.py` | Active gap summary read model |
-
-**Import-graph conventions** (design intent, not test-enforced):
-- `pipelines/` must not import `orchestrator`
-- `_repo/` must not import `pipelines/` or `orchestrator`
+The Unanswered queue lives in `backend/unanswered/` (`capture.py` groups unanswered turns by embedding similarity, `drafts.py` generates versioned LLM drafts, `service.py` reads and triages, `routes.py` mounts `/api/v1/knowledge/unanswered`); publish is owner-only. See `docs/04-features.md` section 5.
 
 ---
 
@@ -129,7 +89,6 @@ Redis is **foundational infra** — used for things that need cross-worker share
 - `ratelimit:*` — managed by slowapi (do not touch directly)
 - `cache:guard:<sha256>` — guard-verdict caches
 - `cache:answer:<sha256>` — exact-level answer cache; `cache:answer_gen:<tenant_id>` — per-tenant generation counter folded into the answer-cache fingerprint
-- `lock:gap_analyzer:<job>` — distributed locks for periodic jobs
 
 **Graceful degradation rules:**
 - Cache misses on Redis errors must not break the request — log at debug, return as if cache miss.
@@ -257,7 +216,6 @@ Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars
 | RAG / BM25 | `BM25_EXPANSION_MODE` |
 | Reranking | `RERANKER_LLM_MODEL`, `RERANKER_CROSS_ENCODER_MODEL`, `RERANKER_TIMEOUT_SECONDS` (per-tenant choice lives in `tenants.reranker_strategy`, see `docs/04-features.md` → Reranking strategies) |
 | OpenAI | `OPENAI_API_KEY`, `OPENAI_REQUEST_TIMEOUT_SECONDS`, `OPENAI_USER_RETRY_*` |
-| Gap Analyzer jobs | `GAP_TRANSIENT_MAX_ATTEMPTS`, `GAP_BASE_DELAY_SECONDS`, `GAP_MAX_DELAY_SECONDS` |
 | Embedding retention | `LOG_EMBEDDINGS_RETENTION_DAYS` |
 | Email | `BREVO_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL`, `INBOUND_EMAIL_SECRET`, `INBOUND_EMAIL_DOMAIN` |
 
@@ -293,9 +251,9 @@ ai-chatbot/
 │   ├── models.py             # SQLAlchemy models and Base (single models file)
 │   ├── core/                 # db, config, security, limiter, utils, openai_client, …
 │   ├── auth/, admin/, bots/, chat/, chunkers/, contact_sessions/, documents/,
-│   │   embeddings/, escalation/, evals/, faq/, gap_analyzer/, guards/, jobs/,
+│   │   embeddings/, escalation/, evals/, faq/, guards/, jobs/,
 │   │   knowledge/, observability/, operator/, search/, tenant_knowledge/,
-│   │   tenants/, widget/, email/
+│   │   tenants/, unanswered/, widget/, email/
 │   │   ├── routes.py         # HTTP routes (often APIRouter)
 │   │   ├── service.py        # business logic, DB access
 │   │   └── schemas.py        # Pydantic request/response schemas
@@ -303,7 +261,7 @@ ai-chatbot/
 ├── frontend/                 # pnpm workspace; root package is the Next.js dashboard
 │   ├── app/                  # dashboard App Router: (marketing), (auth), (app), layout.tsx
 │   │   ├── (app)/            # dashboard routes: admin/, dashboard/, debug/, embed/,
-│   │   │                     #   gap-analyzer/, inbox/, knowledge/, settings/,
+│   │   │                     #   inbox/, knowledge/, settings/,
 │   │   │                     #   widget-settings/
 │   │   └── widget/           # API proxy ROUTES ONLY (chat/, escalate/, history/, messages/, config/) —
 │   │                         # called cross-origin by the standalone widget-app

@@ -15,7 +15,7 @@ import pytest
 
 
 # Override the conftest autouse fixtures — this module only tests a pure function
-# and has no OpenAI / gap-analyzer / language-cache dependencies.
+# and has no OpenAI / language-cache dependencies.
 @pytest.fixture(autouse=True)
 def mock_openai_client():  # noqa: PT004
     yield
@@ -23,11 +23,6 @@ def mock_openai_client():  # noqa: PT004
 
 @pytest.fixture(autouse=True)
 def clear_detect_language_cache():  # noqa: PT004
-    yield
-
-
-@pytest.fixture(autouse=True)
-def reset_gap_analyzer_job_runner_state():  # noqa: PT004
     yield
 
 

@@ -1449,10 +1449,6 @@ def _zh_stub_pre_retrieval(
             decision_reason="test",
         )),
     )
-    monkeypatch.setattr(
-        "backend.chat.post_turn._start_mode_b_followup",
-        lambda _tenant_id: None,
-    )
 
     async def _no_rewrite(*_a, **_kw):
         return None
@@ -2094,7 +2090,6 @@ def _nodocs_patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         "backend.chat.language.detect_language",
         lambda text: LanguageDetectionResult("en", 0.99, True),
     )
-    monkeypatch.setattr("backend.chat.handlers.rag._try_ingest_gap_signal", lambda **kwargs: None)
 
     events: list[dict] = []
 
@@ -2405,7 +2400,6 @@ def _lowconf_patch_weak_turn(monkeypatch: pytest.MonkeyPatch) -> None:
         "backend.chat.language.detect_language",
         lambda text: LanguageDetectionResult("en", 0.99, True),
     )
-    monkeypatch.setattr("backend.chat.handlers.rag._try_ingest_gap_signal", lambda **kwargs: None)
 
     async def _weak_pipeline(*args, **kwargs) -> ChatPipelineResult:
         return ChatPipelineResult(

@@ -381,6 +381,7 @@ def mock_openai_client():
          patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
          patch("backend.chat.language.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.chat.steps.generate.get_async_openai_client", return_value=async_mock_client), \
+         patch("backend.unanswered.drafts.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True), \
          patch("backend.gap_analyzer.prompts.get_openai_client", return_value=mock_client), \
          patch("backend.gap_analyzer.orchestrator.get_openai_client", return_value=mock_client), \

@@ -62,6 +62,7 @@ from backend.observability import (
 from backend.operator.routes import operator_router
 from backend.tenants.members_routes import members_router
 from backend.tenants.routes import tenants_router
+from backend.unanswered.routes import unanswered_router
 from backend.widget.routes import widget_router
 
 # The default asyncio ThreadPoolExecutor is sized at min(32, cpu_count + 4).
@@ -206,6 +207,7 @@ app.include_router(embeddings_router, prefix="/embeddings", include_in_schema=Fa
 app.include_router(email_router)
 app.include_router(gap_analyzer_router, prefix="/gap-analyzer")
 app.include_router(knowledge_router)
+app.include_router(unanswered_router)
 app.include_router(operator_router)
 app.include_router(widget_router)
 

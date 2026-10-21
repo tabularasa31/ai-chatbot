@@ -34,6 +34,7 @@ from backend.knowledge.schemas import (
 )
 from backend.models import Tenant, TenantFaq, TenantProfile
 from backend.tenants.cache import invalidate_tenant
+from backend.unanswered.service import reopen_groups_answered_by
 
 knowledge_router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 
@@ -142,7 +143,7 @@ def list_knowledge_faq(
     tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
     approved: Literal["true", "false", "all"] = Query("all"),
-    source: Literal["docs", "logs", "swagger", "gap_analyzer", "all"] = Query("all"),
+    source: Literal["docs", "logs", "swagger", "gap_analyzer", "unanswered_queue", "all"] = Query("all"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> KnowledgeFaqListResponse:
@@ -265,6 +266,7 @@ def reject_faq(
 ) -> KnowledgeFaqRejectResponse:
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
     faq_source = faq.source
+    reopen_groups_answered_by(db, tenant_id=tenant.id, faq_id=faq.id)
     db.delete(faq)
     db.commit()
     emit_faq_reviewed(
@@ -337,6 +339,7 @@ def delete_faq(
 ) -> KnowledgeFaqRejectResponse:
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
     faq_source = faq.source
+    reopen_groups_answered_by(db, tenant_id=tenant.id, faq_id=faq.id)
     db.delete(faq)
     db.commit()
     emit_faq_reviewed(

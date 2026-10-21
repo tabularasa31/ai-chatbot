@@ -59,7 +59,7 @@ class TenantFaq(UUIDPKMixin, TenantScopedMixin, Base):
     answer = Column(Text, nullable=False)
     question_embedding = Column(Vector(1536), nullable=True)
     confidence = Column(Float, nullable=True)
-    source = Column(Text, nullable=True)  # 'docs' | 'logs' | 'swagger' | 'gap_analyzer'
+    source = Column(Text, nullable=True)  # 'docs' | 'logs' | 'swagger' | 'gap_analyzer' | 'unanswered_queue'
     approved = Column(Boolean, nullable=False, default=False, server_default="false")
     gap_source_id = Column(
         PG_UUID(as_uuid=True),

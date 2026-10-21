@@ -1,11 +1,16 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { Button } from "./button";
 import { useModalDialog } from "./use-modal-dialog";
 
-/** Right-hand modal panel. Mount it only while open; focus is trapped and returned by the native dialog. */
+/**
+ * Right-hand modal panel. Mount it only while open; focus is trapped and returned by the native dialog.
+ * Header and footer stay fixed; the caller's body must be the only scroll container.
+ * Rendered into `document.body` so a parent's `space-y-*` margin cannot push the dialog off its edge.
+ */
 export function Drawer({
   title,
   meta,
@@ -26,13 +31,13 @@ export function Drawer({
   const titleId = useId();
   const ref = useModalDialog({ onClose, canClose, onCloseBlocked });
 
-  return (
+  return createPortal(
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      className="m-0 ml-auto h-full max-h-full w-full max-w-xl border-l border-line bg-surface p-0 text-fg shadow-overlay backdrop:bg-scrim dark:bg-surface-alt"
+      className="m-0 ml-auto h-full max-h-full w-full max-w-xl overflow-hidden border-l border-line bg-surface p-0 text-fg shadow-overlay backdrop:bg-scrim dark:bg-surface-alt"
     >
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-4">
           <div className="min-w-0">
             <h2 id={titleId} className="break-words text-body font-semibold text-fg">
@@ -49,6 +54,7 @@ export function Drawer({
         </header>
         <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       </div>
-    </dialog>
+    </dialog>,
+    document.body,
   );
 }

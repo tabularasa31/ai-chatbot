@@ -26,6 +26,14 @@ export function useModalDialog({ onClose, canClose = true, onCloseBlocked, fallb
     if (!dialog) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
+    const keepFocusOnScrimPress = (event: MouseEvent) => {
+      if (event.target === dialog) event.preventDefault();
+    };
+    const blockCancel = (event: Event) => {
+      if (latest.current.canClose) return;
+      event.preventDefault();
+      latest.current.onCloseBlocked?.();
+    };
     const closeOnScrimClick = (event: MouseEvent) => {
       if (event.target !== dialog) return;
       if (latest.current.canClose) latest.current.onClose();
@@ -44,10 +52,14 @@ export function useModalDialog({ onClose, canClose = true, onCloseBlocked, fallb
     };
 
     dialog.showModal();
+    dialog.addEventListener("mousedown", keepFocusOnScrimPress);
     dialog.addEventListener("click", closeOnScrimClick);
+    dialog.addEventListener("cancel", blockCancel);
     dialog.addEventListener("close", handleClose);
     return () => {
+      dialog.removeEventListener("mousedown", keepFocusOnScrimPress);
       dialog.removeEventListener("click", closeOnScrimClick);
+      dialog.removeEventListener("cancel", blockCancel);
       dialog.removeEventListener("close", handleClose);
       dialog.close();
       const target = opener?.isConnected ? opener : latest.current.fallbackFocus?.();

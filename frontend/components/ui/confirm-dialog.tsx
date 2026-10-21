@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "./button";
 import { Input } from "./field";
 import { InlineNotice } from "./inline-notice";
@@ -23,6 +24,7 @@ type ConfirmDialogProps = {
 /**
  * Mount it only while a decision is pending. `onConfirm` must reject on failure; the dialog then
  * stays open with `failureMessage` (omit it only when `onConfirm` cannot reject), and calls `onClose` once `onConfirm` resolves.
+ * Rendered into `document.body` so a parent's `space-y-*` margin cannot push the dialog off-centre.
  */
 export function ConfirmDialog({
   title,
@@ -54,7 +56,7 @@ export function ConfirmDialog({
     }
   }
 
-  return (
+  return createPortal(
     <dialog
       ref={ref}
       aria-labelledby={titleId}
@@ -89,6 +91,7 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </dialog>
+    </dialog>,
+    document.body,
   );
 }

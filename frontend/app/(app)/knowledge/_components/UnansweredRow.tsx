@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useId, useRef } from "react";
 import type { UnansweredDismissReason, UnansweredGroup } from "@/lib/api";
 import { parseApiDate } from "@/lib/format";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { LINK_CLASS } from "./link-class";
 import { DISMISS_REASON_LABELS, NotNeededForm } from "./NotNeededForm";
 
@@ -99,6 +99,15 @@ export function UnansweredRow({
       </div>
       {!choosingReason && (
         <div className="-mt-2.5 flex shrink-0 items-center gap-2">
+          {group.session_id && (
+            <Link
+              href={`/inbox?scope=all&session=${encodeURIComponent(group.session_id)}`}
+              aria-describedby={questionId}
+              className={buttonClasses({ variant: "ghost" })}
+            >
+              Open conversation
+            </Link>
+          )}
           {group.status === "open" && (
             <>
               <Button variant="ghost" aria-describedby={questionId} onClick={onChooseReason}>

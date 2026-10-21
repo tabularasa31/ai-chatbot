@@ -61,7 +61,7 @@ export default function KnowledgePage() {
     <KnowledgeFrame activeTab={activeTab} onTabChange={setTab}>
       {activeTab === "profile" && <ProfileSection onGoToDocuments={() => setTab("documents")} />}
       {activeTab === "faq" && <FaqSection onGoToDocuments={() => setTab("documents")} />}
-      {activeTab === "unanswered" && <UnansweredSection show={show} onShowChange={changeShow} onAnswer={() => {}} />}
+      {activeTab === "unanswered" && <UnansweredSection show={show} onShowChange={changeShow} />}
       {activeTab === "documents" && <DocumentsSection />}
     </KnowledgeFrame>
   );

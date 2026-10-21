@@ -12,6 +12,7 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { LINK_CLASS } from "./link-class";
+import { AnswerDrawer } from "./AnswerDrawer";
 import { UnansweredRow } from "./UnansweredRow";
 
 export type UnansweredShow = "open" | "answered" | "not-needed";
@@ -82,11 +83,9 @@ function EmptyState({
 export function UnansweredSection({
   show,
   onShowChange,
-  onAnswer,
 }: {
   show: UnansweredShow;
   onShowChange: (show: UnansweredShow) => void;
-  onAnswer: (group: UnansweredGroup) => void;
 }) {
   const status = STATUS_BY_SHOW[show];
   const [state, setState] = useState<ListState>({ status: "loading" });
@@ -95,6 +94,7 @@ export function UnansweredSection({
   const [choosingId, setChoosingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [answeringId, setAnsweringId] = useState<string | null>(null);
   const latestRequest = useRef(0);
   const filter = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -165,15 +165,28 @@ export function UnansweredSection({
     } finally {
       setBusyId(null);
     }
-    const index = state.items.findIndex((item) => item.id === group.id);
-    pendingFocusIndex.current = index;
+    removeFromList(group, success);
+  }
+
+  function removeFromList(group: UnansweredGroup, success: string) {
+    if (state.status !== "ready") return;
+    pendingFocusIndex.current = state.items.findIndex((item) => item.id === group.id);
     setChoosingId(null);
+    setAnsweringId(null);
     setState({
       ...state,
       items: state.items.filter((item) => item.id !== group.id),
       nextOffset: state.nextOffset === null ? null : state.nextOffset - 1,
     });
     flash(success);
+  }
+
+  function markDraftStored(id: string) {
+    setState((prev) =>
+      prev.status === "ready"
+        ? { ...prev, items: prev.items.map((item) => (item.id === id && !item.has_draft ? { ...item, has_draft: true } : item)) }
+        : prev,
+    );
   }
 
   function dismiss(group: UnansweredGroup, reason: UnansweredDismissReason) {
@@ -195,6 +208,7 @@ export function UnansweredSection({
   }
 
   const items = state.status === "ready" ? state.items : [];
+  const answering = items.find((item) => item.id === answeringId);
   const loadFailed = state.status === "error" || (state.status === "ready" && state.refreshFailed);
 
   return (
@@ -255,7 +269,7 @@ export function UnansweredSection({
               group={group}
               choosingReason={choosingId === group.id}
               busy={busyId === group.id}
-              onAnswer={() => onAnswer(group)}
+              onAnswer={() => setAnsweringId(group.id)}
               onChooseReason={() => setChoosingId(group.id)}
               onCancelReason={() => setChoosingId(null)}
               onDismiss={(reason) => void dismiss(group, reason)}
@@ -263,6 +277,15 @@ export function UnansweredSection({
             />
           ))}
         </ul>
+      )}
+
+      {answering && (
+        <AnswerDrawer
+          group={answering}
+          onClose={() => setAnsweringId(null)}
+          onDraftStored={() => markDraftStored(answering.id)}
+          onPublished={(published) => removeFromList(published, "Published. Find it under Answered.")}
+        />
       )}
 
       {state.status === "ready" && state.nextOffset !== null && (

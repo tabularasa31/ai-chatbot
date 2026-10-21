@@ -11,16 +11,20 @@ export function Drawer({
   meta,
   actions,
   onClose,
+  canClose,
+  onCloseBlocked,
   children,
 }: {
   title: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
   onClose: () => void;
+  canClose?: boolean;
+  onCloseBlocked?: () => void;
   children: ReactNode;
 }) {
   const titleId = useId();
-  const ref = useModalDialog({ onClose });
+  const ref = useModalDialog({ onClose, canClose, onCloseBlocked });
 
   return (
     <dialog

@@ -28,7 +28,7 @@ Two surfaces, two credentials:
   has its own per-IP rate limit. Optional [identified sessions](/docs/embedding-the-widget)
   attach an HMAC-SHA256 token signed by your backend.
 
-- **Dashboard / management endpoints** (Documents, Gap Analyzer,
+- **Dashboard / management endpoints** (Documents,
   Knowledge) — authenticated with a JWT bearer token. `POST /auth/login` with your
   e-mail and password returns an `access_token`; send that as
   `Authorization: Bearer <access_token>` on each request. The

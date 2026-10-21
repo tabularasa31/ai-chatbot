@@ -44,8 +44,8 @@ const SETUP_ROWS: DefinitionRow[] = [
     title: 'See what visitors ask',
     content: (
       <p>
-        Doc gaps lists topics your documentation covers poorly and questions visitors keep asking, and drafts
-        an outline for each missing page.
+        Unanswered lists the questions visitors asked that the bot could not answer, with a drafted reply you
+        can edit and publish to the FAQ.
       </p>
     ),
   },

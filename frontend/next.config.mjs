@@ -16,6 +16,11 @@ const nextConfig = {
         destination: "/settings/seats",
         permanent: false,
       },
+      {
+        source: "/gap-analyzer/:path*",
+        destination: "/knowledge?tab=unanswered",
+        permanent: true,
+      },
     ];
   },
   async rewrites() {

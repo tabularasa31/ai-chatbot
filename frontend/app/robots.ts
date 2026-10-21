@@ -19,7 +19,6 @@ export default function robots(): MetadataRoute.Robots {
         "/widget-settings",
         "/inbox",
         "/admin",
-        "/gap-analyzer",
         "/login",
         "/signup",
         "/forgot-password",

@@ -8,7 +8,6 @@ const PROTECTED_PATHS = [
   "/widget-settings",
   "/inbox",
   "/admin",
-  "/gap-analyzer",
 ];
 const AUTH_PATHS = ["/login", "/signup"];
 
@@ -103,8 +102,7 @@ export const config = {
     "/inbox/:path*",
     "/admin",
     "/admin/:path*",
-    "/gap-analyzer",
-    "/gap-analyzer/:path*",
+      "/gap-analyzer/:path*",
     "/login",
     "/signup",
     // Widget CORS — must be in the matcher for middleware to run.

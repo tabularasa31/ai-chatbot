@@ -125,7 +125,7 @@ export function useAnswerDraft(groupId: string, groupQuestion: string, onStored:
         const failure: DraftNotice | null =
           polling && draftErrorCode(err) === "no_draft" ? { kind: "generation_failed" } : loadFailureNotice(err);
         setNotice(failure);
-        if (failure) {
+        if (failure && !reloadedWithKeptText) {
           setQuestion(groupQuestion);
           setPrefilledQuestion(groupQuestion);
         }

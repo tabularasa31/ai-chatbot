@@ -26,13 +26,9 @@ const LIMIT_WARNING_RATIO = 0.9;
 /** Appends a character counter to the helper text once the value is within 10% of its limit. */
 export function withLimit(helper: string | undefined, length: number, max: number): string | undefined {
   if (length < max * LIMIT_WARNING_RATIO) return helper;
-  const counter = length >= max ? `Limit of ${max} characters reached.` : `${length} of ${max} characters.`;
+  const counter = length >= max ? `Limit of ${max.toLocaleString()} characters reached.` : `${length.toLocaleString()} of ${max.toLocaleString()} characters.`;
   return helper ? `${helper} ${counter}` : counter;
 }
-
-export const TEXT_LINK_CLASS =
-  "inline-flex h-11 items-center rounded-control text-ui text-brand underline " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas";
 
 export type KnowledgeTab = "documents" | "profile" | "faq" | "unanswered";
 

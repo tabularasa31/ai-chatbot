@@ -6,7 +6,8 @@ import type { UnansweredDismissReason, UnansweredGroup } from "@/lib/api";
 import { parseApiDate } from "@/lib/format";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { DISMISS_REASON_LABELS, NotNeededForm } from "./NotNeededForm";
-import { TEXT_LINK_CLASS, conversationsLabel } from "./shared";
+import { TEXT_LINK_CLASS } from "./link-class";
+import { conversationsLabel } from "./shared";
 
 type MetaPart = { text: string; warning?: boolean };
 

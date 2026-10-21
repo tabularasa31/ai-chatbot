@@ -239,7 +239,8 @@ export function AnswerDrawer({
               variant="secondary"
               offset="surface"
               busy={pending === "save"}
-              disabled={!ready || !hasContent || pending !== null}
+              disabled={!ready || !hasContent || !dirty || pending !== null}
+              aria-describedby={missingContent ? reasonId : undefined}
               onClick={() => void saveDraft()}
             >
               Save draft

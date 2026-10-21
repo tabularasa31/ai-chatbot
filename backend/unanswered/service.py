@@ -145,8 +145,15 @@ async def _to_responses(
     latest = {
         row.group_id: row
         for row in await db.execute(
-            select(ranked.c.group_id, ranked.c.chat_id, ranked.c.message_id, Message.content)
+            select(
+                ranked.c.group_id,
+                ranked.c.chat_id,
+                ranked.c.message_id,
+                Message.content,
+                Chat.session_id,
+            )
             .join(Message, Message.id == ranked.c.message_id)
+            .join(Chat, Chat.id == ranked.c.chat_id)
             .where(ranked.c.rank == 1)
         )
     }
@@ -158,6 +165,7 @@ async def _to_responses(
             question=latest[g.id].content,
             question_message_id=latest[g.id].message_id,
             chat_id=latest[g.id].chat_id,
+            session_id=latest[g.id].session_id,
             conversations_30d=conversations[g.id],
             last_asked_at=g.last_asked_at,
             reasons=sorted(reasons[g.id], key=lambda r: r.value),

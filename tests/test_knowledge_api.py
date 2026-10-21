@@ -496,6 +496,7 @@ def test_unanswered_group_shape(tenant: TestClient, db_session: Session) -> None
             "question": "latest wording",
             "question_message_id": str(latest.user_message_id),
             "chat_id": str(latest.chat_id),
+            "session_id": str(db_session.get(Chat, latest.chat_id).session_id),
             "conversations_30d": 3,
             "last_asked_at": body["items"][0]["last_asked_at"],
             "reasons": ["llm_self_offer", "no_documents", "unanswered"],

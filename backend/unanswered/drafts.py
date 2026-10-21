@@ -264,11 +264,12 @@ async def _recent_question_texts(
             .where(
                 UnansweredQuestion.group_id == group_id, UnansweredQuestion.tenant_id == tenant_id
             )
-            .order_by(UnansweredQuestion.created_at.desc(), UnansweredQuestion.id)
+            .group_by(Message.content)
+            .order_by(func.max(UnansweredQuestion.created_at).desc(), Message.content)
             .limit(limit)
         )
     ).scalars()
-    return list(dict.fromkeys(texts))
+    return list(texts)
 
 
 async def _sample_questions(

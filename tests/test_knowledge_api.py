@@ -708,6 +708,7 @@ def test_unanswered_draft_journey_from_generation_to_publish(
     assert stale.status_code == 409
     assert stale.json()["detail"]["code"] == "stale_version"
     assert stale.json()["detail"]["draft"]["answer"] == "Click Export in Settings."
+    assert stale.json()["detail"]["draft"]["examples"] == generated.json()["examples"]
 
     _model_replies(mock_openai_client, "Export?", "Click Export in Settings, then pick CSV.")
     refine_url = f"{url}/refine"

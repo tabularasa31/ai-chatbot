@@ -64,6 +64,7 @@ class DraftResponse(BaseModel):
     language: str
     version: int
     generating: bool
+    examples: list[str]
 
 
 class DraftSaveRequest(BaseModel):

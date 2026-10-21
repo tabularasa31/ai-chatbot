@@ -1,9 +1,9 @@
 ---
 title: Dashboard Features
-description: What each section of the Chat9 dashboard does — Knowledge, Doc gaps, Inbox, and more.
+description: What each section of the Chat9 dashboard does — Knowledge, Inbox, and more.
 ---
 
-The app uses a **left sidebar** for navigation (**Inbox**, **Doc gaps**, **Knowledge**, **Analytics**, **Install widget**, **Settings** (owners), and **Platform metrics** for platform admins). The top bar shows the Chat9 brand, your email, and **Log out**.
+The app uses a **left sidebar** for navigation (**Inbox**, **Knowledge**, **Analytics**, **Install widget**, **Settings** (owners), and **Platform metrics** for platform admins). The top bar shows the Chat9 brand, your email, and **Log out**.
 
 ## Install widget (`/dashboard`)
 
@@ -46,17 +46,6 @@ Formerly `/documents` — **that route is removed**; use **Knowledge**.
 
 - **Indexed pages:** Inside a URL source, you can remove one indexed page without deleting the whole source. Removed pages stay excluded from future refreshes for that source.
 - **External sources:** Cards for future connectors (e.g. GitHub) plus a unified table of indexed sources.
-
-## Doc gaps (`/gap-analyzer`)
-
-Doc gaps is the operator backlog for things your documentation may be missing and questions your users keep asking.
-
-- **Visitor questions:** groups repeated low-confidence, fallback, rejected, or escalated questions into actionable clusters.
-- **Docs coverage:** looks at your indexed documentation and surfaces topics that appear under-covered. Each topic shows roughly how much of it your documents cover.
-- **Linked visibility:** when Chat9 sees the same issue from both directions, the open list keeps one primary row instead of showing obvious duplicates.
-- **Actions:** draft a FAQ answer for a visitor question, preview a draft outline for a docs topic, or dismiss a gap. After you dismiss an open gap, **Undo** brings it back.
-- **Show:** switch between **Open**, **Archived** and **All**. Archived groups dismissed gaps, closed gaps (answered by your FAQ or docs, including gaps you resolved) and inactive gaps (no new questions for a while).
-- **Recalculate:** manually trigger a fresh analysis pass from the UI when you want to refresh the backlog after updating docs.
 
 ## Settings → Bot (`/settings`)
 

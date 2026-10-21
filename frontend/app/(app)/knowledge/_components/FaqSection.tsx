@@ -12,7 +12,7 @@ import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { LINK_CLASS } from "./link-class";
 import { confidenceLevel } from "./shared";
 
-type FaqFilter = "all" | "pending" | "approved" | "docs" | "logs";
+type FaqFilter = "all" | "pending" | "approved" | "docs";
 type FaqState =
   | { status: "loading" }
   | { status: "error" }
@@ -23,7 +23,6 @@ const FILTER_OPTIONS: ReadonlyArray<{ value: FaqFilter; label: string }> = [
   { value: "pending", label: "Waiting for review" },
   { value: "approved", label: "Approved" },
   { value: "docs", label: "From documents" },
-  { value: "logs", label: "From chat history" },
 ];
 
 const QUERY_BY_FILTER = {
@@ -31,10 +30,13 @@ const QUERY_BY_FILTER = {
   pending: { approved: "false", source: "all" },
   approved: { approved: "true", source: "all" },
   docs: { approved: "all", source: "docs" },
-  logs: { approved: "all", source: "logs" },
 } as const;
 
-const SOURCE_LABELS: Record<string, string> = { docs: "From documents", logs: "From chat history" };
+const SOURCE_LABELS: Record<string, string> = {
+  docs: "From documents",
+  logs: "From chat history",
+  unanswered_queue: "From Unanswered",
+};
 const SKELETON_ROWS = 4;
 
 function answersCount(count: number): string {
@@ -147,7 +149,7 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
     await load();
   }
 
-  const showReviewState = filter === "all" || filter === "docs" || filter === "logs";
+  const showReviewState = filter === "all" || filter === "docs";
 
   return (
     <div className="max-w-4xl space-y-6">

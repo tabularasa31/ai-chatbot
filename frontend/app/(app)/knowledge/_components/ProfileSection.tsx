@@ -24,6 +24,7 @@ type ProfileState =
 
 const GLOSSARY_SOURCES: Record<string, string> = {
   docs: "Documents",
+  gap_analyzer: "Doc gaps",
   logs: "Chat history",
 };
 

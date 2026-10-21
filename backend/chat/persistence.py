@@ -54,6 +54,7 @@ def _create_message(
     source_documents: list[uuid.UUID] | None = None,
     operator_user_id: uuid.UUID | None = None,
     turn_outcome: TurnOutcome | None = None,
+    escalation_offer_reason: str | None = None,
 ) -> Message:
     """Persist one turn's message with its ORIGINAL text.
 
@@ -69,6 +70,10 @@ def _create_message(
 
     ``turn_outcome`` is a bot-reply-only classification; callers never pass it
     for ``MessageRole.user`` / ``MessageRole.operator`` rows, which keep it NULL.
+
+    ``escalation_offer_reason`` is the ``EscalationTrigger`` value of the offer
+    this very message makes; it stays NULL on every other row, including later
+    turns of the same escalation episode.
     """
     message = Message(
         id=uuid.uuid4(),
@@ -78,6 +83,7 @@ def _create_message(
         source_documents=source_documents,
         operator_user_id=operator_user_id,
         turn_outcome=turn_outcome,
+        escalation_offer_reason=escalation_offer_reason,
     )
     db.add(message)
     redaction = redact(content)
@@ -249,6 +255,7 @@ def _persist_turn(
     set_low_confidence_flag: bool = False,
     set_checklist_flag: bool = False,
     turn_outcome: TurnOutcome | None = None,
+    escalation_offer_reason: str | None = None,
 ) -> tuple[Message, Message]:
     _persist_start = perf_counter()
     _persist_span = None
@@ -274,6 +281,7 @@ def _persist_turn(
         turn_outcome=(
             turn_outcome if turn_outcome is not None else _infer_turn_outcome(chat, document_ids)
         ),
+        escalation_offer_reason=escalation_offer_reason,
     )
     _finalize_persisted_messages(
         db=db,
@@ -309,6 +317,7 @@ def _persist_turn_with_response_language(
     set_low_confidence_flag: bool = False,
     set_checklist_flag: bool = False,
     turn_outcome: TurnOutcome | None = None,
+    escalation_offer_reason: str | None = None,
 ) -> tuple[Message, Message]:
     _set_last_response_language(
         db=db,
@@ -331,4 +340,5 @@ def _persist_turn_with_response_language(
         set_low_confidence_flag=set_low_confidence_flag,
         set_checklist_flag=set_checklist_flag,
         turn_outcome=turn_outcome,
+        escalation_offer_reason=escalation_offer_reason,
     )

@@ -190,6 +190,13 @@ class ChatPipelineResult:
     # stores it once the turn is persisted and the reply is still the pipeline
     # answer (no escalation or handoff replaced it).
     answer_cache_candidate: AnswerCacheCandidate | None = None
+    # Set on rephrase and low_retrieval rejects whose relevance verdict is
+    # relevant or no_profile, i.e. the question is a real knowledge gap. False
+    # on timeout / error / circuit-open and every other verdict.
+    in_domain_unanswered: bool = False
+    # Embedding of the redacted question the pipeline computed for retrieval;
+    # None when the turn ended before (or without) embedding it.
+    question_vector: list[float] | None = None
 
 
 @dataclass
@@ -224,6 +231,7 @@ class PipelineState:
     # short bot-meta / social turn on the *first* turn instead of only catching
     # it on the second consecutive zero-hit turn's force check.
     guard_bypassed_short_query: bool = False
+    relevance_guard_reason: str | None = None
     profile: TenantProfile | None = None
     client_product_name: str | None = None
     topic_hint: str | None = None

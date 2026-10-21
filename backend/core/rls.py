@@ -67,6 +67,8 @@ TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "quick_answers",
     "tenant_faq",
     "tenant_profiles",
+    "unanswered_groups",
+    "unanswered_questions",
     "url_sources",
 )
 

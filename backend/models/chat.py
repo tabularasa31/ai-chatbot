@@ -426,6 +426,9 @@ class Message(UUIDPKMixin, TimestampMixin, Base):
     # How this turn resolved (``TurnOutcome``), for analytics reporting.
     # NULL for every row written before this column existed.
     turn_outcome = Column(String(32), nullable=True)
+    # ``EscalationTrigger`` value, set only on the assistant message that
+    # offers the visitor an escalation; NULL on every other row.
+    escalation_offer_reason = Column(String(32), nullable=True)
 
     chat = relationship("Chat", back_populates="messages")
 

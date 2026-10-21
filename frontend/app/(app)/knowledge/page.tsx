@@ -7,9 +7,10 @@ import { KnowledgeFrame } from "./_components/KnowledgeFrame";
 import { FaqSection } from "./_components/FaqSection";
 import { DocumentsSection } from "./_components/DocumentsSection";
 import { ProfileSection } from "./_components/ProfileSection";
+import { UnansweredSection, parseShow, type UnansweredShow } from "./_components/UnansweredSection";
 
 function parseTab(value: string | null): KnowledgeTab {
-  return value === "faq" || value === "profile" ? value : "documents";
+  return value === "faq" || value === "profile" || value === "unanswered" ? value : "documents";
 }
 
 export default function KnowledgePage() {
@@ -20,9 +21,14 @@ export default function KnowledgePage() {
   // ``window.location.search`` in an effect keeps the page client-rendered
   // without that wrapper.
   const [activeTab, setActiveTab] = useState<KnowledgeTab>("documents");
+  const [show, setShow] = useState<UnansweredShow>("open");
 
   useEffect(() => {
-    const syncFromUrl = () => setActiveTab(parseTab(new URLSearchParams(window.location.search).get("tab")));
+    const syncFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      setActiveTab(parseTab(params.get("tab")));
+      setShow(parseShow(params.get("show")));
+    };
     syncFromUrl();
     window.addEventListener("popstate", syncFromUrl);
     return () => window.removeEventListener("popstate", syncFromUrl);
@@ -32,8 +38,22 @@ export default function KnowledgePage() {
     const next = new URLSearchParams(window.location.search);
     if (tab === "documents") next.delete("tab");
     else next.set("tab", tab);
-    const query = next.toString();
+    next.delete("show");
+    replaceQuery(next);
     setActiveTab(tab);
+    setShow("open");
+  }
+
+  function changeShow(value: UnansweredShow) {
+    const next = new URLSearchParams(window.location.search);
+    if (value === "open") next.delete("show");
+    else next.set("show", value);
+    replaceQuery(next);
+    setShow(value);
+  }
+
+  function replaceQuery(params: URLSearchParams) {
+    const query = params.toString();
     router.replace(`${pathname}${query ? `?${query}` : ""}`);
   }
 
@@ -41,6 +61,7 @@ export default function KnowledgePage() {
     <KnowledgeFrame activeTab={activeTab} onTabChange={setTab}>
       {activeTab === "profile" && <ProfileSection onGoToDocuments={() => setTab("documents")} />}
       {activeTab === "faq" && <FaqSection onGoToDocuments={() => setTab("documents")} />}
+      {activeTab === "unanswered" && <UnansweredSection show={show} onShowChange={changeShow} />}
       {activeTab === "documents" && <DocumentsSection />}
     </KnowledgeFrame>
   );

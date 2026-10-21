@@ -496,6 +496,7 @@ def test_unanswered_group_shape(tenant: TestClient, db_session: Session) -> None
             "question": "latest wording",
             "question_message_id": str(latest.user_message_id),
             "chat_id": str(latest.chat_id),
+            "session_id": str(db_session.get(Chat, latest.chat_id).session_id),
             "conversations_30d": 3,
             "last_asked_at": body["items"][0]["last_asked_at"],
             "reasons": ["llm_self_offer", "no_documents", "unanswered"],
@@ -660,7 +661,12 @@ def test_unanswered_draft_journey_from_generation_to_publish(
     profile = db_session.get(TenantProfile, client.id)
     profile.escalation_language = "de"
     db_session.commit()
-    group = _seed_group(db_session, client.id, [(1, "how do I export?", UnansweredReason.unanswered)])
+    group = _seed_group(
+        db_session,
+        client.id,
+        [(1, "how do I export?", UnansweredReason.unanswered)]
+        + [(day, f"export question {day}", UnansweredReason.unanswered) for day in range(2, 8)],
+    )
     url = _draft_url(group)
     no_draft = [
         tenant.get(url, headers=_auth(token)),
@@ -678,6 +684,13 @@ def test_unanswered_draft_journey_from_generation_to_publish(
         "language": "de",
         "version": 1,
         "generating": False,
+        "examples": [
+            "how do I export?",
+            "export question 2",
+            "export question 3",
+            "export question 4",
+            "export question 5",
+        ],
     }
     prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
     assert "how do I export?" in prompt
@@ -695,6 +708,7 @@ def test_unanswered_draft_journey_from_generation_to_publish(
     assert stale.status_code == 409
     assert stale.json()["detail"]["code"] == "stale_version"
     assert stale.json()["detail"]["draft"]["answer"] == "Click Export in Settings."
+    assert stale.json()["detail"]["draft"]["examples"] == generated.json()["examples"]
 
     _model_replies(mock_openai_client, "Export?", "Click Export in Settings, then pick CSV.")
     refine_url = f"{url}/refine"
@@ -837,6 +851,46 @@ def test_unanswered_reports_generation_in_progress_until_the_marker_expires(
     draft = tenant.get(_draft_url(group), headers=_auth(token)).json()
 
     assert (listed[0]["generating"], draft["generating"]) == (generating, generating)
+
+
+@pytest.mark.parametrize(
+    ("marker_age", "status", "body"),
+    [
+        pytest.param(
+            timedelta(seconds=5),
+            200,
+            {
+                "question": "",
+                "answer": "",
+                "language": "en",
+                "version": 0,
+                "generating": True,
+                "examples": ["first generation"],
+            },
+            id="first_generation_running",
+        ),
+        pytest.param(
+            GENERATION_LOCK_TTL + timedelta(seconds=5),
+            404,
+            {"detail": {"code": "no_draft"}},
+            id="crashed_first_generation",
+        ),
+    ],
+)
+def test_unanswered_draft_read_tells_first_generation_from_no_draft(
+    tenant: TestClient, db_session: Session, marker_age: timedelta, status: int, body: dict
+) -> None:
+    token, client = _create_client(tenant, db_session, email="unanswered-first-gen@example.com")
+    group = _seed_group(
+        db_session,
+        client.id,
+        [(1, "first generation", UnansweredReason.unanswered)],
+        draft_generating_since=_utcnow() - marker_age,
+    )
+
+    resp = tenant.get(_draft_url(group), headers=_auth(token))
+
+    assert (resp.status_code, resp.json()) == (status, body)
 
 
 def _change_draft_while_model_works(db: Session, group: UnansweredGroup, mock_openai_client, reply):

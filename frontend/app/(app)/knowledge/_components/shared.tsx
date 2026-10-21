@@ -17,12 +17,26 @@ const NAME_BUTTON_BASE_CLASS =
 export const NAME_BUTTON_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-canvas`;
 export const NAME_BUTTON_ON_BAND_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-surface-alt`;
 
-export type KnowledgeTab = "documents" | "profile" | "faq";
+export function conversationsLabel(count: number): string {
+  return count === 1 ? "1 conversation" : `${count} conversations`;
+}
+
+const LIMIT_WARNING_RATIO = 0.9;
+
+/** Appends a character counter to the helper text once the value is within 10% of its limit. */
+export function withLimit(helper: string | undefined, length: number, max: number): string | undefined {
+  if (length < max * LIMIT_WARNING_RATIO) return helper;
+  const counter = length >= max ? `Limit of ${max.toLocaleString()} characters reached.` : `${length.toLocaleString()} of ${max.toLocaleString()} characters.`;
+  return helper ? `${helper} ${counter}` : counter;
+}
+
+export type KnowledgeTab = "documents" | "profile" | "faq" | "unanswered";
 
 export const KNOWLEDGE_TABS: readonly SectionTab<KnowledgeTab>[] = [
   { id: "documents", label: "Documents" },
   { id: "profile", label: "Profile" },
   { id: "faq", label: "FAQ" },
+  { id: "unanswered", label: "Unanswered" },
 ];
 
 export const SCHEDULE_OPTIONS = [

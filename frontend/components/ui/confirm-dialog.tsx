@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "./button";
 import { Input } from "./field";
 import { InlineNotice } from "./inline-notice";
@@ -12,7 +13,7 @@ type ConfirmDialogProps = {
   confirmLabel: string;
   cancelLabel?: string;
   tone: "primary" | "destructive";
-  failureMessage: string;
+  failureMessage?: string;
   /** The user must type this exactly (case-sensitive; surrounding spaces are ignored on both sides) before the confirm button enables. */
   confirmText?: string;
   onConfirm: () => Promise<void>;
@@ -22,7 +23,8 @@ type ConfirmDialogProps = {
 
 /**
  * Mount it only while a decision is pending. `onConfirm` must reject on failure; the dialog then
- * stays open with `failureMessage`, and calls `onClose` once `onConfirm` resolves.
+ * stays open with `failureMessage` (omit it only when `onConfirm` cannot reject), and calls `onClose` once `onConfirm` resolves.
+ * Rendered into `document.body` so a parent's `space-y-*` margin cannot push the dialog off-centre.
  */
 export function ConfirmDialog({
   title,
@@ -54,7 +56,7 @@ export function ConfirmDialog({
     }
   }
 
-  return (
+  return createPortal(
     <dialog
       ref={ref}
       aria-labelledby={titleId}
@@ -73,7 +75,7 @@ export function ConfirmDialog({
             onChange={(e) => setTyped(e.target.value)}
           />
         )}
-        {failed && <InlineNotice tone="danger">{failureMessage}</InlineNotice>}
+        {failed && failureMessage && <InlineNotice tone="danger">{failureMessage}</InlineNotice>}
         <div className="flex justify-end gap-3">
           <Button variant="secondary" offset="surface" onClick={onClose} disabled={busy}>
             {cancelLabel}
@@ -89,6 +91,7 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </dialog>
+    </dialog>,
+    document.body,
   );
 }

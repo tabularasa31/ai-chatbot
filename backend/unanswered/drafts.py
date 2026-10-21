@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 UNANSWERED_QUEUE_FAQ_SOURCE = "unanswered_queue"
 DEFAULT_LANGUAGE = "en"
 QUESTION_SAMPLE_SIZE = 5
+EXAMPLES_SIZE = 5
 GUARD_ATTEMPTS = 2
 LLM_TIMEOUT_SECONDS = 30.0
 
@@ -201,13 +202,15 @@ async def _guarded(
     raise DraftRejectedError
 
 
-def _draft_response(group: UnansweredGroup) -> DraftResponse:
+async def _draft_response(db: AsyncSession, group: UnansweredGroup) -> DraftResponse:
+    """A group still on its first generation has no text yet and reports empty fields."""
     return DraftResponse(
-        question=group.draft_question,
-        answer=group.draft_answer,
-        language=group.draft_language,
+        question=group.draft_question or "",
+        answer=group.draft_answer or "",
+        language=group.draft_language or await _draft_language(db, group.tenant_id),
         version=group.draft_version,
         generating=is_generating(group),
+        examples=await _recent_question_texts(db, group.tenant_id, group.id, EXAMPLES_SIZE),
     )
 
 
@@ -216,10 +219,10 @@ def _require_editable(group: UnansweredGroup) -> None:
         raise GroupStateConflictError
 
 
-def _require_version(group: UnansweredGroup, version: int) -> None:
+async def _require_version(db: AsyncSession, group: UnansweredGroup, version: int) -> None:
     if group.draft_version != version:
         raise DraftVersionConflictError(
-            _draft_response(group) if group.draft_answer is not None else None
+            await _draft_response(db, group) if group.draft_answer is not None else None
         )
 
 
@@ -250,10 +253,10 @@ async def _draft_language(db: AsyncSession, tenant_id: uuid.UUID) -> str:
     return DEFAULT_LANGUAGE
 
 
-async def _sample_questions(
-    db: AsyncSession, tenant_id: uuid.UUID, group_id: uuid.UUID
+async def _recent_question_texts(
+    db: AsyncSession, tenant_id: uuid.UUID, group_id: uuid.UUID, limit: int
 ) -> list[str]:
-    """Most recent captured questions of the group, redacted for the model."""
+    """Distinct texts of the group's ``limit`` most recent captured questions, newest first."""
     texts = (
         await db.execute(
             select(Message.content)
@@ -261,10 +264,19 @@ async def _sample_questions(
             .where(
                 UnansweredQuestion.group_id == group_id, UnansweredQuestion.tenant_id == tenant_id
             )
-            .order_by(UnansweredQuestion.created_at.desc(), UnansweredQuestion.id)
-            .limit(QUESTION_SAMPLE_SIZE)
+            .group_by(Message.content)
+            .order_by(func.max(UnansweredQuestion.created_at).desc(), Message.content)
+            .limit(limit)
         )
     ).scalars()
+    return list(texts)
+
+
+async def _sample_questions(
+    db: AsyncSession, tenant_id: uuid.UUID, group_id: uuid.UUID
+) -> list[str]:
+    """Most recent captured questions of the group, redacted for the model."""
+    texts = await _recent_question_texts(db, tenant_id, group_id, QUESTION_SAMPLE_SIZE)
     return list(dict.fromkeys(redact_for_egress(text) for text in texts))
 
 
@@ -280,9 +292,9 @@ async def get_draft(
     db: AsyncSession, *, tenant_id: uuid.UUID, group_id: uuid.UUID
 ) -> DraftResponse:
     group = await get_group(db, tenant_id=tenant_id, group_id=group_id)
-    if group.draft_answer is None:
+    if group.draft_answer is None and not is_generating(group):
         raise NoDraftError
-    return _draft_response(group)
+    return await _draft_response(db, group)
 
 
 async def save_draft(
@@ -298,14 +310,14 @@ async def save_draft(
     _require_editable(group)
     if is_generating(group):
         raise DraftGeneratingError
-    _require_version(group, version)
+    await _require_version(db, group, version)
     _apply_draft(
         group,
         content,
         language=group.draft_language or await _draft_language(db, tenant_id),
     )
     await db.commit()
-    return _draft_response(group)
+    return await _draft_response(db, group)
 
 
 async def _begin_generation(
@@ -348,13 +360,13 @@ async def _finish_generation(
         content = await _guarded(produce, tenant_id=tenant_id, api_key=request.api_key)
         group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
         _require_editable(group)
-        _require_version(group, claimed_version)
+        await _require_version(db, group, claimed_version)
     except BaseException:
         await _release_generation(db, tenant_id=tenant_id, group_id=group_id)
         raise
     _apply_draft(group, content, language=request.language)
     await db.commit()
-    return _draft_response(group)
+    return await _draft_response(db, group)
 
 
 async def generate_draft(*, tenant_id: uuid.UUID, group_id: uuid.UUID) -> DraftResponse:
@@ -399,7 +411,7 @@ async def refine_draft(
     async with core_db.AsyncSessionLocal() as db:
         group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
         _require_editable(group)
-        _require_version(group, version)
+        await _require_version(db, group, version)
         if group.draft_answer is None:
             raise NoDraftError
         if is_generating(group):
@@ -441,7 +453,7 @@ async def publish_draft(
     """
     group = await lock_group(db, tenant_id=tenant_id, group_id=group_id)
     if group.faq_id is None:
-        _require_version(group, version)
+        await _require_version(db, group, version)
         if group.draft_answer is None:
             raise NoDraftError
         api_key = await _api_key(db, tenant_id)

@@ -330,6 +330,99 @@ export type KnowledgeFaqListResponse = {
   pending_count: number;
 };
 
+export type UnansweredStatus = "open" | "answered" | "dismissed";
+export type UnansweredDismissReason = "not_our_product" | "should_not_answer" | "other";
+export type UnansweredReason = "unanswered" | "llm_self_offer" | "low_similarity" | "no_documents";
+
+export type UnansweredGroup = {
+  id: string;
+  status: UnansweredStatus;
+  question: string;
+  question_message_id: string;
+  chat_id: string;
+  session_id: string;
+  conversations_30d: number;
+  last_asked_at: string;
+  reasons: UnansweredReason[];
+  reopened_after_answer: boolean;
+  faq_id: string | null;
+  has_draft: boolean;
+  generating: boolean;
+  dismiss_reason: UnansweredDismissReason | null;
+};
+
+export type UnansweredList = {
+  items: UnansweredGroup[];
+  next_offset: number | null;
+  tenant_conversations_30d: number;
+  tenant_has_conversations: boolean;
+};
+
+export type UnansweredBadge = { new_count: number };
+
+export type UnansweredDraft = {
+  question: string;
+  answer: string;
+  language: string;
+  version: number;
+  generating: boolean;
+  examples: string[];
+};
+
+export type UnansweredPublishResult = { group: UnansweredGroup; faq_id: string };
+
+export const DRAFT_QUESTION_MAX_LENGTH = 1000;
+export const DRAFT_ANSWER_MAX_LENGTH = 20000;
+export const DRAFT_INSTRUCTIONS_MAX_LENGTH = 2000;
+
+const DRAFT_ERROR_CODES = [
+  "no_openai_key",
+  "draft_generating",
+  "stale_version",
+  "group_answered",
+  "no_draft",
+  "draft_generation_failed",
+  "draft_rejected",
+  "faq_embedding_failed",
+] as const;
+
+export type DraftErrorCode = (typeof DRAFT_ERROR_CODES)[number];
+
+function draftDetail(err: unknown): object | null {
+  return err instanceof ApiError && typeof err.detail === "object" && err.detail !== null ? err.detail : null;
+}
+
+export function draftErrorCode(err: unknown): DraftErrorCode | null {
+  const detail = draftDetail(err);
+  return (detail && "code" in detail && DRAFT_ERROR_CODES.find((code) => code === detail.code)) || null;
+}
+
+function isDraft(value: unknown): value is UnansweredDraft {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "question" in value &&
+    typeof value.question === "string" &&
+    "answer" in value &&
+    typeof value.answer === "string" &&
+    "language" in value &&
+    typeof value.language === "string" &&
+    "version" in value &&
+    typeof value.version === "number" &&
+    "generating" in value &&
+    typeof value.generating === "boolean" &&
+    "examples" in value &&
+    Array.isArray(value.examples) &&
+    value.examples.every((example) => typeof example === "string")
+  );
+}
+
+/** The server's current draft carried by a `stale_version` error, if it has one. */
+export function staleDraft(err: unknown): UnansweredDraft | null {
+  const detail = draftDetail(err);
+  return detail && "draft" in detail && isDraft(detail.draft) ? detail.draft : null;
+}
+
 export type GapSource = "mode_a" | "mode_b";
 export type GapItemStatus =
   | "active"
@@ -449,12 +542,19 @@ export const HTTP_TOO_MANY_REQUESTS = 429;
 /** Thrown by `request()` on a non-ok response; `status` lets callers branch on the HTTP code. */
 export class ApiError extends Error {
   status: number;
+  /** The response's `detail` as sent, for endpoints whose errors carry a code or a payload. */
+  detail: unknown;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, detail?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
   }
+}
+
+function errorDetail(data: unknown): unknown {
+  return typeof data === "object" && data !== null && "detail" in data ? data.detail : undefined;
 }
 
 function getErrorMessage(data: unknown, fallback: string): string {
@@ -612,7 +712,7 @@ async function request<T>(url: string, fallback: string, init: RequestOptions = 
     body: json !== undefined ? JSON.stringify(json) : body,
   });
   const data = res.ok ? await parseJsonSafe(res) : await parseJsonSafe(res).catch(() => undefined);
-  if (!res.ok) throw new ApiError(getErrorMessage(data, fallback), res.status);
+  if (!res.ok) throw new ApiError(getErrorMessage(data, fallback), res.status, errorDetail(data));
   return data as T;
 }
 
@@ -837,6 +937,41 @@ export const api = {
       payload: { question: string; answer: string }
     ): Promise<KnowledgeFaqItem> {
       return sendJson(`${BASE_URL}/api/v1/knowledge/faq/${id}`, "PUT", payload, "Failed to update FAQ");
+    },
+  },
+  unanswered: {
+    list(status: UnansweredStatus, offset = 0): Promise<UnansweredList> {
+      const params = new URLSearchParams({ status, offset: String(offset) });
+      return getJson(`${BASE_URL}/api/v1/knowledge/unanswered?${params}`, "Failed to load unanswered questions");
+    },
+    badge(): Promise<UnansweredBadge> {
+      return getJson(`${BASE_URL}/api/v1/knowledge/unanswered/badge`, "Failed to load the unanswered badge");
+    },
+    markSeen(): Promise<void> {
+      return requestVoid(`${BASE_URL}/api/v1/knowledge/unanswered/seen`, "Failed to mark unanswered questions as seen", {
+        method: "POST",
+      });
+    },
+    dismiss(id: string, reason: UnansweredDismissReason): Promise<UnansweredGroup> {
+      return sendJson(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/dismiss`, "POST", { reason }, "Failed to dismiss the question");
+    },
+    restore(id: string): Promise<UnansweredGroup> {
+      return request(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/restore`, "Failed to restore the question", { method: "POST" });
+    },
+    getDraft(id: string): Promise<UnansweredDraft> {
+      return getJson(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/draft`, "Failed to load the draft");
+    },
+    generateDraft(id: string): Promise<UnansweredDraft> {
+      return request(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/draft`, "Failed to generate a draft", { method: "POST" });
+    },
+    saveDraft(id: string, payload: { question: string; answer: string; version: number }): Promise<UnansweredDraft> {
+      return sendJson(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/draft`, "PUT", payload, "Failed to save the draft");
+    },
+    refineDraft(id: string, payload: { instructions: string; version: number }): Promise<UnansweredDraft> {
+      return sendJson(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/draft/refine`, "POST", payload, "Failed to rewrite the draft");
+    },
+    publish(id: string, version: number): Promise<UnansweredPublishResult> {
+      return sendJson(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/publish`, "POST", { version }, "Failed to publish the answer");
     },
   },
   embeddings: {

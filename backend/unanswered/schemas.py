@@ -17,6 +17,7 @@ class UnansweredGroupResponse(BaseModel):
     question: str
     question_message_id: uuid.UUID
     chat_id: uuid.UUID
+    session_id: uuid.UUID
     conversations_30d: int
     last_asked_at: datetime
     reasons: list[UnansweredReason]
@@ -63,6 +64,7 @@ class DraftResponse(BaseModel):
     language: str
     version: int
     generating: bool
+    examples: list[str]
 
 
 class DraftSaveRequest(BaseModel):

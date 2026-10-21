@@ -102,8 +102,7 @@ export const config = {
     "/inbox/:path*",
     "/admin",
     "/admin/:path*",
-      "/gap-analyzer/:path*",
-    "/login",
+      "/login",
     "/signup",
     // Widget CORS — must be in the matcher for middleware to run.
     "/widget/:path*",

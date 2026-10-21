@@ -384,7 +384,6 @@ const DRAFT_ERROR_CODES = [
   "draft_generation_failed",
   "draft_rejected",
   "faq_embedding_failed",
-  "group_not_found",
 ] as const;
 
 export type DraftErrorCode = (typeof DRAFT_ERROR_CODES)[number];
@@ -406,10 +405,15 @@ function isDraft(value: unknown): value is UnansweredDraft {
     typeof value.question === "string" &&
     "answer" in value &&
     typeof value.answer === "string" &&
+    "language" in value &&
+    typeof value.language === "string" &&
     "version" in value &&
     typeof value.version === "number" &&
+    "generating" in value &&
+    typeof value.generating === "boolean" &&
     "examples" in value &&
-    Array.isArray(value.examples)
+    Array.isArray(value.examples) &&
+    value.examples.every((example) => typeof example === "string")
   );
 }
 

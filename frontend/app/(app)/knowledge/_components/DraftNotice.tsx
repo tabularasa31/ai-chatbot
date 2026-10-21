@@ -61,6 +61,12 @@ export function DraftNotice({
       return <InlineNotice tone="danger">Couldn&apos;t rewrite the answer. Try again.</InlineNotice>;
     case "save_failed":
       return <InlineNotice tone="danger">Couldn&apos;t save the draft. Try again.</InlineNotice>;
+    case "group_answered":
+      return (
+        <InlineNotice tone="warning">
+          This question was already answered. Close this panel and refresh the list.
+        </InlineNotice>
+      );
     case "conflict":
       return (
         <InlineNotice

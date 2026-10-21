@@ -24,20 +24,25 @@ export type DraftNotice =
   | { kind: "refine_rejected" }
   | { kind: "refine_failed" }
   | { kind: "save_failed" }
-  | { kind: "conflict"; current: UnansweredDraft }
+  | { kind: "group_answered" }
+  | { kind: "conflict"; current: UnansweredDraft | null }
   | { kind: "reloaded" };
 
 const isRateLimited = (err: unknown) => err instanceof ApiError && err.status === HTTP_TOO_MANY_REQUESTS;
 
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
-/** Reads the group's draft; generation starts only when there is none and none is running. */
-async function fetchOrStartDraft(groupId: string): Promise<UnansweredDraft> {
+/** Resolves to the group's draft, or to null when there is none and generation has to be started. */
+async function fetchDraft(groupId: string): Promise<UnansweredDraft | null> {
   try {
     return await api.unanswered.getDraft(groupId);
   } catch (err) {
-    if (draftErrorCode(err) !== "no_draft") throw err;
+    if (draftErrorCode(err) === "no_draft") return null;
+    throw err;
   }
+}
+
+async function generateDraft(groupId: string): Promise<UnansweredDraft> {
   try {
     return await api.unanswered.generateDraft(groupId);
   } catch (err) {
@@ -70,6 +75,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
   const [notice, setNotice] = useState<DraftNotice | null>(null);
   const [keptText, setKeptText] = useState<string | null>(null);
   const [pending, setPending] = useState<"save" | "refine" | null>(null);
+  const keepTextOnReload = useRef(false);
 
   const dirty = question !== (server?.question ?? "") || answer !== (server?.answer ?? "");
 
@@ -87,10 +93,18 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
 
   useEffect(() => {
     let cancelled = false;
+    const reloadedWithKeptText = keepTextOnReload.current;
+    keepTextOnReload.current = false;
     void (async () => {
       let polling = false;
       try {
-        let draft = await fetchOrStartDraft(groupId);
+        let draft = await fetchDraft(groupId);
+        if (!draft) {
+          if (cancelled) return;
+          setPhase({ status: "generating" });
+          polling = true;
+          draft = await generateDraft(groupId);
+        }
         while (draft.generating) {
           if (cancelled) return;
           setExamples(draft.examples);
@@ -100,7 +114,9 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
           if (cancelled) return;
           draft = await api.unanswered.getDraft(groupId);
         }
-        if (!cancelled) applyDraft(draft);
+        if (cancelled) return;
+        applyDraft(draft);
+        if (reloadedWithKeptText) setNotice({ kind: "reloaded" });
       } catch (err) {
         if (cancelled) return;
         const failure: DraftNotice | null =
@@ -120,10 +136,22 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
     setAttempt((count) => count + 1);
   }
 
+  function reloadKeepingText(current: UnansweredDraft | null) {
+    setKeptText(`${question}\n\n${answer}`);
+    if (current) {
+      applyDraft(current);
+      setNotice({ kind: "reloaded" });
+      return;
+    }
+    keepTextOnReload.current = true;
+    retryLoad();
+  }
+
   function failWrite(err: unknown, fallback: DraftNotice) {
-    const current = staleDraft(err);
-    if (draftErrorCode(err) === "stale_version" && current) setNotice({ kind: "conflict", current });
-    else if (draftErrorCode(err) === "draft_generating") retryLoad();
+    const code = draftErrorCode(err);
+    if (code === "stale_version") setNotice({ kind: "conflict", current: staleDraft(err) });
+    else if (code === "draft_generating") reloadKeepingText(null);
+    else if (code === "group_answered") setNotice({ kind: "group_answered" });
     else if (isRateLimited(err)) setNotice({ kind: "rate_limited" });
     else setNotice(fallback);
   }
@@ -176,10 +204,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
   }
 
   function reloadDraft() {
-    if (notice?.kind !== "conflict") return;
-    setKeptText(`${question}\n\n${answer}`);
-    applyDraft(notice.current);
-    setNotice({ kind: "reloaded" });
+    if (notice?.kind === "conflict") reloadKeepingText(notice.current);
   }
 
   return {

@@ -81,11 +81,12 @@ export function AnswerDrawer({
 
   const { phase, notice, pending, dirty, question, answer, instructions } = draft;
   const waiting = phase.status === "loading" || phase.status === "generating";
-  const noDraftYet = !draft.canAskAgent;
+  const hasDraft = draft.canAskAgent;
+  const noDraftYet = !hasDraft;
   const hasContent = question.trim() !== "" && answer.trim() !== "";
 
   useEffect(() => {
-    if (wasWaiting.current && phase.status === "ready") {
+    if (wasWaiting.current && phase.status === "ready" && hasDraft) {
       setAnnouncement(DRAFT_READY_ANNOUNCEMENT);
       const active = document.activeElement;
       if (!active || active === document.body || body.current?.closest("dialog")?.contains(active)) {
@@ -93,7 +94,7 @@ export function AnswerDrawer({
       }
     }
     wasWaiting.current = waiting;
-  }, [phase.status, waiting]);
+  }, [phase.status, waiting, hasDraft]);
 
   function requestClose() {
     if (dirty) setConfirming("discard");
@@ -154,7 +155,7 @@ export function AnswerDrawer({
 
           {phase.status === "generating" && (
             <>
-              <DraftProgress />
+              <DraftProgress questionCount={draft.examples.length} />
               <FieldsSkeleton />
             </>
           )}
@@ -237,7 +238,7 @@ export function AnswerDrawer({
               variant="primary"
               offset="surface"
               className={ARIA_DISABLED_CLASS}
-              disabled={isOwner && (!hasContent || waiting || pending !== null)}
+              disabled={me === undefined || (isOwner && (!hasContent || waiting || pending !== null))}
               aria-disabled={me && !isOwner ? true : undefined}
               aria-describedby={me && !isOwner ? reasonId : undefined}
               onClick={requestPublish}

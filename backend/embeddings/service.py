@@ -28,7 +28,7 @@ from backend.documents.parsers import (
 )
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 from backend.models.base import _utcnow
-from backend.search.retrieval_db import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_kb_script_cache
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ def create_embeddings_for_document(
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     doc.updated_at = _utcnow()
     db.commit()
-    invalidate_tenant_search_caches(doc.tenant_id)
+    invalidate_tenant_kb_script_cache(doc.tenant_id)
 
     if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)

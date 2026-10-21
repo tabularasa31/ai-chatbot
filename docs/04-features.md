@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-04-08 (Gap Analyzer replaced by the Unanswered queue)  
+**Last updated:** 2026-10-21 (Gap Analyzer replaced by the Unanswered queue)  
 **Status:** Production (getchat9.live)
 
 ---

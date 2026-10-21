@@ -47,16 +47,6 @@ def invalidate_tenant_kb_script_cache(tenant_id: uuid.UUID) -> None:
     _TENANT_KB_SCRIPTS_CACHE.pop(key, None)
 
 
-def invalidate_tenant_search_caches(tenant_id: uuid.UUID) -> None:
-    """Drop every tenant-scoped search cache (KB script detection).
-
-    Call this after any KB change (upload, delete, reindex, crawl) so BM25
-    scoring and cross-lingual rewrite detection reflect the new corpus
-    immediately instead of waiting out their TTLs.
-    """
-    invalidate_tenant_kb_script_cache(tenant_id)
-
-
 async def _async_pgvector_search(
     tenant_id: uuid.UUID,
     query_vector: list[float],

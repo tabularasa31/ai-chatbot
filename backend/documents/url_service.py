@@ -58,7 +58,7 @@ from backend.models import (
 )
 from backend.models.base import utcnow_naive as _utcnow
 from backend.observability.metrics import emit_tenant_event
-from backend.search.retrieval_db import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_kb_script_cache
 
 logger = logging.getLogger(__name__)
 
@@ -663,7 +663,7 @@ def delete_url_source(source_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -
     source = get_url_source(source_id, tenant_id, db)
     db.delete(source)
     db.commit()
-    invalidate_tenant_search_caches(tenant_id)
+    invalidate_tenant_kb_script_cache(tenant_id)
 
 
 def delete_source_document(
@@ -688,7 +688,7 @@ def delete_source_document(
     db.flush()
     _recalculate_source_counts(source, db)
     db.commit()
-    invalidate_tenant_search_caches(tenant_id)
+    invalidate_tenant_kb_script_cache(tenant_id)
 
 
 def trigger_refresh(
@@ -995,7 +995,7 @@ def _finalize_crawl(
     run.failed_urls = result.failures
     run.duration_seconds = max(0, int(time.monotonic() - started))
     db.commit()
-    invalidate_tenant_search_caches(source.tenant_id)
+    invalidate_tenant_kb_script_cache(source.tenant_id)
 
 
 def _summarize_crawl_failure(failures: list[dict[str, str]]) -> str:

@@ -293,7 +293,7 @@ class RagHandler(PipelineHandler):
       * building the policy ``TurnContext``, calling ``decide()``, and
         promoting the decision to escalation if needed
       * persisting the turn (user + assistant messages), emitting analytics
-        events, ingesting gap signals
+        events
     """
 
     def can_handle(self, ctx: HandlerContext) -> bool:

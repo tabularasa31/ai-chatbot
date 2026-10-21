@@ -352,7 +352,7 @@ def delete_tenant(
     # /auth/register refuses the address too. Nobody could free it but us.
     #
     # No attribution stamping, unlike ``remove_member``: everything a label
-    # would preserve — messages, operator stretches, gap dismissals, API keys —
+    # would preserve — messages, operator stretches, API keys —
     # is scoped to this tenant and cascades away with it, so there is no
     # surviving history left to sign.
     members = db.query(User).filter(User.tenant_id == tenant_id).all()

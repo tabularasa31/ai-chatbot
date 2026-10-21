@@ -59,7 +59,7 @@ flowchart LR
 
 **Stack:** Python 3.11, FastAPI, PostgreSQL + pgvector, Redis + ARQ, Next.js 14, Preact + Vite, OpenAI, Brevo, Langfuse, Sentry, PostHog. Hosted on Railway (API, worker, database) and Vercel (dashboard, widget).
 
-A chat turn goes through a fixed pipeline: injection guard → relevance guard → retrieval → generation → post-generation checks, streamed to the widget over SSE. Anything that should survive a deploy or be retried — crawls, embeddings, Gap Analyzer runs, e-mail — runs on the worker.
+A chat turn goes through a fixed pipeline: injection guard → relevance guard → retrieval → generation → post-generation checks, streamed to the widget over SSE. Anything that should survive a deploy or be retried — crawls, embeddings, e-mail — runs on the worker.
 
 ---
 

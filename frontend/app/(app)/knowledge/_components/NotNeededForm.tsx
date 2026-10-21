@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { UnansweredDismissReason } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, type RadioOption } from "@/components/ui/choice";
@@ -37,16 +37,22 @@ export function NotNeededForm({
     form.current?.querySelector("input")?.focus();
   }, []);
 
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") onCancel();
-  }
+  useEffect(() => {
+    const element = form.current;
+    if (!element) return;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel();
+    };
+    element.addEventListener("keydown", cancelOnEscape);
+    return () => element.removeEventListener("keydown", cancelOnEscape);
+  }, [onCancel]);
 
   function submit() {
     if (reason !== "") onSubmit(reason);
   }
 
   return (
-    <div ref={form} onKeyDown={onKeyDown} className="max-w-sm space-y-3 pt-3">
+    <div ref={form} className="max-w-sm space-y-3 pt-3">
       <RadioGroup label="Reason" name={name} options={REASON_OPTIONS} value={reason} onChange={setReason} />
       <div className="flex gap-3">
         <Button variant="secondary" disabled={busy} onClick={onCancel}>

@@ -179,7 +179,6 @@ def list_knowledge_faq(
                 source=item.source,
                 approved=bool(item.approved),
                 created_at=item.created_at,
-                gap_source_id=item.gap_source_id,
             )
             for item in items
         ],
@@ -327,7 +326,6 @@ def update_faq(
         source=faq.source,
         approved=bool(faq.approved),
         created_at=faq.created_at,
-        gap_source_id=faq.gap_source_id,
     )
 
 

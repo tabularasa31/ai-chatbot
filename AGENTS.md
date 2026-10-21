@@ -357,8 +357,7 @@ How the second contour works:
   login — otherwise their global reads/writes would be silently scoped to the admin's
   own tenant. `require_admin_user` keeps the context: use it for admin endpoints that
   operate within the admin's own tenant.
-- Tables without a `tenant_id` column (`messages`, `embeddings`, `url_source_runs`,
-  `gap_question_message_links`) are scoped via a parent-FK `EXISTS` policy.
+- Tables without a `tenant_id` column (`messages`, `embeddings`, `url_source_runs`) are scoped via a parent-FK `EXISTS` policy.
 - **Enforcement requires a non-superuser DB role** (superusers bypass RLS). Tables use
   `FORCE ROW LEVEL SECURITY`, so any non-superuser connection — including the table
   owner — is enforced. While `DATABASE_URL` connects as a superuser, RLS is inert but

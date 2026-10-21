@@ -28,20 +28,6 @@ from backend.models.enums import (
     UnansweredGroupStatus,
     UnansweredReason,
 )
-from backend.models.gap import (
-    GapAnalyzerJob,
-    GapCluster,
-    GapClusterStatus,
-    GapDismissal,
-    GapDismissReason,
-    GapDocTopic,
-    GapDocTopicStatus,
-    GapJobKind,
-    GapJobStatus,
-    GapQuestion,
-    GapQuestionMessageLink,
-    GapSource,
-)
 from backend.models.guard import GuardEvent
 from backend.models.jobs import BackgroundJob, BackgroundJobStatus
 from backend.models.knowledge import Document, Embedding, QuickAnswer, UrlSource, UrlSourceRun
@@ -68,18 +54,6 @@ __all__ = [
     "EscalationStatus",
     "EscalationTicket",
     "EscalationTrigger",
-    "GapAnalyzerJob",
-    "GapCluster",
-    "GapClusterStatus",
-    "GapDismissReason",
-    "GapDismissal",
-    "GapDocTopic",
-    "GapDocTopicStatus",
-    "GapJobKind",
-    "GapJobStatus",
-    "GapQuestion",
-    "GapQuestionMessageLink",
-    "GapSource",
     "GuardEvent",
     "InboundEmailReceipt",
     "Message",

@@ -27,7 +27,6 @@ from sqlalchemy.orm import Session
 from backend.auth.service import create_token_for_user
 from backend.models import (
     Chat,
-    GapDismissal,
     Message,
     MessageRole,
     OperatorSession,
@@ -557,14 +556,7 @@ def test_removing_a_member_cleans_up_after_them(
         content="Refunds take 14 days.",
         operator_user_id=member_id,
     )
-    dismissal = GapDismissal(
-        tenant_id=ws.tenant_id,
-        source="mode_a",
-        gap_id=uuid.uuid4(),
-        reason="not_relevant",
-        dismissed_by=member_id,
-    )
-    db_session.add_all([reply, dismissal])
+    db_session.add(reply)
     db_session.commit()
     stretch = (
         db_session.query(OperatorSession).filter(OperatorSession.chat_id == held.id).one()
@@ -593,10 +585,6 @@ def test_removing_a_member_cleans_up_after_them(
     assert reply.operator_user_id is None
     assert reply.operator_label == "ops@acme.example.com"
     assert reply.content == "Refunds take 14 days."
-
-    dismissal = db_session.query(GapDismissal).filter(GapDismissal.id == dismissal.id).one()
-    assert dismissal.dismissed_by is None
-    assert dismissal.dismissed_by_label == "ops@acme.example.com"
 
 
 def test_a_reinvited_address_gets_a_new_account_and_old_history_keeps_the_label(

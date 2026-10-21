@@ -5,6 +5,8 @@ import {
   DRAFT_ANSWER_MAX_LENGTH,
   DRAFT_INSTRUCTIONS_MAX_LENGTH,
   DRAFT_QUESTION_MAX_LENGTH,
+  draftErrorCode,
+  type DraftErrorCode,
   type UnansweredGroup,
 } from "@/lib/api";
 import { useClientMe } from "@/hooks/useApi";
@@ -16,13 +18,21 @@ import { Input, Textarea } from "@/components/ui/field";
 import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
-import { QuestionList } from "../../gap-analyzer/_components/QuestionList";
+import { QuestionList } from "./QuestionList";
 import { DraftNotice } from "./DraftNotice";
 import { DraftProgress } from "./DraftProgress";
 import { useAnswerDraft } from "./useAnswerDraft";
 
 const ANSWER_ROWS = 12;
 const DRAFT_READY_ANNOUNCEMENT = "Draft ready. Review the question and answer.";
+
+const PUBLISH_FAILED = "Couldn't publish the answer. Try again.";
+
+const PUBLISH_FAILURES: Partial<Record<DraftErrorCode, string>> = {
+  draft_rejected: "This text looks like an instruction to the bot. Edit it before publishing.",
+  group_answered: "This question was already answered. Close this panel and refresh the list.",
+  faq_embedding_failed: "Couldn't publish the answer, and nothing was published. Try again.",
+};
 
 const ARIA_DISABLED_CLASS =
   "aria-disabled:cursor-not-allowed aria-disabled:bg-surface-alt aria-disabled:text-fg-faint aria-disabled:hover:bg-surface-alt";
@@ -63,6 +73,7 @@ export function AnswerDrawer({
   const [flashMessage, flash] = useFlash();
   const [confirming, setConfirming] = useState<"publish" | "discard" | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const [publishFailure, setPublishFailure] = useState(PUBLISH_FAILED);
   const questionInput = useRef<HTMLInputElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const wasWaiting = useRef(true);
@@ -98,8 +109,14 @@ export function AnswerDrawer({
   }
 
   async function publish() {
-    const result = await draft.publish();
-    if (result) onPublished(result.group);
+    try {
+      const result = await draft.publish();
+      if (result) onPublished(result.group);
+    } catch (err) {
+      const code = draftErrorCode(err);
+      setPublishFailure((code && PUBLISH_FAILURES[code]) || PUBLISH_FAILED);
+      throw err;
+    }
   }
 
   return (
@@ -113,7 +130,7 @@ export function AnswerDrawer({
         <div ref={body} className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6">
           <section className="space-y-2">
             <h3 className="text-body font-semibold text-fg">Visitor questions</h3>
-            <QuestionList questions={[group.question]} />
+            <QuestionList questions={draft.examples.length > 0 ? draft.examples : [group.question]} />
             <p className="text-caption tabular-nums text-fg-muted">
               {conversationsLabel(group.conversations_30d)} in the last 30 days
             </p>
@@ -237,7 +254,7 @@ export function AnswerDrawer({
           body="The bot starts answering this question right away."
           confirmLabel="Publish to bot"
           tone="primary"
-          failureMessage="Couldn't publish the answer. Try again."
+          failureMessage={publishFailure}
           onConfirm={publish}
           onClose={() => setConfirming(null)}
         />

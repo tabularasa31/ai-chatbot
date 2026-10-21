@@ -1,5 +1,5 @@
 import type { GapItem } from "@/lib/api";
-import { QuestionList } from "../../../_components/QuestionList";
+import { QuestionList } from "../../../../knowledge/_components/QuestionList";
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 

@@ -9,7 +9,7 @@ import {
   type UnansweredPublishResult,
 } from "@/lib/api";
 
-const POLL_INTERVAL_MS = 7000;
+const POLL_INTERVAL_MS = 3000;
 
 export type DraftPhase =
   | { status: "loading" }
@@ -27,30 +27,22 @@ export type DraftNotice =
   | { kind: "conflict"; current: UnansweredDraft }
   | { kind: "reloaded" };
 
-type Settled = { kind: "draft"; draft: UnansweredDraft } | { kind: "pending" };
-
-const PENDING: Settled = { kind: "pending" };
-
 const isRateLimited = (err: unknown) => err instanceof ApiError && err.status === HTTP_TOO_MANY_REQUESTS;
 
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
-/**
- * The draft endpoint answers 404 both for "never drafted" and for "first draft still being written",
- * so a 404 is followed by a generate call; the server answers 409 while a generation is running.
- */
-async function settle(groupId: string, polling: boolean): Promise<Settled> {
+/** Reads the group's draft; generation starts only when there is none and none is running. */
+async function fetchOrStartDraft(groupId: string): Promise<UnansweredDraft> {
   try {
-    const draft = await api.unanswered.getDraft(groupId);
-    return draft.generating ? PENDING : { kind: "draft", draft };
+    return await api.unanswered.getDraft(groupId);
   } catch (err) {
     if (draftErrorCode(err) !== "no_draft") throw err;
   }
   try {
-    return { kind: "draft", draft: await api.unanswered.generateDraft(groupId) };
+    return await api.unanswered.generateDraft(groupId);
   } catch (err) {
-    if (draftErrorCode(err) === "draft_generating" || (polling && isRateLimited(err))) return PENDING;
-    throw err;
+    if (draftErrorCode(err) !== "draft_generating") throw err;
+    return api.unanswered.getDraft(groupId);
   }
 }
 
@@ -71,6 +63,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
   const [phase, setPhase] = useState<DraftPhase>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [server, setServer] = useState<UnansweredDraft | null>(null);
+  const [examples, setExamples] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -85,6 +78,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
 
   const applyDraft = useCallback((draft: UnansweredDraft) => {
     setServer(draft);
+    setExamples(draft.examples);
     setQuestion(draft.question);
     setAnswer(draft.answer);
     setPhase({ status: "ready" });
@@ -95,24 +89,24 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
     let cancelled = false;
     void (async () => {
       let polling = false;
-      while (!cancelled) {
-        try {
-          const settled = await settle(groupId, polling);
+      try {
+        let draft = await fetchOrStartDraft(groupId);
+        while (draft.generating) {
           if (cancelled) return;
-          if (settled.kind === "draft") {
-            applyDraft(settled.draft);
-            return;
-          }
+          setExamples(draft.examples);
           setPhase({ status: "generating" });
           polling = true;
           await wait(POLL_INTERVAL_MS);
-        } catch (err) {
           if (cancelled) return;
-          const failure = loadFailureNotice(err);
-          setNotice(failure);
-          setPhase({ status: failure ? "ready" : "loadError" });
-          return;
+          draft = await api.unanswered.getDraft(groupId);
         }
+        if (!cancelled) applyDraft(draft);
+      } catch (err) {
+        if (cancelled) return;
+        const failure: DraftNotice | null =
+          polling && draftErrorCode(err) === "no_draft" ? { kind: "generation_failed" } : loadFailureNotice(err);
+        setNotice(failure);
+        setPhase({ status: failure ? "ready" : "loadError" });
       }
     })();
     return () => {
@@ -192,6 +186,7 @@ export function useAnswerDraft(groupId: string, onStored: () => void) {
     phase,
     notice,
     keptText,
+    examples,
     pending,
     dirty,
     question,

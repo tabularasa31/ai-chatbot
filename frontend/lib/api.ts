@@ -340,7 +340,7 @@ export type UnansweredGroup = {
   question: string;
   question_message_id: string;
   chat_id: string;
-  session_id: string | null;
+  session_id: string;
   conversations_30d: number;
   last_asked_at: string;
   reasons: UnansweredReason[];
@@ -366,6 +366,7 @@ export type UnansweredDraft = {
   language: string;
   version: number;
   generating: boolean;
+  examples: string[];
 };
 
 export type UnansweredPublishResult = { group: UnansweredGroup; faq_id: string };
@@ -406,7 +407,9 @@ function isDraft(value: unknown): value is UnansweredDraft {
     "answer" in value &&
     typeof value.answer === "string" &&
     "version" in value &&
-    typeof value.version === "number"
+    typeof value.version === "number" &&
+    "examples" in value &&
+    Array.isArray(value.examples)
   );
 }
 

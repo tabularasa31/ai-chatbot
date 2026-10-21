@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { GapItem } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { Button, buttonClasses } from "@/components/ui/button";
-import { QuestionList } from "./QuestionList";
+import { QuestionList } from "../../knowledge/_components/QuestionList";
 import { coverageText, isInDraftFlow, lifecycleWord } from "./shared";
 
 export type RowAction = "generate" | "preview" | "reactivate" | "dismiss";

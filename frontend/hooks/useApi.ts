@@ -8,11 +8,14 @@ import type {
   DisclosureConfigResponse,
   TenantMemberList,
   InboxSummary,
+  UnansweredBadge,
   Thread,
   AnalyticsPeriod,
   AnalyticsSummaryResponse,
   AuthUser,
 } from "@/lib/api";
+
+export const UNANSWERED_BADGE_KEY = "unanswered/badge";
 
 export function useClientMe() {
   return useSWR<TenantMeResponse>("client/me", () => api.clients.getMe());
@@ -72,6 +75,10 @@ export function useInboxSummary(refreshInterval = 0) {
   return useSWR<InboxSummary>("operator/inbox/summary", () => api.operator.summary(), {
     refreshInterval,
   });
+}
+
+export function useUnansweredBadge() {
+  return useSWR<UnansweredBadge>(UNANSWERED_BADGE_KEY, () => api.unanswered.badge());
 }
 
 export function useAnalyticsSummary(period: AnalyticsPeriod) {

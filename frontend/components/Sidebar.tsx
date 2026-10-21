@@ -14,12 +14,12 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useClientMe, useInboxSummary } from "@/hooks/useApi";
+import { useClientMe, useInboxSummary, useUnansweredBadge } from "@/hooks/useApi";
 import { FOCUS_RING } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/count-badge";
 import { cn } from "@/components/ui/utils";
 
-type BadgeKey = "inbox" | "gaps";
+type BadgeKey = "inbox" | "gaps" | "unanswered";
 
 type NavItem = {
   href: string;
@@ -33,16 +33,20 @@ type NavItem = {
 
 const INBOX_BADGE_POLL_MS = 30_000;
 
-const BADGES: Record<BadgeKey, { tone: "brand" | "quiet"; meaning: string }> = {
-  inbox: { tone: "brand", meaning: "need attention" },
-  gaps: { tone: "quiet", meaning: "new" },
+const BADGES: Record<BadgeKey, { tone: "brand" | "quiet"; meaning: (count: number) => string }> = {
+  inbox: { tone: "brand", meaning: () => "need attention" },
+  gaps: { tone: "quiet", meaning: () => "new" },
+  unanswered: {
+    tone: "quiet",
+    meaning: (count) => (count === 1 ? "new unanswered question" : "new unanswered questions"),
+  },
 };
 
 const NAV_GROUPS: NavItem[][] = [
   [
     { href: "/inbox", activeOn: ["/inbox"], label: "Inbox", Icon: Inbox, badge: "inbox" },
     { href: "/gap-analyzer", activeOn: ["/gap-analyzer"], label: "Doc gaps", Icon: FileSearch, badge: "gaps" },
-    { href: "/knowledge", activeOn: ["/knowledge"], label: "Knowledge", Icon: BookOpen },
+    { href: "/knowledge", activeOn: ["/knowledge"], label: "Knowledge", Icon: BookOpen, badge: "unanswered" },
     { href: "/analytics", activeOn: ["/analytics"], label: "Analytics", Icon: ChartColumn },
   ],
   [
@@ -79,7 +83,7 @@ function NavLink({
     >
       <Icon size={16} aria-hidden="true" className="shrink-0" />
       <span className="min-w-0 flex-1 truncate">{item.label}</span>
-      {badge && <CountBadge count={count} {...BADGES[badge]} />}
+      {badge && <CountBadge count={count} tone={BADGES[badge].tone} meaning={BADGES[badge].meaning(count)} />}
     </Link>
   );
 }
@@ -96,9 +100,11 @@ export function Sidebar() {
   const isOwner = client?.role === "owner" || client === undefined;
 
   const { data: inboxSummary } = useInboxSummary(INBOX_BADGE_POLL_MS);
+  const { data: unansweredBadge } = useUnansweredBadge();
   const counts: Record<BadgeKey, number> = {
     inbox: inboxSummary?.attention_count ?? 0,
     gaps: gapCount,
+    unanswered: unansweredBadge?.new_count ?? 0,
   };
 
   useEffect(() => {

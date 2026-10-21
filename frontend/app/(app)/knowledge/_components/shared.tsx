@@ -17,12 +17,13 @@ const NAME_BUTTON_BASE_CLASS =
 export const NAME_BUTTON_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-canvas`;
 export const NAME_BUTTON_ON_BAND_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-surface-alt`;
 
-export type KnowledgeTab = "documents" | "profile" | "faq";
+export type KnowledgeTab = "documents" | "profile" | "faq" | "unanswered";
 
 export const KNOWLEDGE_TABS: readonly SectionTab<KnowledgeTab>[] = [
   { id: "documents", label: "Documents" },
   { id: "profile", label: "Profile" },
   { id: "faq", label: "FAQ" },
+  { id: "unanswered", label: "Unanswered" },
 ];
 
 export const SCHEDULE_OPTIONS = [

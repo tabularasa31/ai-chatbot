@@ -330,6 +330,35 @@ export type KnowledgeFaqListResponse = {
   pending_count: number;
 };
 
+export type UnansweredStatus = "open" | "answered" | "dismissed";
+export type UnansweredDismissReason = "not_our_product" | "should_not_answer" | "other";
+export type UnansweredReason = "unanswered" | "llm_self_offer" | "low_similarity" | "no_documents";
+
+export type UnansweredGroup = {
+  id: string;
+  status: UnansweredStatus;
+  question: string;
+  question_message_id: string;
+  chat_id: string;
+  conversations_30d: number;
+  last_asked_at: string;
+  reasons: UnansweredReason[];
+  reopened_after_answer: boolean;
+  faq_id: string | null;
+  has_draft: boolean;
+  generating: boolean;
+  dismiss_reason: UnansweredDismissReason | null;
+};
+
+export type UnansweredList = {
+  items: UnansweredGroup[];
+  next_offset: number | null;
+  tenant_conversations_30d: number;
+  tenant_has_conversations: boolean;
+};
+
+export type UnansweredBadge = { new_count: number };
+
 export type GapSource = "mode_a" | "mode_b";
 export type GapItemStatus =
   | "active"
@@ -837,6 +866,26 @@ export const api = {
       payload: { question: string; answer: string }
     ): Promise<KnowledgeFaqItem> {
       return sendJson(`${BASE_URL}/api/v1/knowledge/faq/${id}`, "PUT", payload, "Failed to update FAQ");
+    },
+  },
+  unanswered: {
+    list(status: UnansweredStatus, offset = 0): Promise<UnansweredList> {
+      const params = new URLSearchParams({ status, offset: String(offset) });
+      return getJson(`${BASE_URL}/api/v1/knowledge/unanswered?${params}`, "Failed to load unanswered questions");
+    },
+    badge(): Promise<UnansweredBadge> {
+      return getJson(`${BASE_URL}/api/v1/knowledge/unanswered/badge`, "Failed to load the unanswered badge");
+    },
+    markSeen(): Promise<void> {
+      return requestVoid(`${BASE_URL}/api/v1/knowledge/unanswered/seen`, "Failed to mark unanswered questions as seen", {
+        method: "POST",
+      });
+    },
+    dismiss(id: string, reason: UnansweredDismissReason): Promise<UnansweredGroup> {
+      return sendJson(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/dismiss`, "POST", { reason }, "Failed to dismiss the question");
+    },
+    restore(id: string): Promise<UnansweredGroup> {
+      return request(`${BASE_URL}/api/v1/knowledge/unanswered/${id}/restore`, "Failed to restore the question", { method: "POST" });
     },
   },
   embeddings: {

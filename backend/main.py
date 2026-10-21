@@ -31,8 +31,6 @@ from backend.core.redis import is_enabled as redis_is_enabled
 from backend.documents.routes import documents_router
 from backend.email.routes import email_router
 from backend.embeddings.routes import embeddings_router
-from backend.gap_analyzer.jobs import request_graceful_shutdown as gap_graceful_shutdown
-from backend.gap_analyzer.routes import gap_analyzer_router
 from backend.jobs.chat_session_sweeper import (
     shutdown_chat_session_sweeper_thread,
     start_chat_session_sweeper_thread,
@@ -93,7 +91,6 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        gap_graceful_shutdown()
         shutdown_kb_snapshot_thread()
         shutdown_chat_session_sweeper_thread()
         shutdown_guard_events_purge_thread()
@@ -203,7 +200,6 @@ app.include_router(tenants_router, prefix="/tenants")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings", include_in_schema=False)
 app.include_router(email_router)
-app.include_router(gap_analyzer_router, prefix="/gap-analyzer")
 app.include_router(knowledge_router)
 app.include_router(unanswered_router)
 app.include_router(operator_router)

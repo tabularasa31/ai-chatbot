@@ -100,7 +100,6 @@ from backend.core.security import hash_password
 from backend.email.service import send_email
 from backend.models import (
     Chat,
-    GapDismissal,
     Message,
     OperatorSession,
     OperatorSessionEndReason,
@@ -330,9 +329,6 @@ def _stamp_attribution(member: User, db: Session) -> None:
     db.query(OperatorSession).filter(
         OperatorSession.operator_user_id == member.id
     ).update({OperatorSession.operator_label: label}, synchronize_session=False)
-    db.query(GapDismissal).filter(GapDismissal.dismissed_by == member.id).update(
-        {GapDismissal.dismissed_by_label: label}, synchronize_session=False
-    )
 
 
 def release_chats_held_by(member: User, db: Session) -> list[object]:

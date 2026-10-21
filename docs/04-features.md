@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-04-08 (Gap Analyzer hardening + knowledge topics terminology)  
+**Last updated:** 2026-10-21 (Gap Analyzer replaced by the Unanswered queue)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -56,8 +56,8 @@ follow from it:
 | Inbox: read, reply, close | yes | yes |
 | Logs and transcripts | yes | yes |
 | Knowledge base | read + edit | read only |
-| Gap Analyzer: view, prepare a draft | yes | yes |
-| Publishing an FAQ | yes | no |
+| Unanswered queue: view, prepare a draft | yes | yes |
+| Publishing an unanswered draft as an FAQ | yes | no |
 | Support contacts (the ones the bot hands to visitors) | read + edit | read only |
 | Settings, privacy config, member management, tenant deletion | yes | no |
 
@@ -77,7 +77,7 @@ Five owner-only routes manage the team: `POST /tenants/members/invite`, `GET /te
 
 **Removal deletes the account.** Membership and account have the same lifetime — there is no verified user without a workspace — which is what keeps the invite path honest: every invitee is a new account setting a first password from the link, so nobody joins a workspace without an act of their own. Being invited again later means a new account with a new id, and a live JWT stops working the moment the row is gone (`get_current_user` answers 401).
 
-Deleting would erase attribution, because the FKs into `users` are `ON DELETE SET NULL` — every operator message and every `operator_sessions` row would lose its author silently. So the account goes and the signature stays: `messages.operator_label`, `operator_sessions.operator_label` and `gap_dismissals.dismissed_by_label` are written with the departing member's e-mail in the same transaction as the delete. They are NULL while the account exists — read the author through the FK, fall back to the label once it is gone. `chats.assigned_operator_id` is live state rather than history and is not stamped; `pii_events.actor_user_id` is never written by anything, so it has nothing to preserve.
+Deleting would erase attribution, because the FKs into `users` are `ON DELETE SET NULL` — every operator message and every `operator_sessions` row would lose its author silently. So the account goes and the signature stays: `messages.operator_label` and `operator_sessions.operator_label` are written with the departing member's e-mail in the same transaction as the delete. They are NULL while the account exists — read the author through the FK, fall back to the label once it is gone. `chats.assigned_operator_id` is live state rather than history and is not stamped; `pii_events.actor_user_id` is never written by anything, so it has nothing to preserve.
 
 **An unaccepted invitation expires and the row goes with it.** An invite creates a real (unverified, unusable) `users` row, so an expired token alone would leave the address occupied forever: the invited person cannot register on their own, and only the inviting owner could free it. `backend/jobs/expired_invitations_purge.py` deletes member rows that are unverified with an expired invite token, hourly. It can never strand a workspace, and now by construction rather than by a filter: every invitee is an operator, so the set it sweeps contains no owners at all. It also has no seat to release — a pending invitee holds none.
 
@@ -290,7 +290,7 @@ Contract notes:
 - Deleting a single URL-derived page adds its `source_url` to a persistent manual exclusion list for that source, so the crawler does not recreate it on later refreshes.
 - `recent_runs[].failed_urls` uses a fixed object shape: `{ "url": string, "reason": string }`.
 - Mutating URL source actions (`create`, `edit`, `refresh`, `delete`, `delete page`) require a verified user.
-- Read-side dashboard routes for documents, knowledge, embeddings, search, chat logs/history, the operator inbox, and gap analyzer now also require a verified user, keeping the whole tenant workspace behind the same verification boundary.
+- Read-side dashboard routes for documents, knowledge, embeddings, search, chat logs/history, the operator inbox, and the unanswered queue now also require a verified user, keeping the whole tenant workspace behind the same verification boundary.
 
 ---
 
@@ -378,57 +378,17 @@ structured `message_type` discriminator and no quick-reply payload in v1.
 
 ---
 
-## 5. Gap Analyzer
+## 5. Unanswered queue
 
-Gap Analyzer is the dashboard feature that turns both documentation coverage gaps and real user-question pain into a reviewable backlog for the tenant.
+The Knowledge "Unanswered" tab (`backend/unanswered/`) is the tenant's backlog of questions the bot could not answer.
 
-It has two coordinated pipelines:
+- Signal: a chat turn is captured when the reply counted as unanswered, or when it offered a handoff because the bot could not answer. Explicit requests for a human and complaints are not captured.
+- Grouping: captured questions are clustered by embedding cosine similarity (`GROUPING_SIMILARITY`, 0.85) using the vector the pipeline already computed; each group lists its questions and affected conversations.
+- Statuses: `open`, `answered` (set when a published FAQ closes the group), `dismissed` (with a reason, restorable).
+- Drafts: any member can generate, edit and refine an LLM draft answer for a group (versioned, so stale saves return 409).
+- Publish: publishing the draft creates a tenant FAQ entry and is owner-only.
+- API: `/api/v1/knowledge/unanswered` (list, badge, seen, dismiss, restore, draft, publish).
 
-- `Mode A` analyzes the indexed documentation corpus itself to suggest topics that appear missing or under-covered in docs
-- `Mode B` clusters real user questions that produced low confidence, fallback, rejection, or escalation signals
-
-### Mode A — docs-side gap discovery
-
-Mode A runs only when the retrieval corpus materially changes. It uses deterministic corpus sampling plus an extraction hash so repeated runs can skip both the LLM call and DB churn when the sampled corpus has not changed.
-
-Important constraints:
-
-- candidates are cross-validated with Gap Analyzer's own coverage score before they are persisted
-- dismissals survive re-indexing through a separate dismissal store
-- Swagger / OpenAPI sources are intentionally excluded from Mode A and are reserved for a future dedicated analyzer
-
-### Mode B — user-question clustering
-
-Mode B ingests signals from the chat pipeline after the final turn outcome is known. Signals are stored with explicit message correlation to the user and assistant turns that produced them.
-
-Current behavior:
-
-- new unclustered questions are matched into an existing cluster or create a new one
-- cluster coverage is re-evaluated against the current corpus through Gap Analyzer's own narrow retrieval seam:
-  - semantic vector top-k over the tenant corpus
-  - bounded BM25 lexical confirmation over the same tenant corpus
-- linked `Mode A` and `Mode B` items dedupe on the active list, with `Mode B` as the primary visible card
-- a periodic full reclustering pass now rebuilds recent active/closed cluster history to reduce duplicate or drifted clusters over time
-- chat-signal follow-up work and manual recalculation are persisted as durable Gap Analyzer jobs with retryable orchestration state
-
-### Dashboard and API surface
-
-The app includes a dedicated `/gap-analyzer` dashboard page for verified users. It exposes:
-
-- summary stats and sidebar badge
-- a lightweight `GET /gap-analyzer/summary` badge contract for navigation reads
-- separate Mode A and Mode B sections
-- active vs archive views
-- linked Mode B cards that can show the related docs-gap context inline
-- dismiss / reactivate actions
-- draft generation for follow-up documentation work
-- orchestration-style recalculation requests via `POST /gap-analyzer/recalculate`
-
-Archive semantics are intentionally source-specific:
-
-- archived Mode A means dismissed Mode A topics
-- archived Mode B means closed, dismissed, or older inactive Mode B clusters
-- an archived linked Mode B item does not hide an active Mode A item; suppression only happens when the linked Mode B item is active
 
 Clarification is intentionally narrow. The bot does not ask follow-up questions by default; it does so only when the current request is not sufficiently answerable under the existing pipeline signals and one of these deterministic trigger families is matched:
 
@@ -1196,7 +1156,7 @@ ESCALATION_ALERT_THRESHOLD=15
 ESCALATION_ALERT_WINDOW_SECONDS=3600
 ```
 
-**Baseline:** With a healthy bot covering its knowledge base well, expect ≤ 5% escalation rate (≤ 5 per 100 turns). Rates consistently above 10% indicate a knowledge-base gap or a guard miscalibration and warrant investigation via the Gap Analyzer.
+**Baseline:** With a healthy bot covering its knowledge base well, expect ≤ 5% escalation rate (≤ 5 per 100 turns). Rates consistently above 10% indicate a knowledge-base gap or a guard miscalibration and warrant investigation via the Unanswered queue.
 
 ---
 

@@ -170,7 +170,7 @@
 │  - users, tenants (with encrypted openai_api_key)        │
 │  - bots, documents, url_sources, embeddings (vectors)    │
 │  - chats, messages, contact_sessions                     │
-│  - escalation_tickets, gap_* (analyzer)                  │
+│  - escalation_tickets                                    │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                OpenAI API (External)                      │

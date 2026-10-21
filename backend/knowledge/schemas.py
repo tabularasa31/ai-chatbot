@@ -34,7 +34,6 @@ class KnowledgeFaqItemResponse(BaseModel):
     source: str | None
     approved: bool
     created_at: datetime
-    gap_source_id: UUID | None = None
 
 
 class KnowledgeFaqListResponse(BaseModel):

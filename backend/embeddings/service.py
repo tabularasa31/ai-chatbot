@@ -26,10 +26,9 @@ from backend.documents.parsers import (
     OPENAPI_RESPONSE_DETAIL_MARKER,
     extract_openapi_chunks_from_rendered_text,
 )
-from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 from backend.models.base import _utcnow
-from backend.search.retrieval_db import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_kb_script_cache
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +167,7 @@ def create_embeddings_for_document(
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     doc.updated_at = _utcnow()
     db.commit()
-    invalidate_tenant_search_caches(doc.tenant_id)
+    invalidate_tenant_kb_script_cache(doc.tenant_id)
 
     if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)
@@ -216,20 +215,9 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
     try:
         create_embeddings_for_document(document_id, db, api_key=api_key)
         doc = db.query(Document).filter(Document.id == document_id).first()
-        tenant_id = doc.tenant_id if doc is not None else None
         if doc:
             doc.status = DocumentStatus.ready
             db.commit()
-        if tenant_id is not None:
-            try:
-                run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id)
-            except Exception:
-                logger.warning(
-                    "Gap Analyzer Mode A trigger failed for document_id=%s tenant_id=%s",
-                    document_id,
-                    tenant_id,
-                    exc_info=True,
-                )
     except Exception:
         logger.exception("Background embedding failed for document %s", document_id)
         doc = db.query(Document).filter(Document.id == document_id).first()

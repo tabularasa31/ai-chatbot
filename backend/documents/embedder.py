@@ -19,7 +19,7 @@ from backend.core.openai_retry import call_openai_with_retry
 from backend.documents.parsers import OpenAPIChunk
 from backend.knowledge.entity_extractor import extract_entities_from_passage
 from backend.models import Document, Embedding
-from backend.search.retrieval_db import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_kb_script_cache
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ def _extract_page(url: str, html: str) -> ExtractedPage | None:
     if not chunks:
         return None
 
-    # section_title is read by gap_analyzer/observability; derive it from heading_path.
+    # section_title is read by observability; derive it from heading_path.
     for chunk in chunks:
         heading_path = chunk.get("heading_path")
         chunk["section_title"] = heading_path.rsplit(" > ", 1)[-1] if heading_path else title
@@ -220,7 +220,7 @@ def after_document_indexed(
     db: Session,
 ) -> None:
     """Invalidate search caches, populate entities, and enqueue knowledge extraction (in that order)."""
-    invalidate_tenant_search_caches(doc.tenant_id)
+    invalidate_tenant_kb_script_cache(doc.tenant_id)
     if embeddings and api_key:
         _populate_entities_for_embeddings(
             embeddings=embeddings,

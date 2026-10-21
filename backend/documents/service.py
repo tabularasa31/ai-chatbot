@@ -27,7 +27,7 @@ from backend.documents.parsers import (
 )
 from backend.models import Document, DocumentStatus, DocumentType
 from backend.observability.metrics import emit_tenant_event
-from backend.search.retrieval_db import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_kb_script_cache
 
 _HEALTH_WARNING_TYPES = frozenset(
     {
@@ -535,4 +535,4 @@ def delete_document(
     doc = get_document(document_id, tenant_id, db)
     db.delete(doc)
     db.commit()
-    invalidate_tenant_search_caches(tenant_id)
+    invalidate_tenant_kb_script_cache(tenant_id)

@@ -45,7 +45,6 @@ from backend.documents.quick_answers import (
 from backend.documents.sitemap import DISCOVERY_ESTIMATE_CAP, MAX_DISCOVERY_DEPTH
 from backend.documents.urls import canonical_url
 from backend.embeddings.service import _build_swagger_chunks
-from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.models import (
     Document,
     DocumentStatus,
@@ -59,7 +58,7 @@ from backend.models import (
 )
 from backend.models.base import utcnow_naive as _utcnow
 from backend.observability.metrics import emit_tenant_event
-from backend.search.retrieval_db import invalidate_tenant_search_caches
+from backend.search.retrieval_db import invalidate_tenant_kb_script_cache
 
 logger = logging.getLogger(__name__)
 
@@ -664,7 +663,7 @@ def delete_url_source(source_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -
     source = get_url_source(source_id, tenant_id, db)
     db.delete(source)
     db.commit()
-    invalidate_tenant_search_caches(tenant_id)
+    invalidate_tenant_kb_script_cache(tenant_id)
 
 
 def delete_source_document(
@@ -689,7 +688,7 @@ def delete_source_document(
     db.flush()
     _recalculate_source_counts(source, db)
     db.commit()
-    invalidate_tenant_search_caches(tenant_id)
+    invalidate_tenant_kb_script_cache(tenant_id)
 
 
 def trigger_refresh(
@@ -996,7 +995,7 @@ def _finalize_crawl(
     run.failed_urls = result.failures
     run.duration_seconds = max(0, int(time.monotonic() - started))
     db.commit()
-    invalidate_tenant_search_caches(source.tenant_id)
+    invalidate_tenant_kb_script_cache(source.tenant_id)
 
 
 def _summarize_crawl_failure(failures: list[dict[str, str]]) -> str:
@@ -1069,16 +1068,6 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
             return
 
         _finalize_crawl(source, run, plan, result, started, db)
-        if source.status == SourceStatus.ready:
-            try:
-                run_mode_a_for_tenant_when_queue_empty_best_effort(source.tenant_id)
-            except Exception:
-                logger.warning(
-                    "Gap Analyzer Mode A trigger failed for source_id=%s tenant_id=%s",
-                    source.id,
-                    source.tenant_id,
-                    exc_info=True,
-                )
     except HTTPException as exc:
         logger.warning("URL crawl rejected for source %s: %s", source_id, exc.detail)
         source = db.query(UrlSource).filter(UrlSource.id == source_id).first()

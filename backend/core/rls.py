@@ -54,11 +54,6 @@ TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "contact_sessions",
     "documents",
     "escalation_tickets",
-    "gap_analyzer_jobs",
-    "gap_clusters",
-    "gap_dismissals",
-    "gap_doc_topics",
-    "gap_questions",
     "guard_events",
     "message_embeddings",
     "operator_sessions",
@@ -80,7 +75,6 @@ NULLABLE_TENANT_TABLES: frozenset[str] = frozenset({"background_jobs"})
 # table -> (fk column on the table, parent table with tenant_id).
 CHILD_SCOPED_TABLES: dict[str, tuple[str, str]] = {
     "embeddings": ("document_id", "documents"),
-    "gap_question_message_links": ("chat_id", "chats"),
     "messages": ("chat_id", "chats"),
     "url_source_runs": ("source_id", "url_sources"),
 }

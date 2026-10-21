@@ -71,7 +71,7 @@ def purge_expired_invitations(
       exactly the set that never accepted. It also guarantees the row has no
       history to preserve: every operator surface is behind
       ``require_verified_user``, so an unverified account cannot have written
-      a message, held a chat or dismissed a gap. Nothing to stamp.
+      a message or held a chat. Nothing to stamp.
     * ``reset_password_expires_at < now`` — the invite's own clock, already on
       the row. A NULL expiry never matches, so a member row in an unexpected
       shape is left alone rather than deleted on a guess.

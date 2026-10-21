@@ -143,7 +143,7 @@ def list_knowledge_faq(
     tenant: Annotated[Tenant, Depends(get_current_tenant)],
     db: Annotated[Session, Depends(get_db)],
     approved: Literal["true", "false", "all"] = Query("all"),
-    source: Literal["docs", "logs", "swagger", "gap_analyzer", "unanswered_queue", "all"] = Query("all"),
+    source: Literal["docs", "logs", "swagger", "unanswered_queue", "all"] = Query("all"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> KnowledgeFaqListResponse:
@@ -179,7 +179,6 @@ def list_knowledge_faq(
                 source=item.source,
                 approved=bool(item.approved),
                 created_at=item.created_at,
-                gap_source_id=item.gap_source_id,
             )
             for item in items
         ],
@@ -327,7 +326,6 @@ def update_faq(
         source=faq.source,
         approved=bool(faq.approved),
         created_at=faq.created_at,
-        gap_source_id=faq.gap_source_id,
     )
 
 

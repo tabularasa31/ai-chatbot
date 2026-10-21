@@ -24,8 +24,8 @@ type ProfileState =
 
 const GLOSSARY_SOURCES: Record<string, string> = {
   docs: "Documents",
-  logs: "Chat history",
   gap_analyzer: "Doc gaps",
+  logs: "Chat history",
 };
 
 function glossarySourceLabel(source?: string | null): string {

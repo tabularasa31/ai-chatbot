@@ -87,9 +87,6 @@ def _stub_common(monkeypatch: pytest.MonkeyPatch) -> None:
             decision_reason="test",
         )),
     )
-    monkeypatch.setattr(
-        "backend.chat.post_turn._start_mode_b_followup", lambda _tenant_id: None
-    )
 
     async def _no_rewrite(*_a, **_kw):
         return None

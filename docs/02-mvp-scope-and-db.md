@@ -19,7 +19,7 @@
 - Chat history logging with sessions; optional `userHints` personalization (untrusted)
 - Feedback system (👍/👎 + optional ideal answer)
 - Manual escalation → tickets dashboard
-- Gap Analyzer (Mode A docs-gap + Mode B user-signal clustering)
+- Unanswered queue (grouped unanswered questions with draft answers)
 - Token usage tracking per tenant
 - Debug mode (show which chunks were used)
 - Admin metrics + PII-event audit log
@@ -80,11 +80,11 @@ tenant_id (FK)  is_active           settings              name
 Separation of concerns:
 
 - **Tenant** → *ownership*. Billing, OpenAI API key.
-- **Workspace** → *context*. Knowledge scope (documents, URL sources, chats, gap analysis). Currently exactly **one** workspace per tenant, created automatically on signup; UI hides the selector.
+- **Workspace** → *context*. Knowledge scope (documents, URL sources, chats). Currently exactly **one** workspace per tenant, created automatically on signup; UI hides the selector.
 - **Bot** → *behavior*. Disclosure / response‑detail config, per‑channel tuning. Currently exactly **one** bot per workspace (schema allows N, UI is single‑bot). Widget resolves by `Bot.public_id` via the `data-bot-id` attribute.
 - **public_id** → *access*. Lives on Bot only. Tenant has no `public_id`.
 
-All content tables (`documents`, `url_sources`, `chats`, `messages` via chat, `quick_answers`, `contact_sessions`, `escalation_tickets`, `gap_*`) scope by **`workspace_id`**, not `tenant_id`.
+All content tables (`documents`, `url_sources`, `chats`, `messages` via chat, `quick_answers`, `contact_sessions`, `escalation_tickets`) scope by **`workspace_id`**, not `tenant_id`.
 
 ### Tables
 
@@ -293,7 +293,7 @@ The schema above is the **target**. As of April 2026 the code still reflects the
 |---|---|---|
 | Workspace entity | dedicated table, FK on every content row | **missing** |
 | Bot → parent | `workspace_id` | `tenant_id` ([backend/models.py:275](backend/models.py:275)) |
-| Content scope (`documents`, `url_sources`, `chats`, `quick_answers`, `contact_sessions`, `escalation_tickets`, `gap_*`) | `workspace_id` | `tenant_id` |
+| Content scope (`documents`, `url_sources`, `chats`, `quick_answers`, `contact_sessions`, `escalation_tickets`) | `workspace_id` | `tenant_id` |
 | Tenant public_id | not present | still exists ([backend/models.py:210](backend/models.py:210)) |
 
 Closing this gap is tracked as a single hard‑cutover migration (no production data to preserve). See `docs/adr/0001-tenant-workspace-bot.md`.

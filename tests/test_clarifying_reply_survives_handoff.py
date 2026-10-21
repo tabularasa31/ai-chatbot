@@ -100,7 +100,6 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         "backend.chat.language.detect_language",
         lambda text: LanguageDetectionResult("en", 0.99, True),
     )
-    monkeypatch.setattr("backend.chat.handlers.rag._try_ingest_gap_signal", lambda **kwargs: None)
 
     events: list[dict] = []
 

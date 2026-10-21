@@ -19,47 +19,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Widget | Standalone Vite + Preact build at `frontend/apps/widget-app`, deployed to `widget.getchat9.live/v1/` on its own Vercel project. Loader at `frontend/apps/widget-loader` (TS → IIFE) is co-deployed at `widget.getchat9.live/widget.js`. The dashboard exposes `/widget/{chat,escalate,history,messages,config}` API proxy routes that the widget-app calls cross-origin via the CORS middleware in `frontend/middleware.ts`. `history` bootstraps a conversation on mount; `messages` is the cursor endpoint (`after_message_id`) the widget polls while a human is answering — resolved by position rather than by timestamp, and shaped so it can become a long-poll or SSE stream later without the client changing. Both report a derived `handoff_state` (`bot` | `waiting` | `live`) that drives the poll cadence: silent under `bot`, ~20 s while a request waits, ~2.5 s while live, nothing in a hidden tab, immediate on focus. |
 | Observability | Langfuse (LLM tracing), PostHog (product analytics), Sentry (errors) — see `backend/observability/` |
 
-Gap Analyzer is implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
-
-- `Mode A` — documentation-side gap discovery from the indexed corpus, with deterministic sampling, hash-based no-op skips, coverage gating, dismissal persistence, and Swagger/OpenAPI sources excluded from this document-analysis path
-- `Mode B` — user-question clustering from low-confidence / fallback / rejected / escalated chat signals, with incremental clustering, periodic full reclustering, inactive archive aging, and Mode A ↔ Mode B linking/dedupe on the read side
-
-Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with claim/retry state. The dashboard/API surface includes `GET /gap-analyzer`, `GET /gap-analyzer/summary`, `POST /gap-analyzer/recalculate`, dismiss/reactivate, and draft-generation endpoints. Linked active Mode B items are the primary surface; archive views stay source-specific.
-
-**Package layout** (`backend/gap_analyzer/`):
-
-| File / dir | Role |
-|---|---|
-| `orchestrator.py` | `GapAnalyzerOrchestrator` — thin shell, delegates to pipelines |
-| `repository.py` | `SqlAlchemyGapAnalyzerRepository` — thin proxy, delegates to `_repo/` |
-| `_repo/` | Persistence subpackage (focused ops modules, see below) |
-| `pipelines/mode_a.py` | Mode A coverage pipeline helpers |
-| `pipelines/mode_b.py` | Mode B clustering state machine |
-| `pipelines/link_sync.py` | Mode A ↔ Mode B vector link sync |
-| `pipelines/drafts.py` | Markdown draft builders |
-| `read_models.py` | Response-shape builders (DB rows → API objects) |
-| `_math.py` | Pure vector/token math (no I/O) |
-| `_classification.py` | Gap classification and status helpers |
-| `routes.py`, `schemas.py`, `enums.py`, `events.py`, `domain.py`, `prompts.py`, `jobs.py` | Standard domain slices |
-
-`_repo/` submodules (all imported only through `repository.py`):
-
-| Submodule | Contents |
-|---|---|
-| `records.py` | Public dataclass records (no internal deps) |
-| `capabilities.py` | Dialect capabilities, enum/value helpers, shared utils |
-| `bm25_cache.py` | Thread-safe BM25 LRU/TTL cache + `_load_or_cache_bm25_corpus` |
-| `job_queue_helpers.py` | Constants and pure helpers for job-queue logic |
-| `job_retry.py` | Retry policy: effective max attempts, delay with jitter |
-| `signals.py` | GapQuestion signal ingestion (Phase 2) |
-| `mode_a.py` | Mode A persistence: corpus chunks, dismissals, replace-topics |
-| `mode_b.py` | Mode B persistence: clusters, question embeddings, per-tenant vector/BM25 retrieval |
-| `job_queue.py` | Job CRUD: enqueue / claim / finalize / lease management |
-| `summary.py` | Active gap summary read model |
-
-**Import-graph conventions** (design intent, not test-enforced):
-- `pipelines/` must not import `orchestrator`
-- `_repo/` must not import `pipelines/` or `orchestrator`
+The Unanswered queue lives in `backend/unanswered/` (`capture.py` groups unanswered turns by embedding similarity, `drafts.py` generates versioned LLM drafts, `service.py` reads and triages, `routes.py` mounts `/api/v1/knowledge/unanswered`); publish is owner-only. See `docs/04-features.md` section 5.
 
 ---
 
@@ -104,7 +64,7 @@ Every guard returns a single frozen `Verdict` — `blocked`, `reason` (a `Verdic
 ### Verdict cache + FP/FN logging
 
 - **Semantic-injection cache** (`injection_detector.py`): the expensive level-2 embedding *score* is cached in Redis keyed by `hash(tenant_id, "injection_semantic", seeds_hash, normalized_input)`, TTL `GUARD_SEMANTIC_CACHE_TTL_SECONDS`. The verdict is re-derived from the cached score against the *current* `INJECTION_SEMANTIC_THRESHOLD` on every read, so a threshold change on Railway applies to cached entries immediately; a seed-list change rotates the key (`INJECTION_SEEDS_HASH`, a 12-hex content fingerprint in `guards/injection_seeds.py`). Structural (level 1) is a cheap regex sweep and is not cached. Graceful: Redis down → cache miss → the guard runs directly. Hit/miss is exposed via the admin cache-metrics endpoint (`injection_semantic`) and a per-turn `injection_semantic.cache` PostHog event. The relevance guard keeps its own in-process LRU+TTL cache (keyed by tenant + profile version + question + dialog tail).
-- **`guard_events` table** (`models/guard.py`, recorder in `guards/events.py`): each guard **records its own verdict** (co-located with the cache-hit flag it knows) when given the turn's `chat_id` — so both the pre-retrieval verdict and the post-retrieval `force_llm_check` re-classifications land, while internal non-chat callers (Gap Analyzer draft check) pass no `chat_id` and are not logged. One row per verdict: kind, blocked, reason, score (NULL for relevance — no numeric score), `evidence_hash` (SHA-256 of the trigger, never raw text; NULL for the semantic level where the score is the signal), latency, cache_hit, chat_id — plus a `guard.verdict` PostHog event for the "Guards FP/FN" dashboard. The PostHog event (and the `injection_l2` Langfuse span metadata) additionally carries `threshold` and `seeds_hash`, so a shift in block rate can be split into "scores moved" vs "threshold moved" vs "seeds changed" without digging through the Railway env history — thresholds are env vars and `git_sha` does not capture them. Both are `None` for the relevance guard (categorical LLM verdict, no threshold) and for structural / fail-open injection verdicts. The write is fire-and-forget on its own `AsyncSession`, best-effort (never breaks chat), and only scheduled on the app's main event loop. It is tenant-scoped under RLS (`TENANT_SCOPED_TABLES`) — the detached task inherits the request's tenant context, policy fail-open when no context is set. Indexes are kept lean (tenant_id, reason, label, created_at) on this 2-rows-per-turn table. `label` (fp/fn) is reserved for a future manual-review tool.
+- **`guard_events` table** (`models/guard.py`, recorder in `guards/events.py`): each guard **records its own verdict** (co-located with the cache-hit flag it knows) when given the turn's `chat_id` — so both the pre-retrieval verdict and the post-retrieval `force_llm_check` re-classifications land, while internal non-chat callers pass no `chat_id` and are not logged. One row per verdict: kind, blocked, reason, score (NULL for relevance — no numeric score), `evidence_hash` (SHA-256 of the trigger, never raw text; NULL for the semantic level where the score is the signal), latency, cache_hit, chat_id — plus a `guard.verdict` PostHog event for the "Guards FP/FN" dashboard. The PostHog event (and the `injection_l2` Langfuse span metadata) additionally carries `threshold` and `seeds_hash`, so a shift in block rate can be split into "scores moved" vs "threshold moved" vs "seeds changed" without digging through the Railway env history — thresholds are env vars and `git_sha` does not capture them. Both are `None` for the relevance guard (categorical LLM verdict, no threshold) and for structural / fail-open injection verdicts. The write is fire-and-forget on its own `AsyncSession`, best-effort (never breaks chat), and only scheduled on the app's main event loop. It is tenant-scoped under RLS (`TENANT_SCOPED_TABLES`) — the detached task inherits the request's tenant context, policy fail-open when no context is set. Indexes are kept lean (tenant_id, reason, label, created_at) on this 2-rows-per-turn table. `label` (fp/fn) is reserved for a future manual-review tool.
 
 ---
 
@@ -129,7 +89,6 @@ Redis is **foundational infra** — used for things that need cross-worker share
 - `ratelimit:*` — managed by slowapi (do not touch directly)
 - `cache:guard:<sha256>` — guard-verdict caches
 - `cache:answer:<sha256>` — exact-level answer cache; `cache:answer_gen:<tenant_id>` — per-tenant generation counter folded into the answer-cache fingerprint
-- `lock:gap_analyzer:<job>` — distributed locks for periodic jobs
 
 **Graceful degradation rules:**
 - Cache misses on Redis errors must not break the request — log at debug, return as if cache miss.
@@ -257,7 +216,6 @@ Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars
 | RAG / BM25 | `BM25_EXPANSION_MODE` |
 | Reranking | `RERANKER_LLM_MODEL`, `RERANKER_CROSS_ENCODER_MODEL`, `RERANKER_TIMEOUT_SECONDS` (per-tenant choice lives in `tenants.reranker_strategy`, see `docs/04-features.md` → Reranking strategies) |
 | OpenAI | `OPENAI_API_KEY`, `OPENAI_REQUEST_TIMEOUT_SECONDS`, `OPENAI_USER_RETRY_*` |
-| Gap Analyzer jobs | `GAP_TRANSIENT_MAX_ATTEMPTS`, `GAP_BASE_DELAY_SECONDS`, `GAP_MAX_DELAY_SECONDS` |
 | Embedding retention | `LOG_EMBEDDINGS_RETENTION_DAYS` |
 | Email | `BREVO_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL`, `INBOUND_EMAIL_SECRET`, `INBOUND_EMAIL_DOMAIN` |
 
@@ -293,9 +251,9 @@ ai-chatbot/
 │   ├── models.py             # SQLAlchemy models and Base (single models file)
 │   ├── core/                 # db, config, security, limiter, utils, openai_client, …
 │   ├── auth/, admin/, bots/, chat/, chunkers/, contact_sessions/, documents/,
-│   │   embeddings/, escalation/, evals/, faq/, gap_analyzer/, guards/, jobs/,
+│   │   embeddings/, escalation/, evals/, faq/, guards/, jobs/,
 │   │   knowledge/, observability/, operator/, search/, tenant_knowledge/,
-│   │   tenants/, widget/, email/
+│   │   tenants/, unanswered/, widget/, email/
 │   │   ├── routes.py         # HTTP routes (often APIRouter)
 │   │   ├── service.py        # business logic, DB access
 │   │   └── schemas.py        # Pydantic request/response schemas
@@ -303,7 +261,7 @@ ai-chatbot/
 ├── frontend/                 # pnpm workspace; root package is the Next.js dashboard
 │   ├── app/                  # dashboard App Router: (marketing), (auth), (app), layout.tsx
 │   │   ├── (app)/            # dashboard routes: admin/, dashboard/, debug/, embed/,
-│   │   │                     #   gap-analyzer/, inbox/, knowledge/, settings/,
+│   │   │                     #   inbox/, knowledge/, settings/,
 │   │   │                     #   widget-settings/
 │   │   └── widget/           # API proxy ROUTES ONLY (chat/, escalate/, history/, messages/, config/) —
 │   │                         # called cross-origin by the standalone widget-app
@@ -399,8 +357,7 @@ How the second contour works:
   login — otherwise their global reads/writes would be silently scoped to the admin's
   own tenant. `require_admin_user` keeps the context: use it for admin endpoints that
   operate within the admin's own tenant.
-- Tables without a `tenant_id` column (`messages`, `embeddings`, `url_source_runs`,
-  `gap_question_message_links`) are scoped via a parent-FK `EXISTS` policy.
+- Tables without a `tenant_id` column (`messages`, `embeddings`, `url_source_runs`) are scoped via a parent-FK `EXISTS` policy.
 - **Enforcement requires a non-superuser DB role** (superusers bypass RLS). Tables use
   `FORCE ROW LEVEL SECURITY`, so any non-superuser connection — including the table
   owner — is enforced. While `DATABASE_URL` connects as a superuser, RLS is inert but

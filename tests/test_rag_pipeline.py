@@ -136,10 +136,6 @@ async def test_embedding_once(
             decision_reason="test",
         )),
     )
-    monkeypatch.setattr(
-        "backend.chat.post_turn._start_mode_b_followup",
-        lambda _tenant_id: None,
-    )
     # Suppress LLM-driven query rewrites so the test isolates the embedding
     # call count: base variants are embedded in parallel with the relevance
     # guard (one call), and retrieve_context must not embed again.

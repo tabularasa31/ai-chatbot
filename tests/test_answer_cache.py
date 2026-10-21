@@ -578,7 +578,6 @@ def _patch_pipeline_fakes(monkeypatch: pytest.MonkeyPatch, *, answer: str) -> di
             )
         ),
     )
-    monkeypatch.setattr("backend.chat.post_turn._start_mode_b_followup", lambda _tenant_id: None)
     monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_semantic_query_rewrite", _no_rewrite)
     monkeypatch.setattr("backend.chat.steps.pre_retrieval.async_semantic_query_rewrite_for_kb", _no_rewrite)
     return counters

@@ -61,9 +61,9 @@ function metricRows(data: AnalyticsSummaryResponse): MetricRow[] {
     {
       label: "Answered rate",
       definition: "Bot replies that used your documents, out of all replies except blocked and small-talk ones.",
-      detail: "Unanswered questions show up in Doc gaps.",
+      detail: "Unanswered questions show up in Knowledge.",
       value: formatPercent(data.answered_rate),
-      link: { href: "/gap-analyzer", label: "Open Doc gaps" },
+      link: { href: "/knowledge?tab=unanswered", label: "Open Unanswered" },
     },
     {
       label: "Conversations",

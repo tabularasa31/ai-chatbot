@@ -33,7 +33,6 @@ from backend.email.routes import email_router
 from backend.embeddings.routes import embeddings_router
 from backend.gap_analyzer.jobs import request_graceful_shutdown as gap_graceful_shutdown
 from backend.gap_analyzer.routes import gap_analyzer_router
-from backend.jobs.analyze_chat_logs import shutdown_log_analysis_threads
 from backend.jobs.chat_session_sweeper import (
     shutdown_chat_session_sweeper_thread,
     start_chat_session_sweeper_thread,
@@ -95,7 +94,6 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         gap_graceful_shutdown()
-        shutdown_log_analysis_threads()
         shutdown_kb_snapshot_thread()
         shutdown_chat_session_sweeper_thread()
         shutdown_guard_events_purge_thread()

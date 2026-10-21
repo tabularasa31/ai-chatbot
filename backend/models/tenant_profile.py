@@ -67,7 +67,6 @@ class TenantFaq(UUIDPKMixin, TenantScopedMixin, Base):
         nullable=True,
         index=True,
     )
-    # Phase 4: explainability fields (only populated for source='logs')
     cluster_size = Column(Integer, nullable=True)
     source_message_ids = Column(JSON, nullable=True)  # list of up to 10 message IDs
     created_at = Column(DateTime, nullable=False, default=_utcnow)
@@ -84,59 +83,6 @@ class TenantFaq(UUIDPKMixin, TenantScopedMixin, Base):
             postgresql_where=text("gap_source_id IS NOT NULL"),
             sqlite_where=text("gap_source_id IS NOT NULL"),
         ),
-    )
-
-    tenant = relationship("Tenant")
-
-
-class LogAnalysisState(Base):
-    """Per-tenant state for the chat-log analysis job (Phase 4)."""
-
-    __tablename__ = "log_analysis_state"
-
-    tenant_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    last_run_at = Column(DateTime, nullable=True)
-    # Primary watermark: timestamp-based, resilient to UUID/sharded IDs
-    last_run_started_at = Column(DateTime, nullable=True)
-    # Auxiliary watermark: last processed message ID for dedup within batch
-    last_processed_id = Column(
-        PG_UUID(as_uuid=True),
-        nullable=True,
-    )
-    messages_since_last_run = Column(
-        Integer,
-        nullable=False,
-        default=0,
-        server_default="0",
-    )
-    is_running = Column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default="false",
-    )
-    last_run_status = Column(Text, nullable=True)  # 'ok' | 'failed' | 'skipped_no_data'
-    last_run_faq_created = Column(
-        Integer,
-        nullable=False,
-        default=0,
-        server_default="0",
-    )
-    last_run_aliases_created = Column(
-        Integer,
-        nullable=False,
-        default=0,
-        server_default="0",
-    )
-    analysis_version = Column(
-        Integer,
-        nullable=False,
-        default=1,
-        server_default="1",
     )
 
     tenant = relationship("Tenant")

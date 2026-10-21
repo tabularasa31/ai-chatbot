@@ -258,7 +258,7 @@ Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars
 | Reranking | `RERANKER_LLM_MODEL`, `RERANKER_CROSS_ENCODER_MODEL`, `RERANKER_TIMEOUT_SECONDS` (per-tenant choice lives in `tenants.reranker_strategy`, see `docs/04-features.md` → Reranking strategies) |
 | OpenAI | `OPENAI_API_KEY`, `OPENAI_REQUEST_TIMEOUT_SECONDS`, `OPENAI_USER_RETRY_*` |
 | Gap Analyzer jobs | `GAP_TRANSIENT_MAX_ATTEMPTS`, `GAP_BASE_DELAY_SECONDS`, `GAP_MAX_DELAY_SECONDS` |
-| Log analysis | `LOG_ANALYSIS_BATCH_SIZE`, `LOG_CLUSTER_*`, `MAX_FAQ_PER_RUN`, `LOG_ANALYSIS_CRON_HOURS`, `LOG_ANALYSIS_THRESHOLD_MESSAGES`, `LOG_EMBEDDINGS_RETENTION_DAYS`, `EMBEDDING_BATCH_*`, `MAX_JOB_DURATION_SEC`, `ALIAS_MIN_*` |
+| Embedding retention | `LOG_EMBEDDINGS_RETENTION_DAYS` |
 | Email | `BREVO_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL`, `INBOUND_EMAIL_SECRET`, `INBOUND_EMAIL_DOMAIN` |
 
 See `docs/07-observability-rollout.md` for Langfuse/trace rollout details.

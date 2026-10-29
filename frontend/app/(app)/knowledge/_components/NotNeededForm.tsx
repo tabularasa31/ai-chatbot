@@ -52,9 +52,9 @@ export function NotNeededForm({
   }
 
   return (
-    <div ref={form} className="max-w-sm space-y-3 pt-3">
+    <div ref={form} className="-mt-2.5 w-fit shrink-0 space-y-3">
       <RadioGroup label="Reason" name={name} options={REASON_OPTIONS} value={reason} onChange={setReason} />
-      <div className="flex gap-3">
+      <div className="flex justify-end gap-3">
         <Button variant="secondary" disabled={busy} onClick={onCancel}>
           Cancel
         </Button>

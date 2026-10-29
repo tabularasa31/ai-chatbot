@@ -90,11 +90,10 @@ export function UnansweredRow({
           {group.question}
         </p>
         <RowMeta group={group} />
-        {choosingReason && (
-          <NotNeededForm name={`reason-${group.id}`} busy={busy} onSubmit={onDismiss} onCancel={onCancelReason} />
-        )}
       </div>
-      {!choosingReason && (
+      {choosingReason ? (
+        <NotNeededForm name={`reason-${group.id}`} busy={busy} onSubmit={onDismiss} onCancel={onCancelReason} />
+      ) : (
         <div className="-mt-2.5 flex shrink-0 items-center gap-2">
           <Link
             href={`/inbox?scope=all&session=${encodeURIComponent(group.session_id)}`}

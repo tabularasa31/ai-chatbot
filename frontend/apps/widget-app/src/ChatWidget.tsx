@@ -539,6 +539,7 @@ export function ChatWidget({
         sources?: WidgetSource[];
         outcome?: string | null;
         failure_state?: LlmFailureState | null;
+        delivered_to_operator?: boolean;
       };
       try {
         parsed = JSON.parse(raw);
@@ -557,6 +558,7 @@ export function ChatWidget({
         payload.sources = parsed.sources ?? [];
         payload.outcome = parsed.outcome ?? null;
         payload.failure_state = parsed.failure_state ?? null;
+        payload.delivered_to_operator = parsed.delivered_to_operator === true;
         // Don't replay the final text into onChunk for the degraded path:
         // the LLM-unavailable message is rendered as its own UI block, not
         // as an assistant bubble streamed token-by-token.
@@ -695,7 +697,8 @@ export function ChatWidget({
   }, [botId, historyLoaded, isOpen, loading, messages.length, requestGreeting, sessionHydrated, sessionId]);
 
   // How often to ask whether a human has written. The ladder is the whole
-  // point: a conversation the bot is handling is not polled at all, one
+  // point: a conversation the bot is handling is polled lazily and only while
+  // its panel is open (an operator may take it from the inbox unasked), one
   // waiting in a queue is polled lazily, and one a human is actively typing
   // into is polled briskly enough that their reply lands while the visitor is
   // still looking at the window.
@@ -768,12 +771,12 @@ export function ChatWidget({
     // reported a state: the escalation that just happened is exactly when a
     // human might appear. What bounds the polling is the handoff itself: once
     // the ticket is resolved the server reports `bot` and this goes quiet on
-    // its own.
+    // its own, unless the visitor still has the panel open.
     const shouldPoll =
       sessionHydrated &&
       Boolean(sessionId) &&
       historyLoaded &&
-      (handoffState !== "bot" || activeTicket !== null);
+      (handoffState !== "bot" || activeTicket !== null || isOpen);
     if (!shouldPoll) return;
 
     const period =
@@ -804,7 +807,13 @@ export function ChatWidget({
       start();
     };
 
-    if (!document.hidden) start();
+    if (!document.hidden) {
+      // Opening the panel on a bot-held conversation is what starts its
+      // polling, so ask straight away: a reply written while it was closed
+      // should be there when the visitor looks.
+      if (handoffState === "bot" && activeTicket === null) void pollForOperatorMessages();
+      start();
+    }
     document.addEventListener("visibilitychange", resync);
     window.addEventListener("focus", resync);
     return () => {
@@ -816,6 +825,7 @@ export function ChatWidget({
     activeTicket,
     handoffState,
     historyLoaded,
+    isOpen,
     pollForOperatorMessages,
     sessionHydrated,
     sessionId,
@@ -943,9 +953,16 @@ export function ChatWidget({
         text: string;
         session_id: string;
         sources?: WidgetSource[];
+        delivered_to_operator?: boolean;
       };
 
-      applyAssistantMessage(data);
+      // A human holds the conversation: the bot stayed silent, so there is no
+      // reply to render, and the human's own answer arrives through the poll.
+      if (data.delivered_to_operator) {
+        setHandoffState("live");
+      } else {
+        applyAssistantMessage(data);
+      }
       setSessionId(data.session_id);
       persistSession(botId, data.session_id, userId);
     } catch (error) {

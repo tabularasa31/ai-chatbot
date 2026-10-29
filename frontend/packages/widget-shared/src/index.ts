@@ -39,6 +39,7 @@ export type WidgetTurnPayload = {
   sources?: WidgetSource[];
   outcome?: string | null;
   failure_state?: LlmFailureState | null;
+  delivered_to_operator?: boolean;
 };
 
 // Public Chat9Widget API surface (window.Chat9Widget). Mirrors the loader's

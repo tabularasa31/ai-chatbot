@@ -10,6 +10,10 @@ export const FOCUS_RING = {
   chrome: "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-accent focus-visible:ring-offset-2 focus-visible:ring-offset-chrome",
 } as const;
 
+/** Hover, press and focus of a 32px plate inside a 44px chrome control whose `<button>` carries `group`. */
+export const CHROME_PLATE =
+  "text-chrome-fg-muted group-hover:bg-chrome-hover group-hover:text-chrome-fg group-active:bg-chrome-hover group-focus-visible:ring-2 group-focus-visible:ring-chrome-accent group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-chrome";
+
 const VARIANTS = {
   primary:
     "bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active disabled:bg-surface-alt disabled:text-fg-faint",

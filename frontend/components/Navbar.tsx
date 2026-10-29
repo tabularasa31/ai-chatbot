@@ -5,12 +5,10 @@ import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { api, clearSession } from "@/lib/api";
 import { LogoMark } from "@/components/Logo";
-import { Button, FOCUS_RING } from "@/components/ui/button";
+import { CHROME_PLATE, FOCUS_RING } from "@/components/ui/button";
+import { cn } from "@/components/ui/utils";
 import { ThemeMenu } from "@/components/ui/theme-menu";
 import { useAuthUser } from "@/hooks/useApi";
-
-const LOGOUT_CLASSES =
-  "text-chrome-fg-muted hover:bg-chrome-hover hover:text-chrome-fg active:bg-chrome-hover active:text-chrome-fg";
 
 export function Navbar({
   initialEmail = null,
@@ -45,10 +43,17 @@ export function Navbar({
           </span>
         )}
         <ThemeMenu surface="chrome" side="below" align="end" />
-        <Button variant="ghost" offset="chrome" className={LOGOUT_CLASSES} onClick={handleLogout}>
-          <LogOut size={16} aria-hidden="true" />
-          Log out
-        </Button>
+        <button type="button" onClick={handleLogout} className="group flex h-11 items-center focus-visible:outline-none">
+          <span
+            className={cn(
+              "flex h-8 items-center gap-2 rounded-control px-3 text-ui font-medium transition-colors motion-reduce:transition-none",
+              CHROME_PLATE,
+            )}
+          >
+            <LogOut size={16} aria-hidden="true" />
+            Log out
+          </span>
+        </button>
       </div>
     </header>
   );

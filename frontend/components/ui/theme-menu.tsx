@@ -17,6 +17,7 @@ import {
   writeSchemeCookie,
   type Scheme,
 } from "@/lib/scheme";
+import { CHROME_PLATE } from "./button";
 import { cn } from "./utils";
 
 const OPTIONS: Record<Scheme, { label: string; Icon: LucideIcon }> = {
@@ -48,8 +49,7 @@ const SURFACES = {
     checked: "text-brand",
   },
   chrome: {
-    visual:
-      "text-chrome-fg-muted group-hover:bg-chrome-hover group-hover:text-chrome-fg group-active:bg-chrome-hover group-aria-expanded:bg-chrome-hover group-aria-expanded:text-chrome-fg group-focus-visible:ring-2 group-focus-visible:ring-chrome-accent group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-chrome",
+    visual: `${CHROME_PLATE} group-aria-expanded:bg-chrome-hover group-aria-expanded:text-chrome-fg`,
     menu: "border-chrome-line bg-chrome",
     item: "text-chrome-fg hover:bg-chrome-hover focus-visible:bg-chrome-hover focus-visible:ring-chrome-accent",
     checked: "text-chrome-accent",

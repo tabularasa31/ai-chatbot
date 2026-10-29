@@ -10,7 +10,7 @@ import { ThemeMenu } from "@/components/ui/theme-menu";
 import { useAuthUser } from "@/hooks/useApi";
 
 const LOGOUT_CLASSES =
-  "border-chrome-line-strong bg-transparent text-chrome-fg hover:bg-chrome-hover active:bg-chrome-hover";
+  "text-chrome-fg-muted hover:bg-chrome-hover hover:text-chrome-fg active:bg-chrome-hover active:text-chrome-fg";
 
 export function Navbar({
   initialEmail = null,
@@ -45,7 +45,7 @@ export function Navbar({
           </span>
         )}
         <ThemeMenu surface="chrome" side="below" align="end" />
-        <Button variant="secondary" offset="chrome" className={LOGOUT_CLASSES} onClick={handleLogout}>
+        <Button variant="ghost" offset="chrome" className={LOGOUT_CLASSES} onClick={handleLogout}>
           <LogOut size={16} aria-hidden="true" />
           Log out
         </Button>

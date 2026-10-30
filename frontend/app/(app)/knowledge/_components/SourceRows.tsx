@@ -7,7 +7,7 @@ import { formatDateTime, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FileStatus, UrlStatus } from "./HealthPanel";
 import { SourceErrorDetails } from "./SourceError";
-import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, isIndexing, scheduleCaption } from "./shared";
+import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, PAGES_COLUMN_CLASS, isIndexing, scheduleCaption } from "./shared";
 
 const CELL_CLASS = "px-4 py-3 align-top";
 const SOURCE_CELL_CLASS = "px-4 pb-3 align-top";
@@ -79,7 +79,7 @@ export function FileRow({
       <td className={CELL_CLASS}>
         <FileStatus doc={doc} />
       </td>
-      <td className={`${CELL_CLASS} hidden xl:table-cell`} />
+      <td className={`${CELL_CLASS} ${PAGES_COLUMN_CLASS}`} />
       <td className={NUMERIC_CELL_CLASS}>{indexing ? "" : formatDateTime(doc.updated_at)}</td>
       <Actions>
         <IconAction label="Re-check health" icon={<RotateCw size={20} aria-hidden="true" />} busy={rechecking} disabled={indexing} onClick={onRecheck} />
@@ -137,7 +137,7 @@ export function UrlRow({
         <td className={CELL_CLASS}>
           <UrlStatus source={source} errorOpen={errorOpen} onToggleError={() => setErrorOpen((open) => !open)} />
         </td>
-        <td className={`${NUMERIC_CELL_CLASS} hidden xl:table-cell`}>{pages}</td>
+        <td className={`${NUMERIC_CELL_CLASS} ${PAGES_COLUMN_CLASS}`}>{pages}</td>
         <td className={NUMERIC_CELL_CLASS}>
           {formatDateTime(source.updated_at)}
           <p className="text-caption text-fg-muted xl:hidden">{`${pages} ${pluralize(totalPages, "page", "pages")}`}</p>

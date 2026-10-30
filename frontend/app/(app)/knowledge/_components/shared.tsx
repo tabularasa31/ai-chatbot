@@ -12,16 +12,15 @@ const INDEXING_STATUSES = new Set(["processing", "embedding", "indexing"]);
 
 export const DETAIL_ID_PREFIX = "source-detail-";
 
-// The Pages column is `hidden xl:table-cell`, so a full-width row spans the four
-// always-visible columns and fills the fifth only where it shows.
+// Below xl the Pages column stays in the fixed table layout at zero width, so every row
+// can span all five columns and the Pages figure moves into the Updated cell.
+export const PAGES_COLUMN_CLASS = "max-xl:invisible max-xl:w-0 max-xl:overflow-hidden max-xl:border-0 max-xl:p-0";
+
 export function FullWidthCell({ className, children }: { className: string; children: ReactNode }) {
   return (
-    <>
-      <td colSpan={4} className={className}>
-        {children}
-      </td>
-      <td className="hidden xl:table-cell" />
-    </>
+    <td colSpan={5} className={className}>
+      {children}
+    </td>
   );
 }
 

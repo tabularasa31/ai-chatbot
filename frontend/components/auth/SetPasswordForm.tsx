@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
-import { AuthCard, AuthHeading, AuthSubmit } from "./AuthCard";
+import { AuthCard, AuthFooter, AuthHeading, AuthSubmit, StandaloneLink } from "./AuthCard";
 import { AuthField } from "./AuthField";
+import { BrokenLink } from "./BrokenLink";
 import {
   PASSWORD_HELPER,
   PASSWORD_MAX_LENGTH,
@@ -18,17 +20,25 @@ import {
   type FieldErrors,
 } from "./auth-rules";
 import { fullWidthLinkButtonClasses } from "./link-classes";
+import { Button } from "@/components/ui/button";
 import { LoadError } from "@/components/ui/load-error";
 
 const REDIRECT_DELAY_MS = 2000;
+const CHECKING_REVEAL_DELAY_MS = 200;
+const CHECK_FAILED_MESSAGE = "Check your connection and try again.";
+const RATE_LIMITED_MESSAGE = "Too many attempts. Wait a while and try again.";
 const NO_ERRORS: FieldErrors<"password" | "confirm"> = { password: null, confirm: null };
 
 type View = "form" | "invalid" | "success";
 
 type SetPasswordCopy = {
   heading: string;
-  invalidTitle: string;
-  invalidBody: string;
+  invalid: {
+    title: string;
+    body: string;
+    action: { href: string; label: string };
+    footer?: ReactNode;
+  };
   passwordLabel: string;
   emptyPasswordMessage: string;
   submitLabel: string;
@@ -37,23 +47,81 @@ type SetPasswordCopy = {
   footer: ReactNode;
 };
 
-function InvalidLink({
-  copy,
-  moveFocus,
-}: {
-  copy: Pick<SetPasswordCopy, "invalidTitle" | "invalidBody" | "footer">;
-  moveFocus: boolean;
-}) {
+type TokenCheck =
+  | { status: "checking" }
+  | { status: "valid" }
+  | { status: "broken" }
+  | { status: "failed"; message: string; retrying: boolean };
+
+function DeadLink({ invalid }: { invalid: SetPasswordCopy["invalid"] }) {
   return (
-    <AuthCard>
-      <AuthHeading moveFocus={moveFocus}>{copy.invalidTitle}</AuthHeading>
-      <p className="mb-6 text-body text-fg-muted">{copy.invalidBody}</p>
-      <Link href="/forgot-password" className={fullWidthLinkButtonClasses}>
-        Request a new link
-      </Link>
-      {copy.footer}
+    <BrokenLink title={invalid.title} explanation={invalid.body} action={invalid.action}>
+      {invalid.footer}
+    </BrokenLink>
+  );
+}
+
+function CheckingLink() {
+  const [revealed, setRevealed] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setRevealed(true), CHECKING_REVEAL_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <AuthCard centered role="status" aria-busy="true">
+      {revealed && (
+        <>
+          <AuthHeading>Checking your link…</AuthHeading>
+          <Loader2 size={16} aria-hidden="true" className="mx-auto animate-spin text-fg-muted" />
+        </>
+      )}
     </AuthCard>
   );
+}
+
+function CheckFailed({ message, retrying, onRetry }: { message: string; retrying: boolean; onRetry: () => void }) {
+  return (
+    <AuthCard>
+      <AuthHeading moveFocus>Couldn&apos;t check your link</AuthHeading>
+      <p className="mb-6 text-body text-fg-muted">{message}</p>
+      <Button variant="secondary" offset="surface" busy={retrying} className="w-full active:scale-press-wide" onClick={onRetry}>
+        Try again
+      </Button>
+      <AuthFooter>
+        <StandaloneLink href="/login">Sign in</StandaloneLink>
+      </AuthFooter>
+    </AuthCard>
+  );
+}
+
+function useTokenCheck(token: string) {
+  const [check, setCheck] = useState<TokenCheck>({ status: "checking" });
+
+  const run = useCallback(async () => {
+    try {
+      await api.auth.checkResetToken(token);
+      setCheck({ status: "valid" });
+    } catch (err) {
+      setCheck(
+        isApiStatus(err, 400)
+          ? { status: "broken" }
+          : { status: "failed", message: isApiStatus(err, 429) ? RATE_LIMITED_MESSAGE : CHECK_FAILED_MESSAGE, retrying: false },
+      );
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void run();
+  }, [run]);
+
+  const retry = useCallback(() => {
+    setCheck((current) => (current.status === "failed" ? { ...current, retrying: true } : current));
+    void run();
+  }, [run]);
+
+  return { check, retry };
 }
 
 function PasswordEntry({ token, copy }: { token: string; copy: SetPasswordCopy }) {
@@ -116,7 +184,7 @@ function PasswordEntry({ token, copy }: { token: string; copy: SetPasswordCopy }
     );
   }
 
-  if (view === "invalid") return <InvalidLink copy={copy} moveFocus />;
+  if (view === "invalid") return <DeadLink invalid={copy.invalid} />;
 
   return (
     <AuthCard>
@@ -161,11 +229,26 @@ function PasswordEntry({ token, copy }: { token: string; copy: SetPasswordCopy }
   );
 }
 
+function CheckedPasswordEntry({ token, copy }: { token: string; copy: SetPasswordCopy }) {
+  const { check, retry } = useTokenCheck(token);
+
+  switch (check.status) {
+    case "checking":
+      return <CheckingLink />;
+    case "broken":
+      return <DeadLink invalid={copy.invalid} />;
+    case "failed":
+      return <CheckFailed message={check.message} retrying={check.retrying} onRetry={retry} />;
+    case "valid":
+      return <PasswordEntry token={token} copy={copy} />;
+  }
+}
+
 /**
- * Shared by /reset-password and /accept-invite: same token, same endpoint and
+ * Shared by /reset-password and /accept-invite: same token, same endpoints and
  * validation — only copy differs.
  */
 export function SetPasswordForm(copy: SetPasswordCopy) {
   const token = useSearchParams().get("token");
-  return token ? <PasswordEntry token={token} copy={copy} /> : <InvalidLink copy={copy} moveFocus={false} />;
+  return token ? <CheckedPasswordEntry token={token} copy={copy} /> : <DeadLink invalid={copy.invalid} />;
 }

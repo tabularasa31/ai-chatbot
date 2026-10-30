@@ -10,8 +10,11 @@ export default function AcceptInvitePage() {
     <Suspense fallback={<AuthSkeleton />}>
       <SetPasswordForm
         heading="Join your team"
-        invalidTitle="This invite link doesn't work"
-        invalidBody="It may have expired or already been used. Ask whoever invited you to send it again, or request a new link."
+        invalid={{
+          title: "This invite link doesn't work",
+          body: "It may have expired or already been used. If you already joined, sign in. Otherwise ask whoever invited you to send a new invite.",
+          action: { href: "/login", label: "Sign in" },
+        }}
         passwordLabel="Password"
         emptyPasswordMessage="Enter a password."
         submitLabel="Accept invite"

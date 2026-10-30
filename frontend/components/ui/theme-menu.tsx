@@ -45,13 +45,13 @@ const SURFACES = {
     visual:
       "text-fg-muted transition-[color,background-color,transform] group-hover:bg-surface-alt group-hover:text-fg group-active:scale-press-sm group-active:bg-line group-aria-expanded:bg-surface-alt group-aria-expanded:text-fg group-aria-expanded:group-active:bg-line group-focus-visible:ring-2 group-focus-visible:ring-focus group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-canvas",
     menu: "border-line bg-surface dark:bg-surface-alt",
-    item: "text-fg hover:bg-surface-alt focus-visible:bg-surface-alt focus-visible:ring-focus dark:hover:bg-canvas dark:focus-visible:bg-canvas",
+    item: "text-fg hover:bg-surface-alt active:bg-line focus-visible:bg-surface-alt focus-visible:ring-focus dark:hover:bg-canvas dark:focus-visible:bg-canvas",
     checked: "text-brand",
   },
   chrome: {
     visual: `${CHROME_PLATE} group-aria-expanded:bg-chrome-hover group-aria-expanded:text-chrome-fg group-aria-expanded:group-active:bg-chrome-press`,
     menu: "border-chrome-line bg-chrome",
-    item: "text-chrome-fg hover:bg-chrome-hover focus-visible:bg-chrome-hover focus-visible:ring-chrome-accent",
+    item: "text-chrome-fg hover:bg-chrome-hover active:bg-chrome-press focus-visible:bg-chrome-hover focus-visible:ring-chrome-accent",
     checked: "text-chrome-accent",
   },
 } as const;

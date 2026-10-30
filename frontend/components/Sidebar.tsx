@@ -73,7 +73,7 @@ function NavLink({
         "focus-visible:ring-inset focus-visible:ring-offset-0",
         active
           ? "bg-chrome-active text-chrome-accent shadow-chrome-selected"
-          : "text-chrome-fg-muted hover:bg-chrome-hover hover:text-chrome-fg",
+          : "text-chrome-fg-muted hover:bg-chrome-hover hover:text-chrome-fg active:bg-chrome-press active:text-chrome-fg",
       )}
     >
       <Icon size={16} aria-hidden="true" className="shrink-0" />

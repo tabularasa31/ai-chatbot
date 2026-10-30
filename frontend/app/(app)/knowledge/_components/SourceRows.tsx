@@ -111,7 +111,7 @@ export function UrlRow({
   const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <Fragment>
-      <tr className="cursor-pointer border-b border-line hover:bg-surface-alt" onClick={onToggle}>
+      <tr className="cursor-pointer border-b border-line hover:bg-surface-alt active:bg-line" onClick={onToggle}>
         <td className={SOURCE_CELL_CLASS}>
           <button
             type="button"

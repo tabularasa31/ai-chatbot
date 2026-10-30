@@ -82,6 +82,18 @@ def create_reset_token(email: str, db: Session) -> str | None:
     return token
 
 
+def find_user_by_live_reset_token(token: str, db: Session) -> User | None:
+    """Return the user a reset or invite token currently belongs to, without touching it."""
+    return (
+        db.query(User)
+        .filter(
+            User.reset_password_token == token,
+            User.reset_password_expires_at >= _utcnow(),
+        )
+        .first()
+    )
+
+
 def reset_password(token: str, new_password: str, db: Session) -> bool:
     """
     Validate reset token and update password.
@@ -101,15 +113,7 @@ def reset_password(token: str, new_password: str, db: Session) -> bool:
     an owner who deliberately gave their seat back would have it silently
     handed to them again by their next forgotten password.
     """
-    now = _utcnow()
-    user = (
-        db.query(User)
-        .filter(
-            User.reset_password_token == token,
-            User.reset_password_expires_at >= now,
-        )
-        .first()
-    )
+    user = find_user_by_live_reset_token(token, db)
     if not user:
         return False
 

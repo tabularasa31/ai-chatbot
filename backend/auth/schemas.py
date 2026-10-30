@@ -97,6 +97,18 @@ class ResetPasswordRequest(BaseModel):
     new_password: StrongPassword = Field(..., min_length=8, max_length=128)
 
 
+class ResetTokenCheckRequest(BaseModel):
+    """Request body for checking a reset or invite token without using it."""
+
+    token: str
+
+
+class ResetTokenCheckResponse(BaseModel):
+    """Returned only when the token would currently be accepted."""
+
+    valid: bool
+
+
 class ResetPasswordResponse(BaseModel):
     """Response for password reset."""
 

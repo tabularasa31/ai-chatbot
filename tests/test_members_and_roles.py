@@ -218,6 +218,25 @@ def test_invite_token_is_refused_once_dead(
         assert login.status_code == 401
 
 
+def test_invite_token_check_leaves_the_invite_acceptable(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Opening the invite page checks the link without accepting it: the invitee
+    stays pending and the same link still sets their password."""
+    ws = _make_workspace(tenant, db_session, email="owner@acme.example.com")
+    assert _invite(tenant, ws, email="ops@acme.example.com")[0].status_code == 201
+    token = _invite_token(db_session, "ops@acme.example.com")
+
+    checked = tenant.post("/auth/reset-password/check", json={"token": token})
+    assert checked.status_code == 200
+    assert checked.json() == {"valid": True}
+    member = db_session.query(User).filter(User.email == "ops@acme.example.com").one()
+    assert member.is_verified is False
+
+    assert _accept(tenant, token).status_code == 200
+    assert tenant.post("/auth/reset-password/check", json={"token": token}).status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # What each role may reach
 # ---------------------------------------------------------------------------

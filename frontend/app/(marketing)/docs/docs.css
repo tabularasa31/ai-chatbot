@@ -56,6 +56,15 @@
   @apply flex min-h-11 items-center py-0 text-ui;
 }
 
+[data-toc-popover] a {
+  @apply ps-4;
+}
+
+[data-toc-popover] a[class~='ps-6'],
+[data-toc-popover] a[class~='ps-8'] {
+  @apply ps-8;
+}
+
 #nd-docs-layout [style*='--fd-api-info-top'] h3[class~='not-prose'] {
   @apply text-body font-semibold;
 }
@@ -91,9 +100,31 @@
   @apply text-start;
 }
 
+@keyframes docs-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes docs-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+[role='dialog'][data-state='open']:has(input),
+div[data-state='open']:has(+ [role='dialog'] input) {
+  animation: docs-fade-in 150ms ease-out;
+}
+
+[role='dialog'][data-state='closed']:has(input),
+div[data-state='closed']:has(+ [role='dialog'] input) {
+  animation: docs-fade-out 120ms ease-out forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  #nd-sidebar a[data-active],
-  #nd-sidebar button[data-state] {
-    transition: none;
+  [role='dialog']:has(input),
+  div[data-state]:has(+ [role='dialog'] input) {
+    animation: none;
   }
 }

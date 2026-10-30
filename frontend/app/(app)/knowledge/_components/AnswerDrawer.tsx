@@ -217,7 +217,7 @@ export function AnswerDrawer({
           {draft.keptText !== null && (
             <section className="space-y-2">
               <h3 className="text-body font-semibold text-fg">Your previous text</h3>
-              <pre className="whitespace-pre-wrap break-words rounded-control bg-surface-alt p-3 font-mono text-caption text-fg">
+              <pre className="whitespace-pre-wrap break-anywhere rounded-control bg-surface-alt p-3 font-mono text-caption text-fg">
                 {draft.keptText}
               </pre>
               <CopyButton text={draft.keptText} label="Copy" variant="secondary" />

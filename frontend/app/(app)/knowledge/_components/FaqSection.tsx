@@ -236,8 +236,8 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
             return (
               <li key={item.id} className="py-4">
                 <div className="max-w-prose space-y-1">
-                  <p className="break-words text-body font-semibold text-fg">{item.question}</p>
-                  <p className="break-words text-ui text-fg">{item.answer}</p>
+                  <p className="break-anywhere text-body font-semibold text-fg">{item.question}</p>
+                  <p className="break-anywhere text-ui text-fg">{item.answer}</p>
                   <ItemMeta item={item} showReviewState={showReviewState} />
                 </div>
                 <div className="mt-2 flex items-center gap-2">

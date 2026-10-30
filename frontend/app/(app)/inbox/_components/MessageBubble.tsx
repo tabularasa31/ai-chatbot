@@ -22,7 +22,7 @@ export function MessageBubble({ msg, viewerId }: { msg: ThreadMessage; viewerId:
           {caption.text}
         </p>
         {isUser ? (
-          <p dir="auto" className="whitespace-pre-wrap break-words">
+          <p dir="auto" className="whitespace-pre-wrap break-anywhere">
             {msg.content}
           </p>
         ) : (

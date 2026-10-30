@@ -26,10 +26,10 @@ export function heldBy(
   operatorId: string | null,
   operatorEmail: string | null,
   viewerId: string | undefined,
-): string | null {
+): Attribution | null {
   if (!operatorId) return null;
-  if (operatorId === viewerId) return "Held by you";
-  return operatorEmail ? `Held by ${localPart(operatorEmail)}` : null;
+  if (operatorId === viewerId) return { text: "Held by you" };
+  return operatorEmail ? { text: `Held by ${localPart(operatorEmail)}`, title: `Held by ${operatorEmail}` } : null;
 }
 
 export type Attribution = { text: string; title?: string };
@@ -54,18 +54,23 @@ export function answeredByEmail(ticket: InboxTicket | null): { from: string; at:
   return { from: ticket.forwarded_reply_from, at: formatWhen(ticket.forwarded_reply_at) };
 }
 
-export function rowMeta(row: InboxRow, viewerId: string | undefined, now: number): string {
+export type RowMeta = { lead: string; tail?: Attribution };
+
+export function rowMeta(row: InboxRow, viewerId: string | undefined, now: number): RowMeta {
   const { ticket } = row;
-  const held = heldBy(row.assigned_operator_id, row.assigned_operator_email, viewerId);
+  const held = heldBy(row.assigned_operator_id, row.assigned_operator_email, viewerId) ?? undefined;
   const answered = answeredByEmail(ticket);
-  if (answered) return `Answered by email · ${answered.from} · ${answered.at}`;
-  if (row.handoff_state === "waiting" && row.waiting_since) {
-    return [`Waiting ${waitingFor(row.waiting_since, now)}`, held].filter(Boolean).join(" · ");
+  if (answered) {
+    return { lead: answered.at, tail: { text: "Answered by email", title: `Answered by email from ${answered.from}` } };
   }
-  if (row.handoff_state === "live" && held) return held;
-  if (ticket?.status === "resolved") return `Resolved · ${formatWhen(ticket.resolved_at)}`;
-  if (ticket?.status === "auto_closed") return `Closed after inactivity · ${formatWhen(ticket.resolved_at)}`;
-  return formatWhen(row.last_activity);
+  if (row.handoff_state === "waiting" && row.waiting_since) {
+    return { lead: `Waiting ${waitingFor(row.waiting_since, now)}`, tail: held };
+  }
+  if (ticket?.status === "resolved") return { lead: `Resolved ${formatWhen(ticket.resolved_at)}` };
+  if (ticket?.status === "auto_closed") {
+    return { lead: formatWhen(ticket.resolved_at), tail: { text: "Closed after inactivity" } };
+  }
+  return { lead: formatWhen(row.last_activity), tail: row.handoff_state === "live" ? held : undefined };
 }
 
 const TICKET_STATUS: Record<string, string> = {

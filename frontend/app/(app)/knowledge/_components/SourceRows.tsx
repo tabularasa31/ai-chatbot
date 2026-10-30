@@ -11,7 +11,7 @@ import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, isIndexing, scheduleCaption } from
 const CELL_CLASS = "px-4 py-3 align-top";
 const SOURCE_CELL_CLASS = "px-4 pb-3 align-top";
 const NAME_CAPTIONS_CLASS = "-mt-3";
-const NUMERIC_CELL_CLASS = `${CELL_CLASS} text-right text-ui tabular-nums text-fg`;
+const NUMERIC_CELL_CLASS = `${CELL_CLASS} whitespace-nowrap text-right text-ui tabular-nums text-fg`;
 
 function IconAction({
   label,
@@ -70,7 +70,7 @@ export function FileRow({
   return (
     <tr className="border-b border-line hover:bg-surface-alt">
       <td className={SOURCE_CELL_CLASS}>
-        <button type="button" onClick={onPreview} className={`block break-words py-3 ${NAME_BUTTON_CLASS}`} title="View extracted text">
+        <button type="button" onClick={onPreview} className={`block break-anywhere py-3 ${NAME_BUTTON_CLASS}`} title="View extracted text">
           {doc.filename}
         </button>
         <p className={`${NAME_CAPTIONS_CLASS} text-caption text-fg-muted`}>File</p>
@@ -124,7 +124,7 @@ export function UrlRow({
             className={`inline-flex items-center gap-1 py-3 ${NAME_BUTTON_CLASS}`}
           >
             <Chevron size={16} aria-hidden="true" className="shrink-0" />
-            <span className="min-w-0 break-words">{source.name}</span>
+            <span className="min-w-0 break-anywhere">{source.name}</span>
           </button>
           <p className={`${NAME_CAPTIONS_CLASS} truncate text-caption text-fg-muted`} title={source.url}>
             {displayUrl(source.url)}

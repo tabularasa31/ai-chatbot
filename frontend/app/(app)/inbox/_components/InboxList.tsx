@@ -26,6 +26,10 @@ function InboxRowItem({
   onSelect: () => void;
 }) {
   const prefix = previewPrefix(row, viewerId);
+  const { lead, tail } = rowMeta(row, viewerId, now);
+  const ticketNumber = row.ticket?.ticket_number;
+  const metaTitle = [lead, ticketNumber, tail?.title ?? tail?.text].filter(Boolean).join(" · ");
+  const nameTitle = [row.visitor_name, row.visitor_email].filter(Boolean).join(" · ");
   return (
     <li>
       <button
@@ -42,7 +46,7 @@ function InboxRowItem({
           <span
             dir="auto"
             className="min-w-0 flex-1 truncate font-medium text-fg"
-            title={row.visitor_email ?? undefined}
+            title={nameTitle || undefined}
           >
             {visitorLabel(row)}
           </span>
@@ -54,12 +58,18 @@ function InboxRowItem({
             {row.last_message_preview ?? "(no messages)"}
           </span>
         </span>
-        <span className="block truncate text-caption tabular-nums text-fg-muted">
-          {rowMeta(row, viewerId, now)}
-          {row.ticket && (
+        <span className="flex items-baseline gap-1 text-caption text-fg-muted" title={metaTitle}>
+          <span className="shrink-0 whitespace-nowrap tabular-nums">{lead}</span>
+          {ticketNumber && (
             <>
-              {" · "}
-              <span className="font-mono">{row.ticket.ticket_number}</span>
+              <span aria-hidden="true">·</span>
+              <span className="shrink-0 font-mono">{ticketNumber}</span>
+            </>
+          )}
+          {tail && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="min-w-0 truncate">{tail.text}</span>
             </>
           )}
         </span>

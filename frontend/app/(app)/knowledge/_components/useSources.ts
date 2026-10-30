@@ -9,6 +9,7 @@ import {
   type UrlSourceDetail,
 } from "@/lib/api";
 import { useFlash } from "@/components/ui/flash";
+import { pluralize } from "@/lib/format";
 import {
   POLLABLE_SOURCE_STATUSES,
   parseExclusions,
@@ -128,7 +129,7 @@ export function useSources() {
     setUploadErrors(errors);
     setUploadProgress(null);
     const uploaded = files.length - errors.length;
-    if (uploaded > 0) flashUploaded(uploaded === 1 ? "1 file uploaded" : `${uploaded} files uploaded`);
+    if (uploaded > 0) flashUploaded(`${uploaded.toLocaleString()} ${pluralize(uploaded, "file", "files")} uploaded`);
   }
 
   async function createUrlSource(values: SourceFormValues & { url: string }) {

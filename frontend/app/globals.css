@@ -38,6 +38,10 @@ textarea::placeholder {
   .text-balance {
     text-wrap: balance;
   }
+
+  .break-anywhere {
+    overflow-wrap: anywhere;
+  }
 }
 
 html:has([data-scheme-surface]) {

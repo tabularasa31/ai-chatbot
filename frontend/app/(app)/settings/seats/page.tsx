@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { api, type TenantMember } from "@/lib/api";
 import { useAuthUser, useMembers } from "@/hooks/useApi";
-import { formatDate, parseApiDate } from "@/lib/format";
+import { formatDate, parseApiDate, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
@@ -14,6 +14,8 @@ import { linkClasses, SaveRow, SettingsSection, useSavedMessage } from "../_comp
 
 /** Monthly price of one seat, in US dollars. Nothing is charged during the beta. */
 const SEAT_PRICE_USD = 10;
+
+const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 function seatDate(value: string): string {
   const parsed = parseApiDate(value);
@@ -29,11 +31,10 @@ function SeatSummary({ seats }: { seats: number }) {
   return (
     <div>
       <p className="text-h2 text-fg">
-        {seats} {seats === 1 ? "seat" : "seats"}
+        {seats.toLocaleString()} {pluralize(seats, "seat", "seats")}
       </p>
       <p className="text-ui text-fg-muted">
-        × ${SEAT_PRICE_USD} per seat per month = ${seats * SEAT_PRICE_USD} a month. Free during the beta: no payment
-        method on file, nothing is charged.
+        {`At ${USD.format(SEAT_PRICE_USD)} per seat per month, that is ${USD.format(seats * SEAT_PRICE_USD)} a month. Free during the beta: no payment method on file, nothing is charged.`}
       </p>
       <p className="mt-2 text-caption text-fg-muted">
         A seat lets someone take and answer conversations in the Inbox. Everyone else can read.
@@ -118,10 +119,10 @@ function SeatHoldersSection({ members }: { members: TenantMember[] }) {
         {members.map((member) => (
           <li key={member.id} className="flex min-h-11 flex-wrap items-center gap-x-3 py-2">
             <div className="min-w-0 flex-1">
-              <p className="break-all text-ui text-fg">{member.email}</p>
+              <p className="break-anywhere text-ui text-fg">{member.email}</p>
               {member.status === "pending" && <p className="text-caption text-fg-muted">Invite pending</p>}
             </div>
-            <span className="text-caption text-fg-muted tabular-nums">{seatLabel(member)}</span>
+            <span className="shrink-0 whitespace-nowrap text-caption text-fg-muted tabular-nums">{seatLabel(member)}</span>
           </li>
         ))}
       </ul>

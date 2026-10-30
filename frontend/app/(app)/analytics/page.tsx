@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, Loader2 } from "lucide-react";
 import type { AnalyticsPeriod, AnalyticsSummaryResponse } from "@/lib/api";
+import { pluralize } from "@/lib/format";
 import { useAnalyticsSummary } from "@/hooks/useApi";
 import { buttonClasses } from "@/components/ui/button";
 import { SkeletonRegion } from "@/components/ui/skeleton";
@@ -54,7 +55,7 @@ function metricRows(data: AnalyticsSummaryResponse): MetricRow[] {
       detail:
         escalated == null
           ? undefined
-          : `${escalated.toLocaleString()} of ${data.conversations.toLocaleString()} conversations were escalated.`,
+          : `${escalated.toLocaleString()} of ${data.conversations.toLocaleString()} ${pluralize(data.conversations, "conversation", "conversations")} ${pluralize(escalated, "was", "were")} escalated.`,
       value: formatPercent(data.deflection_rate),
       link: { href: "/inbox?scope=all", label: "Open Inbox" },
     },

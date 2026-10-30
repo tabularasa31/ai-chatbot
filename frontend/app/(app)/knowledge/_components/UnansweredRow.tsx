@@ -86,7 +86,7 @@ export function UnansweredRow({
   return (
     <li ref={row} className="flex items-start gap-6 py-4">
       <div className="min-w-0 flex-1 space-y-1">
-        <p id={questionId} className="break-words text-body font-semibold text-fg">
+        <p id={questionId} className="break-anywhere text-body font-semibold text-fg">
           {group.question}
         </p>
         <RowMeta group={group} />

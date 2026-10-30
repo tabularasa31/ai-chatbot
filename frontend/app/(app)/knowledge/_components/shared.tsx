@@ -1,5 +1,5 @@
 import { ApiError, type DocumentListItem, type UrlSource } from "@/lib/api";
-import { parseApiDate } from "@/lib/format";
+import { parseApiDate, pluralize } from "@/lib/format";
 import type { SectionTab } from "@/components/ui/section-tabs";
 
 export type MixedRow =
@@ -18,7 +18,7 @@ export const NAME_BUTTON_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-o
 export const NAME_BUTTON_ON_BAND_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-surface-alt`;
 
 export function conversationsLabel(count: number): string {
-  return count === 1 ? "1 conversation" : `${count} conversations`;
+  return `${count.toLocaleString()} ${pluralize(count, "conversation", "conversations")}`;
 }
 
 const LIMIT_WARNING_RATIO = 0.9;

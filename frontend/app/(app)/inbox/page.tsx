@@ -114,7 +114,7 @@ function InboxPageContent() {
                 onChanged={refresh}
               />
             ) : (
-              <p className="p-6 text-ui text-fg-muted">Select a conversation.</p>
+              rows.length > 0 && <p className="p-6 text-ui text-fg-muted">Select a conversation.</p>
             )}
           </section>
         </div>

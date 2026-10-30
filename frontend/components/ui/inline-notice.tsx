@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Info, TriangleAlert, X } from "lucide-react";
 import { Button } from "./button";
+import { cn } from "./utils";
 
 const TONES = {
   info: { Icon: Info, surface: "bg-info-subtle", icon: "text-info", role: "status" },
@@ -13,17 +14,31 @@ export function InlineNotice({
   tone = "info",
   action,
   onDismiss,
+  singleLine = false,
 }: {
   children: ReactNode;
   tone?: keyof typeof TONES;
   action?: ReactNode;
   onDismiss?: () => void;
+  singleLine?: boolean;
 }) {
   const { Icon, surface, icon, role } = TONES[tone];
   return (
-    <div role={role} className={`flex items-start gap-3 rounded-control py-2 pl-4 pr-2 ${surface}`}>
-      <Icon size={16} aria-hidden="true" className={`mt-3 shrink-0 ${icon}`} />
-      <div className="min-w-0 flex-1 break-words py-2.5 text-ui text-fg">{children}</div>
+    <div
+      role={role}
+      className={cn(
+        "flex gap-3 rounded-control pl-4 pr-2",
+        singleLine ? "items-center py-2.5" : "items-start py-2",
+        surface,
+      )}
+    >
+      <Icon size={16} aria-hidden="true" className={cn("shrink-0", !singleLine && "mt-3", icon)} />
+      <div
+        title={singleLine && typeof children === "string" ? children : undefined}
+        className={cn("min-w-0 flex-1 text-ui text-fg", singleLine ? "truncate" : "break-anywhere py-2.5")}
+      >
+        {children}
+      </div>
       {action}
       {onDismiss && (
         <Button variant="ghost" size="icon" offset="surface" onClick={onDismiss} aria-label="Dismiss">

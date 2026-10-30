@@ -54,7 +54,7 @@ export function InstallWidget({ botId }: { botId: string }) {
       <section>
         <h2 className="mb-3 text-h2 text-fg">Bot ID</h2>
         <div className="flex flex-wrap items-center gap-3">
-          <code className="min-w-0 break-all rounded-control bg-surface-alt px-3 py-2 font-mono text-ui text-fg">
+          <code className="min-w-0 break-anywhere rounded-control bg-surface-alt px-3 py-2 font-mono text-ui text-fg">
             {botId}
           </code>
           <CopyButton text={botId} label="Copy" variant="secondary" />

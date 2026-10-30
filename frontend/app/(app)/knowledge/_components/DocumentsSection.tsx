@@ -204,7 +204,7 @@ export function DocumentsSection() {
         <InlineNotice tone="danger" onDismiss={sources.clearUploadErrors}>
           <ul>
             {sources.uploadErrors.map(({ filename, message }) => (
-              <li key={filename} className="break-words">{`${filename}: ${message}`}</li>
+              <li key={filename} className="break-anywhere">{`${filename}: ${message}`}</li>
             ))}
           </ul>
         </InlineNotice>
@@ -216,7 +216,7 @@ export function DocumentsSection() {
             <th scope="col" className="px-4 py-3 font-medium">Source</th>
             <th scope="col" className="w-48 px-4 py-3 font-medium">Status</th>
             <th scope="col" className="hidden w-24 px-4 py-3 text-right font-medium xl:table-cell">Pages</th>
-            <th scope="col" className="w-36 px-4 py-3 text-right font-medium">Updated</th>
+            <th scope="col" className="w-44 whitespace-nowrap px-4 py-3 text-right font-medium">Updated</th>
             <th scope="col" className="w-40 px-2 py-3">
               <span className="sr-only">Actions</span>
             </th>

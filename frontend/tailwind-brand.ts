@@ -25,6 +25,7 @@ const CHROME_COLORS = {
   "chrome-line": "#2E2E3E",
   "chrome-line-strong": "#7C7793",
   "chrome-hover": "#1E1E2E",
+  "chrome-press": "#2A2A3D",
   "chrome-active": "#2A2147",
   "chrome-accent": "#A78BFA",
   "chrome-accent-fg": "#0A0A0F",
@@ -36,6 +37,7 @@ const SCHEME_COLORS = {
     surface: "#FFFFFF",
     "surface-alt": "#F1F5F9",
     line: "#E2E8F0",
+    "line-button": "#CBD5E1",
     "line-strong": "#7C8BA1",
     fg: "#1E293B",
     "fg-muted": "#475569",
@@ -44,15 +46,16 @@ const SCHEME_COLORS = {
     "brand-hover": "#6D28D9",
     "brand-active": "#5B21B6",
     "brand-on": "#FFFFFF",
-    "brand-subtle": "#F5F3FF",
+    "brand-subtle": "#EDE9FE",
     focus: "#7C3AED",
     success: "#15803D",
     "success-subtle": "#F0FDF4",
-    warning: "#B45309",
+    warning: "#A15C07",
     "warning-subtle": "#FFFBEB",
     danger: "#B91C1C",
     "danger-subtle": "#FEF2F2",
     "danger-hover": "#991B1B",
+    "danger-active": "#7F1D1D",
     "danger-on": "#FFFFFF",
     info: "#0369A1",
     "info-subtle": "#F0F9FF",
@@ -63,6 +66,7 @@ const SCHEME_COLORS = {
     surface: "#222233",
     "surface-alt": "#2B2B3F",
     line: "#3A3A50",
+    "line-button": "#4A4A63",
     "line-strong": "#7C7793",
     fg: "#FAF5FF",
     "fg-muted": "#A9A3BA",
@@ -80,6 +84,7 @@ const SCHEME_COLORS = {
     danger: "#F87171",
     "danger-subtle": "#432227",
     "danger-hover": "#FCA5A5",
+    "danger-active": "#EF4444",
     "danger-on": "#0A0A0F",
     info: "#38BDF8",
     "info-subtle": "#183246",
@@ -101,6 +106,7 @@ const SCHEME_SHADOWS = {
 type Scheme = keyof typeof SCHEME_COLORS;
 
 const SCRIM_OPACITY = 0.6;
+const EASE_OUT = "cubic-bezier(0.23, 1, 0.32, 1)";
 const SCHEME_SELECTOR: Record<Scheme, string> = { light: ":root", dark: ".dark" };
 
 export const SYSTEM_SANS = ["system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"];
@@ -153,7 +159,7 @@ export function brandTokensPlugin(schemes: readonly Scheme[]) {
   return plugin(({ addBase, addUtilities, theme }) => {
     addBase(Object.fromEntries(schemes.map((s) => [SCHEME_SELECTOR[s], schemeVariables(s)])));
     addUtilities({
-      ".text-display": { fontSize: "1.5rem", lineHeight: "2rem", fontWeight: "600" },
+      ".text-display": { fontSize: "1.5rem", lineHeight: "2rem", fontWeight: "600", letterSpacing: "-0.02em" },
       [`@media (min-width: ${theme("screens.md")})`]: {
         ".text-display": { fontSize: "2.25rem", lineHeight: "2.75rem" },
       },
@@ -177,8 +183,19 @@ export const brandThemeExtend = {
     caption: ["0.75rem", { lineHeight: "1rem" }],
     ui: ["0.875rem", { lineHeight: "1.25rem" }],
     body: ["1rem", { lineHeight: "1.5rem" }],
-    h2: ["1.25rem", { lineHeight: "1.75rem", fontWeight: "600" }],
-    h1: ["1.5rem", { lineHeight: "2rem", fontWeight: "600" }],
+    h2: ["1.25rem", { lineHeight: "1.75rem", fontWeight: "600", letterSpacing: "-0.01em" }],
+    h1: ["1.5rem", { lineHeight: "2rem", fontWeight: "600", letterSpacing: "-0.015em" }],
+  },
+  transitionDuration: {
+    DEFAULT: "120ms",
+  },
+  transitionTimingFunction: {
+    DEFAULT: EASE_OUT,
+  },
+  scale: {
+    press: "0.97",
+    "press-sm": "0.94",
+    "press-wide": "0.985",
   },
   maxWidth: {
     measure: "34rem",
@@ -247,11 +264,18 @@ const proseColors = {
 };
 
 const proseHeadings = {
-  h1: { fontSize: "1.5rem", lineHeight: "2rem", fontWeight: "600", marginBottom: "1rem" },
+  h1: {
+    fontSize: "1.5rem",
+    lineHeight: "2rem",
+    fontWeight: "600",
+    letterSpacing: "-0.015em",
+    marginBottom: "1rem",
+  },
   h2: {
     fontSize: "1.25rem",
     lineHeight: "1.75rem",
     fontWeight: "600",
+    letterSpacing: "-0.01em",
     marginTop: "3rem",
     marginBottom: "1rem",
   },
@@ -286,7 +310,7 @@ export const docsTypography = {
         "a:not([data-card])": {
           fontWeight: "400",
           textDecorationColor: "currentColor",
-          transition: "color 120ms",
+          transition: `color 120ms ${EASE_OUT}`,
         },
         "a:not([data-card]):hover": { color: "theme('colors.brand-hover')", opacity: "1" },
         "a:not([data-card]):focus-visible": {

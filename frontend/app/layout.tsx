@@ -4,6 +4,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { getMetadataBase } from "@/lib/site";
 import { SCHEME_BOOT_SCRIPT } from "@/lib/scheme";
+import { TouchActiveEnabler } from "@/components/ui/touch-active";
 import { PostHogProvider } from "./providers/PostHogProvider";
 import "./globals.css";
 
@@ -41,6 +42,7 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         <PostHogProvider>{children}</PostHogProvider>
+        <TouchActiveEnabler />
         <Analytics />
         <SpeedInsights />
       </body>

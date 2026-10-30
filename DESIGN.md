@@ -1,4 +1,4 @@
-# DESIGN.md — Chat9 design system (v2, 2026-10-16)
+# DESIGN.md — Chat9 design system (v2.1, 2026-10-30)
 
 Scope: marketing site + blog, auth pages, tenant dashboard, embeddable chat widget, client docs (fumadocs).
 Every screen uses only the values below; no value is invented per screen.
@@ -16,7 +16,7 @@ Contrast figures were computed by hand with the WCAG 2.x relative-luminance form
 
 ## 2. Type scale (6 sizes, 3 weights)
 
-Weights: 400 regular (body), 500 medium (labels, buttons, nav, table headers), 600 semibold (headings only). No other weights, no letter-spacing, no all-caps.
+Weights: 400 regular (body), 500 medium (labels, buttons, nav, table headers), 600 semibold (headings only). No other weights, no all-caps. Letter-spacing exists only as heading tracking (below); body, UI and caption text keep the font's default.
 
 | Token | Size / line height | Use |
 |---|---|---|
@@ -28,6 +28,7 @@ Weights: 400 regular (body), 500 medium (labels, buttons, nav, table headers), 6
 | `text-display` | 36 / 44, 600, from 768px (24/32 below) | marketing/blog page title only |
 
 Heading map: display = marketing/blog H1; h1 = H1 everywhere else; h2 = H2; H3 and below = `text-body` 600. Headings of one level never differ between screens.
+Tracking tightens as size grows: display -0.02em, h1 -0.015em, h2 -0.01em; H3 and below, body, ui and caption 0. The same values apply to docs prose headings.
 Body line length 45-75 characters: prose containers on marketing and blog use `max-w-measure` (34rem, about 70-75 characters in Geist; `max-w-prose` at 65ch measured 88-96 characters because Geist is narrow).
 Tables, amounts, counters, dates in columns: `tabular-nums`; numeric columns right-aligned, header aligned the same way.
 
@@ -55,7 +56,7 @@ Elevation: shadows only for things that float. Cards, sections, banners, auth ca
 | `scrim` | `#0A0A0F` at 60% | `#0A0A0F` at 60% | behind modal, drawer |
 
 In dark, shadows are nearly invisible: floating layers also use `surface-alt` + 1px `line`.
-Motion: 120ms ease-out for colour/opacity state changes; 200ms for modal/drawer enter. Nothing scales, bounces or loops decoratively (remove `hover:scale-105`). Honour `prefers-reduced-motion` (no transition).
+Motion: state and colour changes take 120ms on a strong ease-out, `cubic-bezier(0.23, 1, 0.32, 1)`, which is also Tailwind's default transition (the built-in 150ms ease-in-out is replaced). Modal enter 200ms, same curve (opacity and scale 0.96 to 1, from the centre); drawer enter 200ms, `cubic-bezier(0.32, 0.72, 0, 1)` (slides from the right edge); the scrim fades with its panel. There is no exit motion: closing is instant; the one exception is Flash, which fades out in 120ms. Buttons press in on `:active` with scale 0.97 (0.94 for 32px plates and round icon buttons, 0.985 for full-width buttons); nothing else scales: no hover scale, no scale on rows, cards, surfaces or the sidebar. Progress spinners (`Loader2`) are the only looping element and keep rotating under reduced motion; skeletons are static (no pulse, no shimmer). Hover styles apply only on devices that can hover (Tailwind `hoverOnlyWhenSupported`); touch gets feedback on pointer-down through `:active`. Reduced motion: one global rule sets transitions to 0 and drops scale; enter animations become a 120ms opacity fade; spinners are unaffected.
 
 ## 4. Colour roles
 
@@ -70,7 +71,8 @@ Token names avoid `accent`, `primary`, `foreground`, `card` because the fumadocs
 | `surface` cards, inputs, modals, tables | `#FFFFFF` | - |
 | `surface-alt` hover rows, table header, code, assistant bubble, skeleton | `#F1F5F9` | - |
 | `line` dividers, card border (decorative, exempt) | `#E2E8F0` | - |
-| `line-strong` control boundaries (input, select, checkbox, secondary button) | `#7C8BA1` | 3.46 on surface, 3.29 on canvas, 3.16 on surface-alt |
+| `line-strong` control boundaries (input, select, checkbox) | `#7C8BA1` | 3.46 on surface, 3.29 on canvas, 3.16 on surface-alt |
+| `line-button` secondary button outline | `#CBD5E1` | 1.48 surface, 1.41 canvas, 1.36 surface-alt (decorative: the button is identified by its 4.5:1+ label) |
 | `fg` primary text | `#1E293B` | 14.62 surface, 13.88 canvas, 13.35 surface-alt |
 | `fg-muted` secondary text | `#475569` | 7.58 surface, 7.19 canvas, 6.92 surface-alt |
 | `fg-faint` placeholder, disabled, hints | `#586579` | 5.91 surface, 5.61 canvas, 5.40 surface-alt |
@@ -78,12 +80,13 @@ Token names avoid `accent`, `primary`, `foreground`, `card` because the fumadocs
 | `brand-hover` | `#6D28D9` | white on it 7.10 |
 | `brand-active` | `#5B21B6` | white on it 8.99 |
 | `brand-on` text on brand | `#FFFFFF` | 5.70 on brand |
-| `brand-subtle` selected row/nav bg | `#F5F3FF` | brand text on it 5.20 |
+| `brand-subtle` selected row/nav bg | `#EDE9FE` | brand text on it 4.80 |
 | `focus` ring | `#7C3AED` (= brand) | 5.70 surface, 5.41 canvas (needs 3.0) |
 | `success` / `success-subtle` | `#15803D` / `#F0FDF4` | 5.02 surface, 4.76 canvas, 4.58 surface-alt, 4.79 on subtle |
-| `warning` / `warning-subtle` | `#B45309` / `#FFFBEB` | 5.02 surface, 4.77 canvas, 4.58 surface-alt, 4.84 on subtle |
+| `warning` / `warning-subtle` | `#A15C07` / `#FFFBEB` | 5.19 surface, 4.92 canvas, 4.73 surface-alt, 5.00 on subtle |
 | `danger` / `danger-subtle` | `#B91C1C` / `#FEF2F2` | 6.47 surface, 6.14 canvas, 5.91 on subtle |
 | `danger-hover` | `#991B1B` | white on it 8.31 |
+| `danger-active` | `#7F1D1D` | white on it 10.02 |
 | `danger-on` | `#FFFFFF` | 6.47 on danger |
 | `info` / `info-subtle` | `#0369A1` / `#F0F9FF` | 5.93 surface, 5.63 canvas, 5.56 on subtle |
 
@@ -96,6 +99,7 @@ Token names avoid `accent`, `primary`, `foreground`, `card` because the fumadocs
 | `surface-alt` | `#2B2B3F` | - |
 | `line` (decorative, exempt) | `#3A3A50` | - |
 | `line-strong` | `#7C7793` | 3.66 surface, 4.03 canvas, 3.23 surface-alt |
+| `line-button` | `#4A4A63` | 1.82 surface, 2.01 canvas, 1.61 surface-alt |
 | `fg` | `#FAF5FF` | 14.55 surface, 16.05 canvas, 12.88 surface-alt |
 | `fg-muted` | `#A9A3BA` | 6.42 surface, 7.08 canvas, 5.68 surface-alt |
 | `fg-faint` | `#9B95AD` | 5.43 surface, 5.98 canvas, 4.80 surface-alt |
@@ -109,6 +113,7 @@ Token names avoid `accent`, `primary`, `foreground`, `card` because the fumadocs
 | `warning` / `warning-subtle` | `#FBBF24` / `#3A2D16` | 9.35 surface, 10.31 canvas, 8.03 on subtle |
 | `danger` / `danger-subtle` | `#F87171` / `#432227` | 5.65 surface, 6.23 canvas, 5.07 on subtle |
 | `danger-hover` | `#FCA5A5` | danger-on on it 10.40 |
+| `danger-active` | `#EF4444` | danger-on on it 5.25 |
 | `danger-on` | `#0A0A0F` | 7.15 on danger |
 | `info` / `info-subtle` | `#38BDF8` / `#183246` | 7.29 surface, 8.04 canvas, 6.19 on subtle |
 
@@ -119,6 +124,7 @@ Contrast changes made to the existing look:
 - Cyan (`#67E8F9`, `#5EC8FF`) link/tag colours on blog/docs are retired: links use `brand`; one accent only.
 - `slate-400` text (labels, ~2.56 on white) and `gray-400` text in the widget (~2.5) fail 4.5 and are replaced by `fg-faint`.
 - White text on `amber-600` buttons (~3.2) fails; warning is never a button fill.
+- Light brand-subtle is `#EDE9FE` (was `#F5F3FF`, 1.10:1 against surface, invisible as a selection fill; now 1.19:1 with 4.80:1 brand text). Light warning is `#A15C07` (more amber, so Failed and Fair statuses no longer read as the same red-brown).
 - Disabled controls: `surface-alt` fill + `fg-faint` text, no opacity trick. Contrast-exempt by WCAG, but still readable.
 
 ### Widget-only roles
@@ -131,7 +137,7 @@ Contrast changes made to the existing look:
 - Stored in one cookie `chat9-scheme` (`system|light|dark`; `Path=/`, 1 year, `SameSite=Lax`, readable by script because the scheme menu writes it). Marketing, auth, dashboard and docs read the same cookie, so the choice carries across them; site, auth, dashboard and docs are one Next.js app on one host, so a host-only cookie (no `Domain`) is enough.
 - No flash: the server renders no scheme class, so pages stay statically cacheable. A tiny blocking script in the root layout's `<head>` reads the cookie, resolves System through `matchMedia`, and sets `class="dark"` on `<html>` before first paint; it re-resolves when the OS preference or the cookie changes (the scheme menu dispatches `chat9-scheme-change`). `<html>` carries `suppressHydrationWarning`. A surface that forces its own scheme (until it is migrated) renders `[data-scheme-forced]`; while that element is mounted the script does not touch `<html>`. A migrated surface calls `resolveScheme()` (`frontend/lib/scheme.ts`) when it mounts, so client-side navigation from a forcing surface restores the stored scheme. A surface that has migrated to tokens renders `data-scheme-surface`, which sets `color-scheme` to match the resolved scheme so native controls and scrollbars follow.
 - Docs: opts into the scheme. `forcedTheme` and fumadocs' own toggle are gone (`RootProvider theme.enabled = false`, `disableThemeSwitch`); fumadocs reads the same `.dark` class, so there is no second storage key and no second control. The docs layout renders `SchemeSurface` (`data-scheme-surface` + `resolveScheme()` on mount).
-- Scheme menu (`ui/theme-menu.tsx`, one component everywhere; `surface` picks `canvas` or `chrome` styling): a quiet icon trigger that opens a three-row menu. Trigger: no border and no fill at rest, 44x44 hit area with a 32px round visual and a 16px lucide glyph showing the chosen setting (`Monitor` System, `Sun` Light, `Moon` Dark); rest `fg-muted` (`chrome-fg-muted` on chrome), hover and menu open `fg` on a `surface-alt` (`chrome-hover`) fill; focus ring 2px around the visual, offset in the surface colour (`focus` / `chrome-accent`); accessible name `Colour scheme: <choice>`, `aria-haspopup="menu"`, `aria-expanded`, tooltip with the same text. Menu: `role="menu"`, 160px, `p-1`, `rounded-control`, `shadow-pop`, three 44px `role="menuitemradio"` rows (System, Light, Dark; 16px icon, `text-ui` 500 label, 16px `Check` on the current one), no arrow, no scrim, 4px from the trigger's visual edge, opens on the preferred side and flips when it has no room. Canvas: light `surface` + 1px `line`, dark `surface-alt` + 1px `line`; row hover `surface-alt` (dark: `canvas`); current row `brand`. Chrome (same in both schemes): `chrome` + 1px `chrome-line`, row hover `chrome-hover`, current row `chrome-accent`. Keys: click, Enter, Space or ArrowDown on the trigger opens it on the current row; ArrowUp/ArrowDown wrap, Home/End jump, Enter/Space/click applies at once (no save step), closes and returns focus to the trigger; Escape closes and returns focus; Tab closes without selecting; an outside press closes.
+- Scheme menu (`ui/theme-menu.tsx`, one component everywhere; `surface` picks `canvas` or `chrome` styling): a quiet icon trigger that opens a three-row menu. Trigger: no border and no fill at rest, 44x44 hit area with a 32px round visual and a 16px lucide glyph showing the chosen setting (`Monitor` System, `Sun` Light, `Moon` Dark); rest `fg-muted` (`chrome-fg-muted` on chrome), hover and menu open `fg` on a `surface-alt` (`chrome-hover`) fill; pressed: the plate takes scale 0.94 and the next fill (`line`; `chrome-press` on chrome); focus ring 2px around the visual, offset in the surface colour (`focus` / `chrome-accent`); accessible name `Colour scheme: <choice>`, `aria-haspopup="menu"`, `aria-expanded`, tooltip with the same text. Menu: `role="menu"`, 160px, `p-1`, `rounded-control`, `shadow-pop`, three 44px `role="menuitemradio"` rows (System, Light, Dark; 16px icon, `text-ui` 500 label, 16px `Check` on the current one), no arrow, no scrim, 4px from the trigger's visual edge, opens on the preferred side and flips when it has no room. Canvas: light `surface` + 1px `line`, dark `surface-alt` + 1px `line`; row hover `surface-alt` (dark: `canvas`); current row `brand`. Chrome (same in both schemes): `chrome` + 1px `chrome-line`, row hover `chrome-hover`, current row `chrome-accent`. Keys: click, Enter, Space or ArrowDown on the trigger opens it on the current row; ArrowUp/ArrowDown wrap, Home/End jump, Enter/Space/click applies at once (no save step), closes and returns focus to the trigger; Escape closes and returns focus; Tab closes without selecting; an outside press closes.
 - Placement, one per surface: dashboard = top bar account area, between the e-mail and Log out, opens below; marketing + blog = footer, last item of the links row (after Contact support, same 24px rhythm, outside the `nav` landmark), no caption; auth = below the card, trigger glyph aligned to the card edge; docs = foot of the docs sidebar (inside the mobile drawer on narrow widths); all but the dashboard open upward. Not in any header except the dashboard top bar, not in the widget.
 
 ### 4.2 Chrome (dashboard sidebar and top bar, widget header)
@@ -146,6 +152,7 @@ Dark in both schemes, same values in both; the working area keeps its scheme. On
 | `chrome-line` | `#2E2E3E` | dividers, quiet badge fill (decorative, exempt) |
 | `chrome-line-strong` | `#7C7793` | "Powered by Chat9" text in the widget header |
 | `chrome-hover` | `#1E1E2E` | row and button hover |
+| `chrome-press` | `#2A2A3D` | pressed fill for rows and plates (one step past `chrome-hover`) |
 | `chrome-active` | `#2A2147` | selected row fill |
 | `chrome-accent` | `#A78BFA` | selected text and icon, leading bar, focus ring, brand badge fill |
 | `chrome-accent-fg` | `#0A0A0F` | text on `chrome-accent` |
@@ -153,6 +160,7 @@ Dark in both schemes, same values in both; the working area keeps its scheme. On
 Contrast (text >= 4.5, UI >= 3):
 - `chrome-fg` on chrome 18.41, hover 15.28, active 13.91, `chrome-line` 12.41.
 - `chrome-fg-muted` on chrome 8.12, hover 6.74.
+- `chrome-fg` on chrome-press 13.07, `chrome-fg-muted` 5.76, `chrome-accent` 5.15.
 - `chrome-accent` on chrome 7.26, hover 6.03, active 5.48; `chrome-accent-fg` on `chrome-accent` 7.26.
 - `chrome-line-strong` on chrome 4.62 (widget attribution text only; lowest chrome text pair).
 - Selection does not rely on the fill (active vs chrome 1.32): text and icon colour, the 2px `chrome-accent` leading bar (7.26) and `aria-current`. There is no `chrome-focus`: the light `focus` is 2.88 on `chrome-hover` and 2.62 on `chrome-active` (fails 3:1), so chrome uses `chrome-accent`.
@@ -160,11 +168,11 @@ Contrast (text >= 4.5, UI >= 3):
 
 ## 5. Tailwind mapping
 
-Implementation shape: CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (the widget build emits both sets, dark under `html[data-theme="dark"]`, chosen by the `theme` URL param; the widget also reads the `accent` and `position` URL params, and uses `canvas` as the message-area fill in both themes; its dark surfaces are one step lighter than the dashboard's: surface `#222233`, surface-alt `#2B2B3F`, input fill `#1A1A26`, line `#3A3A50`, line-strong `#7C7793`, fg-faint `#9B95AD`, brand-subtle `#2D2552`, danger-subtle `#432227`, info-subtle `#183246`); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. The nine chrome keys are one scheme-independent table (`CHROME_COLORS`) emitted on `:root` by `chromeTokensPlugin`, which only the dashboard config registers; the widget build registers the plugin too, for the header and code blocks. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). The `nd-*` palette is not used.
+Implementation shape: CSS variables (`--c-canvas` ... as space-separated RGB) on `:root` for light and on `.dark` for dark (the widget build emits both sets, dark under `html[data-theme="dark"]`, chosen by the `theme` URL param; the widget also reads the `accent` and `position` URL params, and uses `canvas` as the message-area fill in both themes; its dark surfaces are one step lighter than the dashboard's: surface `#222233`, surface-alt `#2B2B3F`, input fill `#1A1A26`, line `#3A3A50`, line-strong `#7C7793`, fg-faint `#9B95AD`, brand-subtle `#2D2552`, danger-subtle `#432227`, info-subtle `#183246`); `tailwind.config.ts` `darkMode: "class"`; colours declared as `rgb(var(--c-x) / <alpha-value>)` in the shared `tailwind-brand.ts` so dashboard and widget-app builds stay in sync. `tailwind.config.ts` and the widget config set `future.hoverOnlyWhenSupported`, so every `hover:` and `group-hover:` utility is wrapped in `@media (hover: hover) and (pointer: fine)`. The ten chrome keys are one scheme-independent table (`CHROME_COLORS`) emitted on `:root` by `chromeTokensPlugin`, which only the dashboard config registers; the widget build registers the plugin too, for the header and code blocks. The fumadocs preset already switches on the `.dark` class: feed its `light` and `dark` slots with the two scheme values (derive HSL from the hex, do not hand-maintain). The `nd-*` palette is not used.
 
 Fumadocs variable -> token: `background`=canvas, `foreground`=fg, `muted`=surface-alt, `muted-foreground`=fg-muted, `card`/`popover`=surface, `border`=line, `primary`=brand, `primary-foreground`=brand-on, `secondary`=surface-alt, `accent`=surface-alt, `accent-foreground`=fg, `ring`=focus. `accent` is surface-alt, not brand-subtle: fumadocs uses it for hover and selected-result fills while the active sidebar row is `primary/10`, and with `brand-subtle` the two would look the same.
 
-Names: `bg-canvas`, `bg-surface`, `bg-surface-alt`, `border-line`, `border-line-strong`, `text-fg`, `text-fg-muted`, `text-fg-faint`, `bg-brand hover:bg-brand-hover active:bg-brand-active text-brand-on`, `bg-brand-subtle`, `ring-focus`, `text-success bg-success-subtle` (same for warning, danger, info), `bg-danger text-danger-on hover:bg-danger-hover`, `bg-scrim`; chrome: `bg-chrome border-chrome-line text-chrome-fg text-chrome-fg-muted hover:bg-chrome-hover bg-chrome-active text-chrome-accent bg-chrome-accent text-chrome-accent-fg text-chrome-line-strong ring-chrome-accent ring-offset-chrome shadow-chrome-selected` (2px inset leading bar). Sizes: `text-caption|ui|body|h2|h1|display`. Also `shadow-pop`, `shadow-overlay`, `rounded-tag|control|surface|bubble`. Control height `h-11` (44px).
+Names: `bg-canvas`, `bg-surface`, `bg-surface-alt`, `border-line`, `border-line-strong`, `text-fg`, `text-fg-muted`, `text-fg-faint`, `bg-brand hover:bg-brand-hover active:bg-brand-active text-brand-on`, `bg-brand-subtle`, `ring-focus`, `text-success bg-success-subtle` (same for warning, danger, info), `bg-danger text-danger-on hover:bg-danger-hover active:bg-danger-active`, `border-line-button`, `active:bg-line`, `scale-press|press-sm|press-wide`, `bg-scrim`; chrome: `bg-chrome border-chrome-line text-chrome-fg text-chrome-fg-muted hover:bg-chrome-hover bg-chrome-active text-chrome-accent bg-chrome-accent text-chrome-accent-fg bg-chrome-press text-chrome-line-strong ring-chrome-accent ring-offset-chrome shadow-chrome-selected` (2px inset leading bar). Sizes: `text-caption|ui|body|h2|h1|display`. Also `shadow-pop`, `shadow-overlay`, `rounded-tag|control|surface|bubble`. Control height `h-11` (44px).
 
 Old value -> token:
 
@@ -194,20 +202,20 @@ Old value -> token:
 | `rounded-xl` 12, `rounded-[28px]` | `rounded-surface` |
 | `rounded-2xl` bubbles | `rounded-bubble` |
 | `shadow-sm`, `shadow-md` on cards and auth card, `shadow-[0_24px_80px_...]` | none (floating layers: `shadow-overlay`) |
-| `hover:scale-105`, `transition-all` | colour transition only |
+| `hover:scale-*`, `transition-all`, `animate-pulse` | colour transition only (press scale on buttons only; spinners are the one loop) |
 
 ## 6. Components (only those in the product today)
 
 General: every interactive element has hover, active, focus-visible, disabled; hit area at least 44x44 (`h-11`; icon buttons `h-11 w-11`, glyph 20px). Inline text links inside prose are exempt. No action is available only on hover; row actions are always visible. One primary action per screen (or per modal/form section).
 
-Focus: `focus-visible` only, 2px `focus` ring with 2px offset in the underlying surface colour; never `outline-none` without this ring. On chrome (`offset="chrome"`, `FOCUS_RING.chrome`): `chrome-accent` ring, offset `chrome`. Hover: one colour step (never scale/translate). Active: `brand-active`. Disabled: see 4. Widget composer exception: the input's 1px border becomes a 2px `focus` border (inset shadow, no layout shift), no outer ring, no offset ring; other inputs keep the ring.
+Focus: `focus-visible` only, 2px `focus` ring with 2px offset in the underlying surface colour; never `outline-none` without this ring. On chrome (`offset="chrome"`, `FOCUS_RING.chrome`): `chrome-accent` ring, offset `chrome`. Hover: one colour step (never scale/translate). Active: one step past hover (primary `brand-active`, destructive `danger-active`, secondary and ghost fill `line`, chrome `chrome-press`), plus the button press scale of section 3 on Buttons only. Disabled and busy buttons show no hover, no press fill and no scale. Disabled: see 4. Widget composer exception: the input's 1px border becomes a 2px `focus` border (inset shadow, no layout shift), no outer ring, no offset ring; other inputs keep the ring.
 
 Buttons (`ui/button.tsx`: `Button` for `<button>`, `buttonClasses` for links that look like buttons; one definition of height 44, radius, focus ring and the variants below, so no component copies the class strings; `offset` names the surface the ring offset matches). 14/20, 500, `px-4`, `rounded-control`, label is a verb describing the result: "Save widget settings", not "Submit":
 - Primary: `brand` fill, `brand-on` text. Link CTAs (`<a>`) look identical.
-- Secondary: `surface` fill, 1px `line-strong`, `fg` text; hover `surface-alt`. Cancel, Copy, Back.
-- Destructive: `danger` fill, `danger-on` text. Only in the confirm step of a destructive flow (`ConfirmDialog`), with the consequence stated next to it. Never the default focus in a modal.
-- Ghost: no fill, `fg-muted`, hover `surface-alt`. On chrome (Log out, built like the scheme menu trigger beside it): a 44px hit area around a 32px `rounded-control` plate (`px-3`, `CHROME_PLATE`) that carries `chrome-fg-muted`, the `chrome-hover` fill with `chrome-fg` text on hover and press, and the focus ring, so the ring stays inside the 48px bar. Icon-only (`size="icon"` = 44x44) for glyph actions such as close; with a text label (`size="default"`) for quiet row actions such as Edit, Reject, Dismiss, Discard draft. Reason: a row with several text actions cannot make all of them Secondary without the row competing with the page's primary action.
-- Disabled: `surface-alt` fill and `fg-faint` text (Ghost keeps no fill), `cursor-not-allowed`. Widget send follows this rule when the input is empty (grey, `disabled`) and takes the `accent` fill once there is text; while a request is in flight it keeps the `accent` fill with a spinner (`aria-busy`, clicks ignored).
+- Secondary: `surface` fill, 1px `line-button` (lighter than input boundaries on purpose: the label identifies the button), `fg` text; hover `surface-alt`; active `line` fill with a `line-strong` border. No icon-only Secondary (use Ghost). Cancel, Copy, Back.
+- Destructive: `danger` fill, `danger-on` text. Only in the confirm step of a destructive flow (`ConfirmDialog`), with the consequence stated next to it. Never the default focus in a modal. Hover `danger-hover`, active `danger-active`.
+- Ghost: no fill, `fg-muted`, hover `surface-alt`, active `line` fill with `fg` text. On chrome (Log out, built like the scheme menu trigger beside it): a 44px hit area around a 32px `rounded-control` plate (`px-3`, `CHROME_PLATE`) that carries `chrome-fg-muted`, the `chrome-hover` fill with `chrome-fg` text on hover, the `chrome-press` fill on press, and the focus ring, so the ring stays inside the 48px bar. Icon-only (`size="icon"` = 44x44) for glyph actions such as close; with a text label (`size="default"`) for quiet row actions such as Edit, Reject, Dismiss, Discard draft. Reason: a row with several text actions cannot make all of them Secondary without the row competing with the page's primary action.
+- Disabled: `surface-alt` fill and `fg-faint` text; Ghost keeps no fill and its label or glyph drops to `line-strong` (3.46 light, 3.66 dark), visibly fainter than the enabled `fg-muted` (chrome Ghost: `chrome-line-strong`), `cursor-not-allowed`. Widget send follows this rule when the input is empty (grey, `disabled`) and takes the `accent` fill once there is text; while a request is in flight it keeps the `accent` fill with a spinner (`aria-busy`, clicks ignored).
 - Loading (`busy` prop): a 16px spinner (lucide `Loader2`, only rotating element allowed) overlays the button centre while the label is hidden (`opacity-0`, still in the accessible name), so width never changes; `aria-busy`, clicks ignored, focus kept. The label never changes text while busy; progress such as "Uploading 2 of 5" goes in a separate `role="status"` line next to the button.
 - Order in a row: secondary left, primary right; on the auth card the primary is full-width.
 
@@ -219,7 +227,7 @@ Card: only for a standalone, actionable object (a source, a document, an inbox c
 
 Count badge (`ui/count-badge.tsx`, new): number pill in a nav row. `rounded-full`, `h-5 min-w-5 px-1.5`, `text-caption` 500, `tabular-nums`; above 99 shows `99+`; renders nothing at 0 (also while loading or on error); a visually hidden suffix carries the meaning ("3 need attention"). Sits on chrome: tone `brand` (`chrome-accent` fill, `chrome-accent-fg` text) only for what needs a person; tone `quiet` (`chrome-line` fill, `chrome-fg` text) for the rest. Reason: the sidebar shows it twice and the badge rule (one count, one definition) must live in one place.
 
-Modal and drawer: `surface`, `rounded-surface`, `shadow-overlay`, `scrim`. Modal `max-w-md`, `p-6`, title `text-h2`, only for a decision or a consequence that must be confirmed (link-safety confirm, destructive confirm). Drawer (document preview) from the right, `max-w-xl`, full height, same chrome. Both: focus moves in, is trapped, returns to the trigger on close; Escape and a visible close control (lucide `X`, 44px) close; the scrim click closes unless there is unsaved input. Buttons bottom-right per button order.
+Modal and drawer: `surface`, `rounded-surface`, `shadow-overlay`, `scrim`. Modal `max-w-md`, `p-6`, title `text-h2`, only for a decision or a consequence that must be confirmed (link-safety confirm, destructive confirm). Drawer (document preview) from the right, `max-w-xl`, full height, same chrome. Both: focus moves in, is trapped, returns to the trigger on close; Escape and a visible close control (lucide `X`, 44px) close; the scrim click closes unless there is unsaved input. Buttons bottom-right per button order. Enter motion: section 3. Closing is instant.
 
 Table: header `text-caption` 500 `fg-muted`, sentence case, 1px `line` below; rows separated by 1px `line`, no zebra, no per-cell borders; hover `surface-alt`; row height 44 when the row has controls, 40 otherwise; cell padding `px-4`. Numbers and dates `tabular-nums`, right-aligned with their header. Long text wraps in the first column; IDs/keys in Geist Mono and truncated with the full value in a tooltip. Empty, loading, error render inside the table region (below).
 
@@ -241,7 +249,7 @@ Drawer (`ui/drawer.tsx`, new): the Drawer rule above as a component: native `<di
 
 Fields (`ui/field.tsx`, new): `Input`, `Select`, `Textarea` implementing the Text input rule: visible label above (`hideLabel` makes it screen-reader-only for toolbar filters), optional helper, optional error (border `danger`, message linked with `aria-describedby`, `aria-invalid`). Reason: many fields on Knowledge; one definition keeps height, border and focus ring identical.
 
-Skeleton (`ui/skeleton.tsx`, new): `Skeleton` is a `surface-alt` block with no shimmer; `SkeletonRegion` wraps a set of them, renders nothing for 200ms, then reveals them with `role="status"` and `aria-busy`. Reason: the Loading rule needs the delay in one place; replaces `PageLoader` and "Loading..." lines on these pages.
+Skeleton (`ui/skeleton.tsx`, new): `Skeleton` is a `surface-alt` block with no shimmer and no pulse; `SkeletonRegion` wraps a set of them, renders nothing for 200ms, then reveals them with `role="status"` and `aria-busy`. Reason: the Loading rule needs the delay in one place; replaces `PageLoader` and "Loading..." lines on these pages.
 
 Flash (`ui/flash.tsx`): `useFlash()` returns the current message and a setter that clears it after 4s; `FlashMessage` renders it as `success` text with a 16px `Check`. The `aria-live="polite"` region stays mounted so the text is announced when it appears. Reason: the completed-action tier (section 6, Banners and notices, tier 3) is used on Knowledge and its drafts, and the 4s timer and live region must exist once.
 
@@ -294,7 +302,7 @@ Widget colour: text, links, focus and status use `brand`; the launcher, send but
 
 Decision 3. Routes do not change; only labels, order, grouping and the settings tab strip. Sidebar `w-52` (replaces `w-[200px]`); top bar `h-12` (48px) on `chrome`, `chrome-line` bottom border, with content starting `pt-8` below it (replaces `pt-[calc(48px+32px)]`): logo (to /dashboard), account e-mail, "Log out" (44px button).
 
-Sidebar (208px, `chrome`, `chrome-line` right border, dark in both schemes). Row = 44px, 16px lucide icon + 8px gap + label (`text-ui` 500); inactive `chrome-fg-muted`, hover `chrome-hover` + `chrome-fg`, active `chrome-active` + `chrome-accent` text + 2px leading bar + `aria-current="page"`. Groups are separated by 24px of space, no group labels.
+Sidebar (208px, `chrome`, `chrome-line` right border, dark in both schemes). Row = 44px, 16px lucide icon + 8px gap + label (`text-ui` 500); inactive `chrome-fg-muted`, hover `chrome-hover` + `chrome-fg`, pressed `chrome-press` + `chrome-fg` (no scale; a selected row keeps `chrome-active`), active `chrome-active` + `chrome-accent` text + 2px leading bar + `aria-current="page"`. Groups are separated by 24px of space, no group labels.
 
 | Order | Label | Route | Icon | Badge / notes | Visible to |
 |---|---|---|---|---|---|
@@ -323,11 +331,12 @@ Settings tab strip (SectionTabs, shared with the Knowledge tabs; see 6): Bot (/s
 6. Targets: 44px minimum everywhere, including the dashboard; density comes from 14px type and spacing, not from smaller controls.
 7. Typeface: keep the bundled Geist Sans + Geist Mono for site, auth, dashboard and docs; the widget uses the system font stack (section 1).
 8. 2026-10-16 chrome is dark in the light scheme: dashboard sidebar and top bar are one dark set (`chrome`, 4.2) in both schemes; in dark the working area is lifted one step above it (canvas, surface, surface-alt, line, line-strong, fg-faint; section 4) and the dark `*-subtle` fills sit above `surface`. Supersedes "the sidebar follows the scheme".
+9. 2026-10-30 UI taste pass: button press push-in (scale, buttons only), heading tracking, light brand-subtle `#EDE9FE` and warning `#A15C07`, lighter Secondary outline (`line-button`), pressed state for every button and row, motion policy (120ms strong ease-out default, 200ms enter, no pulse, one reduced-motion rule), hover only where the device can hover. Supersedes "nothing scales" and "no letter-spacing" of v2. Light-scheme near-black chrome stays (decision 8).
 
 ## 11. Known product-wide fixes (token-level, for implementers)
 
 - Every text and placeholder colour under 4.5:1 is replaced by a role: Inbox meta (2.56), placeholders (2.6-3.6), sidebar label (1.73), banner Dismiss (3.86), auth hint (3.58), docs lead text (4.33), docs accent text (~3.2), white on the docs primary (3.52).
-- Field and control boundaries use `line-strong` (auth inputs are 1.23:1 today); never `line`.
+- Field and control boundaries use `line-strong` (auth inputs are 1.23:1 today); never `line`; the one exception is the Secondary button outline (`line-button`), whose label carries the 4.5:1 identification.
 - Four accents (fuchsia shell, violet-600, blue-600 visitor bubble, `#a855f7` widget) collapse to `brand`; cyan retires.
 - Raw hex in auth pages (`SetPasswordForm`, verify, signup, accept-invite) and the login banners' own radius/colours move to tokens and the banner tiers in section 6.
 - One font stack (Arial vs `ui-sans-serif` today); all-caps labels and untabulated numbers (StatCard, admin tables) follow section 2.

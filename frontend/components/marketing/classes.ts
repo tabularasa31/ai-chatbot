@@ -3,7 +3,7 @@ import { cn } from "@/components/ui/utils";
 
 export const CONTAINER = "mx-auto w-full max-w-6xl px-4 sm:px-6";
 
-const TRANSITION = "transition-colors duration-[120ms] motion-reduce:transition-none";
+const TRANSITION = "transition-colors";
 
 export const textLinkClasses = cn(
   "rounded-tag text-brand underline underline-offset-2 hover:text-brand-hover",

@@ -1257,7 +1257,7 @@ export function ChatWidget({
                         type="button"
                         disabled={loading}
                         onClick={() => retryFailedSend(msg.id)}
-                        className="hit-44-y relative inline-flex h-9 items-center font-medium underline disabled:cursor-not-allowed disabled:opacity-60"
+                        className="hit-44-y relative inline-flex h-9 items-center press-text font-medium underline transition disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {tString(locale, "try_again_button")}
                       </button>

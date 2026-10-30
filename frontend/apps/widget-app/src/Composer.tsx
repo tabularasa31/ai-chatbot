@@ -145,7 +145,7 @@ export function Composer({
         </p>
       ) : null}
       {counter.state === "over" ? (
-        <p id={COUNTER_ID} aria-hidden="true" className="mt-1 text-caption tabular-nums text-danger">
+        <p id={COUNTER_ID} aria-hidden="true" className="mt-1 pb-1 text-caption tabular-nums text-danger">
           {overMessage}
         </p>
       ) : null}

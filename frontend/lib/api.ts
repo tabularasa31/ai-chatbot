@@ -646,6 +646,13 @@ export const api = {
         skipAuthRedirect: true,
       });
     },
+    checkResetToken(token: string): Promise<{ valid: true }> {
+      return request(`${BASE_URL}/auth/reset-password/check`, "Invalid or expired reset link", {
+        method: "POST",
+        json: { token },
+        skipAuthRedirect: true,
+      });
+    },
     resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
       return request(`${BASE_URL}/auth/reset-password`, "Invalid or expired reset link", {
         method: "POST",

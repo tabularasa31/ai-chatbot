@@ -18,9 +18,9 @@ export default function ResetPasswordPage() {
         heading="Choose a new password"
         invalid={{
           title: "This link doesn't work",
-          body: "It may have expired or already been used. Request a new one.",
+          explanation: "It may have expired or already been used. Request a new one.",
           action: { href: "/forgot-password", label: "Request a new link" },
-          footer: backToSignIn,
+          children: backToSignIn,
         }}
         passwordLabel="New password"
         emptyPasswordMessage="Enter a new password."

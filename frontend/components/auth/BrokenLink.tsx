@@ -3,7 +3,7 @@ import Link from "next/link";
 import { AuthCard, AuthHeading } from "./AuthCard";
 import { fullWidthLinkButtonClasses } from "./link-classes";
 
-type BrokenLinkProps = {
+export type BrokenLinkProps = {
   title: string;
   explanation: string;
   action: { href: string; label: string };

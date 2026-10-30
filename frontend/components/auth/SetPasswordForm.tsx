@@ -7,7 +7,7 @@ import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { AuthCard, AuthFooter, AuthHeading, AuthSubmit, StandaloneLink } from "./AuthCard";
 import { AuthField } from "./AuthField";
-import { BrokenLink } from "./BrokenLink";
+import { BrokenLink, type BrokenLinkProps } from "./BrokenLink";
 import {
   PASSWORD_HELPER,
   PASSWORD_MAX_LENGTH,
@@ -33,12 +33,7 @@ type View = "form" | "invalid" | "success";
 
 type SetPasswordCopy = {
   heading: string;
-  invalid: {
-    title: string;
-    body: string;
-    action: { href: string; label: string };
-    footer?: ReactNode;
-  };
+  invalid: Omit<BrokenLinkProps, "centered">;
   passwordLabel: string;
   emptyPasswordMessage: string;
   submitLabel: string;
@@ -52,14 +47,6 @@ type TokenCheck =
   | { status: "valid" }
   | { status: "broken" }
   | { status: "failed"; message: string; retrying: boolean };
-
-function DeadLink({ invalid }: { invalid: SetPasswordCopy["invalid"] }) {
-  return (
-    <BrokenLink title={invalid.title} explanation={invalid.body} action={invalid.action}>
-      {invalid.footer}
-    </BrokenLink>
-  );
-}
 
 function CheckingLink() {
   const [revealed, setRevealed] = useState(false);
@@ -184,7 +171,7 @@ function PasswordEntry({ token, copy }: { token: string; copy: SetPasswordCopy }
     );
   }
 
-  if (view === "invalid") return <DeadLink invalid={copy.invalid} />;
+  if (view === "invalid") return <BrokenLink {...copy.invalid} />;
 
   return (
     <AuthCard>
@@ -236,7 +223,7 @@ function CheckedPasswordEntry({ token, copy }: { token: string; copy: SetPasswor
     case "checking":
       return <CheckingLink />;
     case "broken":
-      return <DeadLink invalid={copy.invalid} />;
+      return <BrokenLink {...copy.invalid} />;
     case "failed":
       return <CheckFailed message={check.message} retrying={check.retrying} onRetry={retry} />;
     case "valid":
@@ -250,5 +237,5 @@ function CheckedPasswordEntry({ token, copy }: { token: string; copy: SetPasswor
  */
 export function SetPasswordForm(copy: SetPasswordCopy) {
   const token = useSearchParams().get("token");
-  return token ? <CheckedPasswordEntry token={token} copy={copy} /> : <DeadLink invalid={copy.invalid} />;
+  return token ? <CheckedPasswordEntry token={token} copy={copy} /> : <BrokenLink {...copy.invalid} />;
 }

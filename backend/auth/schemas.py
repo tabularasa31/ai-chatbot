@@ -93,14 +93,14 @@ class ForgotPasswordResponse(BaseModel):
 class ResetPasswordRequest(BaseModel):
     """Request body for password reset."""
 
-    token: str
+    token: str = Field(..., min_length=1, max_length=128)
     new_password: StrongPassword = Field(..., min_length=8, max_length=128)
 
 
 class ResetTokenCheckRequest(BaseModel):
     """Request body for checking a reset or invite token without using it."""
 
-    token: str
+    token: str = Field(..., min_length=1, max_length=128)
 
 
 class ResetTokenCheckResponse(BaseModel):

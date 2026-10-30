@@ -45,6 +45,7 @@ from backend.tenants.service import (
 auth_router = APIRouter(tags=["auth"])
 
 _COOKIE_NAME = "chat9_token"
+_INVALID_RESET_TOKEN_DETAIL = "Invalid or expired reset token. Please request a new one."
 
 
 def _auth_cookie_attrs() -> tuple[str, bool]:
@@ -279,10 +280,7 @@ def reset_password_endpoint(
     """
     success = reset_password(body.token, body.new_password, db)
     if not success:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired reset token. Please request a new one.",
-        )
+        raise HTTPException(status_code=400, detail=_INVALID_RESET_TOKEN_DETAIL)
     return ResetPasswordResponse(
         message="Password updated successfully. You can now log in."
     )
@@ -303,10 +301,7 @@ def check_reset_token_endpoint(
     Errors: 400 (invalid, expired or already used token).
     """
     if find_user_by_live_reset_token(body.token, db) is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired reset token. Please request a new one.",
-        )
+        raise HTTPException(status_code=400, detail=_INVALID_RESET_TOKEN_DETAIL)
     return ResetTokenCheckResponse(valid=True)
 
 

@@ -12,7 +12,7 @@ export default function AcceptInvitePage() {
         heading="Join your team"
         invalid={{
           title: "This invite link doesn't work",
-          body: "It may have expired or already been used. If you already joined, sign in. Otherwise ask whoever invited you to send a new invite.",
+          explanation: "It may have expired or already been used. If you already joined, sign in. Otherwise ask whoever invited you to send a new invite.",
           action: { href: "/login", label: "Sign in" },
         }}
         passwordLabel="Password"

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Trash2, X } from "lucide-react";
 import { api, type KnowledgeProfile } from "@/lib/api";
-import { formatDateTime, parseApiDate } from "@/lib/format";
+import { formatDateTime, parseApiDate, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
@@ -157,7 +157,7 @@ function Glossary({ glossary }: { glossary: KnowledgeProfile["glossary"] }) {
       <h2 className="text-h2 text-fg">Glossary</h2>
       <details>
         <summary className="flex min-h-11 cursor-pointer items-center text-ui font-medium text-fg">
-          {glossary.length === 1 ? "1 term" : `${glossary.length} terms`}
+          {`${glossary.length} ${pluralize(glossary.length, "term", "terms")}`}
         </summary>
         <table className="w-full table-fixed border-collapse text-left text-ui">
           <thead>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type KnowledgeFaqItem } from "@/lib/api";
+import { pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input, Select, Textarea } from "@/components/ui/field";
@@ -40,7 +41,7 @@ const SOURCE_LABELS: Record<string, string> = {
 const SKELETON_ROWS = 4;
 
 function answersCount(count: number): string {
-  return count === 1 ? "1 answer" : `${count} answers`;
+  return `${count} ${pluralize(count, "answer", "answers")}`;
 }
 
 function EmptyMessage({ filter, onGoToDocuments }: { filter: FaqFilter; onGoToDocuments: () => void }) {

@@ -3,7 +3,7 @@
 import { Fragment, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Pencil, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type { DocumentListItem, UrlSource } from "@/lib/api";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FileStatus, UrlStatus } from "./HealthPanel";
 import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, isIndexing, scheduleCaption } from "./shared";
@@ -108,6 +108,7 @@ export function UrlRow({
   detail: ReactNode;
 }) {
   const pages = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
+  const totalPages = source.pages_found ?? source.pages_indexed;
   const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <Fragment>
@@ -137,7 +138,7 @@ export function UrlRow({
         <td className={`${NUMERIC_CELL_CLASS} hidden xl:table-cell`}>{pages}</td>
         <td className={NUMERIC_CELL_CLASS}>
           {formatDateTime(source.updated_at)}
-          <p className="text-caption text-fg-muted xl:hidden">{`${pages} pages`}</p>
+          <p className="text-caption text-fg-muted xl:hidden">{`${pages} ${pluralize(totalPages, "page", "pages")}`}</p>
         </td>
         <td className="px-2 py-2 align-top" onClick={(event) => event.stopPropagation()}>
           <div className="flex justify-end">

@@ -264,14 +264,38 @@ def test_the_list_previews_a_markdown_reply_as_plain_text(
     bare_url = _chat(db_session, ws.tenant_id)
     _say(db_session, bare_url, MessageRole.assistant, "Visit https://example.com/foo_bar_baz or use snake_case")
 
+    in_word = _chat(db_session, ws.tenant_id)
+    _say(db_session, in_word, MessageRole.assistant, "5*3 = 15, see [docs](https://example.com/a_(b)) and **bold**")
+
     items = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()["items"]
     preview = {r["chat_id"]: r["last_message_preview"] for r in items}
 
+    assert preview[str(in_word.id)] == "5*3 = 15, see docs and bold"
     assert preview[str(formatted.id)] == "Steps Open the settings page Save it Plan Seats Pro 5"
     assert "*" not in preview[str(unclosed.id)]
     assert preview[str(unclosed.id)].startswith("Ja, wenn Sie Per E-Mail antworten")
     assert preview[str(unclosed.id)].endswith("…")
     assert preview[str(bare_url.id)] == "Visit https://example.com/foo_bar_baz or use snake_case"
+
+
+def test_the_list_previews_long_unstructured_input_as_plain_text(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="long@example.com", name="Long Co")
+    blank_padded = _chat(db_session, ws.tenant_id)
+    _say(db_session, blank_padded, MessageRole.operator, " " * 9000 + "tail")
+    open_links = _chat(db_session, ws.tenant_id)
+    _say(db_session, open_links, MessageRole.operator, "[a](" * 2500)
+    dash_run = _chat(db_session, ws.tenant_id)
+    _say(db_session, dash_run, MessageRole.operator, "| " + "- " * 4000 + "end")
+
+    items = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()["items"]
+    preview = {r["chat_id"]: r["last_message_preview"] for r in items}
+
+    assert preview[str(blank_padded.id)] == "tail"
+    assert preview[str(open_links.id)].startswith("[a](")
+    assert preview[str(open_links.id)].endswith("…")
+    assert preview[str(dash_run.id)] == ""
 
 
 def test_a_rotated_session_is_one_row_pointing_at_its_newest_chat(

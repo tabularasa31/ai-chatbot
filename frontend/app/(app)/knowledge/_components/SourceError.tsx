@@ -7,16 +7,13 @@ export function SourceError({ sourceId, message }: { sourceId: string; message: 
   const [open, setOpen] = useState(false);
   const detailsId = `source-error-${sourceId}`;
   return (
-    <div>
+    <div role="presentation" onClick={(event) => event.stopPropagation()}>
       <p className="text-caption text-danger">Couldn&apos;t read this page</p>
       <Button
         variant="ghost"
         aria-expanded={open}
         aria-controls={detailsId}
-        onClick={(event) => {
-          event.stopPropagation();
-          setOpen((current) => !current);
-        }}
+        onClick={() => setOpen((current) => !current)}
       >
         {open ? "Hide details" : "Show details"}
       </Button>

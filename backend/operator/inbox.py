@@ -296,17 +296,27 @@ def _last_messages(
 
 
 _CODE_FENCE_LINE = re.compile(r"^\s*(```|~~~)")
-_TABLE_SEPARATOR_ROW = re.compile(r"^\s*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$")
 _LINE_PREFIX = re.compile(r"^\s*(#{1,6}\s+|>+\s?|[-*+]\s+|\d+[.)]\s+)+")
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
-_LINK_OR_IMAGE = re.compile(r"!?\[([^\]]*)\]\([^)\s]*(?:\s+\"[^\"]*\")?\)")
-_EMPHASIS_MARKER = re.compile(r"\*+(?=\S)|(?<=\S)\*+|(?<!\w)_+(?=\S)|(?<=\S)_+(?!\w)|~~|`+")
+_LINK_OR_IMAGE = re.compile(
+    r"!?\[([^\]\n]{0,200})\]\((?:[^()\s]|\([^()\s]*\)){0,500}(?:\s+\"[^\"\n]{0,200}\")?\)"
+)
+_EMPHASIS_MARKER = re.compile(
+    r"(?<!\w)\*+(?=\S)|(?<=\S)\*+(?!\w)|(?<!\w)_+(?=\S)|(?<=\S)_+(?!\w)|~~|`+"
+)
+_TABLE_SEPARATOR_CHARS = frozenset("|-: ")
+_PREVIEW_SOURCE_FACTOR = 8
+
+
+def _is_table_separator_row(line: str) -> bool:
+    stripped = line.strip()
+    return "|" in stripped and "-" in stripped and set(stripped) <= _TABLE_SEPARATOR_CHARS
 
 
 def _strip_markdown(text: str) -> str:
     lines = []
     for line in text.splitlines():
-        if _CODE_FENCE_LINE.match(line) or _TABLE_SEPARATOR_ROW.match(line):
+        if _CODE_FENCE_LINE.match(line) or _is_table_separator_row(line):
             continue
         if _TABLE_ROW.match(line):
             line = line.replace("|", " ")
@@ -317,7 +327,7 @@ def _strip_markdown(text: str) -> str:
 
 
 def _preview(text: str) -> str:
-    text = " ".join(_strip_markdown(text).split())
+    text = " ".join(_strip_markdown(text.lstrip()[: PREVIEW_MAX_LEN * _PREVIEW_SOURCE_FACTOR]).split())
     if len(text) > PREVIEW_MAX_LEN:
         return text[:PREVIEW_MAX_LEN].rstrip() + "…"
     return text

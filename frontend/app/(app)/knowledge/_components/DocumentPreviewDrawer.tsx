@@ -217,7 +217,7 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
           />
           {search.trim() && (
             <span className="shrink-0 text-caption tabular-nums text-fg-muted">
-              {matchCount} {pluralize(matchCount, "match", "matches")}
+              {matchCount.toLocaleString()} {pluralize(matchCount, "match", "matches")}
             </span>
           )}
           <FlashMessage message={copiedMessage} />

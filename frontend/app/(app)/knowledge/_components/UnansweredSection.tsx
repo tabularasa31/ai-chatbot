@@ -179,7 +179,7 @@ export function UnansweredSection({
       )}
 
       {state.status === "loading" && (
-        <RowListSkeleton rows={SKELETON_ROWS} className="border-t border-line" />
+        <RowListSkeleton rows={SKELETON_ROWS} className="border-y border-line" />
       )}
 
       {state.status === "ready" && items.length === 0 && (

@@ -13,12 +13,23 @@ import { InstallWidget } from "./install-widget";
 function InstallWidgetSkeleton() {
   return (
     <SkeletonRegion>
-      <div className="space-y-4">
+      <div className="space-y-3">
         <Skeleton className="h-7 w-40" />
-        <Skeleton className="h-11 w-full" />
-        <Skeleton className="h-11 w-32" />
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-10 w-72 max-w-full" />
+          <Skeleton className="h-11 w-24" />
+        </div>
       </div>
     </SkeletonRegion>
+  );
+}
+
+function InstallWidgetPageSkeleton() {
+  return (
+    <div className="max-w-2xl space-y-8">
+      <Skeleton className="h-8 w-48" />
+      <InstallWidgetSkeleton />
+    </div>
   );
 }
 
@@ -73,7 +84,7 @@ function InstallWidgetContent() {
 
 export default function InstallWidgetPage() {
   return (
-    <Suspense fallback={<InstallWidgetSkeleton />}>
+    <Suspense fallback={<InstallWidgetPageSkeleton />}>
       <InstallWidgetContent />
     </Suspense>
   );

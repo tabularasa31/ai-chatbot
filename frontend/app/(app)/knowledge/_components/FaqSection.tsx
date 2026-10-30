@@ -7,7 +7,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
-import { RowListSkeleton } from "@/components/ui/skeleton";
+import { FaqListSkeleton } from "@/components/ui/skeleton";
 import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { LINK_CLASS } from "./link-class";
 import { confidenceLevel } from "./shared";
@@ -187,7 +187,7 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
       )}
 
       {state.status === "loading" && (
-        <RowListSkeleton rows={SKELETON_ROWS} className="border-y border-line" />
+        <FaqListSkeleton rows={SKELETON_ROWS} className="border-y border-line" />
       )}
 
       {state.status === "ready" && items.length === 0 && <EmptyMessage filter={filter} onGoToDocuments={onGoToDocuments} />}

@@ -33,15 +33,38 @@ export function RowListSkeleton({ rows, caption = true, className }: { rows: num
     <SkeletonRegion>
       <div className={cn("divide-y divide-line", className)}>
         {Array.from({ length: rows }, (_, index) => (
-          <div key={index} className={cn("flex items-center justify-between gap-6", caption ? "py-3" : "h-11")}>
+          <div key={index} className={cn("flex items-center justify-between gap-6", caption ? "py-4" : "h-14")}>
             <div className="min-w-0 flex-1 space-y-1">
-              <Skeleton className={cn("h-5", NAME_WIDTHS[index % NAME_WIDTHS.length])} />
+              <Skeleton className={cn("h-6", NAME_WIDTHS[index % NAME_WIDTHS.length])} />
               {caption && <Skeleton className="w-24" />}
             </div>
             <div className="flex shrink-0 items-center gap-3">
               <Skeleton className="h-5 w-20" />
               <Skeleton className="h-8 w-8" />
               <Skeleton className="h-8 w-8" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </SkeletonRegion>
+  );
+}
+
+/** FAQ-shaped placeholder: question, answer and meta bars over an action row, as tall as a real entry. */
+export function FaqListSkeleton({ rows, className }: { rows: number; className?: string }) {
+  return (
+    <SkeletonRegion>
+      <div className={cn("divide-y divide-line", className)}>
+        {Array.from({ length: rows }, (_, index) => (
+          <div key={index} className="py-4">
+            <div className="space-y-1">
+              <Skeleton className="h-6 w-3/5" />
+              <Skeleton className="h-5 w-4/5" />
+              <Skeleton className="h-4 w-24" />
+            </div>
+            <div className="mt-2 flex h-11 items-center justify-between">
+              <Skeleton className="h-8 w-12" />
+              <Skeleton className="h-8 w-20" />
             </div>
           </div>
         ))}

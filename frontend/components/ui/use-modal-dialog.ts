@@ -37,7 +37,9 @@ export function useModalDialog({ onClose, canClose = true, onCloseBlocked, fallb
       latest.current.onCloseBlocked?.();
     };
     const closeOnScrimClick = (event: MouseEvent) => {
-      if (event.target !== dialog || !pressStartedOnScrim) return;
+      const pressedOnScrim = pressStartedOnScrim;
+      pressStartedOnScrim = false;
+      if (event.target !== dialog || !pressedOnScrim) return;
       if (latest.current.canClose) latest.current.onClose();
       else latest.current.onCloseBlocked?.();
     };

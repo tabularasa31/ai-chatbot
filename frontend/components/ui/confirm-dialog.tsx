@@ -60,7 +60,7 @@ export function ConfirmDialog({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      className="m-auto w-11/12 max-w-md rounded-surface border border-line bg-surface p-0 text-fg shadow-overlay animate-modal-in backdrop:animate-scrim-in backdrop:bg-scrim motion-reduce:animate-fade-in dark:bg-surface-alt"
+      className="m-auto w-11/12 max-w-md rounded-surface border border-line bg-surface p-0 text-fg shadow-overlay animate-modal-in backdrop:animate-scrim-in backdrop:bg-scrim motion-reduce:animate-fade-in motion-reduce:backdrop:animate-fade-in dark:bg-surface-alt"
     >
       <div className="space-y-4 p-6">
         <h2 id={titleId} className="break-words text-h2 text-fg">

@@ -331,6 +331,8 @@ export function ChatWidget({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const focusInputAtEndRef = useRef(false);
   const [failures, setFailures] = useState<SendFailures>(NO_FAILURES);
+  // Set synchronously so a second tap cannot slip in before `loading` re-renders.
+  const sendInFlightRef = useRef(false);
   const [serverMaxChars, setServerMaxChars] = useState<number | null>(null);
   // The last identity asked; the stored marker covers earlier ones, so no
   // history refresh can trigger a second request.
@@ -435,6 +437,7 @@ export function ChatWidget({
     setHandoffState("bot");
     setMessages([]);
     setStreamingText("");
+    setFailures(NO_FAILURES);
     cursorRef.current = null;
 
     // Purge the legacy shared-key session (pre-user-scoped namespacing) so stale
@@ -922,6 +925,7 @@ export function ChatWidget({
     { bubbleId, failureRetryId = null }: { bubbleId: string | null; failureRetryId?: string | null },
   ) => {
     const userId = userIdRef.current;
+    sendInFlightRef.current = true;
     setLoading(true);
     setStreamingText("");
     setStatusStage(null);
@@ -1021,6 +1025,7 @@ export function ChatWidget({
       setStreamingText("");
       setStatusStage(null);
       setLoading(false);
+      sendInFlightRef.current = false;
     }
   }, [applyAssistantMessage, botId, disableRetry, requestWidgetTurn, restoreRejectedMessage, sessionId]);
 
@@ -1040,6 +1045,7 @@ export function ChatWidget({
    *  the new outcome below it; only on a successful answer do we drop the
    *  stale bubble, avoiding flicker if retry returns the same failure. */
   const handleLlmUnavailableRetry = useCallback(async (messageId: string) => {
+    if (sendInFlightRef.current) return;
     let originalMessage: string | null = null;
     setMessages((prev) =>
       prev.map((msg) => {
@@ -1133,6 +1139,7 @@ export function ChatWidget({
   }, [apiBase, botId, localeParam, messages, sessionId]);
 
   const retryFailedSend = useCallback((bubbleId: string) => {
+    if (sendInFlightRef.current) return;
     const bubble = messages.find(
       (m): m is ChatWidgetMessage & { type: "user" } => m.id === bubbleId && m.type === "user",
     );

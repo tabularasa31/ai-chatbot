@@ -19,13 +19,6 @@ textarea::placeholder {
   opacity: 1;
 }
 
-@layer base {
-  button,
-  a {
-    -webkit-tap-highlight-color: transparent;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,

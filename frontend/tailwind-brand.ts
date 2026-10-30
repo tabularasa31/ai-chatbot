@@ -192,7 +192,6 @@ export const brandThemeExtend = {
   transitionTimingFunction: {
     DEFAULT: EASE_OUT,
   },
-  // Key order is the cascade order: press-sm and press-wide override press when a caller adds them.
   scale: {
     press: "0.97",
     "press-sm": "0.94",

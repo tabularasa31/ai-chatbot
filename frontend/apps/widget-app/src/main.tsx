@@ -184,7 +184,7 @@ function App() {
   if (!botId || !apiBase) {
     console.error("Chat9: missing required loader parameters botId and apiBase.");
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-surface px-4 text-ui text-fg">
+      <div className="flex h-dvh w-full items-center justify-center bg-surface px-4 text-ui text-fg">
         {t(locale, "unavailable")}
       </div>
     );
@@ -192,7 +192,7 @@ function App() {
 
   if (hints === undefined) {
     return (
-      <div role="status" className="flex h-screen w-full items-center justify-center bg-surface px-4 text-ui text-fg-muted">
+      <div role="status" className="flex h-dvh w-full items-center justify-center bg-surface px-4 text-ui text-fg-muted">
         {t(locale, "loading")}
       </div>
     );
@@ -205,7 +205,7 @@ function App() {
   const identityKey = deriveStorageUserId(hints) ?? "anon";
 
   return (
-    <div className="flex h-screen w-full">
+    <div className="flex h-dvh w-full">
       <ChatWidget
         key={identityKey}
         botId={botId}

@@ -3,6 +3,7 @@ import type { JSX } from "preact";
 import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
 import type { ComposerCounter } from "./composerLimit";
 import { t } from "./strings";
+import { useRevealed } from "./useRevealed";
 import { cn } from "./utils";
 
 const MAX_ROWS = 5;
@@ -65,6 +66,7 @@ export function Composer({
   const coarse = useCoarsePointer();
   const [multiline, setMultiline] = useState(false);
   const over = counter.state === "over";
+  const spinnerVisible = useRevealed(loading);
 
   useLayoutEffect(() => {
     const field = textareaRef.current;
@@ -113,10 +115,10 @@ export function Composer({
           aria-disabled={loading || undefined}
           aria-busy={loading}
           aria-label={t(locale, "send_message")}
-          className="accent-fill accent-press hit-44-send relative mb-0.5 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint"
+          className="accent-fill accent-press hit-44-send relative mb-0.5 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center press-round rounded-full transition disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint"
         >
-          {loading ? (
-            <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+          {spinnerVisible ? (
+            <Loader2 size={16} aria-hidden="true" className="animate-spin" />
           ) : (
             <ArrowUp size={16} aria-hidden="true" />
           )}

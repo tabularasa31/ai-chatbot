@@ -3,6 +3,7 @@
 import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { t } from "./strings";
+import { useRevealed } from "./useRevealed";
 
 // If a stage stays the same for this long, swap the label so the visitor
 // does not perceive a freeze (reasoning models can go silent before the
@@ -11,6 +12,7 @@ const STALLED_AFTER_MS = 8000;
 
 export function LoadingIndicator({ stage, locale, greeting }: { stage: string | null; locale: string | null; greeting: boolean }) {
   const [stalled, setStalled] = useState(false);
+  const revealed = useRevealed(true);
 
   useEffect(() => {
     setStalled(false);
@@ -28,8 +30,12 @@ export function LoadingIndicator({ stage, locale, greeting }: { stage: string | 
 
   return (
     <div role="status" className="flex items-center gap-2 text-ui text-fg-muted">
-      <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
-      {label}
+      {revealed ? (
+        <>
+          <Loader2 size={16} aria-hidden="true" className="animate-spin" />
+          {label}
+        </>
+      ) : null}
     </div>
   );
 }

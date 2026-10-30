@@ -23,9 +23,9 @@ export function ActionButton({ variant, onClick, busy = false, disabled = false,
       onClick={onClick}
       disabled={busy || disabled}
       aria-busy={busy}
-      className={`hit-44-y relative inline-flex h-9 items-center justify-center gap-2 rounded-control px-4 text-ui font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${VARIANT_CLASSES[variant]}`}
+      className={`hit-44-y relative inline-flex h-9 items-center justify-center gap-2 press-text rounded-control px-4 text-ui font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${VARIANT_CLASSES[variant]}`}
     >
-      {busy ? <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : null}
+      {busy ? <Loader2 size={16} aria-hidden="true" className="animate-spin" /> : null}
       {children}
     </button>
   );

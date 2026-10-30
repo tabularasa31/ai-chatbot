@@ -7,18 +7,23 @@ import {
   chromeTokensPlugin,
 } from "../../tailwind-brand";
 
-// Light values come from the shared brand tokens (`frontend/tailwind-brand.ts`);
-// the widget's dark values live in styles.css under [data-theme="dark"].
+const DARK_SELECTOR = '[data-theme="dark"]';
+
+// Both schemes come from the shared brand tokens (`frontend/tailwind-brand.ts`);
+// dark is emitted under the widget's own theme attribute.
 const config: Config = {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  darkMode: ["selector", '[data-theme="dark"]'],
+  darkMode: ["selector", DARK_SELECTOR],
+  future: { hoverOnlyWhenSupported: true },
   theme: {
     extend: {
       ...brandThemeExtend,
+      transitionDuration: { DEFAULT: "120ms" },
+      transitionTimingFunction: { DEFAULT: "cubic-bezier(0.23, 1, 0.32, 1)" },
       fontFamily: { sans: SYSTEM_SANS, mono: SYSTEM_MONO },
     },
   },
-  plugins: [brandTokensPlugin(["light"]), chromeTokensPlugin()],
+  plugins: [brandTokensPlugin(["light", "dark"], { dark: `html${DARK_SELECTOR}` }), chromeTokensPlugin()],
 };
 
 export default config;

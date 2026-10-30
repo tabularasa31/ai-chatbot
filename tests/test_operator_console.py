@@ -247,6 +247,33 @@ def test_the_list_names_the_operator_who_wrote_the_last_message(
         assert row[str(chat.id)]["last_message_author_label"] is None
 
 
+def test_the_list_previews_a_markdown_reply_as_plain_text(
+    tenant: TestClient, db_session: Session
+) -> None:
+    ws = _workspace(tenant, db_session, email="plain@example.com", name="Plain Co")
+    formatted = _chat(db_session, ws.tenant_id)
+    _say(
+        db_session,
+        formatted,
+        MessageRole.assistant,
+        "## Steps\n- **Open** the [settings page](https://example.com/a_b_c)\n"
+        "1. *Save* it\n| Plan | Seats |\n|---|---|\n| Pro | 5 |\n",
+    )
+    unclosed = _chat(db_session, ws.tenant_id)
+    _say(db_session, unclosed, MessageRole.assistant, "Ja, wenn Sie *Per E-Mail" + " antworten" * 40)
+    bare_url = _chat(db_session, ws.tenant_id)
+    _say(db_session, bare_url, MessageRole.assistant, "Visit https://example.com/foo_bar_baz or use snake_case")
+
+    items = tenant.get("/operator/inbox?scope=all", headers=ws.auth).json()["items"]
+    preview = {r["chat_id"]: r["last_message_preview"] for r in items}
+
+    assert preview[str(formatted.id)] == "Steps Open the settings page Save it Plan Seats Pro 5"
+    assert "*" not in preview[str(unclosed.id)]
+    assert preview[str(unclosed.id)].startswith("Ja, wenn Sie Per E-Mail antworten")
+    assert preview[str(unclosed.id)].endswith("…")
+    assert preview[str(bare_url.id)] == "Visit https://example.com/foo_bar_baz or use snake_case"
+
+
 def test_a_rotated_session_is_one_row_pointing_at_its_newest_chat(
     tenant: TestClient, db_session: Session
 ) -> None:

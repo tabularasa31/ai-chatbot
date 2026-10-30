@@ -11,7 +11,6 @@ import { cn, deriveStorageUserId, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { MarkdownBody } from "./MarkdownBody";
-import { useRevealed } from "./useRevealed";
 import {
   NO_FAILURES,
   classifySendFailure,

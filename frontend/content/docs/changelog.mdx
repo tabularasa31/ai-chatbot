@@ -3,6 +3,18 @@ title: Changelog
 description: What's changed in Chat9, most recent first.
 ---
 
+## 2026-10-30 — Widget: multi-line messages, clearer length limit, full screen on phones in landscape
+
+The message box now grows to several lines, and pasted multi-line text keeps its line breaks. On phones Enter adds a new line and the Send button sends; on desktop Enter sends and Shift+Enter adds a line. The 1000-character limit is unchanged, but the widget now shows a counter near the limit and a "too long" note over it, and never discards what the visitor typed. A message that fails to send is marked "Not sent · Try again" on the message itself instead of in stacked error blocks.
+
+Phones in landscape now open the chat full screen, like portrait. Full screen respects the notch and home indicator on sites that use `viewport-fit=cover` and stays above the on-screen keyboard. Scrolling inside the chat no longer scrolls the page behind it, buttons give press feedback, and motion follows the visitor's reduced-motion setting.
+
+If the embed snippet is missing the bot ID, the browser console now shows a warning that names the missing attribute. Visitors still see "Chat is unavailable".
+
+**Who it affects:** visitors on any site with the widget, and tenants who check the browser console while setting up the embed.
+
+**What to do:** nothing, existing snippets keep working. See [Embedding the widget](/docs/embedding-the-widget#basic-embed) for the embed code.
+
 ## 2026-10-29 — Operator replies reach visitors when you take a chat unasked
 
 When an operator took a conversation from **Inbox → All** where the visitor had not asked for a human, the reply did not appear in the open widget until the visitor reloaded the page. It now shows up within about 20 seconds while the visitor has the chat open, and within a few seconds once the visitor writes again. The visitor's messages to an operator no longer leave an empty bot bubble behind them.

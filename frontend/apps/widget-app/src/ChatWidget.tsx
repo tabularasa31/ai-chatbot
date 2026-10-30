@@ -16,7 +16,10 @@ import {
   classifySendFailure,
   clearSendFailure,
   dismissBanner,
+  dismissBannerOnEdit,
+  keepUnsent,
   markSendFailed,
+  moveToEnd,
   showBanner,
   type Banner,
   type SendFailures,
@@ -345,10 +348,12 @@ export function ChatWidget({
   const canSubmit = Boolean(trimmedInput) && counter.state !== "over";
   const canSend = canSubmit && !loading;
   const { banner } = failures;
-  const bannerText = (banner: Banner): string => {
-    if (banner.kind === "rate_limit") return tString(localeParam, "error_rate_limit");
-    if (banner.kind === "history") return tString(localeParam, "error_history");
-    if (banner.kind === "escalate") return tString(localeParam, "error_support");
+  const failedIdsRef = useRef(failures.failedIds);
+  failedIdsRef.current = failures.failedIds;
+  const bannerText = (shown: Banner): string => {
+    if (shown.kind === "rate_limit") return tString(localeParam, "error_rate_limit");
+    if (shown.kind === "history") return tString(localeParam, "error_history");
+    if (shown.kind === "escalate") return tString(localeParam, "error_support");
     return tString(localeParam, "send_failed_marker");
   };
   const ticketNotice = activeTicket
@@ -690,7 +695,8 @@ export function ChatWidget({
           cursorRef.current = lastServerMessage?.id ?? null;
           const lastOperatorMessage = [...data.messages].reverse().find((m) => m.role === "operator");
           if (lastOperatorMessage) setPendingReadId(lastOperatorMessage.id);
-          setMessages(hydrated);
+          const unsentIds = failedIdsRef.current;
+          setMessages((prev) => keepUnsent(hydrated, prev, unsentIds));
           if (data.ticket_number) setActiveTicket(data.ticket_number);
         }
       })
@@ -913,6 +919,7 @@ export function ChatWidget({
 
     const reportFailure = (cause: "rate_limit" | "other") => {
       if (bubbleId) setFailures((prev) => markSendFailed(prev, bubbleId, cause));
+      else if (cause === "rate_limit") setFailures((prev) => showBanner(prev, { kind: "rate_limit" }));
       else if (failureRetryId) setFailures((prev) => showBanner(prev, { kind: "resend", messageId: failureRetryId }));
     };
     // A session minted by this message has no history to load, and loading it
@@ -954,10 +961,8 @@ export function ChatWidget({
         if (failure === "too_long") {
           const maxChars = maxCharsFromDetail(detail);
           if (maxChars) setServerMaxChars(maxChars);
-          if (bubbleId) {
-            restoreRejectedMessage(bubbleId, userMessage);
-            return;
-          }
+          if (bubbleId) restoreRejectedMessage(bubbleId, userMessage);
+          return;
         }
         reportFailure(failure === "rate_limit" ? "rate_limit" : "other");
         return;
@@ -1038,10 +1043,9 @@ export function ChatWidget({
     const messagesCountBefore = messages.length;
     try {
       await sendUserMessage(originalMessage, { bubbleId: null, failureRetryId: messageId });
-      // If sendUserMessage appended a non-degraded outcome (assistant or
-      // error), drop the stale degraded bubble. If it appended another
-      // llm_unavailable, the new bubble carries fresh state — also drop
-      // the old one so we don't show two side by side.
+      // If sendUserMessage appended an assistant answer or a new
+      // llm_unavailable bubble (which carries fresh state), drop the stale
+      // degraded bubble so two are never shown side by side.
       setMessages((prev) =>
         prev.length > messagesCountBefore
           ? prev.filter((m) => m.id !== messageId)
@@ -1118,15 +1122,19 @@ export function ChatWidget({
   }, [apiBase, botId, localeParam, messages, sessionId]);
 
   const retryFailedSend = useCallback((bubbleId: string) => {
-    const bubble = messages.find((m) => m.id === bubbleId && m.type === "user");
-    if (bubble && bubble.type === "user") void sendUserMessage(bubble.text, { bubbleId });
+    const bubble = messages.find(
+      (m): m is ChatWidgetMessage & { type: "user" } => m.id === bubbleId && m.type === "user",
+    );
+    if (!bubble) return;
+    setMessages((prev) => moveToEnd(prev, bubbleId));
+    void sendUserMessage(bubble.text, { bubbleId });
   }, [messages, sendUserMessage]);
 
-  const retryBanner = useCallback((banner: Banner) => {
+  const retryBanner = useCallback((target: Banner) => {
     setFailures((prev) => dismissBanner(prev));
-    if (banner.kind === "history") setHistoryLoaded(false);
-    else if (banner.kind === "escalate") void handleLlmUnavailableEscalate(banner.messageId);
-    else if (banner.kind === "resend") void handleLlmUnavailableRetry(banner.messageId);
+    if (target.kind === "history") setHistoryLoaded(false);
+    else if (target.kind === "escalate") void handleLlmUnavailableEscalate(target.messageId);
+    else if (target.kind === "resend") void handleLlmUnavailableRetry(target.messageId);
   }, [handleLlmUnavailableEscalate, handleLlmUnavailableRetry]);
 
   useLayoutEffect(() => {
@@ -1372,7 +1380,7 @@ export function ChatWidget({
             value={input}
             onValueChange={(value) => {
               setInput(value);
-              setFailures((prev) => dismissBanner(prev));
+              setFailures((prev) => dismissBannerOnEdit(prev));
             }}
             onSend={() => void handleSend()}
             locale={locale ?? null}

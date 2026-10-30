@@ -109,7 +109,7 @@ export function AuthSubmit({
   loadingLabel: string;
 }) {
   return (
-    <Button type="submit" variant="primary" offset="surface" aria-busy={submitting} className="mt-2 w-full">
+    <Button type="submit" variant="primary" offset="surface" aria-busy={submitting} className="mt-2 w-full active:scale-press-wide">
       {submitting && <Loader2 size={16} aria-hidden="true" className="animate-spin" />}
       {submitting ? loadingLabel : label}
     </Button>

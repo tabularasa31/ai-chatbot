@@ -1,0 +1,38 @@
+export type Banner =
+  | { kind: "rate_limit" }
+  | { kind: "history" }
+  | { kind: "escalate"; messageId: string }
+  | { kind: "resend"; messageId: string };
+
+export type SendFailures = {
+  failedIds: readonly string[];
+  banner: Banner | null;
+};
+
+export const NO_FAILURES: SendFailures = { failedIds: [], banner: null };
+
+export function classifySendFailure(status: number | null): "too_long" | "rate_limit" | "other" {
+  if (status === 413) return "too_long";
+  if (status === 429) return "rate_limit";
+  return "other";
+}
+
+export function showBanner(state: SendFailures, banner: Banner): SendFailures {
+  return { ...state, banner };
+}
+
+export function dismissBanner(state: SendFailures): SendFailures {
+  return state.banner ? { ...state, banner: null } : state;
+}
+
+export function markSendFailed(state: SendFailures, bubbleId: string, cause: "rate_limit" | "other"): SendFailures {
+  const failedIds = state.failedIds.includes(bubbleId) ? state.failedIds : [...state.failedIds, bubbleId];
+  return cause === "rate_limit" ? { failedIds, banner: { kind: "rate_limit" } } : { ...state, failedIds };
+}
+
+export function clearSendFailure(state: SendFailures, bubbleId: string | null): SendFailures {
+  return {
+    failedIds: bubbleId ? state.failedIds.filter((id) => id !== bubbleId) : state.failedIds,
+    banner: null,
+  };
+}

@@ -116,6 +116,8 @@
 
   .composer-input {
     @apply text-ui;
+    padding-top: 0.5625rem;
+    padding-bottom: 0.5625rem;
   }
 
   .composer-input:focus-visible {
@@ -124,13 +126,17 @@
     box-shadow: inset 0 0 0 1px rgb(var(--c-focus));
   }
 
-  html[data-fullscreen="on"] .composer-input {
-    @apply text-body;
+  .composer-input[aria-invalid="true"],
+  .composer-input[aria-invalid="true"]:focus-visible {
+    border-color: rgb(var(--c-danger));
+    box-shadow: none;
   }
 
-  @media (max-width: 479px) {
-    html:not([data-bubble]) .composer-input {
+  @media (pointer: coarse) {
+    .composer-input {
       @apply text-body;
+      padding-top: 0.4375rem;
+      padding-bottom: 0.4375rem;
     }
   }
 

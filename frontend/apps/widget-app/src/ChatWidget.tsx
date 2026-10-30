@@ -3,14 +3,25 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type Components } from "react-markdown";
 import "highlight.js/styles/github-dark.css";
-import { ArrowUp, Check, Copy, ExternalLink, Info, Loader2, TriangleAlert, X } from "lucide-react";
+import { Check, Copy, ExternalLink, Info, TriangleAlert, X } from "lucide-react";
 import { ActionButton } from "./ActionButton";
+import { Composer } from "./Composer";
+import { composerCounter, maxCharsFromDetail, resolveLimit, restoreDraft } from "./composerLimit";
 import { cn, deriveStorageUserId, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { MarkdownBody } from "./MarkdownBody";
 import {
-  createErrorMessage,
+  NO_FAILURES,
+  classifySendFailure,
+  clearSendFailure,
+  dismissBanner,
+  markSendFailed,
+  showBanner,
+  type Banner,
+  type SendFailures,
+} from "./sendFailures";
+import {
   createLlmUnavailableMessage,
   createSystemMessage,
   createTextMessage,
@@ -41,6 +52,7 @@ type WidgetConfig = {
   link_safety_enabled: boolean;
   allowed_domains: string[];
   link_safety_labels: WidgetLinkSafetyLabels;
+  message_max_chars?: number;
 };
 
 type PendingExternalLink = {
@@ -313,7 +325,10 @@ export function ChatWidget({
   const panelRef = useRef<HTMLDivElement>(null);
   const linkOpenerRef = useRef<HTMLElement | null>(null);
   const modalOpenRef = useRef(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const focusInputAtEndRef = useRef(false);
+  const [failures, setFailures] = useState<SendFailures>(NO_FAILURES);
+  const [serverMaxChars, setServerMaxChars] = useState<number | null>(null);
   // The last identity asked; the stored marker covers earlier ones, so no
   // history refresh can trigger a second request.
   const greetingRequestedForRef = useRef<string | null>(null);
@@ -325,7 +340,17 @@ export function ChatWidget({
 
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
   const trimmedInput = input.trim();
-  const canSend = Boolean(trimmedInput) && !loading;
+  const limit = resolveLimit(serverMaxChars, widgetConfig?.message_max_chars);
+  const counter = composerCounter(input, limit);
+  const canSubmit = Boolean(trimmedInput) && counter.state !== "over";
+  const canSend = canSubmit && !loading;
+  const { banner } = failures;
+  const bannerText = (banner: Banner): string => {
+    if (banner.kind === "rate_limit") return tString(localeParam, "error_rate_limit");
+    if (banner.kind === "history") return tString(localeParam, "error_history");
+    if (banner.kind === "escalate") return tString(localeParam, "error_support");
+    return tString(localeParam, "send_failed_marker");
+  };
   const ticketNotice = activeTicket
     ? tString(
         locale,
@@ -672,10 +697,7 @@ export function ChatWidget({
       .catch((error) => {
         if (cancelled) return;
         console.error("Chat9: history failed", error);
-        setMessages((prev) => [
-          ...prev,
-          createErrorMessage(tString(localeParam, "error_history"), { kind: "history" }),
-        ]);
+        setFailures((prev) => showBanner(prev, { kind: "history" }));
       })
       .finally(() => {
         if (!cancelled) {
@@ -868,29 +890,31 @@ export function ChatWidget({
     };
   }, [apiBase, botId, isOpen, pendingReadId, sessionId]);
 
-  const appendSendError = useCallback((key: "error_send" | "error_rate_limit", message: string) => {
-    setMessages((prev) => [
-      ...prev,
-      createErrorMessage(tString(localeParam, key), { kind: "send", message }),
-    ]);
-  }, [localeParam]);
+  const restoreRejectedMessage = useCallback((bubbleId: string, text: string) => {
+    setMessages((prev) => prev.filter((m) => m.id !== bubbleId));
+    focusInputAtEndRef.current = true;
+    setInput((draft) => restoreDraft(text, draft));
+  }, []);
 
   /** Send a user message through /widget/chat and apply the response.
-   *  Used both by the input-area send button and by the Try again retry path
-   *  for an LLM-unavailable degraded turn (in which case `appendUserBubble`
-   *  is false — the original user message is already on screen). */
+   *  `bubbleId` is the visitor bubble the message belongs to: a failure is
+   *  marked on it. It is null for the Try again path of an LLM-unavailable
+   *  degraded turn, where the original bubble is already on screen and has
+   *  its own retry (`failureRetryId` names that turn for the banner). */
   const sendUserMessage = useCallback(async (
     userMessage: string,
-    { appendUserBubble }: { appendUserBubble: boolean },
+    { bubbleId, failureRetryId = null }: { bubbleId: string | null; failureRetryId?: string | null },
   ) => {
     const userId = userIdRef.current;
     setLoading(true);
     setStreamingText("");
     setStatusStage(null);
-    if (appendUserBubble) {
-      visitorSentRef.current = true;
-      setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
-    }
+    setFailures((prev) => clearSendFailure(prev, bubbleId));
+
+    const reportFailure = (cause: "rate_limit" | "other") => {
+      if (bubbleId) setFailures((prev) => markSendFailed(prev, bubbleId, cause));
+      else if (failureRetryId) setFailures((prev) => showBanner(prev, { kind: "resend", messageId: failureRetryId }));
+    };
     // A session minted by this message has no history to load, and loading it
     // would replace the bubbles already on screen.
     if (!sessionId) setHistoryLoaded(true);
@@ -926,7 +950,16 @@ export function ChatWidget({
 
       if (!res.ok) {
         console.error("Chat9: chat request failed", res.status, formatApiDetail(detail, ""));
-        appendSendError(res.status === 429 ? "error_rate_limit" : "error_send", userMessage);
+        const failure = classifySendFailure(res.status);
+        if (failure === "too_long") {
+          const maxChars = maxCharsFromDetail(detail);
+          if (maxChars) setServerMaxChars(maxChars);
+          if (bubbleId) {
+            restoreRejectedMessage(bubbleId, userMessage);
+            return;
+          }
+        }
+        reportFailure(failure === "rate_limit" ? "rate_limit" : "other");
         return;
       }
 
@@ -967,23 +1000,22 @@ export function ChatWidget({
       persistSession(botId, data.session_id, userId);
     } catch (error) {
       console.error("Chat9: chat request failed", error);
-      appendSendError("error_send", userMessage);
+      reportFailure("other");
     } finally {
       setStreamingText("");
       setStatusStage(null);
       setLoading(false);
     }
-  }, [appendSendError, applyAssistantMessage, botId, requestWidgetTurn, sessionId]);
+  }, [applyAssistantMessage, botId, requestWidgetTurn, restoreRejectedMessage, sessionId]);
 
   const handleSend = async () => {
     const userMessage = trimmedInput;
     if (!userMessage || !canSend) return;
+    const bubble = createTextMessage("user", userMessage);
+    visitorSentRef.current = true;
+    setMessages((prev) => [...prev, bubble]);
     setInput("");
-    await sendUserMessage(userMessage, { appendUserBubble: true });
-  };
-
-  const handleSendClick = () => {
-    void handleSend();
+    await sendUserMessage(userMessage, { bubbleId: bubble.id });
   };
 
   /** Try again on an LLM-unavailable bubble: reuse the original user message
@@ -1005,7 +1037,7 @@ export function ChatWidget({
     if (!originalMessage) return;
     const messagesCountBefore = messages.length;
     try {
-      await sendUserMessage(originalMessage, { appendUserBubble: false });
+      await sendUserMessage(originalMessage, { bubbleId: null, failureRetryId: messageId });
       // If sendUserMessage appended a non-degraded outcome (assistant or
       // error), drop the stale degraded bubble. If it appended another
       // llm_unavailable, the new bubble carries fresh state — also drop
@@ -1081,23 +1113,29 @@ export function ChatWidget({
         ),
       );
       console.error("Chat9: escalate failed", error);
-      setMessages((prev) => [
-        ...prev,
-        createErrorMessage(tString(localeParam, "error_support"), { kind: "escalate", messageId }),
-      ]);
+      setFailures((prev) => showBanner(prev, { kind: "escalate", messageId }));
     }
   }, [apiBase, botId, localeParam, messages, sessionId]);
 
-  const handleErrorRetry = useCallback((error: Extract<ChatWidgetMessage, { type: "error" }>) => {
-    setMessages((prev) => prev.filter((m) => m.id !== error.id));
-    if (error.retry.kind === "send") {
-      void sendUserMessage(error.retry.message, { appendUserBubble: false });
-    } else if (error.retry.kind === "escalate") {
-      void handleLlmUnavailableEscalate(error.retry.messageId);
-    } else {
-      setHistoryLoaded(false);
-    }
-  }, [handleLlmUnavailableEscalate, sendUserMessage]);
+  const retryFailedSend = useCallback((bubbleId: string) => {
+    const bubble = messages.find((m) => m.id === bubbleId && m.type === "user");
+    if (bubble && bubble.type === "user") void sendUserMessage(bubble.text, { bubbleId });
+  }, [messages, sendUserMessage]);
+
+  const retryBanner = useCallback((banner: Banner) => {
+    setFailures((prev) => dismissBanner(prev));
+    if (banner.kind === "history") setHistoryLoaded(false);
+    else if (banner.kind === "escalate") void handleLlmUnavailableEscalate(banner.messageId);
+    else if (banner.kind === "resend") void handleLlmUnavailableRetry(banner.messageId);
+  }, [handleLlmUnavailableEscalate, handleLlmUnavailableRetry]);
+
+  useLayoutEffect(() => {
+    const field = inputRef.current;
+    if (!focusInputAtEndRef.current || !field) return;
+    focusInputAtEndRef.current = false;
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [input]);
 
   useEffect(() => {
     if (!isOpen || !onClose || modalOpenRef.current) return;
@@ -1188,10 +1226,24 @@ export function ChatWidget({
 
             if (msg.type === "user") {
               return (
-                <div key={msg.id} className="flex justify-end">
+                <div key={msg.id} className="flex flex-col items-end">
                   <div dir="auto" className={cn(BUBBLE_CLASSES, "accent-fill rounded-br-tag whitespace-pre-wrap text-ui")}>
                     {msg.text}
                   </div>
+                  {failures.failedIds.includes(msg.id) ? (
+                    <p className="flex items-center text-caption text-danger">
+                      {tString(locale, "send_failed_marker")}
+                      <span aria-hidden="true" className="px-1">·</span>
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => retryFailedSend(msg.id)}
+                        className="hit-44-y relative inline-flex h-9 items-center font-medium underline disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {tString(locale, "try_again_button")}
+                      </button>
+                    </p>
+                  ) : null}
                 </div>
               );
             }
@@ -1237,24 +1289,6 @@ export function ChatWidget({
                         ) : null}
                       </div>
                     ) : null}
-                  </div>
-                </div>
-              );
-            }
-
-            if (msg.type === "error") {
-              return (
-                <div key={msg.id} className="flex">
-                  <div role="alert" className={cn(BUBBLE_CLASSES, "rounded-bl-tag bg-danger-subtle pb-3")}>
-                    <p className="flex items-start gap-2 text-ui">
-                      <TriangleAlert size={16} aria-hidden="true" className="mt-0.5 flex-shrink-0 text-danger" />
-                      <span dir="auto">{msg.text}</span>
-                    </p>
-                    <div className="mt-2">
-                      <ActionButton variant="secondary" disabled={loading} onClick={() => handleErrorRetry(msg)}>
-                        {tString(locale, "try_again_button")}
-                      </ActionButton>
-                    </div>
                   </div>
                 </div>
               );
@@ -1319,44 +1353,36 @@ export function ChatWidget({
             <LoadingIndicator stage={null} locale={locale ?? null} greeting />
           ) : null}
         </div>
+
+        {banner ? (
+          <div role="alert" className="mx-2 mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-control bg-danger-subtle px-3 py-2 text-ui text-fg">
+            <TriangleAlert size={16} aria-hidden="true" className="flex-shrink-0 text-danger" />
+            <span dir="auto" className="min-w-0 flex-1">{bannerText(banner)}</span>
+            {banner.kind === "rate_limit" ? null : (
+              <ActionButton variant="secondary" disabled={loading} onClick={() => retryBanner(banner)}>
+                {tString(locale, "try_again_button")}
+              </ActionButton>
+            )}
+          </div>
+        ) : null}
         </div>
 
         <div className={cn("pad-b-composer flex-shrink-0 bg-surface pt-2", padX)}>
-          <div className="flex items-center gap-2">
-            <input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.nativeEvent.isComposing && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              dir="auto"
-              aria-label={tString(locale, "composer_label")}
-              placeholder={tString(locale, "composer_placeholder")}
-              enterKeyHint="send"
-              autoComplete="off"
-              autoCapitalize="sentences"
-              className="composer-input h-10 min-w-0 flex-1 rounded-full border border-line bg-surface-alt px-4 text-fg placeholder:text-fg-faint dark:bg-canvas"
-            />
-            <button
-              type="button"
-              onClick={handleSendClick}
-              disabled={!loading && !trimmedInput}
-              aria-disabled={loading || undefined}
-              aria-busy={loading}
-              aria-label={tString(locale, "send_message")}
-              className="accent-fill accent-press hit-44-send relative inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint"
-            >
-              {loading ? (
-                <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
-              ) : (
-                <ArrowUp size={16} aria-hidden="true" />
-              )}
-            </button>
-          </div>
+          <Composer
+            value={input}
+            onValueChange={(value) => {
+              setInput(value);
+              setFailures((prev) => dismissBanner(prev));
+            }}
+            onSend={() => void handleSend()}
+            locale={locale ?? null}
+            limit={limit}
+            counter={counter}
+            canSubmit={canSubmit}
+            loading={loading}
+            textareaRef={inputRef}
+            panelRef={panelRef}
+          />
         </div>
       </div>
 

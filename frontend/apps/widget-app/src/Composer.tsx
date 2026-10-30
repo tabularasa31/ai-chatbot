@@ -1,6 +1,6 @@
 import { ArrowUp, Loader2 } from "lucide-react";
 import type { JSX } from "preact";
-import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { ComposerCounter } from "./composerLimit";
 import { t } from "./strings";
 import { useRevealed } from "./useRevealed";
@@ -68,14 +68,25 @@ export function Composer({
   const over = counter.state === "over";
   const spinnerVisible = useRevealed(loading);
 
-  useLayoutEffect(() => {
+  const refit = useCallback(() => {
     const field = textareaRef.current;
-    if (!field) return;
-    const refit = () => setMultiline(fitToContent(field, panelRef.current));
-    refit();
+    if (field) setMultiline(fitToContent(field, panelRef.current));
+  }, [textareaRef, panelRef]);
+
+  useLayoutEffect(refit, [value, refit]);
+
+  useEffect(() => {
     window.addEventListener("resize", refit);
     return () => window.removeEventListener("resize", refit);
-  }, [value, textareaRef, panelRef]);
+  }, [refit]);
+
+  const overMessage = counter.state === "over" ? t(locale, "composer_too_long", { n: String(counter.over), max: String(limit) }) : "";
+  const overMessageRef = useRef(overMessage);
+  overMessageRef.current = overMessage;
+  const [announcement, setAnnouncement] = useState("");
+  useEffect(() => {
+    setAnnouncement(overMessageRef.current);
+  }, [over]);
 
   function handleKeyDown(event: JSX.TargetedKeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.isComposing) return;
@@ -130,10 +141,13 @@ export function Composer({
         </p>
       ) : null}
       {counter.state === "over" ? (
-        <p id={COUNTER_ID} role="status" className="mt-1 text-caption tabular-nums text-danger">
-          {t(locale, "composer_too_long", { n: String(counter.over), max: String(limit) })}
+        <p id={COUNTER_ID} aria-hidden="true" className="mt-1 text-caption tabular-nums text-danger">
+          {overMessage}
         </p>
       ) : null}
+      <p role="status" className="sr-only">
+        {announcement}
+      </p>
     </>
   );
 }

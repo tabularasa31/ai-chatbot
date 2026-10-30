@@ -25,6 +25,24 @@ export function dismissBanner(state: SendFailures): SendFailures {
   return state.banner ? { ...state, banner: null } : state;
 }
 
+export function dismissBannerOnEdit(state: SendFailures): SendFailures {
+  const kind = state.banner?.kind;
+  return kind === "rate_limit" || kind === "resend" ? { ...state, banner: null } : state;
+}
+
+export function moveToEnd<T extends { id: string }>(items: readonly T[], id: string): T[] {
+  const moved = items.find((item) => item.id === id);
+  return moved ? [...items.filter((item) => item.id !== id), moved] : [...items];
+}
+
+export function keepUnsent<T extends { id: string }>(
+  hydrated: readonly T[],
+  current: readonly T[],
+  failedIds: readonly string[],
+): T[] {
+  return [...hydrated, ...current.filter((item) => failedIds.includes(item.id))];
+}
+
 export function markSendFailed(state: SendFailures, bubbleId: string, cause: "rate_limit" | "other"): SendFailures {
   const failedIds = state.failedIds.includes(bubbleId) ? state.failedIds : [...state.failedIds, bubbleId];
   return cause === "rate_limit" ? { failedIds, banner: { kind: "rate_limit" } } : { ...state, failedIds };

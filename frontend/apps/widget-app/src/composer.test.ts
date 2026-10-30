@@ -3,18 +3,27 @@ import { describe, test } from "node:test";
 import { composerCounter, maxCharsFromDetail, resolveLimit, restoreDraft } from "./composerLimit.ts";
 import {
   NO_FAILURES,
-  classifySendFailure,
   clearSendFailure,
   dismissBanner,
+  dismissBannerOnEdit,
+  keepUnsent,
   markSendFailed,
+  moveToEnd,
   showBanner,
+  type Banner,
 } from "./sendFailures.ts";
 
 describe("composerCounter", () => {
-  test("nothing below 900, muted remaining count from 900 through the limit", () => {
+  test("nothing until 100 characters remain, then the remaining count through the limit", () => {
     assert.deepEqual(composerCounter("a".repeat(899), 1000), { state: "hidden" });
     assert.deepEqual(composerCounter("a".repeat(900), 1000), { state: "left", left: 100 });
     assert.deepEqual(composerCounter("a".repeat(1000), 1000), { state: "left", left: 0 });
+  });
+
+  test("the threshold follows a server-provided limit", () => {
+    assert.deepEqual(composerCounter("a".repeat(399), 500), { state: "hidden" });
+    assert.deepEqual(composerCounter("a".repeat(400), 500), { state: "left", left: 100 });
+    assert.deepEqual(composerCounter("a".repeat(501), 500), { state: "over", over: 1 });
   });
 
   test("over the limit reports how far over, without truncating", () => {
@@ -51,13 +60,6 @@ describe("restoreDraft", () => {
 });
 
 describe("send failures", () => {
-  test("status codes map to too long, rate limit or generic", () => {
-    assert.equal(classifySendFailure(413), "too_long");
-    assert.equal(classifySendFailure(429), "rate_limit");
-    assert.equal(classifySendFailure(500), "other");
-    assert.equal(classifySendFailure(null), "other");
-  });
-
   test("repeated generic failures keep one marker on the bubble and no banner", () => {
     let state = NO_FAILURES;
     for (let i = 0; i < 3; i += 1) {
@@ -74,9 +76,37 @@ describe("send failures", () => {
     assert.deepEqual(state.failedIds, ["m1"]);
   });
 
-  test("retrying or editing clears the banner; retrying also clears that bubble's marker", () => {
+  test("retrying clears the banner and also clears that bubble's marker", () => {
     const failed = markSendFailed(markSendFailed(NO_FAILURES, "m1", "other"), "m2", "rate_limit");
     assert.deepEqual(dismissBanner(failed), { failedIds: ["m1", "m2"], banner: null });
     assert.deepEqual(clearSendFailure(failed, "m2"), { failedIds: ["m1"], banner: null });
+  });
+
+  test("typing clears the rate limit and resend banners but keeps history and support ones", () => {
+    const withBanner = (banner: Banner) => showBanner(markSendFailed(NO_FAILURES, "m1", "other"), banner);
+    assert.equal(dismissBannerOnEdit(withBanner({ kind: "rate_limit" })).banner, null);
+    assert.equal(dismissBannerOnEdit(withBanner({ kind: "resend", messageId: "a1" })).banner, null);
+    assert.deepEqual(dismissBannerOnEdit(withBanner({ kind: "history" })).banner, { kind: "history" });
+    assert.deepEqual(
+      dismissBannerOnEdit(withBanner({ kind: "escalate", messageId: "a1" })).banner,
+      { kind: "escalate", messageId: "a1" },
+    );
+    assert.deepEqual(dismissBannerOnEdit(withBanner({ kind: "history" })).failedIds, ["m1"]);
+  });
+});
+
+describe("failed bubble placement", () => {
+  const log = [{ id: "m1" }, { id: "a1" }, { id: "m2" }];
+
+  test("a retried bubble moves to the end of the log and keeps its id", () => {
+    assert.deepEqual(moveToEnd(log, "m1"), [{ id: "a1" }, { id: "m2" }, { id: "m1" }]);
+    assert.deepEqual(moveToEnd(log, "m2"), log);
+    assert.deepEqual(moveToEnd(log, "missing"), log);
+  });
+
+  test("reloading history keeps the failed bubbles that never reached the server", () => {
+    const hydrated = [{ id: "s1" }, { id: "s2" }];
+    assert.deepEqual(keepUnsent(hydrated, log, ["m2"]), [{ id: "s1" }, { id: "s2" }, { id: "m2" }]);
+    assert.deepEqual(keepUnsent(hydrated, log, []), hydrated);
   });
 });

@@ -1,5 +1,5 @@
 export const DEFAULT_MAX_CHARS = 1000;
-export const COUNTER_FROM = 900;
+const COUNTER_MARGIN = 100;
 
 export type ComposerCounter =
   | { state: "hidden" }
@@ -15,7 +15,7 @@ export function countCodePoints(text: string): number {
 export function composerCounter(text: string, limit: number): ComposerCounter {
   const length = countCodePoints(text.trim());
   if (length > limit) return { state: "over", over: length - limit };
-  if (length >= COUNTER_FROM) return { state: "left", left: limit - length };
+  if (length >= limit - COUNTER_MARGIN) return { state: "left", left: limit - length };
   return { state: "hidden" };
 }
 
@@ -25,7 +25,7 @@ function positiveInteger(value: unknown): number | null {
 
 export function maxCharsFromDetail(detail: unknown): number | null {
   if (typeof detail !== "object" || detail === null || !("max_chars" in detail)) return null;
-  return positiveInteger((detail as { max_chars?: unknown }).max_chars);
+  return positiveInteger(detail.max_chars);
 }
 
 export function resolveLimit(serverMax: number | null, configMax: unknown): number {

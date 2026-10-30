@@ -1,11 +1,12 @@
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Pencil, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type { DocumentListItem, UrlSource } from "@/lib/api";
 import { formatDateTime, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FileStatus, UrlStatus } from "./HealthPanel";
+import { SourceErrorDetails } from "./SourceError";
 import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, isIndexing, scheduleCaption } from "./shared";
 
 const CELL_CLASS = "px-4 py-3 align-top";
@@ -110,6 +111,7 @@ export function UrlRow({
   const pages = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
   const totalPages = source.pages_found || source.pages_indexed;
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const [errorOpen, setErrorOpen] = useState(false);
   return (
     <Fragment>
       <tr className="cursor-pointer border-b border-line hover:bg-surface-alt active:bg-line" onClick={onToggle}>
@@ -127,13 +129,13 @@ export function UrlRow({
             <Chevron size={16} aria-hidden="true" className="shrink-0" />
             <span className="min-w-0 break-anywhere">{source.name}</span>
           </button>
-          <p className={`${NAME_CAPTIONS_CLASS} truncate text-caption text-fg-muted`} title={source.url}>
+          <p className={`${NAME_CAPTIONS_CLASS} break-anywhere text-caption text-fg-muted`}>
             {displayUrl(source.url)}
           </p>
           <p className="text-caption text-fg-muted">{scheduleCaption(source)}</p>
         </td>
         <td className={CELL_CLASS}>
-          <UrlStatus source={source} />
+          <UrlStatus source={source} errorOpen={errorOpen} onToggleError={() => setErrorOpen((open) => !open)} />
         </td>
         <td className={`${NUMERIC_CELL_CLASS} hidden xl:table-cell`}>{pages}</td>
         <td className={NUMERIC_CELL_CLASS}>
@@ -148,6 +150,7 @@ export function UrlRow({
           </div>
         </td>
       </tr>
+      {errorOpen && source.error_message && <SourceErrorDetails sourceId={source.id} message={source.error_message} />}
       {expanded && detail}
     </Fragment>
   );

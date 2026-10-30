@@ -50,14 +50,14 @@ export function FileStatus({ doc }: { doc: DocumentListItem }) {
   );
 }
 
-export function UrlStatus({ source }: { source: UrlSource }) {
+export function UrlStatus({ source, errorOpen, onToggleError }: { source: UrlSource; errorOpen: boolean; onToggleError: () => void }) {
   const { label, dot } = sourceStatus(source.status);
   return (
     <div className="text-ui text-fg">
       <Labelled dot={dot}>{label}</Labelled>
       <div className="mt-1 space-y-0.5">
         {source.status === "paused" && <Caption>Needs your action before indexing continues.</Caption>}
-        {source.error_message && <SourceError sourceId={source.id} message={source.error_message} />}
+        {source.error_message && <SourceError sourceId={source.id} open={errorOpen} onToggle={onToggleError} />}
         {source.warning_message && <Caption>{source.warning_message}</Caption>}
       </div>
     </div>

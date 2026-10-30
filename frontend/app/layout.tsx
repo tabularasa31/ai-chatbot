@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Analytics } from "@vercel/analytics/next";
-import { SpeedInsights } from "@vercel/speed-insights/next";
 import { getMetadataBase } from "@/lib/site";
 import { SCHEME_BOOT_SCRIPT } from "@/lib/scheme";
 import { PostHogProvider } from "./providers/PostHogProvider";
+import { VercelInsights } from "./providers/VercelInsights";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -41,8 +40,7 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         <PostHogProvider>{children}</PostHogProvider>
-        <Analytics />
-        <SpeedInsights />
+        <VercelInsights />
       </body>
     </html>
   );

@@ -4,6 +4,7 @@ import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, Suspense } from "react";
+import { redactPostHogEvent, SECRET_QUERY_PARAMS } from "@/lib/analytics-privacy";
 
 // The widget iframe context silently drops all PostHog network egress
 // (storage partitioning / extensions / shields). Skip init there so we
@@ -22,6 +23,11 @@ if (typeof window !== "undefined" && !isWidgetPath(window.location.pathname)) {
       capture_pageview: false,
       capture_pageleave: true,
       session_recording: { maskAllInputs: true },
+      // Masks the stored first-visit URL too, which the /flags request sends
+      // outside before_send. Also masks ad click ids (gclid, fbclid, ...).
+      mask_personal_data_properties: true,
+      custom_personal_data_properties: SECRET_QUERY_PARAMS,
+      before_send: redactPostHogEvent,
     });
   }
 }

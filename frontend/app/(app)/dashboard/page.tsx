@@ -10,26 +10,34 @@ import { WidgetIdentityNotice } from "@/components/WidgetIdentityNotice";
 import { useClientMe, useActiveBot } from "@/hooks/useApi";
 import { InstallWidget } from "./install-widget";
 
+function InstallWidgetBars() {
+  return (
+    <div className="space-y-3">
+      <Skeleton className="h-7 w-40" />
+      <div className="flex items-center gap-3">
+        <Skeleton className="h-10 w-72 max-w-full" />
+        <Skeleton className="h-11 w-24" />
+      </div>
+    </div>
+  );
+}
+
 function InstallWidgetSkeleton() {
   return (
     <SkeletonRegion>
-      <div className="space-y-3">
-        <Skeleton className="h-7 w-40" />
-        <div className="flex items-center gap-3">
-          <Skeleton className="h-10 w-72 max-w-full" />
-          <Skeleton className="h-11 w-24" />
-        </div>
-      </div>
+      <InstallWidgetBars />
     </SkeletonRegion>
   );
 }
 
 function InstallWidgetPageSkeleton() {
   return (
-    <div className="max-w-2xl space-y-8">
-      <Skeleton className="h-8 w-48" />
-      <InstallWidgetSkeleton />
-    </div>
+    <SkeletonRegion>
+      <div className="max-w-2xl space-y-8">
+        <Skeleton className="h-8 w-48" />
+        <InstallWidgetBars />
+      </div>
+    </SkeletonRegion>
   );
 }
 

@@ -94,7 +94,7 @@ export function FaqListSkeleton({ rows, className }: { rows: number; className?:
             <div className="space-y-1">
               <Skeleton className="h-6 w-3/5" />
               <Skeleton className="h-5 w-4/5" />
-              <Skeleton className="h-5 w-3/5" />
+              <Skeleton className="h-4 w-3/5" />
               <Skeleton className="h-4 w-24" />
             </div>
             <div className="mt-2 flex h-11 items-center justify-between">

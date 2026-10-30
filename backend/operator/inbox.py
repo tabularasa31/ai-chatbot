@@ -28,6 +28,7 @@ rest of the operator domain.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -294,8 +295,29 @@ def _last_messages(
     return {m.chat_id: (m, counts.get(m.chat_id, 0)) for m in newest}
 
 
+_CODE_FENCE_LINE = re.compile(r"^\s*(```|~~~)")
+_TABLE_SEPARATOR_ROW = re.compile(r"^\s*\|?(\s*:?-+:?\s*\|)+(\s*:?-+:?\s*)?$")
+_LINE_PREFIX = re.compile(r"^\s*(#{1,6}\s+|>+\s?|[-*+]\s+|\d+[.)]\s+)+")
+_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_LINK_OR_IMAGE = re.compile(r"!?\[([^\]]*)\]\([^)\s]*(?:\s+\"[^\"]*\")?\)")
+_EMPHASIS_MARKER = re.compile(r"\*+(?=\S)|(?<=\S)\*+|(?<!\w)_+(?=\S)|(?<=\S)_+(?!\w)|~~|`+")
+
+
+def _strip_markdown(text: str) -> str:
+    lines = []
+    for line in text.splitlines():
+        if _CODE_FENCE_LINE.match(line) or _TABLE_SEPARATOR_ROW.match(line):
+            continue
+        if _TABLE_ROW.match(line):
+            line = line.replace("|", " ")
+        line = _LINE_PREFIX.sub("", line)
+        line = _LINK_OR_IMAGE.sub(r"\1", line)
+        lines.append(_EMPHASIS_MARKER.sub("", line))
+    return " ".join(lines)
+
+
 def _preview(text: str) -> str:
-    text = " ".join(text.split())
+    text = " ".join(_strip_markdown(text).split())
     if len(text) > PREVIEW_MAX_LEN:
         return text[:PREVIEW_MAX_LEN].rstrip() + "…"
     return text

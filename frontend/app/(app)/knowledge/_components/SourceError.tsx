@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { FullWidthCell } from "./shared";
 
 function detailsId(sourceId: string): string {
   return `source-error-${sourceId}`;
@@ -20,11 +21,11 @@ export function SourceError({ sourceId, open, onToggle }: { sourceId: string; op
 export function SourceErrorDetails({ sourceId, message }: { sourceId: string; message: string }) {
   return (
     <tr className="border-b border-line">
-      <td colSpan={5} className="px-4 pb-3">
+      <FullWidthCell className="px-4 pb-3">
         <p id={detailsId(sourceId)} className="break-anywhere select-text rounded-control border border-line-strong bg-surface p-3 text-ui text-fg">
           {message}
         </p>
-      </td>
+      </FullWidthCell>
     </tr>
   );
 }

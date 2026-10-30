@@ -15,7 +15,7 @@ import { SourceForm } from "./SourceForm";
 import { FileRow, UrlRow } from "./SourceRows";
 import { UrlSourcesSection, type DetailView } from "./UrlSourcesSection";
 import { useSources, type Sources } from "./useSources";
-import type { MixedRow } from "./shared";
+import { FullWidthCell, type MixedRow } from "./shared";
 
 const ACCEPTED_FILE_TYPES = ".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt,.html,.htm";
 const ADD_URL_FORM_ID = "add-url-form";
@@ -225,9 +225,9 @@ export function DocumentsSection() {
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={5} className="px-4 py-6">
+              <FullWidthCell className="px-4 py-6">
                 {renderEmpty()}
-              </td>
+              </FullWidthCell>
             </tr>
           ) : (
             rows.map((row) =>

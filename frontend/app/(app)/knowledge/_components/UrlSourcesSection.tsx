@@ -8,7 +8,7 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { SourceForm } from "./SourceForm";
-import { DETAIL_ID_PREFIX, NAME_BUTTON_ON_BAND_CLASS, quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
+import { DETAIL_ID_PREFIX, FullWidthCell, NAME_BUTTON_ON_BAND_CLASS, quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
 
 export type DetailView =
   | { state: "loading" }
@@ -170,7 +170,7 @@ function DetailBody({
 export function UrlSourcesSection({ view, ...rest }: UrlSourcesSectionProps) {
   return (
     <tr id={`${DETAIL_ID_PREFIX}${rest.source.id}`} className="bg-surface-alt">
-      <td colSpan={5} className="px-4 py-4">
+      <FullWidthCell className="px-4 py-4">
         {view.state === "loading" && (
           <SkeletonRegion>
             <div className="space-y-3">
@@ -187,7 +187,7 @@ export function UrlSourcesSection({ view, ...rest }: UrlSourcesSectionProps) {
             <DetailBody {...rest} detail={view.detail} />
           </div>
         )}
-      </td>
+      </FullWidthCell>
     </tr>
   );
 }

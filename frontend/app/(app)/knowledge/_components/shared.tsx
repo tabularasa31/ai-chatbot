@@ -1,6 +1,7 @@
 import { ApiError, type DocumentListItem, type UrlSource } from "@/lib/api";
 import { parseApiDate, pluralize } from "@/lib/format";
 import type { SectionTab } from "@/components/ui/section-tabs";
+import type { ReactNode } from "react";
 
 export type MixedRow =
   | { kind: "file"; item: DocumentListItem }
@@ -10,6 +11,19 @@ export const POLLABLE_SOURCE_STATUSES = new Set(["queued", "indexing"]);
 const INDEXING_STATUSES = new Set(["processing", "embedding", "indexing"]);
 
 export const DETAIL_ID_PREFIX = "source-detail-";
+
+// The Pages column is `hidden xl:table-cell`, so a full-width row spans the four
+// always-visible columns and fills the fifth only where it shows.
+export function FullWidthCell({ className, children }: { className: string; children: ReactNode }) {
+  return (
+    <>
+      <td colSpan={4} className={className}>
+        {children}
+      </td>
+      <td className="hidden xl:table-cell" />
+    </>
+  );
+}
 
 const NAME_BUTTON_BASE_CLASS =
   "min-h-11 max-w-full rounded-control text-left text-ui font-medium text-fg hover:underline " +

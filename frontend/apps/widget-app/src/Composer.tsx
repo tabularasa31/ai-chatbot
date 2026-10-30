@@ -1,6 +1,5 @@
 import { ArrowUp, Loader2 } from "lucide-react";
-import type { JSX } from "preact";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { ComposerCounter } from "./composerLimit";
 import { t } from "./strings";
 import { useRevealed } from "./useRevealed";
@@ -88,8 +87,8 @@ export function Composer({
     setAnnouncement(overMessageRef.current);
   }, [over]);
 
-  function handleKeyDown(event: JSX.TargetedKeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== "Enter" || event.isComposing) return;
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
     const modified = event.ctrlKey || event.metaKey;
     const sends = modified || (!coarse && !event.shiftKey);
     if (!sends) return;
@@ -111,7 +110,7 @@ export function Composer({
           aria-invalid={over || undefined}
           aria-describedby={counter.state === "hidden" ? undefined : COUNTER_ID}
           placeholder={t(locale, "composer_placeholder")}
-          enterkeyhint={coarse ? "enter" : "send"}
+          enterKeyHint={coarse ? "enter" : "send"}
           autoComplete="off"
           autoCapitalize="sentences"
           className={cn(

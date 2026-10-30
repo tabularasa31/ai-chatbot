@@ -45,7 +45,7 @@ import {
   launcherVisual,
   reduceLauncherPointer,
   type LauncherPointerInput,
-} from "./launcherPointer.ts";
+} from "./launcherPointer";
 
 type UserHints = {
   user_id?: string;

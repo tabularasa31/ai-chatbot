@@ -46,7 +46,7 @@ type TokenCheck =
   | { status: "checking" }
   | { status: "valid" }
   | { status: "broken" }
-  | { status: "failed"; message: string; retrying: boolean };
+  | { status: "failed"; message: string; retrying: boolean; retryable: boolean };
 
 function CheckingLink() {
   const [revealed, setRevealed] = useState(false);
@@ -68,14 +68,16 @@ function CheckingLink() {
   );
 }
 
-function CheckFailed({ message, retrying, onRetry }: { message: string; retrying: boolean; onRetry: () => void }) {
+function CheckFailed({ message, retrying, retryable, onRetry }: { message: string; retrying: boolean; retryable: boolean; onRetry: () => void }) {
   return (
     <AuthCard>
       <AuthHeading moveFocus>Couldn&apos;t check your link</AuthHeading>
       <p className="mb-6 text-body text-fg-muted">{message}</p>
-      <Button variant="secondary" offset="surface" busy={retrying} className="w-full active:scale-press-wide" onClick={onRetry}>
-        Try again
-      </Button>
+      {retryable && (
+        <Button variant="secondary" offset="surface" busy={retrying} className="w-full active:scale-press-wide" onClick={onRetry}>
+          Try again
+        </Button>
+      )}
       <AuthFooter>
         <StandaloneLink href="/login">Sign in</StandaloneLink>
       </AuthFooter>
@@ -91,11 +93,13 @@ function useTokenCheck(token: string) {
       await api.auth.checkResetToken(token);
       setCheck({ status: "valid" });
     } catch (err) {
-      setCheck(
-        isApiStatus(err, 400)
-          ? { status: "broken" }
-          : { status: "failed", message: isApiStatus(err, 429) ? RATE_LIMITED_MESSAGE : CHECK_FAILED_MESSAGE, retrying: false },
-      );
+      if (isApiStatus(err, 400)) {
+        setCheck({ status: "broken" });
+      } else if (isApiStatus(err, 429)) {
+        setCheck({ status: "failed", message: RATE_LIMITED_MESSAGE, retrying: false, retryable: false });
+      } else {
+        setCheck({ status: "failed", message: CHECK_FAILED_MESSAGE, retrying: false, retryable: true });
+      }
     }
   }, [token]);
 
@@ -225,7 +229,7 @@ function CheckedPasswordEntry({ token, copy }: { token: string; copy: SetPasswor
     case "broken":
       return <BrokenLink {...copy.invalid} />;
     case "failed":
-      return <CheckFailed message={check.message} retrying={check.retrying} onRetry={retry} />;
+      return <CheckFailed message={check.message} retrying={check.retrying} retryable={check.retryable} onRetry={retry} />;
     case "valid":
       return <PasswordEntry token={token} copy={copy} />;
   }

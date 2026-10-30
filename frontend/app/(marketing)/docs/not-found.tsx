@@ -1,6 +1,12 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { DocsPage } from 'fumadocs-ui/page';
 import { buttonClasses } from '@/components/ui/button';
+
+export const metadata: Metadata = {
+  title: 'Page not found - Chat9',
+  robots: { index: false },
+};
 
 export default function DocsNotFound() {
   return (

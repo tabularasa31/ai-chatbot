@@ -286,6 +286,8 @@ def test_the_list_previews_long_unstructured_input_as_plain_text(
     _say(db_session, blank_padded, MessageRole.operator, " " * 9000 + "tail")
     open_links = _chat(db_session, ws.tenant_id)
     _say(db_session, open_links, MessageRole.operator, "[a](" * 2500)
+    cut_link = _chat(db_session, ws.tenant_id)
+    _say(db_session, cut_link, MessageRole.operator, "word" + " " * 1100 + "[label](https://example.com/path)")
     dash_run = _chat(db_session, ws.tenant_id)
     _say(db_session, dash_run, MessageRole.operator, "| " + "- " * 4000 + "end")
 
@@ -295,7 +297,9 @@ def test_the_list_previews_long_unstructured_input_as_plain_text(
     assert preview[str(blank_padded.id)] == "tail"
     assert preview[str(open_links.id)].startswith("[a](")
     assert preview[str(open_links.id)].endswith("…")
-    assert preview[str(dash_run.id)] == ""
+    assert preview[str(cut_link.id)] == "word…"
+    assert preview[str(dash_run.id)].startswith("| - -")
+    assert preview[str(dash_run.id)].endswith("…")
 
 
 def test_a_rotated_session_is_one_row_pointing_at_its_newest_chat(

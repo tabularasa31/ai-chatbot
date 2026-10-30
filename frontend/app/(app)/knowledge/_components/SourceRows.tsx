@@ -108,7 +108,7 @@ export function UrlRow({
   detail: ReactNode;
 }) {
   const pages = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
-  const totalPages = source.pages_found ?? source.pages_indexed;
+  const totalPages = source.pages_found || source.pages_indexed;
   const Chevron = expanded ? ChevronDown : ChevronRight;
   return (
     <Fragment>

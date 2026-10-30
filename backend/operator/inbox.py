@@ -304,13 +304,16 @@ _LINK_OR_IMAGE = re.compile(
 _EMPHASIS_MARKER = re.compile(
     r"(?<!\w)\*+(?=\S)|(?<=\S)\*+(?!\w)|(?<!\w)_+(?=\S)|(?<=\S)_+(?!\w)|~~|`+"
 )
-_TABLE_SEPARATOR_CHARS = frozenset("|-: ")
+_TABLE_SEPARATOR_CELL = re.compile(r":?-+:?")
+_CUT_MARKDOWN_TAIL = re.compile(r"!?\[[^\[\]]*(?:\]\([^()\s]*)?$")
 _PREVIEW_SOURCE_FACTOR = 8
 
 
 def _is_table_separator_row(line: str) -> bool:
     stripped = line.strip()
-    return "|" in stripped and "-" in stripped and set(stripped) <= _TABLE_SEPARATOR_CHARS
+    return "|" in stripped and all(
+        _TABLE_SEPARATOR_CELL.fullmatch(cell.strip()) for cell in stripped.strip("|").split("|")
+    )
 
 
 def _strip_markdown(text: str) -> str:
@@ -327,10 +330,11 @@ def _strip_markdown(text: str) -> str:
 
 
 def _preview(text: str) -> str:
-    text = " ".join(_strip_markdown(text.lstrip()[: PREVIEW_MAX_LEN * _PREVIEW_SOURCE_FACTOR]).split())
-    if len(text) > PREVIEW_MAX_LEN:
-        return text[:PREVIEW_MAX_LEN].rstrip() + "…"
-    return text
+    source = text.lstrip()
+    preview = " ".join(_strip_markdown(source[: PREVIEW_MAX_LEN * _PREVIEW_SOURCE_FACTOR]).split())
+    if len(source) > PREVIEW_MAX_LEN * _PREVIEW_SOURCE_FACTOR or len(preview) > PREVIEW_MAX_LEN:
+        return _CUT_MARKDOWN_TAIL.sub("", preview[:PREVIEW_MAX_LEN]).rstrip() + "…"
+    return preview
 
 
 def visitor_key(chat: Chat, *, strict: bool) -> str | None:

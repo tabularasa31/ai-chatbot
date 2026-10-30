@@ -560,7 +560,7 @@ declare global {
     const safeAreaStrip = document.createElement("div");
     safeAreaStrip.setAttribute("aria-hidden", "true");
     safeAreaStrip.style.cssText =
-      `display:none;position:absolute;top:0;left:0;right:0;height:env(safe-area-inset-top);background:${CHROME_BG};`;
+      `display:none;position:absolute;inset:0;box-sizing:border-box;pointer-events:none;border:solid ${CHROME_BG};border-width:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);`;
 
     // Fullscreen follows the visual viewport so the panel stays pinned to the visible area while the keyboard is open.
     function visibleArea() {
@@ -640,7 +640,6 @@ declare global {
       }
     }
 
-    // The phone sheet slides in from off-screen and stays opaque; the floating panel fades and lifts 8px.
     function panelMotionTarget(open: boolean) {
       const sheet = fullScreenQuery.matches;
       if (sheet) return { opacity: "1", transform: open ? "translateY(0)" : "translateY(100%)" };

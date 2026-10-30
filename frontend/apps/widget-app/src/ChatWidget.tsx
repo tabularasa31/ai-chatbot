@@ -9,6 +9,7 @@ import { cn, deriveStorageUserId, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { MarkdownBody } from "./MarkdownBody";
+import { useRevealed } from "./useRevealed";
 import {
   createErrorMessage,
   createLlmUnavailableMessage,
@@ -98,7 +99,7 @@ function CodeCopyButton({ code, locale }: { code: string; locale: string | null 
       onClick={handleCopy}
       aria-label={label}
       title={label}
-      className="hit-44 relative inline-flex h-8 w-8 items-center justify-center rounded-control text-chrome-fg-muted transition-colors hover:bg-chrome-hover"
+      className="hit-44 relative inline-flex h-8 w-8 items-center justify-center press-round rounded-control text-chrome-fg-muted transition hover:bg-chrome-hover"
     >
       {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
     </button>
@@ -325,6 +326,7 @@ export function ChatWidget({
 
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
   const trimmedInput = input.trim();
+  const sendSpinnerVisible = useRevealed(loading);
   const canSend = Boolean(trimmedInput) && !loading;
   const ticketNotice = activeTicket
     ? tString(
@@ -1153,7 +1155,7 @@ export function ChatWidget({
               type="button"
               onClick={onClose}
               aria-label={tString(locale, "close_chat")}
-              className="header-close hit-44 relative inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-chrome-fg transition-colors hover:bg-chrome-hover active:bg-chrome-active focus-visible:outline-chrome-accent"
+              className="header-close hit-44 relative inline-flex h-8 w-8 flex-shrink-0 items-center justify-center press-round rounded-full text-chrome-fg transition hover:bg-chrome-hover active:bg-chrome-active focus-visible:outline-chrome-accent"
             >
               <X size={16} aria-hidden="true" />
             </button>
@@ -1173,7 +1175,7 @@ export function ChatWidget({
           role="log"
           aria-live="polite"
           aria-busy={loading}
-          className={cn("min-h-0 flex-1 space-y-3 overflow-y-auto py-4", padX)}
+          className={cn("min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain py-4", padX)}
         >
           {messages.map((msg, i) => {
             if (msg.type === "system") {
@@ -1348,10 +1350,10 @@ export function ChatWidget({
               aria-disabled={loading || undefined}
               aria-busy={loading}
               aria-label={tString(locale, "send_message")}
-              className="accent-fill accent-press hit-44-send relative inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint"
+              className="accent-fill accent-press hit-44-send relative inline-flex h-9 w-9 flex-shrink-0 items-center justify-center press-round rounded-full transition disabled:cursor-not-allowed disabled:bg-surface-alt disabled:text-fg-faint"
             >
-              {loading ? (
-                <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+              {sendSpinnerVisible ? (
+                <Loader2 size={16} aria-hidden="true" className="animate-spin" />
               ) : (
                 <ArrowUp size={16} aria-hidden="true" />
               )}

@@ -180,6 +180,7 @@ export function AnswerDrawer({
               />
               <Textarea
                 mono
+                resizable
                 rows={ANSWER_ROWS}
                 label="Answer (Markdown)"
                 helper={withLimit(undefined, answer.length, DRAFT_ANSWER_MAX_LENGTH)}

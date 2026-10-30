@@ -4,6 +4,7 @@ import { Suspense, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { clearSession, api } from "@/lib/api";
 import { LoadError } from "@/components/ui/load-error";
+import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { WidgetIdentityNotice } from "@/components/WidgetIdentityNotice";
 import { useClientMe, useActiveBot } from "@/hooks/useApi";
@@ -11,12 +12,13 @@ import { InstallWidget } from "./install-widget";
 
 function InstallWidgetSkeleton() {
   return (
-    <div className="animate-pulse space-y-8" role="status" aria-label="Loading">
-      <div className="h-11 w-2/3 rounded-control bg-surface-alt" />
-      <div className="h-24 rounded-control bg-surface-alt" />
-      <div className="h-28 rounded-control bg-surface-alt" />
-      <div className="h-40 rounded-control bg-surface-alt" />
-    </div>
+    <SkeletonRegion>
+      <div className="space-y-4">
+        <Skeleton className="h-7 w-40" />
+        <Skeleton className="h-11 w-full" />
+        <Skeleton className="h-11 w-32" />
+      </div>
+    </SkeletonRegion>
   );
 }
 

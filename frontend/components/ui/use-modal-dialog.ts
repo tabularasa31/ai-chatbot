@@ -26,8 +26,10 @@ export function useModalDialog({ onClose, canClose = true, onCloseBlocked, fallb
     if (!dialog) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
+    let pressStartedOnScrim = false;
     const keepFocusOnScrimPress = (event: MouseEvent) => {
-      if (event.target === dialog) event.preventDefault();
+      pressStartedOnScrim = event.target === dialog;
+      if (pressStartedOnScrim) event.preventDefault();
     };
     const blockCancel = (event: Event) => {
       if (latest.current.canClose) return;
@@ -35,7 +37,7 @@ export function useModalDialog({ onClose, canClose = true, onCloseBlocked, fallb
       latest.current.onCloseBlocked?.();
     };
     const closeOnScrimClick = (event: MouseEvent) => {
-      if (event.target !== dialog) return;
+      if (event.target !== dialog || !pressStartedOnScrim) return;
       if (latest.current.canClose) latest.current.onClose();
       else latest.current.onCloseBlocked?.();
     };

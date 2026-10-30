@@ -8,7 +8,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
-import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
+import { RowListSkeleton } from "@/components/ui/skeleton";
 import { DocumentPreviewDrawer } from "./DocumentPreviewDrawer";
 import { FlashMessage } from "@/components/ui/flash";
 import { SourceForm } from "./SourceForm";
@@ -109,11 +109,7 @@ export function DocumentsSection() {
   function renderEmpty() {
     if (sources.loadState === "loading") {
       return (
-        <SkeletonRegion>
-          {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-            <Skeleton key={index} className="mb-3 h-11 w-full" />
-          ))}
-        </SkeletonRegion>
+        <RowListSkeleton rows={SKELETON_ROWS} caption={false} />
       );
     }
     if (sources.loadState === "error") return null;

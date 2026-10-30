@@ -35,7 +35,7 @@ export function Drawer({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      className="m-0 ml-auto h-full max-h-full w-full max-w-xl overflow-hidden border-l border-line bg-surface p-0 text-fg shadow-overlay backdrop:bg-scrim dark:bg-surface-alt"
+      className="m-0 ml-auto h-full max-h-full w-full max-w-xl overflow-hidden border-l border-line bg-surface p-0 text-fg shadow-overlay animate-drawer-in backdrop:animate-scrim-in backdrop:bg-scrim motion-reduce:animate-fade-in dark:bg-surface-alt"
     >
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-4">

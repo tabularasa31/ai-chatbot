@@ -109,7 +109,7 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
         placeholder="Write a reply…"
         dir="auto"
         readOnly={busy !== null}
-        className={cn(FIELD_CLASS, "py-2", fieldError ? "border-danger" : "border-line-strong", FOCUS_RING.surface)}
+        className={cn(FIELD_CLASS, "resize-none py-2", fieldError ? "border-danger" : "border-line-strong", FOCUS_RING.surface)}
       />
       {fieldError && (
         <p id={ERROR_ID} role="alert" className="text-ui text-danger">

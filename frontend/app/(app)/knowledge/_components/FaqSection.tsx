@@ -7,7 +7,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
-import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
+import { RowListSkeleton } from "@/components/ui/skeleton";
 import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { LINK_CLASS } from "./link-class";
 import { confidenceLevel } from "./shared";
@@ -37,7 +37,7 @@ const SOURCE_LABELS: Record<string, string> = {
   logs: "From chat history",
   unanswered_queue: "From Unanswered",
 };
-const SKELETON_ROWS = 4;
+const SKELETON_ROWS = 5;
 
 function answersCount(count: number): string {
   return count === 1 ? "1 answer" : `${count} answers`;
@@ -187,13 +187,7 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
       )}
 
       {state.status === "loading" && (
-        <SkeletonRegion>
-          <div className="space-y-4">
-            {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-              <Skeleton key={index} className="h-16 w-full" />
-            ))}
-          </div>
-        </SkeletonRegion>
+        <RowListSkeleton rows={SKELETON_ROWS} className="border-y border-line" />
       )}
 
       {state.status === "ready" && items.length === 0 && <EmptyMessage filter={filter} onGoToDocuments={onGoToDocuments} />}
@@ -243,6 +237,7 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
                 <div className="mt-2 flex items-center gap-2">
                   <Button
                     variant="ghost"
+                    bleed="start"
                     onClick={() => setEditing({ id: item.id, question: item.question, answer: item.answer })}
                   >
                     Edit

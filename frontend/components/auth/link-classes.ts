@@ -2,7 +2,7 @@ import { FOCUS_RING, buttonClasses } from "@/components/ui/button";
 import { cn } from "@/components/ui/utils";
 
 export const authLinkClasses = cn(
-  "rounded-tag text-brand underline underline-offset-2 transition-colors duration-[120ms] hover:text-brand-hover motion-reduce:transition-none",
+  "rounded-tag text-brand underline underline-offset-2 transition-colors hover:text-brand-hover",
   FOCUS_RING.surface,
 );
 

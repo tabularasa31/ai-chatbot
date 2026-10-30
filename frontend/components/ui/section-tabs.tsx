@@ -23,7 +23,7 @@ const TAB_CLASS =
   "inline-flex h-11 items-center gap-2 rounded-control px-4 text-ui font-medium " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 const SELECTED_CLASS = "bg-brand-subtle text-brand";
-const IDLE_CLASS = "text-fg-muted hover:bg-surface-alt active:bg-surface-alt";
+const IDLE_CLASS = "text-fg-muted transition-colors hover:bg-surface-alt active:bg-line active:text-fg";
 const ROW_CLASS = "flex flex-wrap gap-1";
 
 const ARROW_STEP: Partial<Record<string, 1 | -1>> = { ArrowRight: 1, ArrowLeft: -1 };

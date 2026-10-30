@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { getMetadataBase } from "@/lib/site";
 import { SCHEME_BOOT_SCRIPT } from "@/lib/scheme";
+import { TouchActiveEnabler } from "@/components/ui/touch-active";
 import { PostHogProvider } from "./providers/PostHogProvider";
 import { VercelInsights } from "./providers/VercelInsights";
 import "./globals.css";
@@ -40,6 +41,7 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         <PostHogProvider>{children}</PostHogProvider>
+        <TouchActiveEnabler />
         <VercelInsights />
       </body>
     </html>

@@ -77,8 +77,8 @@ export function SiteHeader() {
             aria-label={open ? "Close menu" : "Open menu"}
             onClick={() => setOpen((value) => !value)}
             className={cn(
-              "flex h-11 w-11 items-center justify-center rounded-control text-fg-muted hover:bg-surface-alt hover:text-fg md:hidden",
-              "transition-colors duration-[120ms] motion-reduce:transition-none",
+              "flex h-11 w-11 items-center justify-center rounded-control text-fg-muted hover:bg-surface-alt hover:text-fg active:bg-line md:hidden",
+              "transition-colors",
               FOCUS_RING.canvas,
             )}
           >
@@ -98,7 +98,7 @@ export function SiteHeader() {
                     aria-current={current ? "page" : undefined}
                     onClick={() => setOpen(false)}
                     className={cn(
-                      "flex h-11 w-full items-center px-4 text-ui font-medium hover:bg-surface-alt",
+                      "flex h-11 w-full items-center px-4 text-ui font-medium hover:bg-surface-alt active:bg-line",
                       current ? "text-fg" : "text-fg-muted",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
                     )}

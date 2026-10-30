@@ -33,9 +33,9 @@ function InboxRowItem({
         onClick={onSelect}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "block w-full border-l-2 border-transparent px-4 py-3 text-left text-ui hover:bg-surface-alt",
+          "block w-full border-l-2 border-transparent px-4 py-3 text-left text-ui transition-colors hover:bg-surface-alt active:bg-line",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
-          selected && "border-brand bg-brand-subtle hover:bg-brand-subtle",
+          selected && "border-brand bg-brand-subtle hover:bg-brand-subtle active:bg-brand-subtle",
         )}
       >
         <span className="flex items-center gap-2">

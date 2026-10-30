@@ -72,7 +72,7 @@ export default function SignupPage() {
           activate your account.
         </p>
         <p className="mb-6 text-ui text-fg-muted">Can&apos;t find it? Check your spam folder.</p>
-        <Button variant="secondary" offset="surface" className="w-full" onClick={editEmail}>
+        <Button variant="secondary" offset="surface" className="w-full active:scale-press-wide" onClick={editEmail}>
           Use a different email
         </Button>
         <AuthFooter className="justify-center">

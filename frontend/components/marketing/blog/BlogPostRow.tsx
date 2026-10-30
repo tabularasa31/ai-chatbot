@@ -6,7 +6,7 @@ type BlogPostRowProps = { post: BlogPostSummary; titleAs: "h2" | "h3" };
 
 export function BlogPostRow({ post, titleAs: Title }: BlogPostRowProps) {
   return (
-    <li className="group relative -mx-4 rounded-control px-4 transition-colors duration-[120ms] hover:bg-surface-alt motion-reduce:transition-none">
+    <li className="group relative -mx-4 rounded-control px-4 transition-colors hover:bg-surface-alt">
       <div className="border-t border-line py-6 group-first:border-t-0">
         <PostMeta post={post} />
         <Title className="mt-2 break-words text-h2 text-fg">

@@ -109,4 +109,13 @@ describe("failed bubble placement", () => {
     assert.deepEqual(keepUnsent(hydrated, log, ["m2"]), [{ id: "s1" }, { id: "s2" }, { id: "m2" }]);
     assert.deepEqual(keepUnsent(hydrated, log, []), hydrated);
   });
+
+  test("a failed bubble the server saved anyway is not shown twice after hydration", () => {
+    const saved = [{ id: "s1", type: "user", text: "first" }, { id: "s2", type: "assistant", text: "hi" }, { id: "s3", type: "user", text: "hello there" }];
+    const current = [
+      { id: "m1", type: "user", text: "hello there  " },
+      { id: "m2", type: "user", text: "still unsent" },
+    ];
+    assert.deepEqual(keepUnsent(saved, current, ["m1", "m2"]), [...saved, current[1]]);
+  });
 });

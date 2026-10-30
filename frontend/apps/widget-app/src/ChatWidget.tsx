@@ -902,6 +902,16 @@ export function ChatWidget({
     setInput((draft) => restoreDraft(text, draft));
   }, []);
 
+  const disableRetry = useCallback((messageId: string) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId && m.type === "llm_unavailable"
+          ? { ...m, failureState: { ...m.failureState, retryable: false } }
+          : m,
+      ),
+    );
+  }, []);
+
   /** Send a user message through /widget/chat and apply the response.
    *  `bubbleId` is the visitor bubble the message belongs to: a failure is
    *  marked on it. It is null for the Try again path of an LLM-unavailable
@@ -962,6 +972,7 @@ export function ChatWidget({
           const maxChars = maxCharsFromDetail(detail);
           if (maxChars) setServerMaxChars(maxChars);
           if (bubbleId) restoreRejectedMessage(bubbleId, userMessage);
+          else if (failureRetryId) disableRetry(failureRetryId);
           return;
         }
         reportFailure(failure === "rate_limit" ? "rate_limit" : "other");
@@ -1011,7 +1022,7 @@ export function ChatWidget({
       setStatusStage(null);
       setLoading(false);
     }
-  }, [applyAssistantMessage, botId, requestWidgetTurn, restoreRejectedMessage, sessionId]);
+  }, [applyAssistantMessage, botId, disableRetry, requestWidgetTurn, restoreRejectedMessage, sessionId]);
 
   const handleSend = async () => {
     const userMessage = trimmedInput;

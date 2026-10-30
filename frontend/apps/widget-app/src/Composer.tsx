@@ -50,6 +50,11 @@ function fitToContent(field: HTMLTextAreaElement, panel: HTMLElement | null): bo
   return wanted > oneRow + 1;
 }
 
+function isComposing(event: object): boolean {
+  const native = "nativeEvent" in event ? event.nativeEvent : event;
+  return typeof native === "object" && native !== null && "isComposing" in native && native.isComposing === true;
+}
+
 export function Composer({
   value,
   onValueChange,
@@ -88,7 +93,7 @@ export function Composer({
   }, [over]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (event.key !== "Enter" || isComposing(event)) return;
     const modified = event.ctrlKey || event.metaKey;
     const sends = modified || (!coarse && !event.shiftKey);
     if (!sends) return;

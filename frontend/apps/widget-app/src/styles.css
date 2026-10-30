@@ -144,8 +144,8 @@
 
   .composer-input {
     @apply text-ui;
-    padding-top: 0.5625rem;
-    padding-bottom: 0.5625rem;
+    --composer-line: 1.25rem;
+    padding-block: calc((2.5rem - 2px - var(--composer-line)) / 2);
   }
 
   .composer-input:focus-visible {
@@ -163,8 +163,7 @@
   @media (pointer: coarse) {
     .composer-input {
       @apply text-body;
-      padding-top: 0.4375rem;
-      padding-bottom: 0.4375rem;
+      --composer-line: 1.5rem;
     }
   }
 

@@ -107,7 +107,6 @@ function App() {
   const apiBase = safeOrigin((params.get("apiBase") ?? "").trim());
   const parentOrigin = safeOrigin(params.get("parentOrigin"));
   const embeddedBubble = params.get("mode") === "bubble" && window.parent !== window;
-  if (embeddedBubble) document.documentElement.dataset.bubble = "on";
   // siteUrl can be any http(s) URL (path/query allowed for marketing links).
   const siteUrl = safeMarketingUrl(params.get("siteUrl"));
 

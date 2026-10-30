@@ -15,8 +15,30 @@ select {
 
 input::placeholder,
 textarea::placeholder {
-  color: color-mix(in srgb, currentColor 45%, transparent);
+  color: rgb(var(--c-fg-faint));
   opacity: 1;
+}
+
+@layer base {
+  button,
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    --tw-scale-x: 1 !important;
+    --tw-scale-y: 1 !important;
+  }
+
+  [class*="animate-fd-"] {
+    animation: none !important;
+  }
 }
 
 @layer utilities {

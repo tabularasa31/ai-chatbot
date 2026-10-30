@@ -80,7 +80,7 @@ function TokenVerification({ token }: { token: string }) {
     <AuthCard centered>
       <AuthHeading moveFocus>Couldn&apos;t verify your email</AuthHeading>
       <p className="mb-6 text-body text-fg-muted">{state.message}</p>
-      <Button variant="secondary" offset="surface" className="w-full" onClick={() => verify(true)}>
+      <Button variant="secondary" offset="surface" className="w-full active:scale-press-wide" onClick={() => verify(true)}>
         Try again
       </Button>
       <div className="mt-4 flex justify-center">

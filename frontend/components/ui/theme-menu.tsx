@@ -43,7 +43,7 @@ function subscribe(onChange: () => void) {
 const SURFACES = {
   canvas: {
     visual:
-      "text-fg-muted group-hover:bg-surface-alt group-hover:text-fg group-active:bg-surface-alt group-aria-expanded:bg-surface-alt group-aria-expanded:text-fg group-focus-visible:ring-2 group-focus-visible:ring-focus group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-canvas",
+      "text-fg-muted transition-[color,background-color,transform] group-hover:bg-surface-alt group-hover:text-fg group-active:scale-press-sm group-active:bg-line group-aria-expanded:bg-surface-alt group-aria-expanded:text-fg group-focus-visible:ring-2 group-focus-visible:ring-focus group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-canvas",
     menu: "border-line bg-surface dark:bg-surface-alt",
     item: "text-fg hover:bg-surface-alt focus-visible:bg-surface-alt focus-visible:ring-focus dark:hover:bg-canvas dark:focus-visible:bg-canvas",
     checked: "text-brand",
@@ -170,7 +170,7 @@ export function ThemeMenu({
       >
         <span
           className={cn(
-            "flex h-8 w-8 items-center justify-center rounded-full transition-colors motion-reduce:transition-none",
+            "flex h-8 w-8 items-center justify-center rounded-full",
             styles.visual,
           )}
         >

@@ -48,7 +48,7 @@ export default function ForgotPasswordPage() {
           If an account exists for <span className="break-all font-medium text-fg">{email}</span>, we sent a link to
           reset the password.
         </p>
-        <Button variant="secondary" offset="surface" className="w-full" onClick={editEmail}>
+        <Button variant="secondary" offset="surface" className="w-full active:scale-press-wide" onClick={editEmail}>
           Use a different email
         </Button>
         <AuthFooter className="justify-center">

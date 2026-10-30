@@ -78,7 +78,7 @@ export function SiteHeader() {
             onClick={() => setOpen((value) => !value)}
             className={cn(
               "flex h-11 w-11 items-center justify-center rounded-control text-fg-muted hover:bg-surface-alt hover:text-fg md:hidden",
-              "transition-colors duration-[120ms] motion-reduce:transition-none",
+              "transition-colors duration-[120ms]",
               FOCUS_RING.canvas,
             )}
           >

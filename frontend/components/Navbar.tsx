@@ -46,7 +46,7 @@ export function Navbar({
         <button type="button" onClick={handleLogout} className="group flex h-11 items-center focus-visible:outline-none">
           <span
             className={cn(
-              "flex h-8 items-center gap-2 rounded-control px-3 text-ui font-medium transition-colors motion-reduce:transition-none",
+              "flex h-8 items-center gap-2 rounded-control px-3 text-ui font-medium",
               CHROME_PLATE,
             )}
           >

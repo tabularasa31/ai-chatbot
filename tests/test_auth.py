@@ -307,6 +307,55 @@ def test_reset_password_rejects_invalid_or_expired_token(
     assert response.status_code == 400
 
 
+@pytest.mark.auth_reset
+@pytest.mark.parametrize("kind", ["valid", "unknown", "expired", "used"])
+def test_reset_token_check_does_not_consume_token(
+    tenant: TestClient, db_session, kind: str
+) -> None:
+    """The check answers 200 only for a token the reset endpoint would accept
+    (400 for unknown, expired and used ones alike) and leaves a valid token usable."""
+    from backend.models import User
+
+    email = f"reset-check-{kind}@example.com"
+    with patch("backend.auth.routes.send_email"):
+        tenant.post("/auth/register", json={"email": email, "password": "SecurePass1!"})
+        tenant.post("/auth/forgot-password", json={"email": email})
+    user = db_session.query(User).filter(User.email == email).first()
+    token = user.reset_password_token
+
+    def check(value: str):
+        return tenant.post("/auth/reset-password/check", json={"token": value})
+
+    if kind == "unknown":
+        assert check("not-valid-token").status_code == 400
+        return
+    if kind == "expired":
+        user.reset_password_expires_at = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
+        db_session.commit()
+        assert check(token).status_code == 400
+        return
+    if kind == "used":
+        reset = tenant.post(
+            "/auth/reset-password", json={"token": token, "new_password": "NewSecurePass1!"}
+        )
+        assert reset.status_code == 200
+        assert check(token).status_code == 400
+        return
+
+    expires_at = user.reset_password_expires_at
+    for _ in range(2):
+        response = check(token)
+        assert response.status_code == 200
+        assert response.json() == {"valid": True}
+    db_session.refresh(user)
+    assert user.reset_password_token == token
+    assert user.reset_password_expires_at == expires_at
+    reset = tenant.post(
+        "/auth/reset-password", json={"token": token, "new_password": "NewSecurePass1!"}
+    )
+    assert reset.status_code == 200
+
+
 def test_health(tenant: TestClient) -> None:
     """Health check endpoint returns ok and reports Redis status."""
     response = tenant.get("/health")

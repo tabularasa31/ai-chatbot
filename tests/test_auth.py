@@ -307,6 +307,63 @@ def test_reset_password_rejects_invalid_or_expired_token(
     assert response.status_code == 400
 
 
+def _check_reset_token(tenant: TestClient, token: str):
+    return tenant.post("/auth/reset-password/check", json={"token": token})
+
+
+@pytest.mark.auth_reset
+def test_reset_token_check_does_not_consume_valid_token(tenant: TestClient, db_session) -> None:
+    """The check answers 200 for a token the reset endpoint accepts, and leaves it usable."""
+    from backend.models import User
+
+    email = "reset-check-valid@example.com"
+    with patch("backend.auth.routes.send_email"):
+        tenant.post("/auth/register", json={"email": email, "password": "SecurePass1!"})
+        tenant.post("/auth/forgot-password", json={"email": email})
+    user = db_session.query(User).filter(User.email == email).first()
+    token = user.reset_password_token
+    expires_at = user.reset_password_expires_at
+
+    for _ in range(2):
+        response = _check_reset_token(tenant, token)
+        assert response.status_code == 200
+        assert response.json() == {"valid": True}
+    db_session.refresh(user)
+    assert user.reset_password_token == token
+    assert user.reset_password_expires_at == expires_at
+    reset = tenant.post(
+        "/auth/reset-password", json={"token": token, "new_password": "NewSecurePass1!"}
+    )
+    assert reset.status_code == 200
+
+
+@pytest.mark.auth_reset
+@pytest.mark.parametrize("kind", ["unknown", "expired", "used"])
+def test_reset_token_check_rejects_dead_token(tenant: TestClient, db_session, kind: str) -> None:
+    """Unknown, expired and already used tokens are all answered with 400."""
+    from backend.models import User
+
+    token = "not-valid-token"
+    if kind != "unknown":
+        email = f"reset-check-{kind}@example.com"
+        with patch("backend.auth.routes.send_email"):
+            tenant.post("/auth/register", json={"email": email, "password": "SecurePass1!"})
+            tenant.post("/auth/forgot-password", json={"email": email})
+        user = db_session.query(User).filter(User.email == email).first()
+        token = user.reset_password_token
+        if kind == "expired":
+            user.reset_password_expires_at = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+                minutes=1
+            )
+            db_session.commit()
+        else:
+            tenant.post(
+                "/auth/reset-password", json={"token": token, "new_password": "NewSecurePass1!"}
+            )
+
+    assert _check_reset_token(tenant, token).status_code == 400
+
+
 def test_health(tenant: TestClient) -> None:
     """Health check endpoint returns ok and reports Redis status."""
     response = tenant.get("/health")

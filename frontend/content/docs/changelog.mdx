@@ -3,6 +3,18 @@ title: Changelog
 description: What's changed in Chat9, most recent first.
 ---
 
+## 2026-10-30 — Dashboard polish
+
+The dashboard feels more responsive. Buttons and list rows react when pressed, panels and confirmation dialogs slide or fade in instead of popping, and all motion follows your system "reduce motion" setting. Selection and highlights are easier to see in the light theme, and warnings no longer look like errors. Loading placeholders now match the shape of the real lists and no longer pulse, the sidebar and top bar stay put once the page loads, and "Saved" and "Copied" notes fade out instead of vanishing.
+
+**Inbox:** conversation previews show plain text instead of raw formatting symbols, the date and ticket number stay visible in narrow lists, taking a chat no longer pushes messages down, and "Answered by email" is a single line with the details on hover.
+
+**Knowledge, Team and Seats:** a source that could not be loaded says "Couldn't read this page", with "Show details" for the full error. Dates stay on one line, counts use the right singular or plural ("1 page", "1 conversation"), long emails wrap cleanly, and the seats total reads as one sentence with formatted amounts.
+
+**Who it affects:** everyone using the dashboard.
+
+**What to do:** nothing. See [Dashboard Features](/docs/dashboard-features#inbox-inbox) for the Inbox and [Dashboard Features](/docs/dashboard-features#knowledge-knowledge) for Knowledge.
+
 ## 2026-10-29 — Operator replies reach visitors when you take a chat unasked
 
 When an operator took a conversation from **Inbox → All** where the visitor had not asked for a human, the reply did not appear in the open widget until the visitor reloaded the page. It now shows up within about 20 seconds while the visitor has the chat open, and within a few seconds once the visitor writes again. The visitor's messages to an operator no longer leave an empty bot bubble behind them.

@@ -86,6 +86,11 @@
     overflow: hidden;
   }
 
+  html[data-fullscreen="on"] .header-bar a {
+    display: block;
+    width: fit-content;
+  }
+
   @media (orientation: landscape) and (max-height: 500px) {
     html[data-fullscreen="on"] .header-bar h1 {
       -webkit-line-clamp: 1;

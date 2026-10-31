@@ -14,26 +14,25 @@ type CopyButtonProps = {
   variant: "primary" | "secondary";
 };
 
+type CopyState = { status: "idle" } | { status: "copied"; id: number } | { status: "failed" };
+
 export function CopyButton({ text, label, variant }: CopyButtonProps) {
-  const [copied, setCopied] = useState(false);
-  const [clicks, setClicks] = useState(0);
-  const [failed, setFailed] = useState(false);
+  const [state, setState] = useState<CopyState>({ status: "idle" });
+  const copied = state.status === "copied";
+  const copiedId = state.status === "copied" ? state.id : null;
 
   useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), COPIED_RESET_MS);
+    if (copiedId === null) return;
+    const timer = setTimeout(() => setState({ status: "idle" }), COPIED_RESET_MS);
     return () => clearTimeout(timer);
-  }, [copied, clicks]);
+  }, [copiedId]);
 
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(text);
-      setFailed(false);
-      setCopied(true);
-      setClicks((previous) => previous + 1);
+      setState((previous) => ({ status: "copied", id: previous.status === "copied" ? previous.id + 1 : 0 }));
     } catch {
-      setCopied(false);
-      setFailed(true);
+      setState({ status: "failed" });
     }
   }
 
@@ -45,7 +44,7 @@ export function CopyButton({ text, label, variant }: CopyButtonProps) {
         <span aria-live="polite" className="sr-only">{copied ? COPIED_LABEL : label}</span>
         <span
           aria-hidden="true"
-          key={copied ? clicks : "idle"}
+          key={copiedId ?? "idle"}
           className={`inline-flex items-center gap-2 ${copied ? "animate-fade-out" : ""}`}
           style={copied ? { animationDelay: `${COPIED_RESET_MS - COPIED_FADE_MS}ms` } : undefined}
         >
@@ -56,7 +55,7 @@ export function CopyButton({ text, label, variant }: CopyButtonProps) {
           </span>
         </span>
       </Button>
-      {failed && (
+      {state.status === "failed" && (
         <span role="alert" className="text-ui text-danger">
           Copy failed. Select the text and copy it manually.
         </span>

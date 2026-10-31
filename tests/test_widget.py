@@ -16,6 +16,7 @@ from backend.chat.service import (
     ChatTurnOutcome,
 )
 from backend.chat.types import RetrievalContext
+from backend.core.config import settings
 from backend.core.crypto import encrypt_value
 from backend.guards.reject_response import RejectReason, _build_canonical_reject_response
 from backend.guards.types import Verdict, VerdictReason
@@ -236,6 +237,16 @@ def test_widget_config_link_safety_disabled_then_enabled(
     assert enabled_data["link_safety_enabled"] is True
     assert enabled_data["allowed_domains"] == ["example.com"]
     assert enabled_data["link_safety_labels"]["body"] == "You are going to {hostname}. Continue?"
+
+
+def test_widget_config_advertises_message_limit(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """/widget/config advertises the configured message limit."""
+    _, bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-limit@example.com")
+
+    config = tenant.get(f"/widget/config?bot_id={bot_public_id}").json()
+    assert config["message_max_chars"] == settings.widget_message_max_chars
 
 
 @pytest.mark.parametrize("idle_minutes", [1, 45], ids=["active_session", "idle_past_rotation"])

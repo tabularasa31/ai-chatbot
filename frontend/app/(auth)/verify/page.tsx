@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { api, markSession } from "@/lib/api";
@@ -11,7 +10,7 @@ import {
   AuthSkeleton,
   StandaloneLink,
 } from "@/components/auth/AuthCard";
-import { fullWidthLinkButtonClasses } from "@/components/auth/link-classes";
+import { BrokenLink } from "@/components/auth/BrokenLink";
 import { formErrorMessage, isApiStatus } from "@/components/auth/auth-rules";
 import { Button } from "@/components/ui/button";
 
@@ -21,15 +20,14 @@ type VerifyState =
   | { status: "rejected" }
   | { status: "failed"; message: string };
 
-function BrokenLink({ explanation }: { explanation: string }) {
+function VerifyBrokenLink({ explanation }: { explanation: string }) {
   return (
-    <AuthCard centered>
-      <AuthHeading moveFocus>This link doesn&apos;t work</AuthHeading>
-      <p className="mb-6 text-body text-fg-muted">{explanation}</p>
-      <Link href="/login" className={fullWidthLinkButtonClasses}>
-        Sign in
-      </Link>
-    </AuthCard>
+    <BrokenLink
+      centered
+      title="This link doesn't work"
+      explanation={explanation}
+      action={{ href: "/login", label: "Sign in" }}
+    />
   );
 }
 
@@ -72,7 +70,7 @@ function TokenVerification({ token }: { token: string }) {
 
   if (state.status === "rejected") {
     return (
-      <BrokenLink explanation="It may have expired or already been used. If you already verified your email, sign in." />
+      <VerifyBrokenLink explanation="It may have expired or already been used. If you already verified your email, sign in." />
     );
   }
 
@@ -95,7 +93,7 @@ function VerifyContent() {
   return token ? (
     <TokenVerification token={token} />
   ) : (
-    <BrokenLink explanation="This link is incomplete. Open it again from the email." />
+    <VerifyBrokenLink explanation="This link is incomplete. Open it again from the email." />
   );
 }
 

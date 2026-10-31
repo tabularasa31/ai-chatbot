@@ -53,7 +53,12 @@
 
 #nd-toc a,
 [data-toc-popover] a {
-  @apply flex min-h-11 items-center py-0 text-ui;
+  @apply flex min-h-11 items-center py-0 ps-4 text-ui;
+}
+
+[data-toc-popover] a[class~='ps-6'],
+[data-toc-popover] a[class~='ps-8'] {
+  @apply ps-8;
 }
 
 #nd-docs-layout [style*='--fd-api-info-top'] h3[class~='not-prose'] {
@@ -74,26 +79,48 @@
   @apply bg-danger-subtle text-danger;
 }
 
-[role='dialog'] input {
+.bg-fd-popover[role='dialog'] input {
   @apply min-h-11;
 }
 
-[role='dialog'] button[aria-selected],
-[role='dialog'] button[aria-label='Close Search'] {
+.bg-fd-popover[role='dialog'] button[aria-selected],
+.bg-fd-popover[role='dialog'] button[aria-label='Close Search'] {
   @apply min-h-11;
 }
 
-[role='dialog'] button[aria-selected] {
+.bg-fd-popover[role='dialog'] button[aria-selected] {
   @apply px-3 text-ui;
 }
 
-[role='dialog'] div.text-center {
+.bg-fd-popover[role='dialog'] div.text-center {
   @apply text-start;
 }
 
+@keyframes docs-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes docs-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.bg-fd-popover[role='dialog'][data-state='open']:has(input),
+div[data-state='open']:has(+ .bg-fd-popover[role='dialog'] input) {
+  animation: docs-fade-in 150ms ease-out;
+}
+
+.bg-fd-popover[role='dialog'][data-state='closed']:has(input),
+div[data-state='closed']:has(+ .bg-fd-popover[role='dialog'] input) {
+  animation: docs-fade-out 120ms ease-out forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  #nd-sidebar a[data-active],
-  #nd-sidebar button[data-state] {
-    transition: none;
+  .bg-fd-popover[role='dialog']:has(input),
+  div[data-state]:has(+ .bg-fd-popover[role='dialog'] input) {
+    animation: none;
   }
 }

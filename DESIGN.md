@@ -67,7 +67,7 @@ Token names avoid `accent`, `primary`, `foreground`, `card` because the fumadocs
 
 | Role (Tailwind name) | Hex | Contrast |
 |---|---|---|
-| `canvas` page background | `#F8F9FA` | - |
+| `canvas` page background | `#F8F9FA` | browser bar: the single `theme-color` meta is `#F8F9FA`, `#1A1A26` when dark (the dark `canvas`), set by the scheme boot script so the in-app choice wins over the OS; change all together |
 | `surface` cards, inputs, modals, tables | `#FFFFFF` | - |
 | `surface-alt` hover rows, table header, code, assistant bubble, skeleton | `#F1F5F9` | - |
 | `line` dividers, card border (decorative, exempt) | `#E2E8F0` | - |

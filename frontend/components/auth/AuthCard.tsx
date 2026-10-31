@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { Button, FOCUS_RING } from "@/components/ui/button";
 import { ThemeMenu } from "@/components/ui/theme-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/components/ui/utils";
 import { resolveScheme } from "@/lib/scheme";
 import { authLinkClasses, standaloneLinkClasses } from "./link-classes";
@@ -20,7 +21,7 @@ export function AuthCard({ centered, className, children, ...card }: AuthCardPro
   return (
     <div
       data-scheme-surface
-      className="flex min-h-dvh justify-center bg-canvas px-4 py-8 text-fg sm:items-center sm:p-4"
+      className="flex min-h-dvh items-start justify-center bg-canvas px-4 pb-8 pt-8 text-fg sm:pt-16"
     >
       <div className="w-full max-w-md">
         <div className="mb-6">
@@ -51,7 +52,7 @@ export function AuthCard({ centered, className, children, ...card }: AuthCardPro
 export function AuthSkeleton() {
   return (
     <AuthCard aria-busy="true">
-      <div className="h-6 rounded-tag bg-surface-alt" />
+      <Skeleton className="mb-6 h-8 w-48" />
     </AuthCard>
   );
 }

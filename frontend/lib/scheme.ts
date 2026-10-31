@@ -5,6 +5,10 @@ export const SCHEME_CHANGE_EVENT = "chat9-scheme-change";
 const SCHEME_COOKIE = "chat9-scheme";
 const SCHEME_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 
+// The `canvas` tokens in tailwind-brand.ts; change both together.
+const THEME_COLOR_LIGHT = "#F8F9FA";
+const THEME_COLOR_DARK = "#1A1A26";
+
 function parseScheme(value: string | undefined): Scheme {
   return SCHEMES.find((scheme) => scheme === value) ?? "system";
 }
@@ -26,5 +30,5 @@ export function writeSchemeCookie(scheme: Scheme): void {
   resolveScheme();
 }
 
-// Blocking head script. A surface that forces its own scheme renders [data-scheme-forced]; while it is mounted the script leaves <html> alone.
-export const SCHEME_BOOT_SCRIPT = `(function(){var d=document.documentElement,q=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)");function s(){try{var m=document.cookie.match(/(?:^|; )${SCHEME_COOKIE}=(\\w+)/);return m?m[1]:"system"}catch(e){return"system"}}function a(){try{if(document.querySelector("[data-scheme-forced]"))return;var v=s();d.classList.toggle("dark",v==="dark"||v!=="light"&&!!q&&q.matches)}catch(e){}}a();try{if(q)q.addEventListener?q.addEventListener("change",a):q.addListener(a);addEventListener("${SCHEME_CHANGE_EVENT}",a)}catch(e){}})()`;
+// Blocking head script; also creates and keeps in step the single <meta name="theme-color">, which React does not render because it would re-add a second one on hydration. A surface that forces its own scheme renders [data-scheme-forced]; while it is mounted the script leaves <html> alone.
+export const SCHEME_BOOT_SCRIPT = `(function(){var d=document.documentElement,q=window.matchMedia&&matchMedia("(prefers-color-scheme: dark)");function s(){try{var m=document.cookie.match(/(?:^|; )${SCHEME_COOKIE}=(\\w+)/);return m?m[1]:"system"}catch(e){return"system"}}function a(){try{if(document.querySelector("[data-scheme-forced]"))return;var v=s();var k=v==="dark"||v!=="light"&&!!q&&q.matches,m=document.querySelector("meta[name='theme-color']");d.classList.toggle("dark",k);if(!m){m=document.createElement("meta");m.name="theme-color";document.head.appendChild(m)}m.content=k?"${THEME_COLOR_DARK}":"${THEME_COLOR_LIGHT}"}catch(e){}}a();try{if(q)q.addEventListener?q.addEventListener("change",a):q.addListener(a);addEventListener("${SCHEME_CHANGE_EVENT}",a)}catch(e){}})()`;

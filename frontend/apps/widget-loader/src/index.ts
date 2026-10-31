@@ -40,6 +40,12 @@
 
 import { sharedChromeString, type SharedChromeKey } from "../../../packages/widget-shared/src/chromeStrings";
 import { ACCENT_ON_LIGHT, accentOnRgb, rgbToHex, type Rgb } from "../../../packages/widget-shared/src/accent";
+import {
+  LAUNCHER_POINTER_REST,
+  launcherVisual,
+  reduceLauncherPointer,
+  type LauncherPointerInput,
+} from "./launcherPointer";
 
 type UserHints = {
   user_id?: string;
@@ -87,8 +93,22 @@ declare global {
   // Bypasses TSPU throttling on Vercel/Railway from Russian ISPs.
   const RU_API_BASE = "https://api-ru.getchat9.live";
 
-  const PHONE_MEDIA_QUERY = "(max-width: 479px)";
+  // Phones in portrait, and landscape phones (short viewport, coarse pointer), get the full-screen chat.
+  const FULLSCREEN_MEDIA_QUERY =
+    "(max-width: 479px) and (orientation: portrait), (orientation: landscape) and (pointer: coarse) and (max-height: 479px)";
+  const REDUCED_MOTION_MEDIA_QUERY = "(prefers-reduced-motion: reduce)";
+  const HOVER_MEDIA_QUERY = "(hover: hover) and (pointer: fine)";
   const IFRAME_READY_TIMEOUT_MS = 8000;
+
+  const STRONG_EASE_OUT = "cubic-bezier(0.23, 1, 0.32, 1)";
+  const SHEET_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+  const PANEL_ENTER_MS = 200;
+  const PANEL_EXIT_MS = 120;
+  const LAUNCHER_PRESS_MS = 120;
+  const LAUNCHER_PRESS_SCALE = 0.94;
+  const CONTROL_TOUCH_CSS =
+    "-webkit-tap-highlight-color:transparent;touch-action:manipulation;user-select:none;" +
+    "-webkit-user-select:none;-webkit-touch-callout:none;";
 
   // The host page has no access to our CSS variables, so the launcher and the
   // panel frame carry the design tokens as constants (DESIGN.md section 4).
@@ -97,6 +117,7 @@ declare global {
   const LAUNCHER_ACTIVE_FILL = "#5B21B6";
   const LAUNCHER_SHADOW = "0 4px 12px rgba(15,23,42,0.12)";
   const LAUNCHER_FOCUS_RING = "0 0 0 2px #FFFFFF, 0 0 0 4px #1E293B";
+  const CHROME_BG = "#0A0A0F";
   const CHROME_FG = "#FAF5FF";
   const CHROME_FG_MUTED = "#A9A3BA";
   const CHROME_ACCENT = "#A78BFA";
@@ -153,7 +174,9 @@ declare global {
 
   const botId = (currentScript.dataset.botId ?? "").trim();
   if (!botId) {
-    console.error("Chat9: data-bot-id is required on the loader script tag.");
+    console.warn(
+      'Chat9: widget not started. The widget.js <script> tag has no data-bot-id attribute. Copy the snippet from your Chat9 dashboard and keep data-bot-id="ch_..." on the tag.',
+    );
     return;
   }
 
@@ -329,7 +352,8 @@ declare global {
     // entire mount lifetime.
     let panelOpen = mode === "inline";
     let gripShown = false;
-    const phoneFullScreen = (): boolean => window.matchMedia(PHONE_MEDIA_QUERY).matches;
+    let fullScreenShown = false;
+    const phoneFullScreen = (): boolean => window.matchMedia(FULLSCREEN_MEDIA_QUERY).matches;
     let closePanel: (() => void) | null = null;
     let onIframeReady: (() => void) | null = null;
     function onMessage(event: MessageEvent) {
@@ -410,9 +434,11 @@ declare global {
     const launcherHoverFilter = accentRgb ? "brightness(0.92)" : "";
     const launcherActiveFilter = accentRgb ? "brightness(0.85)" : "";
     const launcherGlyph = accentRgb ? rgbToHex(accentOnRgb(accentRgb)) : ACCENT_ON_LIGHT;
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const phoneQuery = window.matchMedia(PHONE_MEDIA_QUERY);
+    const reducedMotionQuery = window.matchMedia(REDUCED_MOTION_MEDIA_QUERY);
+    const fullScreenQuery = window.matchMedia(FULLSCREEN_MEDIA_QUERY);
     const gripQuery = window.matchMedia(GRIP_MEDIA_QUERY);
+    const hoverQuery = window.matchMedia(HOVER_MEDIA_QUERY);
+    const viewportHeightUnit = CSS.supports("height", "1dvh") ? "dvh" : "vh";
 
     const isLeft = position === "left";
     const sideProp = isLeft ? "left" : "right";
@@ -457,7 +483,7 @@ declare global {
       `box-sizing:border-box;width:${GRIP_SIZE}px;height:${GRIP_SIZE}px;background:transparent;` +
       `cursor:${handleCursor};z-index:20;display:none;align-items:center;justify-content:center;` +
       `color:${CHROME_FG_MUTED};opacity:0;` +
-      (reducedMotion ? "" : `transition:opacity ${GRIP_FADE_MS}ms ease-out;`);
+      CONTROL_TOUCH_CSS;
     resizeHandle.innerHTML =
       '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       (isLeft
@@ -479,27 +505,45 @@ declare global {
     fab.setAttribute("aria-controls", "chat9-chat-window");
     fab.style.cssText =
       `width:56px;height:56px;border-radius:50%;border:none;background:${launcherFill};cursor:pointer;` +
-      "display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;" +
+      "display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;transform-origin:center;" +
       `box-shadow:${LAUNCHER_SHADOW};` +
-      (reducedMotion ? "" : "transition:background-color 120ms ease-out, filter 120ms ease-out;");
+      CONTROL_TOUCH_CSS;
 
-    function setLauncherState(background: string, filter: string) {
-      fab.style.background = background;
-      fab.style.filter = filter;
+    const launcherTransition =
+      `transform ${LAUNCHER_PRESS_MS}ms ${STRONG_EASE_OUT}, ` +
+      `background-color ${LAUNCHER_PRESS_MS}ms ease-out, filter ${LAUNCHER_PRESS_MS}ms ease-out`;
+    let launcherPointer = LAUNCHER_POINTER_REST;
+
+    function renderLauncher() {
+      const visual = launcherVisual(launcherPointer);
+      const reduced = reducedMotionQuery.matches;
+      fab.style.transition = reduced ? "none" : launcherTransition;
+      fab.style.transform = visual === "pressed" && !reduced ? `scale(${LAUNCHER_PRESS_SCALE})` : "";
+      if (visual === "pressed") {
+        fab.style.background = accentRgb ? launcherFill : LAUNCHER_ACTIVE_FILL;
+        fab.style.filter = launcherActiveFilter;
+      } else if (visual === "hover") {
+        fab.style.background = accentRgb ? launcherFill : LAUNCHER_HOVER_FILL;
+        fab.style.filter = launcherHoverFilter;
+      } else {
+        fab.style.background = launcherFill;
+        fab.style.filter = "";
+      }
     }
-    function launcherRest() {
-      setLauncherState(launcherFill, "");
+    function feedLauncherPointer(type: LauncherPointerInput["type"], e: PointerEvent) {
+      launcherPointer = reduceLauncherPointer(launcherPointer, {
+        type,
+        pointerType: e.pointerType,
+        button: e.button,
+        hoverCapable: hoverQuery.matches,
+      });
+      renderLauncher();
     }
-    function launcherHover() {
-      setLauncherState(accentRgb ? launcherFill : LAUNCHER_HOVER_FILL, launcherHoverFilter);
-    }
-    function launcherActive() {
-      setLauncherState(accentRgb ? launcherFill : LAUNCHER_ACTIVE_FILL, launcherActiveFilter);
-    }
-    fab.addEventListener("mouseenter", launcherHover);
-    fab.addEventListener("mouseleave", launcherRest);
-    fab.addEventListener("mousedown", launcherActive);
-    fab.addEventListener("mouseup", launcherHover);
+    fab.addEventListener("pointerenter", (e) => feedLauncherPointer("enter", e));
+    fab.addEventListener("pointerleave", (e) => feedLauncherPointer("leave", e));
+    fab.addEventListener("pointerdown", (e) => feedLauncherPointer("down", e));
+    fab.addEventListener("pointerup", (e) => feedLauncherPointer("up", e));
+    fab.addEventListener("pointercancel", (e) => feedLauncherPointer("cancel", e));
     fab.addEventListener("focus", () => {
       if (fab.matches(":focus-visible")) fab.style.boxShadow = `${LAUNCHER_FOCUS_RING}, ${LAUNCHER_SHADOW}`;
     });
@@ -513,8 +557,21 @@ declare global {
     let panelWidth = `${DEFAULT_PANEL_WIDTH}px`;
     let panelHeight = `${DEFAULT_PANEL_HEIGHT}px`;
 
+    const safeAreaStrip = document.createElement("div");
+    safeAreaStrip.setAttribute("aria-hidden", "true");
+    safeAreaStrip.style.cssText =
+      `display:none;position:absolute;inset:0;box-sizing:border-box;pointer-events:none;border:solid ${CHROME_BG};border-width:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);`;
+
+    // Fullscreen follows the visual viewport so the panel stays pinned to the visible area while the keyboard is open.
+    function visibleArea() {
+      const vv = window.visualViewport;
+      return vv
+        ? { top: vv.offsetTop, left: vv.offsetLeft, width: vv.width, height: vv.height }
+        : { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
+    }
+
     function applyLayout() {
-      const phone = phoneQuery.matches;
+      const phone = fullScreenQuery.matches;
       const inset = phone ? 16 : PANEL_OFFSET;
       container.style.bottom = `max(${inset}px, env(safe-area-inset-bottom))`;
       container.style[sideProp] = `max(${inset}px, env(safe-area-inset-${sideProp}))`;
@@ -525,24 +582,36 @@ declare global {
       chatWindow.setAttribute("aria-modal", String(fullScreen));
       resizeHandle.style.display = !phone && gripQuery.matches ? "flex" : "none";
       const grip = isOpen && !phone && gripQuery.matches;
-      if (grip !== gripShown) {
+      if (grip !== gripShown || fullScreen !== fullScreenShown) {
         gripShown = grip;
+        fullScreenShown = fullScreen;
         if (handles) postPanelStateToIframe(handles, isOpen, fullScreen, grip);
       }
+      safeAreaStrip.style.display = fullScreen ? "block" : "none";
+      Object.assign(failOverlay.style, {
+        top: fullScreen ? "env(safe-area-inset-top)" : "0",
+        right: fullScreen ? "env(safe-area-inset-right)" : "0",
+        bottom: fullScreen ? "env(safe-area-inset-bottom)" : "0",
+        left: fullScreen ? "env(safe-area-inset-left)" : "0",
+      });
       if (fullScreen) {
-        const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        const area = visibleArea();
         Object.assign(chatWindow.style, {
           position: "fixed",
-          top: "0",
-          left: "0",
-          right: "0",
-          bottom: "0",
-          width: "auto",
-          height: `${viewportHeight}px`,
+          top: `${area.top}px`,
+          left: `${area.left}px`,
+          right: "auto",
+          bottom: "auto",
+          width: `${area.width}px`,
+          height: `${area.height}px`,
           minWidth: "0",
           minHeight: "0",
           maxWidth: "none",
           maxHeight: "none",
+          paddingTop: "env(safe-area-inset-top)",
+          paddingRight: "env(safe-area-inset-right)",
+          paddingBottom: "env(safe-area-inset-bottom)",
+          paddingLeft: "env(safe-area-inset-left)",
           border: "none",
           borderRadius: "0",
           boxShadow: "none",
@@ -557,9 +626,13 @@ declare global {
           width: panelWidth,
           height: panelHeight,
           minWidth: `${MIN_PANEL_WIDTH}px`,
-          minHeight: `${MIN_PANEL_HEIGHT}px`,
+          minHeight: `min(${MIN_PANEL_HEIGHT}px, calc(100${viewportHeightUnit} - ${2 * PANEL_OFFSET + topClearance}px))`,
           maxWidth: `min(${MAX_PANEL_WIDTH}px, calc(100vw - ${2 * PANEL_OFFSET}px))`,
-          maxHeight: `min(${MAX_PANEL_HEIGHT}px, calc(100vh - ${2 * PANEL_OFFSET}px - ${topClearance}px))`,
+          maxHeight: `min(${MAX_PANEL_HEIGHT}px, calc(100${viewportHeightUnit} - ${2 * PANEL_OFFSET + topClearance}px))`,
+          paddingTop: "0",
+          paddingRight: "0",
+          paddingBottom: "0",
+          paddingLeft: "0",
           border: `1px solid ${palette.line}`,
           borderRadius: PANEL_RADIUS,
           boxShadow: palette.shadow,
@@ -567,14 +640,31 @@ declare global {
       }
     }
 
+    function panelMotionTarget(open: boolean) {
+      const sheet = fullScreenQuery.matches;
+      if (sheet) return { opacity: "1", transform: open ? "translateY(0)" : "translateY(100%)" };
+      return { opacity: open ? "1" : "0", transform: open ? "translateY(0)" : "translateY(8px)" };
+    }
+
+    function placePanelHidden() {
+      chatWindow.style.transition = "none";
+      Object.assign(chatWindow.style, panelMotionTarget(false));
+    }
+
     function setPanelMotion(open: boolean) {
-      const hidden = phoneQuery.matches ? "translateY(100%)" : "translateY(8px)";
-      const duration = open ? 200 : 120;
-      chatWindow.style.transition = reducedMotion
-        ? "none"
-        : `opacity ${duration}ms ease-out, transform ${duration}ms ease-out`;
-      chatWindow.style.opacity = open ? "1" : "0";
-      chatWindow.style.transform = open ? "translateY(0)" : hidden;
+      if (reducedMotionQuery.matches) {
+        chatWindow.style.transition = "none";
+        chatWindow.style.opacity = open ? "1" : "0";
+        chatWindow.style.transform = "none";
+        return;
+      }
+      const sheet = fullScreenQuery.matches;
+      const duration = open ? PANEL_ENTER_MS : PANEL_EXIT_MS;
+      const easing = sheet && open ? SHEET_EASING : STRONG_EASE_OUT;
+      chatWindow.style.transition = sheet
+        ? `transform ${duration}ms ${easing}`
+        : `opacity ${duration}ms ${easing}, transform ${duration}ms ${easing}`;
+      Object.assign(chatWindow.style, panelMotionTarget(open));
     }
 
     function lockBodyScroll() {
@@ -589,8 +679,13 @@ declare global {
       document.body.style.overflow = savedBodyOverflow;
     }
 
+    let layoutFrame = 0;
     function onViewportResize() {
-      if (isOpen) applyLayout();
+      if (!isOpen || layoutFrame) return;
+      layoutFrame = window.requestAnimationFrame(() => {
+        layoutFrame = 0;
+        applyLayout();
+      });
     }
 
     const failOverlay = document.createElement("div");
@@ -603,14 +698,16 @@ declare global {
     failRetry.type = "button";
     failRetry.style.cssText =
       "height:44px;padding:0 16px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:14px;font-weight:500;line-height:20px;" +
-      `background:${palette.surface};color:${palette.fg};border:1px solid ${palette.lineStrong};`;
+      `background:${palette.surface};color:${palette.fg};border:1px solid ${palette.lineStrong};` +
+      CONTROL_TOUCH_CSS;
     failRetry.textContent = chromeString("try_again_button");
     const failClose = document.createElement("button");
     failClose.type = "button";
     failClose.setAttribute("aria-label", chromeString("close_chat"));
     failClose.style.cssText =
       "position:absolute;top:0;right:0;width:44px;height:44px;border:none;background:transparent;" +
-      `cursor:pointer;display:flex;align-items:center;justify-content:center;margin:8px;`;
+      `cursor:pointer;display:flex;align-items:center;justify-content:center;margin:8px;` +
+      CONTROL_TOUCH_CSS;
     failClose.innerHTML = closeIcon(palette.fg, 20);
     failOverlay.appendChild(failClose);
     failOverlay.appendChild(failText);
@@ -649,10 +746,14 @@ declare global {
         iframe.src = buildIframeSrc();
         armLoadFailTimer();
       }
+      const revealing = chatWindow.style.display === "none";
       chatWindow.style.display = "block";
       applyLayout();
-      setPanelMotion(false);
-      requestAnimationFrame(() => setPanelMotion(true));
+      if (revealing) {
+        placePanelHidden();
+        void chatWindow.offsetWidth;
+      }
+      setPanelMotion(true);
       iframe.focus();
       if (handles) postPanelStateToIframe(handles, true, phoneFullScreen(), gripShown);
     }
@@ -668,7 +769,7 @@ declare global {
         if (isOpen) return;
         chatWindow.style.display = "none";
         applyLayout();
-      }, reducedMotion ? 0 : 120);
+      }, reducedMotionQuery.matches ? 0 : PANEL_EXIT_MS);
       panelHovered = false;
       revealGrip(false);
       fab.style.display = "flex";
@@ -676,6 +777,8 @@ declare global {
     };
 
     fab.addEventListener("click", () => {
+      launcherPointer = LAUNCHER_POINTER_REST;
+      renderLauncher();
       openChat();
     });
 
@@ -694,6 +797,7 @@ declare global {
 
     let panelHovered = false;
     function revealGrip(visible: boolean) {
+      resizeHandle.style.transition = reducedMotionQuery.matches ? "none" : `opacity ${GRIP_FADE_MS}ms ease-out`;
       resizeHandle.style.opacity = visible ? "1" : "0";
     }
     chatWindow.addEventListener("mouseenter", () => {
@@ -770,8 +874,10 @@ declare global {
     document.addEventListener("keydown", onKeyDown);
     window.addEventListener("resize", onViewportResize);
     window.visualViewport?.addEventListener("resize", onViewportResize);
+    window.visualViewport?.addEventListener("scroll", onViewportResize);
 
     chatWindow.appendChild(iframe);
+    chatWindow.appendChild(safeAreaStrip);
     chatWindow.appendChild(failOverlay);
     chatWindow.appendChild(resizeHandle);
     container.appendChild(chatWindow);
@@ -791,6 +897,8 @@ declare global {
         document.removeEventListener("keydown", onKeyDown);
         window.removeEventListener("resize", onViewportResize);
         window.visualViewport?.removeEventListener("resize", onViewportResize);
+        window.visualViewport?.removeEventListener("scroll", onViewportResize);
+        window.cancelAnimationFrame(layoutFrame);
         window.clearTimeout(loadFailTimer);
         unlockBodyScroll();
       },

@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "test": "node --test src/launcherPointer.test.ts",
     "dev": "vite build --watch"
   },
   "devDependencies": {

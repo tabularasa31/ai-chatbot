@@ -66,13 +66,6 @@ export type LlmFailureState = {
   can_escalate: boolean;
 };
 
-// What "Try again" on an error bubble repeats. A failed send keeps the
-// visitor's text so it is never retyped.
-export type ErrorRetry =
-  | { kind: "send"; message: string }
-  | { kind: "history" }
-  | { kind: "escalate"; messageId: string };
-
 export type ChatWidgetMessage =
   | {
       // "operator" is a human answering the visitor — through the dashboard
@@ -84,12 +77,6 @@ export type ChatWidgetMessage =
       type: "assistant" | "user" | "operator";
       text: string;
       sources?: WidgetSource[];
-    }
-  | {
-      id: string;
-      type: "error";
-      text: string;
-      retry: ErrorRetry;
     }
   | {
       id: string;
@@ -111,10 +98,6 @@ function createMessageId(): string {
     return crypto.randomUUID();
   }
   return `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-export function createErrorMessage(text: string, retry: ErrorRetry): ChatWidgetMessage {
-  return { id: createMessageId(), type: "error", text, retry };
 }
 
 export function createTextMessage(

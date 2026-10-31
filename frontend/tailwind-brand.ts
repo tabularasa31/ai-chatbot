@@ -155,9 +155,13 @@ const brandColors = {
   scrim: `rgb(var(--c-scrim) / ${SCRIM_OPACITY})`,
 };
 
-export function brandTokensPlugin(schemes: readonly Scheme[]) {
+export function brandTokensPlugin(
+  schemes: readonly Scheme[],
+  selectors: Partial<Record<Scheme, string>> = {},
+) {
+  const selectorFor = (scheme: Scheme) => selectors[scheme] ?? SCHEME_SELECTOR[scheme];
   return plugin(({ addBase, addUtilities, theme }) => {
-    addBase(Object.fromEntries(schemes.map((s) => [SCHEME_SELECTOR[s], schemeVariables(s)])));
+    addBase(Object.fromEntries(schemes.map((s) => [selectorFor(s), schemeVariables(s)])));
     addUtilities({
       ".text-display": { fontSize: "1.5rem", lineHeight: "2rem", fontWeight: "600", letterSpacing: "-0.02em" },
       [`@media (min-width: ${theme("screens.md")})`]: {

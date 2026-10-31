@@ -170,6 +170,7 @@ class WidgetConfigResponse(BaseModel):
     link_safety_enabled: bool = False
     allowed_domains: list[str] = Field(default_factory=list)
     link_safety_labels: WidgetLinkSafetyLabels
+    message_max_chars: int
 
 
 def _default_link_safety_labels() -> WidgetLinkSafetyLabels:
@@ -255,6 +256,7 @@ async def widget_config(
         link_safety_enabled=bool(bot.link_safety_enabled),
         allowed_domains=[str(domain) for domain in allowed_domains if str(domain).strip()],
         link_safety_labels=labels,
+        message_max_chars=_WIDGET_MESSAGE_MAX_CHARS,
     )
 
 

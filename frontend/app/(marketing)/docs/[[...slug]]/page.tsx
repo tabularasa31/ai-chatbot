@@ -33,7 +33,7 @@ export function generateStaticParams() {
 
 export function generateMetadata({ params }: PageProps): Metadata {
   const page = source.getPage(params.slug);
-  if (!page) return {};
+  if (!page) notFound();
 
   const title = `${page.data.title} | Chat9 Docs`;
 

@@ -13,8 +13,8 @@ export function ThreadHeader({ thread, viewerId }: { thread: Thread; viewerId: s
     ...(ticket ? ticketSummary(ticket).map((segment) => <span key={segment}>{segment}</span>) : []),
   ].filter(Boolean);
   return (
-    <>
-      <div className="shrink-0 space-y-1 border-b border-line p-4">
+    <div className="shrink-0 border-b border-line p-4">
+      <div className="space-y-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p dir="auto" className="min-w-0 break-anywhere text-body font-semibold text-fg">
             {visitorLabel(thread)}
@@ -34,10 +34,10 @@ export function ThreadHeader({ thread, viewerId }: { thread: Thread; viewerId: s
         )}
       </div>
       {answered && (
-        <div className="shrink-0 px-4 pt-4">
+        <div className="mt-3">
           <InlineNotice singleLine>{`Answered by email · ${answered.at} · ${answered.from}`}</InlineNotice>
         </div>
       )}
-    </>
+    </div>
   );
 }

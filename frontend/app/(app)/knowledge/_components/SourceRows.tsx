@@ -1,17 +1,18 @@
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Pencil, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import type { DocumentListItem, UrlSource } from "@/lib/api";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FileStatus, UrlStatus } from "./HealthPanel";
-import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, isIndexing, scheduleCaption } from "./shared";
+import { SourceErrorDetails } from "./SourceError";
+import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, PAGES_COLUMN_CLASS, isIndexing, scheduleCaption } from "./shared";
 
 const CELL_CLASS = "px-4 py-3 align-top";
 const SOURCE_CELL_CLASS = "px-4 pb-3 align-top";
 const NAME_CAPTIONS_CLASS = "-mt-3";
-const NUMERIC_CELL_CLASS = `${CELL_CLASS} text-right text-ui tabular-nums text-fg`;
+const NUMERIC_CELL_CLASS = `${CELL_CLASS} whitespace-nowrap text-right text-ui tabular-nums text-fg`;
 
 function IconAction({
   label,
@@ -70,7 +71,7 @@ export function FileRow({
   return (
     <tr className="border-b border-line hover:bg-surface-alt">
       <td className={SOURCE_CELL_CLASS}>
-        <button type="button" onClick={onPreview} className={`block break-words py-3 ${NAME_BUTTON_CLASS}`} title="View extracted text">
+        <button type="button" onClick={onPreview} className={`block break-anywhere py-3 ${NAME_BUTTON_CLASS}`} title="View extracted text">
           {doc.filename}
         </button>
         <p className={`${NAME_CAPTIONS_CLASS} text-caption text-fg-muted`}>File</p>
@@ -78,7 +79,7 @@ export function FileRow({
       <td className={CELL_CLASS}>
         <FileStatus doc={doc} />
       </td>
-      <td className={`${CELL_CLASS} hidden xl:table-cell`} />
+      <td className={`${CELL_CLASS} ${PAGES_COLUMN_CLASS}`} />
       <td className={NUMERIC_CELL_CLASS}>{indexing ? "" : formatDateTime(doc.updated_at)}</td>
       <Actions>
         <IconAction label="Re-check health" icon={<RotateCw size={20} aria-hidden="true" />} busy={rechecking} disabled={indexing} onClick={onRecheck} />
@@ -108,7 +109,9 @@ export function UrlRow({
   detail: ReactNode;
 }) {
   const pages = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
+  const totalPages = source.pages_found || source.pages_indexed;
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const [errorOpen, setErrorOpen] = useState(false);
   return (
     <Fragment>
       <tr className="cursor-pointer border-b border-line transition-colors hover:bg-surface-alt active:bg-line" onClick={onToggle}>
@@ -124,20 +127,20 @@ export function UrlRow({
             className={`inline-flex items-center gap-1 py-3 ${NAME_BUTTON_CLASS}`}
           >
             <Chevron size={16} aria-hidden="true" className="shrink-0" />
-            <span className="min-w-0 break-words">{source.name}</span>
+            <span className="min-w-0 break-anywhere">{source.name}</span>
           </button>
-          <p className={`${NAME_CAPTIONS_CLASS} truncate text-caption text-fg-muted`} title={source.url}>
+          <p className={`${NAME_CAPTIONS_CLASS} break-anywhere text-caption text-fg-muted`}>
             {displayUrl(source.url)}
           </p>
           <p className="text-caption text-fg-muted">{scheduleCaption(source)}</p>
         </td>
         <td className={CELL_CLASS}>
-          <UrlStatus source={source} />
+          <UrlStatus source={source} errorOpen={errorOpen} onToggleError={() => setErrorOpen((open) => !open)} />
         </td>
-        <td className={`${NUMERIC_CELL_CLASS} hidden xl:table-cell`}>{pages}</td>
+        <td className={`${NUMERIC_CELL_CLASS} ${PAGES_COLUMN_CLASS}`}>{pages}</td>
         <td className={NUMERIC_CELL_CLASS}>
           {formatDateTime(source.updated_at)}
-          <p className="text-caption text-fg-muted xl:hidden">{`${pages} pages`}</p>
+          <p className="text-caption text-fg-muted xl:hidden">{`${pages} ${pluralize(totalPages, "page", "pages")}`}</p>
         </td>
         <td className="px-2 py-2 align-top" onClick={(event) => event.stopPropagation()}>
           <div className="flex justify-end">
@@ -147,6 +150,7 @@ export function UrlRow({
           </div>
         </td>
       </tr>
+      {errorOpen && source.error_message && <SourceErrorDetails sourceId={source.id} message={source.error_message} />}
       {expanded && detail}
     </Fragment>
   );

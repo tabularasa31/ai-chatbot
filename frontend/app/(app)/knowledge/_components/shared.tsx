@@ -1,6 +1,7 @@
 import { ApiError, type DocumentListItem, type UrlSource } from "@/lib/api";
-import { parseApiDate } from "@/lib/format";
+import { parseApiDate, pluralize } from "@/lib/format";
 import type { SectionTab } from "@/components/ui/section-tabs";
+import type { ReactNode } from "react";
 
 export type MixedRow =
   | { kind: "file"; item: DocumentListItem }
@@ -11,6 +12,18 @@ const INDEXING_STATUSES = new Set(["processing", "embedding", "indexing"]);
 
 export const DETAIL_ID_PREFIX = "source-detail-";
 
+// Below xl the Pages column stays in the fixed table layout at zero width, so every row
+// can span all five columns and the Pages figure moves into the Updated cell.
+export const PAGES_COLUMN_CLASS = "max-xl:invisible max-xl:w-0 max-xl:overflow-hidden max-xl:border-0 max-xl:p-0";
+
+export function FullWidthCell({ className, children }: { className: string; children: ReactNode }) {
+  return (
+    <td colSpan={5} className={className}>
+      {children}
+    </td>
+  );
+}
+
 const NAME_BUTTON_BASE_CLASS =
   "min-h-11 max-w-full rounded-control text-left text-ui font-medium text-fg hover:underline " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2";
@@ -18,7 +31,7 @@ export const NAME_BUTTON_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-o
 export const NAME_BUTTON_ON_BAND_CLASS = `${NAME_BUTTON_BASE_CLASS} focus-visible:ring-offset-surface-alt`;
 
 export function conversationsLabel(count: number): string {
-  return count === 1 ? "1 conversation" : `${count} conversations`;
+  return `${count.toLocaleString()} ${pluralize(count, "conversation", "conversations")}`;
 }
 
 const LIMIT_WARNING_RATIO = 0.9;

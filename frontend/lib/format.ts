@@ -33,6 +33,12 @@ export function formatTime(iso: string | null | undefined, fallback = "—"): st
   return format(iso, fallback, (d) => d.toLocaleTimeString(undefined, { timeStyle: "short" }));
 }
 
+const PLURALS = new Intl.PluralRules("en");
+
+export function pluralize(count: number, one: string, other: string): string {
+  return PLURALS.select(count) === "one" ? one : other;
+}
+
 export function formatWhen(iso: string | null): string {
   if (!iso) return "—";
   const date = parseApiDate(iso);

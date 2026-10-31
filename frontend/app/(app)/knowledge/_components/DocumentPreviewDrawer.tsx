@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type DocumentDetail } from "@/lib/api";
+import { pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/field";
@@ -179,7 +180,7 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
               href={doc.source_url}
               target="_blank"
               rel="noreferrer noopener"
-              className="mt-1 block break-all text-caption text-fg-muted hover:underline"
+              className="mt-1 block break-anywhere text-caption text-fg-muted hover:underline"
             >
               {doc.source_url}
             </a>
@@ -216,7 +217,7 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
           />
           {search.trim() && (
             <span className="shrink-0 text-caption tabular-nums text-fg-muted">
-              {matchCount} match{matchCount === 1 ? "" : "es"}
+              {matchCount.toLocaleString()} {pluralize(matchCount, "match", "matches")}
             </span>
           )}
           <FlashMessage message={copiedMessage} />
@@ -249,7 +250,7 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
         )}
         {showEmptyState && <p className="text-ui text-fg-muted">No text was extracted from this document.</p>}
         {text && (
-          <pre className="whitespace-pre-wrap break-words font-sans text-ui text-fg">
+          <pre className="whitespace-pre-wrap break-anywhere font-sans text-ui text-fg">
             <HighlightedText text={text} query={search} />
           </pre>
         )}

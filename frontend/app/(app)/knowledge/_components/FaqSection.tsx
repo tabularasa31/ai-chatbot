@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type KnowledgeFaqItem } from "@/lib/api";
+import { pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input, Select, Textarea } from "@/components/ui/field";
@@ -40,7 +41,7 @@ const SOURCE_LABELS: Record<string, string> = {
 const SKELETON_ROWS = 5;
 
 function answersCount(count: number): string {
-  return count === 1 ? "1 answer" : `${count} answers`;
+  return `${count} ${pluralize(count, "answer", "answers")}`;
 }
 
 function EmptyMessage({ filter, onGoToDocuments }: { filter: FaqFilter; onGoToDocuments: () => void }) {
@@ -230,8 +231,8 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
             return (
               <li key={item.id} className="py-4">
                 <div className="max-w-prose space-y-1">
-                  <p className="break-words text-body font-semibold text-fg">{item.question}</p>
-                  <p className="break-words text-ui text-fg">{item.answer}</p>
+                  <p className="break-anywhere text-body font-semibold text-fg">{item.question}</p>
+                  <p className="break-anywhere text-ui text-fg">{item.answer}</p>
                   <ItemMeta item={item} showReviewState={showReviewState} />
                 </div>
                 <div className="mt-2 flex items-center gap-2">

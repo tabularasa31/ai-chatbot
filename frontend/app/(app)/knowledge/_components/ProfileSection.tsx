@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Trash2, X } from "lucide-react";
 import { api, type KnowledgeProfile } from "@/lib/api";
-import { formatDateTime, parseApiDate } from "@/lib/format";
+import { formatDateTime, parseApiDate, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
@@ -157,7 +157,7 @@ function Glossary({ glossary }: { glossary: KnowledgeProfile["glossary"] }) {
       <h2 className="text-h2 text-fg">Glossary</h2>
       <details>
         <summary className="flex min-h-11 cursor-pointer items-center text-ui font-medium text-fg">
-          {glossary.length === 1 ? "1 term" : `${glossary.length} terms`}
+          {`${glossary.length} ${pluralize(glossary.length, "term", "terms")}`}
         </summary>
         <table className="w-full table-fixed border-collapse text-left text-ui">
           <thead>
@@ -171,10 +171,10 @@ function Glossary({ glossary }: { glossary: KnowledgeProfile["glossary"] }) {
           <tbody>
             {glossary.map((entry, index) => (
               <tr key={`${entry.term ?? "term"}-${index}`} className="border-b border-line align-top">
-                <td className="break-words py-2 pr-4 font-medium text-fg">{entry.term}</td>
-                <td className="break-words py-2 pr-4 text-fg">{entry.definition}</td>
+                <td className="break-anywhere py-2 pr-4 font-medium text-fg">{entry.term}</td>
+                <td className="break-anywhere py-2 pr-4 text-fg">{entry.definition}</td>
                 <td className="py-2 pr-4 text-fg">{confidenceLevel(entry.confidence)}</td>
-                <td className="break-words py-2 text-fg-muted">{glossarySourceLabel(entry.source)}</td>
+                <td className="break-anywhere py-2 text-fg-muted">{glossarySourceLabel(entry.source)}</td>
               </tr>
             ))}
           </tbody>
@@ -315,7 +315,7 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
                   type="button"
                   aria-label={`Remove topic ${topic}`}
                   onClick={() => update({ topics: draft.topics.filter((item) => item !== topic) })}
-                  className="inline-flex min-h-11 items-center gap-2 py-2 break-all rounded-control bg-surface-alt px-3 text-ui text-fg hover:bg-line focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
+                  className="inline-flex min-h-11 items-center gap-2 py-2 break-anywhere rounded-control bg-surface-alt px-3 text-ui text-fg hover:bg-line focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
                 >
                   {topic}
                   <X size={16} aria-hidden="true" className="shrink-0 text-fg-muted" />
@@ -347,7 +347,7 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
           <ul className="divide-y divide-line">
             {draft.support_urls.map((url) => (
               <li key={url} className="flex items-center justify-between gap-3">
-                <span className="min-w-0 break-all text-ui text-fg">{url}</span>
+                <span className="min-w-0 break-anywhere text-ui text-fg">{url}</span>
                 <Button
                   variant="ghost"
                   size="icon"

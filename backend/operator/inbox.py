@@ -28,6 +28,7 @@ rest of the operator domain.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -294,11 +295,46 @@ def _last_messages(
     return {m.chat_id: (m, counts.get(m.chat_id, 0)) for m in newest}
 
 
+_CODE_FENCE_LINE = re.compile(r"^\s*(```|~~~)")
+_LINE_PREFIX = re.compile(r"^\s*(#{1,6}\s+|>+\s?|[-*+]\s+|\d+[.)]\s+)+")
+_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_LINK_OR_IMAGE = re.compile(
+    r"!?\[([^\]\n]{0,200})\]\((?:[^()\s]|\([^()\s]*\)){0,500}(?:\s+\"[^\"\n]{0,200}\")?\)"
+)
+_EMPHASIS_MARKER = re.compile(
+    r"(?<!\w)\*+(?=\S)|(?<=\S)\*+(?!\w)|(?<!\w)_+(?=\S)|(?<=\S)_+(?!\w)|~~|`+"
+)
+_TABLE_SEPARATOR_CELL = re.compile(r":?-+:?")
+_CUT_MARKDOWN_TAIL = re.compile(r"!?\[[^\[\]]*(?:\]\([^()\s]*)?$")
+_PREVIEW_SOURCE_FACTOR = 8
+
+
+def _is_table_separator_row(line: str) -> bool:
+    stripped = line.strip()
+    return "|" in stripped and all(
+        _TABLE_SEPARATOR_CELL.fullmatch(cell.strip()) for cell in stripped.strip("|").split("|")
+    )
+
+
+def _strip_markdown(text: str) -> str:
+    lines = []
+    for line in text.splitlines():
+        if _CODE_FENCE_LINE.match(line) or _is_table_separator_row(line):
+            continue
+        if _TABLE_ROW.match(line):
+            line = line.replace("|", " ")
+        line = _LINE_PREFIX.sub("", line)
+        line = _LINK_OR_IMAGE.sub(r"\1", line)
+        lines.append(_EMPHASIS_MARKER.sub("", line))
+    return " ".join(lines)
+
+
 def _preview(text: str) -> str:
-    text = " ".join(text.split())
-    if len(text) > PREVIEW_MAX_LEN:
-        return text[:PREVIEW_MAX_LEN].rstrip() + "…"
-    return text
+    source = text.lstrip()
+    preview = " ".join(_strip_markdown(source[: PREVIEW_MAX_LEN * _PREVIEW_SOURCE_FACTOR]).split())
+    if len(source) > PREVIEW_MAX_LEN * _PREVIEW_SOURCE_FACTOR or len(preview) > PREVIEW_MAX_LEN:
+        return _CUT_MARKDOWN_TAIL.sub("", preview[:PREVIEW_MAX_LEN]).rstrip() + "…"
+    return preview
 
 
 def visitor_key(chat: Chat, *, strict: bool) -> str | None:

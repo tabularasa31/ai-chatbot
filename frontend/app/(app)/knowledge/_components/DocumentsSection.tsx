@@ -15,7 +15,7 @@ import { SourceForm } from "./SourceForm";
 import { FileRow, UrlRow } from "./SourceRows";
 import { UrlSourcesSection, type DetailView } from "./UrlSourcesSection";
 import { useSources, type Sources } from "./useSources";
-import type { MixedRow } from "./shared";
+import { FullWidthCell, PAGES_COLUMN_CLASS, type MixedRow } from "./shared";
 
 const ACCEPTED_FILE_TYPES = ".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt,.html,.htm";
 const ADD_URL_FORM_ID = "add-url-form";
@@ -195,7 +195,7 @@ export function DocumentsSection() {
         <InlineNotice tone="danger" onDismiss={sources.clearUploadErrors}>
           <ul>
             {sources.uploadErrors.map(({ filename, message }) => (
-              <li key={filename} className="break-words">{`${filename}: ${message}`}</li>
+              <li key={filename} className="break-anywhere">{`${filename}: ${message}`}</li>
             ))}
           </ul>
         </InlineNotice>
@@ -206,8 +206,8 @@ export function DocumentsSection() {
           <tr className="border-b border-line text-left text-caption font-medium text-fg-muted">
             <th scope="col" className="px-4 py-3 font-medium">Source</th>
             <th scope="col" className="w-48 px-4 py-3 font-medium">Status</th>
-            <th scope="col" className="hidden w-24 px-4 py-3 text-right font-medium xl:table-cell">Pages</th>
-            <th scope="col" className="w-36 px-4 py-3 text-right font-medium">Updated</th>
+            <th scope="col" className={`w-24 px-4 py-3 text-right font-medium ${PAGES_COLUMN_CLASS}`}>Pages</th>
+            <th scope="col" className="w-44 whitespace-nowrap px-4 py-3 text-right font-medium">Updated</th>
             <th scope="col" className="w-40 px-2 py-3">
               <span className="sr-only">Actions</span>
             </th>
@@ -218,9 +218,9 @@ export function DocumentsSection() {
             <DocumentRowsSkeleton rows={SKELETON_ROWS} />
           ) : rows.length === 0 ? (
             <tr>
-              <td colSpan={5} className="px-4 py-6">
+              <FullWidthCell className="px-4 py-6">
                 {renderEmpty()}
-              </td>
+              </FullWidthCell>
             </tr>
           ) : (
             rows.map((row) =>

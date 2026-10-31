@@ -2,13 +2,13 @@
 
 import { Trash2 } from "lucide-react";
 import type { UrlSource, UrlSourceDetail } from "@/lib/api";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { SourceForm } from "./SourceForm";
-import { DETAIL_ID_PREFIX, NAME_BUTTON_ON_BAND_CLASS, quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
+import { DETAIL_ID_PREFIX, FullWidthCell, NAME_BUTTON_ON_BAND_CLASS, quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
 
 export type DetailView =
   | { state: "loading" }
@@ -67,18 +67,18 @@ function DetailBody({
             <ul className="divide-y divide-line">
               {detail.pages.map((page) => (
                 <li key={page.id} className="flex items-center justify-between gap-3 py-2">
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <button
                       type="button"
                       onClick={() => onPreviewPage(page.id)}
-                      className={`block break-words ${NAME_BUTTON_ON_BAND_CLASS}`}
+                      className={`block break-anywhere ${NAME_BUTTON_ON_BAND_CLASS}`}
                     >
                       {page.title}
                     </button>
-                    <p className="break-all text-caption text-fg-muted">{page.url}</p>
+                    <p className="break-anywhere text-caption text-fg-muted">{page.url}</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
-                    <span className="text-caption tabular-nums text-fg-muted">{`${page.chunk_count} passages`}</span>
+                    <span className="whitespace-nowrap text-caption tabular-nums text-fg-muted">{`${page.chunk_count} ${pluralize(page.chunk_count, "passage", "passages")}`}</span>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -108,21 +108,19 @@ function DetailBody({
                     <li key={run.id} className="py-2 text-ui">
                       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
                         <span className="font-medium text-fg">{label}</span>
-                        <span className="text-caption tabular-nums text-fg-muted">{formatDateTime(run.created_at)}</span>
+                        <span className="whitespace-nowrap text-caption tabular-nums text-fg-muted">{formatDateTime(run.created_at)}</span>
                       </div>
                       <p className="text-caption tabular-nums text-fg-muted">
-                        {run.pages_found ? `${run.pages_indexed} of ${run.pages_found} pages` : `${run.pages_indexed} pages`}
+                        {run.pages_found ? `${run.pages_indexed} of ${run.pages_found} ${pluralize(run.pages_found, "page", "pages")}` : `${run.pages_indexed} ${pluralize(run.pages_indexed, "page", "pages")}`}
                       </p>
                       {run.failed_urls.length > 0 && (
                         <details className="text-caption text-fg-muted">
                           <summary className="flex min-h-11 cursor-pointer items-center">
-                            {run.failed_urls.length === 1
-                              ? "1 page could not be read"
-                              : `${run.failed_urls.length} pages could not be read`}
+                            {`${run.failed_urls.length} ${pluralize(run.failed_urls.length, "page", "pages")} could not be read`}
                           </summary>
                           <ul className="space-y-1 pb-2">
                             {run.failed_urls.map((failed) => (
-                              <li key={failed.url} className="break-all">{`${failed.url} (${failed.reason})`}</li>
+                              <li key={failed.url} className="break-anywhere">{`${failed.url} (${failed.reason})`}</li>
                             ))}
                           </ul>
                         </details>
@@ -141,7 +139,7 @@ function DetailBody({
             ) : (
               <ul className="space-y-1 font-mono text-ui text-fg">
                 {detail.exclusion_patterns.map((pattern) => (
-                  <li key={pattern} className="break-all">{pattern}</li>
+                  <li key={pattern} className="break-anywhere">{pattern}</li>
                 ))}
               </ul>
             )}
@@ -158,8 +156,8 @@ function DetailBody({
             {detail.quick_answers.map((item) => (
               <div key={item.key} className="border-b border-line py-2">
                 <dt className="text-caption font-medium text-fg-muted">{quickAnswerLabel(item.key)}</dt>
-                <dd className="break-all text-ui text-fg">{item.value}</dd>
-                <dd className="break-all text-caption text-fg-muted">{item.source_url}</dd>
+                <dd className="break-anywhere text-ui text-fg">{item.value}</dd>
+                <dd className="break-anywhere text-caption text-fg-muted">{item.source_url}</dd>
               </div>
             ))}
           </dl>
@@ -172,7 +170,7 @@ function DetailBody({
 export function UrlSourcesSection({ view, ...rest }: UrlSourcesSectionProps) {
   return (
     <tr id={`${DETAIL_ID_PREFIX}${rest.source.id}`} className="bg-surface-alt">
-      <td colSpan={5} className="px-4 py-4">
+      <FullWidthCell className="px-4 py-4">
         {view.state === "loading" && (
           <SkeletonRegion>
             <div className="space-y-3">
@@ -189,7 +187,7 @@ export function UrlSourcesSection({ view, ...rest }: UrlSourcesSectionProps) {
             <DetailBody {...rest} detail={view.detail} />
           </div>
         )}
-      </td>
+      </FullWidthCell>
     </tr>
   );
 }

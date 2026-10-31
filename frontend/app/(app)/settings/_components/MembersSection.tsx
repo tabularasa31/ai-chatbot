@@ -35,7 +35,7 @@ export function MembersSection() {
             {members.map((member) => (
               <li key={member.id} className="flex min-h-11 items-center gap-3 py-2">
                 <div className="min-w-0 flex-1">
-                  <p className="break-all text-ui text-fg">{member.email}</p>
+                  <p className="break-anywhere text-ui text-fg">{member.email}</p>
                   <p className="text-caption text-fg-muted">{roleText(member)}</p>
                 </div>
                 {member.role !== "owner" && (

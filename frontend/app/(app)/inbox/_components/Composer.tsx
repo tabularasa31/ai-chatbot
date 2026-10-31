@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, type ButtonHTMLAttributes } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes } from "react";
 import { Loader2 } from "lucide-react";
 import { ApiError, api, HTTP_CONFLICT, type Thread } from "@/lib/api";
 import { Button, FOCUS_RING } from "@/components/ui/button";
@@ -52,10 +52,18 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
   const [busy, setBusy] = useState<Action | null>(null);
   const [fieldError, setFieldError] = useState("");
   const [notice, setNotice] = useState("");
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
   const chatId = thread.chat.chat_id;
   const { ticket } = thread;
   const isLive = thread.handoff_state === "live";
   const ticketActive = ticket?.status === "open" || ticket?.status === "in_progress";
+
+  useLayoutEffect(() => {
+    const field = fieldRef.current;
+    if (!field) return;
+    field.style.height = "auto";
+    field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`;
+  }, [text]);
 
   const run = useCallback(
     async (name: Action, action: () => Promise<unknown>) => {
@@ -93,6 +101,7 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
         </p>
       )}
       <textarea
+        ref={fieldRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -102,23 +111,20 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
             send();
           }
         }}
-        rows={3}
+        rows={2}
         aria-label="Reply to the visitor"
         aria-describedby={fieldError ? `${ERROR_ID} ${HELPER_ID}` : HELPER_ID}
         aria-invalid={fieldError ? true : undefined}
         placeholder="Write a reply…"
         dir="auto"
         readOnly={busy !== null}
-        className={cn(FIELD_CLASS, "resize-none py-2", fieldError ? "border-danger" : "border-line-strong", FOCUS_RING.surface)}
+        className={cn(FIELD_CLASS, "max-h-44 resize-none py-2", fieldError ? "border-danger" : "border-line-strong", FOCUS_RING.surface)}
       />
       {fieldError && (
         <p id={ERROR_ID} role="alert" className="text-ui text-danger">
           {fieldError}
         </p>
       )}
-      <p id={HELPER_ID} className="text-caption text-fg-muted">
-        Enter to send, Shift+Enter for a new line
-      </p>
       <div className="flex flex-wrap items-center gap-2">
         {isLive ? (
           <ActionButton
@@ -142,11 +148,13 @@ export function Composer({ thread, onChanged }: { thread: Thread; onChanged: () 
             Mark resolved
           </ActionButton>
         )}
+        <p id={HELPER_ID} className="min-w-40 flex-1 text-caption text-fg-muted">
+          Enter to send, Shift+Enter for a new line
+        </p>
         <ActionButton
           variant="primary"
           loading={busy === "send"}
           disabled={busy !== null || !text.trim()}
-          className="ml-auto"
           onClick={send}
         >
           Send

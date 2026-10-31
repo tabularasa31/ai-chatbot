@@ -42,15 +42,17 @@ export function CopyButton({ text, label, variant }: CopyButtonProps) {
   return (
     <>
       <Button variant={variant} onClick={handleCopy}>
+        <span aria-live="polite" className="sr-only">{copied ? COPIED_LABEL : label}</span>
         <span
+          aria-hidden="true"
           key={copied ? clicks : "idle"}
           className={`inline-flex items-center gap-2 ${copied ? "animate-fade-out" : ""}`}
           style={copied ? { animationDelay: `${COPIED_RESET_MS - COPIED_FADE_MS}ms` } : undefined}
         >
           <Icon size={16} aria-hidden />
           <span className="grid">
-            <span aria-live="polite" className="col-start-1 row-start-1">{copied ? COPIED_LABEL : label}</span>
-            <span aria-hidden="true" className="invisible col-start-1 row-start-1">{copied ? label : COPIED_LABEL}</span>
+            <span className="col-start-1 row-start-1">{copied ? COPIED_LABEL : label}</span>
+            <span className="invisible col-start-1 row-start-1">{copied ? label : COPIED_LABEL}</span>
           </span>
         </span>
       </Button>

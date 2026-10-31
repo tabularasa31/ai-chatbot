@@ -3,6 +3,22 @@ title: Changelog
 description: What's changed in Chat9, most recent first.
 ---
 
+## 2026-10-31 — OpenAI key warning no longer moves the page
+
+When your OpenAI key is missing, rejected or out of credits, the warning at the top of the dashboard now appears together with the page instead of a moment later, so the content below no longer jumps down while you start reading or clicking.
+
+**Who it affects:** tenants whose OpenAI key needs attention.
+
+**What to do:** nothing. See [Connect your OpenAI API key](/docs/getting-started#step-2-connect-your-openai-api-key) for how to set or replace the key.
+
+## 2026-10-31 — Widget: a wrong bot ID says so
+
+If the embed code points at a bot that doesn't exist, for example after a typo or once the bot is deleted, the opened widget now says "Chat is unavailable." instead of showing an empty chat with nothing to do. The close button still works. The loader also no longer logs two "postMessage … target origin does not match" warnings in the browser console each time the bubble starts.
+
+**Who it affects:** sites whose snippet has a wrong or outdated bot ID.
+
+**What to do:** if you see "Chat is unavailable.", copy the embed code again. See [Where to get the embed code](/docs/embedding-the-widget#where-to-get-the-embed-code).
+
 ## 2026-10-30 — Dashboard polish
 
 The dashboard feels more responsive. Buttons and list rows react when pressed, panels and confirmation dialogs slide or fade in instead of popping, and all motion follows your system "reduce motion" setting. Selection and highlights are easier to see in the light theme, and warnings no longer look like errors. Loading placeholders now match the shape of the real lists and no longer pulse, the sidebar and top bar stay put once the page loads, and "Saved" and "Copied" notes fade out instead of vanishing.

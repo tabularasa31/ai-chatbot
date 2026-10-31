@@ -6,7 +6,7 @@ import { jwtVerify } from "jose";
 
 // Must match the backend: cookie set in backend/auth/routes.py, claims built
 // in backend/auth/service.py (HS256, typ from backend/core/jwt_kinds.py).
-const AUTH_COOKIE_NAME = "chat9_token";
+export const AUTH_COOKIE_NAME = "chat9_token";
 const USER_ACCESS_JWT_TYP = "chat9_user";
 
 export interface SessionClaims {

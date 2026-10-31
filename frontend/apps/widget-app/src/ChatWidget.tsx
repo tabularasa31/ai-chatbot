@@ -323,6 +323,7 @@ export function ChatWidget({
   const [streamingText, setStreamingText] = useState<string>("");
   const [statusStage, setStatusStage] = useState<string | null>(null);
   const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
+  const [botMissing, setBotMissing] = useState(false);
   const [pendingExternalLink, setPendingExternalLink] = useState<PendingExternalLink | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -481,6 +482,7 @@ export function ChatWidget({
 
     fetch(`${apiBase}/widget/config?${params}`)
       .then(async (r) => {
+        if (!cancelled) setBotMissing(r.status === 404);
         if (!r.ok) return null;
         return r.json() as Promise<WidgetConfig>;
       })
@@ -719,13 +721,13 @@ export function ChatWidget({
 
   useEffect(() => {
     const waitingForHistory = sessionId !== null && !historyLoaded;
-    if (!isOpen || !sessionHydrated || waitingForHistory || loading || messages.length > 0) return;
+    if (botMissing || !isOpen || !sessionHydrated || waitingForHistory || loading || messages.length > 0) return;
     const userId = userIdRef.current;
     const identity = userId ?? "";
     if (greetingRequestedForRef.current === identity || hasBeenGreeted(botId, userId)) return;
     greetingRequestedForRef.current = identity;
     void requestGreeting(userId);
-  }, [botId, historyLoaded, isOpen, loading, messages.length, requestGreeting, sessionHydrated, sessionId]);
+  }, [botId, botMissing, historyLoaded, isOpen, loading, messages.length, requestGreeting, sessionHydrated, sessionId]);
 
   // How often to ask whether a human has written. The ladder is the whole
   // point: a conversation the bot is handling is polled lazily and only while
@@ -1186,6 +1188,47 @@ export function ChatWidget({
   }, [pendingExternalLink]);
 
   const padX = compact ? "pad-x-compact" : "pad-x";
+  const header = (
+    <header className="header-bar flex flex-shrink-0 items-center justify-between bg-chrome text-chrome-fg dark:border-b dark:border-chrome-line">
+      <div className="min-w-0">
+        <h1 className="text-body font-semibold leading-5">{tString(locale, "panel_name")}</h1>
+        <a
+          href={withUtm(siteUrl, botId)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hit-link relative inline-block text-caption text-chrome-line-strong hover:text-chrome-fg-muted focus-visible:outline-chrome-accent"
+        >
+          {tString(locale, "powered_by")}
+        </a>
+      </div>
+      {onClose ? (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={tString(locale, "close_chat")}
+          className="header-close hit-44 relative inline-flex h-8 w-8 flex-shrink-0 items-center justify-center press-round rounded-full text-chrome-fg transition hover:bg-chrome-hover active:bg-chrome-active focus-visible:outline-chrome-accent"
+        >
+          <X size={16} aria-hidden="true" />
+        </button>
+      ) : null}
+    </header>
+  );
+
+  if (botMissing) {
+    return (
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-surface focus:outline-none"
+      >
+        {header}
+        <p className="flex flex-1 items-center justify-center bg-canvas px-4 text-ui text-fg">
+          {tString(locale, "unavailable")}
+        </p>
+      </div>
+    );
+  }
+
   const modalOpen = pendingExternalLink !== null;
   modalOpenRef.current = modalOpen;
 
@@ -1200,29 +1243,7 @@ export function ChatWidget({
         aria-hidden={modalOpen}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <header className="header-bar flex flex-shrink-0 items-center justify-between bg-chrome text-chrome-fg dark:border-b dark:border-chrome-line">
-          <div className="min-w-0">
-            <h1 className="text-body font-semibold leading-5">{tString(locale, "panel_name")}</h1>
-            <a
-              href={withUtm(siteUrl, botId)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hit-link relative inline-block text-caption text-chrome-line-strong hover:text-chrome-fg-muted focus-visible:outline-chrome-accent"
-            >
-              {tString(locale, "powered_by")}
-            </a>
-          </div>
-          {onClose ? (
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label={tString(locale, "close_chat")}
-              className="header-close hit-44 relative inline-flex h-8 w-8 flex-shrink-0 items-center justify-center press-round rounded-full text-chrome-fg transition hover:bg-chrome-hover active:bg-chrome-active focus-visible:outline-chrome-accent"
-            >
-              <X size={16} aria-hidden="true" />
-            </button>
-          ) : null}
-        </header>
+        {header}
 
         <div className="flex min-h-0 flex-1 flex-col bg-canvas">
         {ticketNotice ? (

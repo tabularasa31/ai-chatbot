@@ -43,10 +43,16 @@ function fitToContent(field: HTMLTextAreaElement, panel: HTMLElement | null): bo
   const panelCap = panel ? panel.clientHeight * MAX_PANEL_FRACTION : Infinity;
   const maxHeight = Math.max(oneRow, Math.min(line * MAX_ROWS + padding + border, panelCap));
 
+  const scrolled = field.scrollTop;
   field.style.height = "auto";
   const wanted = field.scrollHeight + border;
+  const overflows = wanted > maxHeight;
   field.style.height = `${Math.min(wanted, maxHeight)}px`;
-  field.style.overflowY = wanted > maxHeight ? "auto" : "hidden";
+  field.style.overflowY = overflows ? "auto" : "hidden";
+  if (overflows) {
+    const caretAtEnd = field.selectionStart === field.value.length;
+    field.scrollTop = caretAtEnd ? field.scrollHeight - field.clientHeight : scrolled;
+  }
   return wanted > oneRow + 1;
 }
 

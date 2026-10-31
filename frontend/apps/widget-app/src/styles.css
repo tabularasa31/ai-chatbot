@@ -71,6 +71,27 @@
     padding-right: max(0.5rem, var(--safe-right));
   }
 
+  html[data-fullscreen="on"] .header-bar {
+    height: auto;
+    min-height: calc(3rem + var(--safe-top));
+    padding-top: calc(0.5rem + var(--safe-top));
+    padding-bottom: 0.5rem;
+    gap: 0.5rem;
+  }
+
+  html[data-fullscreen="on"] .header-bar h1 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  @media (orientation: landscape) and (max-height: 500px) {
+    html[data-fullscreen="on"] .header-bar h1 {
+      -webkit-line-clamp: 1;
+    }
+  }
+
   html[data-grip="on"][data-position="right"] .header-bar {
     padding-left: max(2rem, var(--safe-left));
   }

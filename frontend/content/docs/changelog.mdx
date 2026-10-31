@@ -3,6 +3,26 @@ title: Changelog
 description: What's changed in Chat9, most recent first.
 ---
 
+## 2026-10-30 — Widget: multi-line messages, clearer length limit, full screen on phones in landscape
+
+The message box now grows to several lines, and pasted multi-line text keeps its line breaks. On phones Enter adds a new line and the Send button sends; on desktop Enter sends and Shift+Enter adds a line. The 1000-character limit is unchanged, but the widget now shows a counter near the limit and a "too long" note over it, and never discards what the visitor typed. A message that fails to send is marked "Not sent · Try again" on the message itself instead of in stacked error blocks.
+
+Phones in landscape now open the chat full screen, like portrait. Full screen respects the notch and home indicator on sites that use `viewport-fit=cover` and stays above the on-screen keyboard. Scrolling inside the chat no longer scrolls the page behind it, buttons give press feedback, and motion follows the visitor's reduced-motion setting.
+
+**Who it affects:** visitors on any site with the widget.
+
+**What to do:** nothing, existing snippets keep working. See [Embedding the widget](/docs/embedding-the-widget#basic-embed) for the embed code.
+
+## 2026-10-30 — Clearer password reset and invite links, and a Page not found page
+
+Password reset and team invite links are now checked as soon as the page opens. A link that has expired, was already used or is wrong says "This link doesn't work" (for invites, "This invite link doesn't work", with a **Sign in** button) before anyone types a new password. If the check itself can't run, for example because of a connection problem, the page offers to try again.
+
+Addresses that don't exist on the site now show a "Page not found" page with a way back: the home page, or Inbox when you are signed in. Sign-in, sign-up and the other account pages also keep the logo and heading in the same place from one page to the next.
+
+**Who it affects:** everyone who signs in, resets a password or accepts a team invite.
+
+**What to do:** nothing.
+
 ## 2026-10-29 — Operator replies reach visitors when you take a chat unasked
 
 When an operator took a conversation from **Inbox → All** where the visitor had not asked for a human, the reply did not appear in the open widget until the visitor reloaded the page. It now shows up within about 20 seconds while the visitor has the chat open, and within a few seconds once the visitor writes again. The visitor's messages to an operator no longer leave an empty bot bubble behind them.

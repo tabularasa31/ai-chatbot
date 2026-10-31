@@ -21,7 +21,9 @@ type AppStringKey =
   | "copy_code"
   | "code_copied"
   | "opens_new_tab"
-  | "error_send"
+  | "send_failed_marker"
+  | "composer_chars_left"
+  | "composer_too_long"
   | "error_rate_limit"
   | "error_history"
   | "error_support"
@@ -46,7 +48,9 @@ const EN: Record<AppStringKey, string> = {
   copy_code: "Copy code",
   code_copied: "Code copied",
   opens_new_tab: "Opens in a new tab",
-  error_send: "Couldn't send your message.",
+  send_failed_marker: "Not sent",
+  composer_chars_left: "Characters left: {n}",
+  composer_too_long: "Too long: {n} over the limit of {max}.",
   error_rate_limit: "Too many messages. Wait a moment.",
   error_history: "Couldn't load your conversation.",
   error_support: "Couldn't reach support.",
@@ -77,9 +81,13 @@ function isSharedKey(key: StringKey): key is SharedChromeKey {
   return SHARED_KEYS.has(key);
 }
 
-export function t(locale: string | null | undefined, key: StringKey, vars?: { n: string }): string {
+export function t(
+  locale: string | null | undefined,
+  key: StringKey,
+  vars?: { n?: string; max?: string },
+): string {
   const text = isSharedKey(key) ? sharedChromeString(key) : textFor(locale, key);
-  return vars ? text.replace("{n}", vars.n) : text;
+  return vars ? text.replace(/\{(n|max)\}/g, (placeholder, name: "n" | "max") => vars[name] ?? placeholder) : text;
 }
 
 function textFor(locale: string | null | undefined, key: AppStringKey): string {

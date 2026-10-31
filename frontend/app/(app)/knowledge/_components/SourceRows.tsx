@@ -114,7 +114,7 @@ export function UrlRow({
   const [errorOpen, setErrorOpen] = useState(false);
   return (
     <Fragment>
-      <tr className="cursor-pointer border-b border-line hover:bg-surface-alt active:bg-line" onClick={onToggle}>
+      <tr className="cursor-pointer border-b border-line transition-colors hover:bg-surface-alt active:bg-line" onClick={onToggle}>
         <td className={SOURCE_CELL_CLASS}>
           <button
             type="button"

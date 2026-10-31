@@ -10,7 +10,7 @@ import { Select } from "@/components/ui/field";
 import { FlashMessage, useFlash } from "@/components/ui/flash";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
-import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
+import { RowListSkeleton } from "@/components/ui/skeleton";
 import { TEXT_LINK_CLASS } from "./link-class";
 import { conversationsLabel } from "./shared";
 import { useUnansweredList } from "./useUnansweredList";
@@ -179,16 +179,7 @@ export function UnansweredSection({
       )}
 
       {state.status === "loading" && (
-        <SkeletonRegion>
-          <div className="border-t border-line">
-            {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-              <div key={index} className="space-y-2 py-4">
-                <Skeleton className="h-6 w-2/3" />
-                <Skeleton className="h-4 w-1/3" />
-              </div>
-            ))}
-          </div>
-        </SkeletonRegion>
+        <RowListSkeleton rows={SKELETON_ROWS} className="border-y border-line" />
       )}
 
       {state.status === "ready" && items.length === 0 && (

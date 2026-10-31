@@ -4,19 +4,40 @@ import { Suspense, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { clearSession, api } from "@/lib/api";
 import { LoadError } from "@/components/ui/load-error";
+import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { WidgetIdentityNotice } from "@/components/WidgetIdentityNotice";
 import { useClientMe, useActiveBot } from "@/hooks/useApi";
 import { InstallWidget } from "./install-widget";
 
+function InstallWidgetBars() {
+  return (
+    <div className="space-y-3">
+      <Skeleton className="h-7 w-40" />
+      <div className="flex items-center gap-3">
+        <Skeleton className="h-10 w-72 max-w-full" />
+        <Skeleton className="h-11 w-24" />
+      </div>
+    </div>
+  );
+}
+
 function InstallWidgetSkeleton() {
   return (
-    <div className="animate-pulse space-y-8" role="status" aria-label="Loading">
-      <div className="h-11 w-2/3 rounded-control bg-surface-alt" />
-      <div className="h-24 rounded-control bg-surface-alt" />
-      <div className="h-28 rounded-control bg-surface-alt" />
-      <div className="h-40 rounded-control bg-surface-alt" />
-    </div>
+    <SkeletonRegion>
+      <InstallWidgetBars />
+    </SkeletonRegion>
+  );
+}
+
+function InstallWidgetPageSkeleton() {
+  return (
+    <SkeletonRegion>
+      <div className="max-w-2xl space-y-8">
+        <Skeleton className="h-8 w-48" />
+        <InstallWidgetBars />
+      </div>
+    </SkeletonRegion>
   );
 }
 
@@ -71,7 +92,7 @@ function InstallWidgetContent() {
 
 export default function InstallWidgetPage() {
   return (
-    <Suspense fallback={<InstallWidgetSkeleton />}>
+    <Suspense fallback={<InstallWidgetPageSkeleton />}>
       <InstallWidgetContent />
     </Suspense>
   );

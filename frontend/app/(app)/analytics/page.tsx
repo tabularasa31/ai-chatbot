@@ -86,7 +86,7 @@ function metricRows(data: AnalyticsSummaryResponse): MetricRow[] {
 
 function MetricList({ rows }: { rows: MetricRow[] }) {
   return (
-    <dl className="max-w-3xl">
+    <dl>
       {rows.map((row) => (
         <div
           key={row.label}
@@ -166,7 +166,7 @@ function AnalyticsPageContent() {
   );
 
   return (
-    <div className="space-y-8">
+    <div className="max-w-3xl space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-h1 text-fg">Analytics</h1>
         <div className="flex items-center gap-2">

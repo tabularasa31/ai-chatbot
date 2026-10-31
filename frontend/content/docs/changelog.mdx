@@ -3,6 +3,18 @@ title: Changelog
 description: What's changed in Chat9, most recent first.
 ---
 
+## 2026-10-30 — Dashboard polish
+
+The dashboard feels more responsive. Buttons and list rows react when pressed, panels and confirmation dialogs slide or fade in instead of popping, and all motion follows your system "reduce motion" setting. Selection and highlights are easier to see in the light theme, and warnings no longer look like errors. Loading placeholders now match the shape of the real lists and no longer pulse, the sidebar and top bar stay put once the page loads, and "Saved" and "Copied" notes fade out instead of vanishing.
+
+**Inbox:** conversation previews show plain text instead of raw formatting symbols, the date and ticket number stay visible in narrow lists, taking a chat no longer pushes messages down, and "Answered by email" is a single line with the details on hover.
+
+**Knowledge, Team and Seats:** a source that could not be loaded says "Couldn't read this page", with "Show details" for the full error. Dates stay on one line, counts use the right singular or plural ("1 page", "1 conversation"), long emails wrap cleanly, and the seats total reads as one sentence with formatted amounts.
+
+**Who it affects:** everyone using the dashboard.
+
+**What to do:** nothing. See [Dashboard Features](/docs/dashboard-features#inbox-inbox) for the Inbox and [Dashboard Features](/docs/dashboard-features#knowledge-knowledge) for Knowledge.
+
 ## 2026-10-30 — Widget: multi-line messages, clearer length limit, full screen on phones in landscape
 
 The message box now grows to several lines, and pasted multi-line text keeps its line breaks. On phones Enter adds a new line and the Send button sends; on desktop Enter sends and Shift+Enter adds a line. The 1000-character limit is unchanged, but the widget now shows a counter near the limit and a "too long" note over it, and never discards what the visitor typed. A message that fails to send is marked "Not sent · Try again" on the message itself instead of in stacked error blocks.

@@ -257,13 +257,16 @@ declare global {
     resizeOverlay: HTMLDivElement;
     iframe: HTMLIFrameElement;
     widgetOrigin: string;
+    // Before chat9:ready the frame may still be about:blank, where a post to
+    // widgetOrigin only logs an origin mismatch; ready resends the full state.
+    iframeReady: boolean;
     onMessage: (e: MessageEvent) => void;
     teardown: () => void;
   };
   let handles: MountHandles | null = null;
 
   function postHintsToIframe(h: MountHandles, hints: UserHints | null) {
-    if (!h.widgetOrigin) return;
+    if (!h.widgetOrigin || !h.iframeReady) return;
     const message = hints
       ? { type: "chat9:hints", userHints: hints }
       : { type: "chat9:no-hints" };
@@ -276,7 +279,7 @@ declare global {
   // when a message has actually been on screen. It also carries whether the
   // panel is full-screen, which decides where focus goes on open.
   function postPanelStateToIframe(h: MountHandles, open: boolean, fullScreen: boolean, grip: boolean) {
-    if (!h.widgetOrigin) return;
+    if (!h.widgetOrigin || !h.iframeReady) return;
     h.iframe.contentWindow?.postMessage({ type: "chat9:panel", open, fullScreen, grip }, h.widgetOrigin);
   }
 
@@ -366,6 +369,7 @@ declare global {
         return;
       }
       if (payload.type !== "chat9:ready") return;
+      handles.iframeReady = true;
       onIframeReady?.();
       if (!handles.widgetOrigin) {
         console.error("Chat9: cannot determine widget origin — set widgetBase. Aborting handshake.");
@@ -411,6 +415,7 @@ declare global {
         resizeOverlay,
         iframe: inlineFrame,
         widgetOrigin,
+        iframeReady: false,
         onMessage,
         teardown: () => {},
       };
@@ -729,6 +734,7 @@ declare global {
 
     failRetry.addEventListener("click", () => {
       showFailOverlay(chromeString("loading"), false);
+      if (handles) handles.iframeReady = false;
       iframe.src = buildIframeSrc() + `&_=${Date.now()}`;
       armLoadFailTimer();
     });
@@ -890,6 +896,7 @@ declare global {
       resizeOverlay,
       iframe,
       widgetOrigin,
+      iframeReady: false,
       onMessage,
       teardown: () => {
         document.removeEventListener("mousemove", onMouseMove);

@@ -86,11 +86,10 @@ function NavLink({
 export function Sidebar() {
   const pathname = usePathname();
 
-  // Assume owner until /tenants/me says otherwise: the dashboard's own owner
-  // sees no flicker, and an operator loses the owner-only links a moment later.
   const { data: client } = useClientMe();
+  const roleKnown = client !== undefined;
   const isAdmin = client?.is_admin ?? false;
-  const isOwner = client?.role === "owner" || client === undefined;
+  const isOwner = client?.role === "owner";
 
   const { data: inboxSummary } = useInboxSummary(INBOX_BADGE_POLL_MS);
   const { data: unansweredBadge } = useUnansweredBadge();
@@ -101,24 +100,30 @@ export function Sidebar() {
 
   const isActive = (item: NavItem) =>
     item.activeOn.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+  const isGated = (item: NavItem) => item.ownerOnly || item.adminOnly;
   const isVisible = (item: NavItem) =>
-    (!item.ownerOnly || isOwner) && (!item.adminOnly || isAdmin);
+    !isGated(item) || (roleKnown && (!item.ownerOnly || isOwner) && (!item.adminOnly || isAdmin));
+  const isReserved = (item: NavItem) => isGated(item) && !roleKnown;
 
   return (
     <aside className="fixed bottom-0 left-0 top-12 flex w-52 flex-col border-r border-chrome-line bg-chrome p-3">
       <nav aria-label="Main" className="flex flex-1 flex-col gap-6">
-        {NAV_GROUPS.map((group) => ({ key: group[0].href, items: group.filter(isVisible) }))
+        {NAV_GROUPS.map((group) => ({ key: group[0].href, items: group.filter((item) => isVisible(item) || isReserved(item)) }))
           .filter(({ items }) => items.length > 0)
           .map(({ key, items }) => (
             <div key={key} className="flex flex-col gap-1">
-              {items.map((item) => (
-                <NavLink
-                  key={item.href}
-                  item={item}
-                  active={isActive(item)}
-                  count={item.badge ? counts[item.badge] : 0}
-                />
-              ))}
+              {items.map((item) =>
+                isVisible(item) ? (
+                  <NavLink
+                    key={item.href}
+                    item={item}
+                    active={isActive(item)}
+                    count={item.badge ? counts[item.badge] : 0}
+                  />
+                ) : (
+                  <div key={item.href} aria-hidden="true" className="h-11" />
+                ),
+              )}
             </div>
           ))}
       </nav>

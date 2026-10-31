@@ -107,6 +107,7 @@ type Scheme = keyof typeof SCHEME_COLORS;
 
 const SCRIM_OPACITY = 0.6;
 const EASE_OUT = "cubic-bezier(0.23, 1, 0.32, 1)";
+const DRAWER_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 const SCHEME_SELECTOR: Record<Scheme, string> = { light: ":root", dark: ".dark" };
 
 export const SYSTEM_SANS = ["system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"];
@@ -200,6 +201,19 @@ export const brandThemeExtend = {
     press: "0.97",
     "press-sm": "0.94",
     "press-wide": "0.985",
+  },
+  keyframes: {
+    "modal-in": { from: { opacity: "0", transform: "scale(0.96)" } },
+    "drawer-in": { from: { transform: "translateX(100%)" } },
+    "fade-in": { from: { opacity: "0" } },
+    "fade-out": { to: { opacity: "0" } },
+  },
+  animation: {
+    "modal-in": `modal-in 200ms ${EASE_OUT}`,
+    "drawer-in": `drawer-in 200ms ${DRAWER_EASE}`,
+    "scrim-in": "fade-in 200ms ease-out",
+    "fade-in": "fade-in 120ms ease-out",
+    "fade-out": "fade-out 120ms ease-out forwards",
   },
   maxWidth: {
     measure: "34rem",

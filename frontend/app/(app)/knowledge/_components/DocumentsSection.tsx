@@ -8,7 +8,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/field";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
-import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
+import { DocumentRowsSkeleton } from "@/components/ui/skeleton";
 import { DocumentPreviewDrawer } from "./DocumentPreviewDrawer";
 import { FlashMessage } from "@/components/ui/flash";
 import { SourceForm } from "./SourceForm";
@@ -107,15 +107,6 @@ export function DocumentsSection() {
   }
 
   function renderEmpty() {
-    if (sources.loadState === "loading") {
-      return (
-        <SkeletonRegion>
-          {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-            <Skeleton key={index} className="mb-3 h-11 w-full" />
-          ))}
-        </SkeletonRegion>
-      );
-    }
     if (sources.loadState === "error") return null;
     if (filter.trim()) {
       return (
@@ -223,7 +214,9 @@ export function DocumentsSection() {
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 ? (
+          {rows.length === 0 && sources.loadState === "loading" ? (
+            <DocumentRowsSkeleton rows={SKELETON_ROWS} />
+          ) : rows.length === 0 ? (
             <tr>
               <td colSpan={5} className="px-4 py-6">
                 {renderEmpty()}

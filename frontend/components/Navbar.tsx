@@ -37,11 +37,9 @@ export function Navbar({
         <span className="text-body font-semibold leading-none text-chrome-fg">Chat9</span>
       </Link>
       <div className="flex min-w-0 items-center gap-4">
-        {userEmail && (
-          <span title={userEmail} className="max-w-72 truncate text-ui text-chrome-fg-muted">
-            {userEmail}
-          </span>
-        )}
+        <span title={userEmail ?? undefined} className="w-60 min-w-0 truncate text-right text-ui text-chrome-fg-muted">
+          {userEmail}
+        </span>
         <ThemeMenu surface="chrome" side="below" align="end" />
         <button type="button" onClick={handleLogout} className="group flex h-11 items-center focus-visible:outline-none">
           <span

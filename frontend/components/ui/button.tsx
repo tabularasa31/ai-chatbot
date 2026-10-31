@@ -35,18 +35,21 @@ const SIZES = {
 type ButtonStyle = {
   variant: keyof typeof VARIANTS;
   size?: keyof typeof SIZES;
+  /** Pulls a row-leading ghost label out by its padding so the text aligns with the column above; the hover plate extends into the gutter. */
+  bleed?: "start";
   /** Surface the button sits on, for the focus ring offset. */
   offset?: keyof typeof FOCUS_RING;
 };
 
 /** Class string for elements that must look like a button but are not one, such as links. */
-export function buttonClasses({ variant, size = "default", offset = "canvas" }: ButtonStyle): string {
+export function buttonClasses({ variant, size = "default", offset = "canvas", bleed }: ButtonStyle): string {
   return cn(
     "inline-flex h-11 shrink-0 items-center justify-center rounded-control text-ui font-medium touch-manipulation transition-[color,background-color,border-color,transform] disabled:cursor-not-allowed",
     FOCUS_RING[offset],
     VARIANTS[variant],
     PRESS,
     SIZES[size],
+    bleed === "start" && "-ml-4",
   );
 }
 
@@ -55,6 +58,7 @@ export function Button({
   variant,
   size,
   offset,
+  bleed,
   className,
   type = "button",
   busy = false,
@@ -69,7 +73,7 @@ export function Button({
   return (
     <button
       type={type}
-      className={cn(buttonClasses({ variant, size, offset }), busy && "relative", className)}
+      className={cn(buttonClasses({ variant, size, offset, bleed }), busy && "relative", className)}
       aria-busy={busy || undefined}
       onClick={handleClick}
       {...props}

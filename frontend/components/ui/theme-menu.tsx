@@ -45,7 +45,7 @@ const SURFACES = {
     visual:
       "text-fg-muted transition-[color,background-color,transform] group-hover:bg-surface-alt group-hover:text-fg group-active:scale-press-sm group-active:bg-line group-aria-expanded:bg-surface-alt group-aria-expanded:text-fg group-aria-expanded:group-active:bg-line group-focus-visible:ring-2 group-focus-visible:ring-focus group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-canvas",
     menu: "border-line bg-surface dark:bg-surface-alt",
-    item: "text-fg hover:bg-surface-alt active:bg-line focus-visible:bg-surface-alt focus-visible:ring-focus dark:hover:bg-canvas dark:focus-visible:bg-canvas",
+    item: "text-fg hover:bg-surface-alt active:bg-line focus-visible:bg-surface-alt focus-visible:ring-focus dark:hover:bg-canvas dark:active:bg-line dark:focus-visible:bg-canvas",
     checked: "text-brand",
   },
   chrome: {

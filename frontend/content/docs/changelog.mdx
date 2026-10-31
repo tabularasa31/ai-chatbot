@@ -13,6 +13,14 @@ Dashboard: in **Knowledge**, pressing a button inside a source row (Show details
 
 **What to do:** nothing. See [Embedding the widget](/docs/embedding-the-widget#basic-embed) for the embed code, and [Dashboard Features](/docs/dashboard-features#knowledge-knowledge) for Knowledge and [Dashboard Features](/docs/dashboard-features#inbox-inbox) for the Inbox.
 
+## 2026-10-31 — OpenAI key warning no longer moves the page
+
+When your OpenAI key is missing, rejected or out of credits, the warning at the top of the dashboard now appears together with the page instead of a moment later, so the content below no longer jumps down while you start reading or clicking.
+
+**Who it affects:** tenants whose OpenAI key needs attention.
+
+**What to do:** nothing. See [Connect your OpenAI API key](/docs/getting-started#step-2-connect-your-openai-api-key) for how to set or replace the key.
+
 ## 2026-10-31 — Widget: a wrong bot ID says so
 
 If the embed code points at a bot that doesn't exist, for example after a typo or once the bot is deleted, the opened widget now says "Chat is unavailable." instead of showing an empty chat with nothing to do. The close button still works. The loader also no longer logs two "postMessage … target origin does not match" warnings in the browser console each time the bubble starts.

@@ -17,14 +17,15 @@ import type {
 
 export const UNANSWERED_BADGE_KEY = "unanswered/badge";
 
-export function useClientMe() {
-  return useSWR<TenantMeResponse>("client/me", () => api.clients.getMe());
+export function useClientMe(fallbackData?: TenantMeResponse) {
+  return useSWR<TenantMeResponse>("client/me", () => api.clients.getMe(), { fallbackData });
 }
 
 const LLM_ALERT_POLL_MS = 60_000;
 
-export function useLlmAlert() {
+export function useLlmAlert(fallbackData?: TenantLlmAlertResponse) {
   return useSWR<TenantLlmAlertResponse>("client/llm-alert", () => api.clients.getLlmAlert(), {
+    fallbackData,
     refreshInterval: LLM_ALERT_POLL_MS,
     revalidateOnFocus: false,
     shouldRetryOnError: false,

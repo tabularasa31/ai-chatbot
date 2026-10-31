@@ -3,6 +3,7 @@
 import type { LlmAlertType } from "@/lib/api";
 import { useClientMe, useLlmAlert } from "@/hooks/useApi";
 import { PageBanner, type PageBannerAction } from "@/components/ui/page-banner";
+import type { ShellState } from "@/lib/shell-state";
 
 type BannerContent = {
   tone: "danger" | "warning";
@@ -46,9 +47,9 @@ const EMAIL_NOT_VERIFIED_BANNER: BannerContent = {
 };
 
 /** The one banner the page shows: blocking conditions first, then the email warning. */
-export function useShellBanner(): BannerContent | null {
-  const { data: client } = useClientMe();
-  const { data: llmAlert } = useLlmAlert();
+export function useShellBanner(initialState: ShellState = {}): BannerContent | null {
+  const { data: client } = useClientMe(initialState.client);
+  const { data: llmAlert } = useLlmAlert(initialState.llmAlert);
 
   if (!client) return null;
   const blocking =
@@ -60,7 +61,7 @@ export function useShellBanner(): BannerContent | null {
   return banner;
 }
 
-export function ShellBanner() {
-  const banner = useShellBanner();
+export function ShellBanner({ initialState }: { initialState: ShellState }) {
+  const banner = useShellBanner(initialState);
   return banner ? <PageBanner {...banner} /> : null;
 }

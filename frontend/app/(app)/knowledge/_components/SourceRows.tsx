@@ -51,7 +51,7 @@ function Actions({ children }: { children: ReactNode }) {
 }
 
 function displayUrl(url: string): string {
-  return url.replace(/^https?:\/\//, "");
+  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
 export function FileRow({
@@ -114,7 +114,7 @@ export function UrlRow({
   const [errorOpen, setErrorOpen] = useState(false);
   return (
     <Fragment>
-      <tr className="cursor-pointer border-b border-line transition-colors hover:bg-surface-alt active:bg-line" onClick={onToggle}>
+      <tr className="cursor-pointer border-b border-line transition-colors hover:bg-surface-alt active:bg-line has-[button:active]:bg-transparent hover:has-[button:active]:bg-surface-alt" onClick={onToggle}>
         <td className={SOURCE_CELL_CLASS}>
           <button
             type="button"

@@ -9,7 +9,7 @@ import { CONTAINER, standaloneLinkClasses } from '@/components/marketing/classes
 import { cn } from '@/components/ui/utils';
 import { getSiteUrl } from '@/lib/site';
 
-const TITLE = 'AI support chatbot for your docs — Chat9';
+const TITLE = 'Chat9 — AI support chatbot for your docs';
 const DESCRIPTION =
   'Chat9 answers support questions from your documentation. Upload files or add your docs site, paste one snippet, and hand off to your team when the bot cannot answer.';
 

@@ -19,11 +19,6 @@ function resolvedSiteTheme(): DemoTheme {
   return document.documentElement.classList.contains("dark") ? "dark" : "light";
 }
 
-function clearTarget() {
-  const target = document.getElementById(TARGET_ID);
-  if (target) target.innerHTML = "";
-}
-
 function DemoErrorMessage() {
   return (
     <>
@@ -52,6 +47,7 @@ export function DemoSlot({ botId }: { botId: string }) {
   const [status, setStatus] = useState<DemoStatus>("loading");
   const [skeletonVisible, setSkeletonVisible] = useState(false);
   const startedTheme = useRef<DemoTheme | null>(null);
+  const targetRef = useRef<HTMLDivElement>(null);
 
   function startWidget(widget: NonNullable<typeof window.Chat9Widget>, theme: DemoTheme) {
     // The loader's baked-in apiBase is production; preview hosts must call their own origin.
@@ -61,6 +57,7 @@ export function DemoSlot({ botId }: { botId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    const target = targetRef.current;
     const skeletonTimer = setTimeout(() => setSkeletonVisible(true), SKELETON_DELAY_MS);
     const failTimer = setTimeout(() => {
       cancelled = true;
@@ -87,27 +84,36 @@ export function DemoSlot({ botId }: { botId: string }) {
       clearTimeout(failTimer);
       window.Chat9Widget?.stop();
       startedTheme.current = null;
-      clearTarget();
+      target?.replaceChildren();
     };
   }, [botId]);
 
   useEffect(() => {
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
     const observer = new MutationObserver(() => {
       const widget = window.Chat9Widget;
+      const target = targetRef.current;
       const theme = resolvedSiteTheme();
-      if (!widget || !widget.isStarted() || startedTheme.current === null || startedTheme.current === theme) return;
+      if (!widget || !target || !widget.isStarted()) return;
+      if (startedTheme.current === null || startedTheme.current === theme) return;
       setSkeletonVisible(true);
       setStatus("loading");
       widget.stop();
-      clearTarget();
+      target.replaceChildren();
       startWidget(widget, theme);
-      document
-        .getElementById(TARGET_ID)
-        ?.querySelector("iframe")
-        ?.addEventListener("load", () => setStatus("ready"), { once: true });
+      const settle = () => {
+        clearTimeout(settleTimer);
+        setStatus("ready");
+      };
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(settle, LOAD_TIMEOUT_MS);
+      target.querySelector("iframe")?.addEventListener("load", settle, { once: true });
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      clearTimeout(settleTimer);
+    };
   }, []);
 
   return (
@@ -134,7 +140,7 @@ export function DemoSlot({ botId }: { botId: string }) {
           </div>
         ) : (
           <>
-            <div id={TARGET_ID} className="h-full w-full" />
+            <div id={TARGET_ID} ref={targetRef} className="h-full w-full" />
             {status === "loading" && skeletonVisible && <DemoSkeleton />}
           </>
         )}

@@ -133,7 +133,6 @@ Contrast changes made to the existing look:
 
 ### 4.1 Scheme selection (site, auth, dashboard, docs)
 
-- Browser tab title is `<Page> — Chat9` on every route (site, auth, docs, blog, dashboard, 404). `<Page>` is the page h1 or, in the dashboard, the sidebar section name. The suffix lives only in the root layout `title.template`; pages give just `<Page>`. The landing is the exception: `Chat9 — AI support chatbot for your docs`.
 - One shared setting with three values: System (default), Light, Dark. System follows `prefers-color-scheme`; if the browser gives no signal, light.
 - Stored in one cookie `chat9-scheme` (`system|light|dark`; `Path=/`, 1 year, `SameSite=Lax`, readable by script because the scheme menu writes it). Marketing, auth, dashboard and docs read the same cookie, so the choice carries across them; site, auth, dashboard and docs are one Next.js app on one host, so a host-only cookie (no `Domain`) is enough.
 - No flash: the server renders no scheme class, so pages stay statically cacheable. A tiny blocking script in the root layout's `<head>` reads the cookie, resolves System through `matchMedia`, and sets `class="dark"` on `<html>` before first paint; it re-resolves when the OS preference or the cookie changes (the scheme menu dispatches `chat9-scheme-change`). `<html>` carries `suppressHydrationWarning`. A surface that forces its own scheme (until it is migrated) renders `[data-scheme-forced]`; while that element is mounted the script does not touch `<html>`. A migrated surface calls `resolveScheme()` (`frontend/lib/scheme.ts`) when it mounts, so client-side navigation from a forcing surface restores the stored scheme. A surface that has migrated to tokens renders `data-scheme-surface`, which sets `color-scheme` to match the resolved scheme so native controls and scrollbars follow.
@@ -302,6 +301,8 @@ lucide-react only (already used in dashboard and widget). Sizes 16 (inline with 
 
 Breakpoints (Tailwind defaults): sm 640, md 768, lg 1024, xl 1280. Everything except the dashboard works from 320px with no horizontal scroll; single column below 640.
 Widget colour: text, links, focus and status use `brand`; the launcher, send button and visitor bubble use `accent`, flat `#7C3AED` (`#A78BFA` send and bubble in dark) unless the tenant sets `color`, then the glyph and bubble text are white or `#000000`, whichever contrasts more. Embed options: `mode, color, position, target, topClearance, theme, userHints`.
+
+Browser tab title is `<Page> — Chat9` on every route (site, auth, docs, blog, dashboard, 404). `<Page>` is the page h1 or, in the dashboard, the sidebar section name. The suffix lives only in the root layout `title.template`; pages give just `<Page>`. The landing is the exception: `Chat9 — AI support chatbot for your docs`.
 
 ## 9. Navigation (dashboard)
 

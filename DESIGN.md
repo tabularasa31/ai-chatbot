@@ -2,7 +2,7 @@
 
 Scope: marketing site + blog, auth pages, tenant dashboard, embeddable chat widget, client docs (fumadocs).
 Every screen uses only the values below; no value is invented per screen.
-Site, auth, dashboard and docs support two colour schemes (light, dark), chosen as in 4.1. The widget follows the tenant's `theme` embed option (`light` default, `dark`), never the visitor's system setting or the scheme cookie. Tokens below are scheme-independent names; each has a light and a dark value.
+Site, auth, dashboard and docs support two colour schemes (light, dark), chosen as in 4.1. The widget follows the tenant's `theme` embed option (`light` default, `dark`), never the visitor's system setting or the scheme cookie. The landing demo is the one place the site passes the scheme on: it starts the widget with `theme` set to the resolved site scheme and restarts it when the scheme changes. The widget still reads only its `theme` option. Tokens below are scheme-independent names; each has a light and a dark value.
 
 Contrast figures were computed by hand with the WCAG 2.x relative-luminance formula. Re-verify with a tool when a token changes.
 
@@ -133,6 +133,7 @@ Contrast changes made to the existing look:
 
 ### 4.1 Scheme selection (site, auth, dashboard, docs)
 
+- Browser tab title is `<Page> — Chat9` on every route (site, auth, docs, blog, dashboard, 404). `<Page>` is the page h1 or, in the dashboard, the sidebar section name. The suffix lives only in the root layout `title.template`; pages give just `<Page>`. The landing is `AI support chatbot for your docs — Chat9`.
 - One shared setting with three values: System (default), Light, Dark. System follows `prefers-color-scheme`; if the browser gives no signal, light.
 - Stored in one cookie `chat9-scheme` (`system|light|dark`; `Path=/`, 1 year, `SameSite=Lax`, readable by script because the scheme menu writes it). Marketing, auth, dashboard and docs read the same cookie, so the choice carries across them; site, auth, dashboard and docs are one Next.js app on one host, so a host-only cookie (no `Domain`) is enough.
 - No flash: the server renders no scheme class, so pages stay statically cacheable. A tiny blocking script in the root layout's `<head>` reads the cookie, resolves System through `matchMedia`, and sets `class="dark"` on `<html>` before first paint; it re-resolves when the OS preference or the cookie changes (the scheme menu dispatches `chat9-scheme-change`). `<html>` carries `suppressHydrationWarning`. A surface that forces its own scheme (until it is migrated) renders `[data-scheme-forced]`; while that element is mounted the script does not touch `<html>`. A migrated surface calls `resolveScheme()` (`frontend/lib/scheme.ts`) when it mounts, so client-side navigation from a forcing surface restores the stored scheme. A surface that has migrated to tokens renders `data-scheme-surface`, which sets `color-scheme` to match the resolved scheme so native controls and scrollbars follow.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ensureLoaderScript } from "@/lib/widget-embed";
@@ -13,6 +13,16 @@ const SKELETON_DELAY_MS = 200;
 const LOAD_TIMEOUT_MS = 10_000;
 
 type DemoStatus = "loading" | "ready" | "error";
+type DemoTheme = "light" | "dark";
+
+function resolvedSiteTheme(): DemoTheme {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
+function clearTarget() {
+  const target = document.getElementById(TARGET_ID);
+  if (target) target.innerHTML = "";
+}
 
 function DemoErrorMessage() {
   return (
@@ -41,6 +51,13 @@ function DemoSkeleton() {
 export function DemoSlot({ botId }: { botId: string }) {
   const [status, setStatus] = useState<DemoStatus>("loading");
   const [skeletonVisible, setSkeletonVisible] = useState(false);
+  const startedTheme = useRef<DemoTheme | null>(null);
+
+  function startWidget(widget: NonNullable<typeof window.Chat9Widget>, theme: DemoTheme) {
+    // The loader's baked-in apiBase is production; preview hosts must call their own origin.
+    widget.start({ mode: "inline", target: TARGET_ID, apiBase: window.location.origin, theme });
+    startedTheme.current = theme;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -56,8 +73,7 @@ export function DemoSlot({ botId }: { botId: string }) {
         if (cancelled || !widget) return;
         clearTimeout(failTimer);
         if (!widget.isStarted()) {
-          // The loader's baked-in apiBase is production; preview hosts must call their own origin.
-          widget.start({ mode: "inline", target: TARGET_ID, apiBase: window.location.origin });
+          startWidget(widget, resolvedSiteTheme());
         }
         setStatus("ready");
       })
@@ -70,10 +86,29 @@ export function DemoSlot({ botId }: { botId: string }) {
       clearTimeout(skeletonTimer);
       clearTimeout(failTimer);
       window.Chat9Widget?.stop();
-      const target = document.getElementById(TARGET_ID);
-      if (target) target.innerHTML = "";
+      startedTheme.current = null;
+      clearTarget();
     };
   }, [botId]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const widget = window.Chat9Widget;
+      const theme = resolvedSiteTheme();
+      if (!widget || !widget.isStarted() || startedTheme.current === null || startedTheme.current === theme) return;
+      setSkeletonVisible(true);
+      setStatus("loading");
+      widget.stop();
+      clearTarget();
+      startWidget(widget, theme);
+      document
+        .getElementById(TARGET_ID)
+        ?.querySelector("iframe")
+        ?.addEventListener("load", () => setStatus("ready"), { once: true });
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <div>

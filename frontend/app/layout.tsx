@@ -21,7 +21,7 @@ const geistMono = localFont({
 
 export const metadata: Metadata = {
   metadataBase: getMetadataBase(),
-  title: "Chat9 — AI support chatbot for your docs",
+  title: { default: "Chat9", template: "%s — Chat9" },
   description:
     "Chat9 answers support questions from your documentation. Upload files or add your docs site, paste one snippet, and hand off to your team when the bot cannot answer.",
 };

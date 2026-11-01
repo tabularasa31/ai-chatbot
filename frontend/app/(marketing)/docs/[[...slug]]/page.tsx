@@ -35,10 +35,10 @@ export function generateMetadata({ params }: PageProps): Metadata {
   const page = source.getPage(params.slug);
   if (!page) notFound();
 
-  const title = `${page.data.title} | Chat9 Docs`;
+  const socialTitle = `${page.data.title} — Chat9`;
 
   return {
-    title,
+    title: page.data.title,
     description: page.data.description,
     alternates: {
       canonical: page.url,
@@ -48,12 +48,12 @@ export function generateMetadata({ params }: PageProps): Metadata {
       url: page.url,
       siteName: 'Chat9',
       locale: 'en_US',
-      title,
+      title: socialTitle,
       description: page.data.description,
     },
     twitter: {
       card: 'summary_large_image',
-      title,
+      title: socialTitle,
       description: page.data.description,
     },
   };

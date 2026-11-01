@@ -2,7 +2,7 @@
 
 Scope: marketing site + blog, auth pages, tenant dashboard, embeddable chat widget, client docs (fumadocs).
 Every screen uses only the values below; no value is invented per screen.
-Site, auth, dashboard and docs support two colour schemes (light, dark), chosen as in 4.1. The widget follows the tenant's `theme` embed option (`light` default, `dark`), never the visitor's system setting or the scheme cookie. Tokens below are scheme-independent names; each has a light and a dark value.
+Site, auth, dashboard and docs support two colour schemes (light, dark), chosen as in 4.1. The widget follows the tenant's `theme` embed option (`light` default, `dark`), never the visitor's system setting or the scheme cookie. The landing demo is the one place the site passes the scheme on: it starts the widget with `theme` set to the resolved site scheme and restarts it when the scheme changes. The widget still reads only its `theme` option. Tokens below are scheme-independent names; each has a light and a dark value.
 
 Contrast figures were computed by hand with the WCAG 2.x relative-luminance formula. Re-verify with a tool when a token changes.
 
@@ -301,6 +301,8 @@ lucide-react only (already used in dashboard and widget). Sizes 16 (inline with 
 
 Breakpoints (Tailwind defaults): sm 640, md 768, lg 1024, xl 1280. Everything except the dashboard works from 320px with no horizontal scroll; single column below 640.
 Widget colour: text, links, focus and status use `brand`; the launcher, send button and visitor bubble use `accent`, flat `#7C3AED` (`#A78BFA` send and bubble in dark) unless the tenant sets `color`, then the glyph and bubble text are white or `#000000`, whichever contrasts more. Embed options: `mode, color, position, target, topClearance, theme, userHints`.
+
+Browser tab title is `<Page> — Chat9` on every route (site, auth, docs, blog, dashboard, 404). `<Page>` is the page h1 or, in the dashboard, the sidebar section name. The suffix lives only in the root layout `title.template`; pages give just `<Page>`. The landing is the exception: `Chat9 — AI support chatbot for your docs`.
 
 ## 9. Navigation (dashboard)
 

@@ -1,8 +1,14 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { MarketingShell } from "@/components/marketing/MarketingShell";
 import { CONTAINER, standaloneLinkClasses } from "@/components/marketing/classes";
 import { cn } from "@/components/ui/utils";
+
+export const metadata: Metadata = {
+  title: "Article not found",
+  robots: { index: false },
+};
 
 export default function BlogNotFound() {
   return (

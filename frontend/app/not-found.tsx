@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { SiteNotFound } from "@/components/marketing/SiteNotFound";
 
 export const metadata: Metadata = {
-  title: "Page not found - Chat9",
+  title: "Page not found",
   robots: { index: false },
 };
 

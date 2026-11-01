@@ -7,7 +7,7 @@ import { cn } from "@/components/ui/utils";
 import { getAllBlogPosts } from "@/lib/blog";
 
 export const metadata: Metadata = {
-  title: "Blog | Chat9",
+  title: "Blog",
   description:
     "Practical articles on AI chat, support automation, and product decisions for teams evaluating Chat9.",
   alternates: {

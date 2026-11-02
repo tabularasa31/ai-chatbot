@@ -85,7 +85,7 @@ const CONDITION_ROWS: DefinitionRow[] = [
 ];
 
 export const metadata: Metadata = {
-  title: TITLE,
+  title: { absolute: TITLE },
   description: DESCRIPTION,
   alternates: {
     canonical: '/',

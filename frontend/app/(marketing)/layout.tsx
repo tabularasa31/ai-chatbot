@@ -5,7 +5,6 @@ import type { Metadata } from 'next';
 // that page-specific URLs never leak here. The homepage OG image comes from the
 // `opengraph-image` file convention in this segment.
 export const metadata: Metadata = {
-  title: 'Chat9 — AI support chatbot for your docs',
   description:
     'Chat9 answers support questions from your documentation. Upload files or add your docs site, paste one snippet, and hand off to your team when the bot cannot answer.',
   robots: {

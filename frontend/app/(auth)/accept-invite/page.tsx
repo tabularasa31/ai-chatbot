@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { AuthFooter, AuthSkeleton, StandaloneLink } from "@/components/auth/AuthCard";
 import { SetPasswordForm } from "@/components/auth/SetPasswordForm";
 
-export const metadata: Metadata = { title: "Join your team - Chat9" };
+export const metadata: Metadata = { title: "Join your team" };
 
 export default function AcceptInvitePage() {
   return (

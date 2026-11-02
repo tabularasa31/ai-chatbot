@@ -51,7 +51,7 @@ export function generateMetadata({
     : undefined;
 
   return {
-    title: `${post.title} | Chat9 Blog`,
+    title: post.title,
     description: post.description,
     alternates: {
       canonical: `/blog/${post.slug}`,

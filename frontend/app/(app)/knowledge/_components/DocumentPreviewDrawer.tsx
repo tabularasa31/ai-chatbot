@@ -175,33 +175,33 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
     <Drawer
       title={doc?.filename || (loading ? "Loading" : "Document")}
       meta={
-        <>
-          {doc?.source_url && (
-            <a
-              href={doc.source_url}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="mt-1 block break-anywhere text-caption text-fg-muted hover:underline"
-            >
-              {displayUrl(doc.source_url)}
-            </a>
-          )}
-          {doc?.parsed_text_length != null && (
-            <p className="mt-1 text-caption tabular-nums text-fg-muted">
-              {formatNumber(doc.parsed_text_length)} chars · {doc.file_type}
-            </p>
-          )}
-        </>
-      }
-      actions={
-        <>
-          <Button variant="secondary" offset="surface" onClick={() => void handleCopy()} disabled={!text}>
-            Copy
-          </Button>
-          <Button variant="secondary" offset="surface" onClick={() => doc && downloadAsTxt(doc.filename, text)} disabled={!text}>
-            Download .txt
-          </Button>
-        </>
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <div className="min-w-0 flex-1">
+            {doc?.source_url && (
+              <a
+                href={doc.source_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="block break-anywhere text-caption text-fg-muted hover:underline"
+              >
+                {displayUrl(doc.source_url)}
+              </a>
+            )}
+            {doc?.parsed_text_length != null && (
+              <p className="text-caption tabular-nums text-fg-muted">
+                {formatNumber(doc.parsed_text_length)} chars · {doc.file_type}
+              </p>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button variant="secondary" offset="surface" onClick={() => void handleCopy()} disabled={!text}>
+              Copy
+            </Button>
+            <Button variant="secondary" offset="surface" onClick={() => doc && downloadAsTxt(doc.filename, text)} disabled={!text}>
+              Download .txt
+            </Button>
+          </div>
+        </div>
       }
       onClose={onClose}
     >

@@ -14,7 +14,6 @@ import { useModalDialog } from "./use-modal-dialog";
 export function Drawer({
   title,
   meta,
-  actions,
   onClose,
   canClose,
   onCloseBlocked,
@@ -22,7 +21,6 @@ export function Drawer({
 }: {
   title: ReactNode;
   meta?: ReactNode;
-  actions?: ReactNode;
   onClose: () => void;
   canClose?: boolean;
   onCloseBlocked?: () => void;
@@ -39,18 +37,15 @@ export function Drawer({
     >
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-4">
-          <div className="min-w-0">
-            <h2 id={titleId} className="flex min-h-11 items-center break-words text-h2 text-fg">
-              {title}
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="flex min-h-11 items-center text-h2 text-fg">
+              <span className="min-w-0 break-anywhere">{title}</span>
             </h2>
             {meta}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {actions}
-            <Button variant="ghost" size="icon" offset="surface" onClick={onClose} aria-label="Close">
-              <X size={20} aria-hidden="true" />
-            </Button>
-          </div>
+          <Button variant="ghost" size="icon" offset="surface" className="shrink-0" onClick={onClose} aria-label="Close">
+            <X size={20} aria-hidden="true" />
+          </Button>
         </header>
         <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       </div>

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
+import { DisclosureSummary } from "./DisclosureSummary";
 import { SourceForm } from "./SourceForm";
 import { DETAIL_ID_PREFIX, FullWidthCell, displayUrl, NAME_BUTTON_ON_BAND_CLASS, quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
 
@@ -114,10 +115,10 @@ function DetailBody({
                         {run.pages_found ? `${run.pages_indexed} of ${run.pages_found} ${pluralize(run.pages_found, "page", "pages")}` : `${run.pages_indexed} ${pluralize(run.pages_indexed, "page", "pages")}`}
                       </p>
                       {run.failed_urls.length > 0 && (
-                        <details className="text-caption text-fg-muted">
-                          <summary className="flex min-h-11 cursor-pointer items-center">
+                        <details className="group text-caption text-fg-muted">
+                          <DisclosureSummary>
                             {`${run.failed_urls.length} ${pluralize(run.failed_urls.length, "page", "pages")} could not be read`}
-                          </summary>
+                          </DisclosureSummary>
                           <ul className="space-y-1 pb-2">
                             {run.failed_urls.map((failed) => (
                               <li key={failed.url} className="break-anywhere">{`${failed.url} (${failed.reason})`}</li>

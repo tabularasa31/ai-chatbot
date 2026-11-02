@@ -121,7 +121,7 @@ function DetailBody({
                           </DisclosureSummary>
                           <ul className="space-y-1 pb-2">
                             {run.failed_urls.map((failed) => (
-                              <li key={failed.url} className="break-anywhere">{`${failed.url} (${failed.reason})`}</li>
+                              <li key={failed.url} className="break-anywhere">{`${displayUrl(failed.url)} (${failed.reason})`}</li>
                             ))}
                           </ul>
                         </details>
@@ -158,7 +158,7 @@ function DetailBody({
               <div key={item.key} className="border-b border-line py-2">
                 <dt className="text-caption font-medium text-fg-muted">{quickAnswerLabel(item.key)}</dt>
                 <dd className="break-anywhere text-ui text-fg">{item.value}</dd>
-                <dd className="break-anywhere text-caption text-fg-muted">{item.source_url}</dd>
+                <dd className="break-anywhere text-caption text-fg-muted">{displayUrl(item.source_url)}</dd>
               </div>
             ))}
           </dl>

@@ -12,6 +12,10 @@ const INDEXING_STATUSES = new Set(["processing", "embedding", "indexing"]);
 
 export const DETAIL_ID_PREFIX = "source-detail-";
 
+export function displayUrl(url: string): string {
+  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
+
 // Below xl the Pages column stays in the fixed table layout at zero width, so every row
 // can span all five columns and the Pages figure moves into the Updated cell.
 export const PAGES_COLUMN_CLASS = "max-xl:invisible max-xl:w-0 max-xl:overflow-hidden max-xl:border-0 max-xl:p-0";

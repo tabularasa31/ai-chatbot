@@ -10,6 +10,7 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { FlashMessage, useFlash } from "@/components/ui/flash";
+import { displayUrl } from "./shared";
 
 const REFETCH_DELAY_MS = 5000;
 
@@ -182,7 +183,7 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
               rel="noreferrer noopener"
               className="mt-1 block break-anywhere text-caption text-fg-muted hover:underline"
             >
-              {doc.source_url}
+              {displayUrl(doc.source_url)}
             </a>
           )}
           {doc?.parsed_text_length != null && (

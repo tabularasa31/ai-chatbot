@@ -8,7 +8,7 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { SourceForm } from "./SourceForm";
-import { DETAIL_ID_PREFIX, FullWidthCell, NAME_BUTTON_ON_BAND_CLASS, quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
+import { DETAIL_ID_PREFIX, FullWidthCell, displayUrl, NAME_BUTTON_ON_BAND_CLASS, quickAnswerLabel, sourceStatus, type SourceFormValues } from "./shared";
 
 export type DetailView =
   | { state: "loading" }
@@ -75,7 +75,7 @@ function DetailBody({
                     >
                       {page.title}
                     </button>
-                    <p className="break-anywhere text-caption text-fg-muted">{page.url}</p>
+                    <p className="break-anywhere text-caption text-fg-muted">{displayUrl(page.url)}</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <span className="whitespace-nowrap text-caption tabular-nums text-fg-muted">{`${page.chunk_count} ${pluralize(page.chunk_count, "passage", "passages")}`}</span>

@@ -10,6 +10,7 @@ import { InlineNotice } from "@/components/ui/inline-notice";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { FlashMessage, useFlash } from "@/components/ui/flash";
+import { DisclosureSummary } from "./DisclosureSummary";
 import { LINK_CLASS } from "./link-class";
 import { confidenceLevel } from "./shared";
 
@@ -155,10 +156,10 @@ function Glossary({ glossary }: { glossary: KnowledgeProfile["glossary"] }) {
   return (
     <section className="space-y-2">
       <h2 className="text-h2 text-fg">Glossary</h2>
-      <details>
-        <summary className="flex min-h-11 cursor-pointer items-center text-ui font-medium text-fg">
+      <details className="group">
+        <DisclosureSummary className="text-ui font-medium text-fg">
           {`${glossary.length} ${pluralize(glossary.length, "term", "terms")}`}
-        </summary>
+        </DisclosureSummary>
         <table className="w-full table-fixed border-collapse text-left text-ui">
           <thead>
             <tr className="border-b border-line text-caption font-medium text-fg-muted">
@@ -374,13 +375,15 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
       <div className="space-y-3">
         {saveFailed && <InlineNotice tone="danger">Couldn&apos;t save the profile. Your changes are still here, try again.</InlineNotice>}
         <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <FlashMessage message={savedMessage} />
+          </div>
+          <Button variant="secondary" disabled={!dirty || saving} onClick={() => update(editable(profile))}>
+            Discard changes
+          </Button>
           <Button variant="primary" busy={saving} disabled={!dirty} onClick={() => void save()}>
             Save changes
           </Button>
-          <Button variant="ghost" disabled={!dirty || saving} onClick={() => update(editable(profile))}>
-            Discard changes
-          </Button>
-          <FlashMessage message={savedMessage} />
         </div>
       </div>
 

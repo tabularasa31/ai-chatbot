@@ -1,4 +1,5 @@
 import { pluralize } from "@/lib/format";
+import { DisclosureSummary } from "./DisclosureSummary";
 
 const VISIBLE_QUESTIONS = 3;
 
@@ -15,10 +16,10 @@ export function QuestionList({ questions }: { questions: string[] }) {
         ))}
       </ul>
       {rest.length > 0 && (
-        <details>
-          <summary className="flex min-h-11 cursor-pointer items-center text-ui text-brand">
+        <details className="group">
+          <DisclosureSummary className="text-ui text-brand">
             Show {rest.length} more {pluralize(rest.length, "question", "questions")}
-          </summary>
+          </DisclosureSummary>
           <ul className="list-disc space-y-1 pl-5">
             {rest.map((question, index) => (
               <li key={`${index}:${question}`} className="break-anywhere">

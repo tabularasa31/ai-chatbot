@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, type ReactNode } from "react";
+import { useCallback, useId, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { FOCUS_RING } from "@/components/ui/button";
 import { FlashMessage, useFlash, type FlashState } from "@/components/ui/flash";
@@ -71,7 +71,8 @@ export function SectionFallback({
 
 export function useSavedMessage(): [FlashState, (message: string | null) => void] {
   const [message, flash] = useFlash();
-  return [message, (text) => flash(text ?? "")];
+  const setMessage = useCallback((text: string | null) => flash(text ?? ""), [flash]);
+  return [message, setMessage];
 }
 
 export function StatusLine({ children }: { children: ReactNode }) {

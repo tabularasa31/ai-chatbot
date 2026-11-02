@@ -115,8 +115,8 @@ function DetailBody({
                         {run.pages_found ? `${run.pages_indexed} of ${run.pages_found} ${pluralize(run.pages_found, "page", "pages")}` : `${run.pages_indexed} ${pluralize(run.pages_indexed, "page", "pages")}`}
                       </p>
                       {run.failed_urls.length > 0 && (
-                        <details className="group text-caption text-fg-muted">
-                          <DisclosureSummary>
+                        <details className="group/disclosure text-caption text-fg-muted">
+                          <DisclosureSummary className="focus-visible:ring-offset-surface-alt">
                             {`${run.failed_urls.length} ${pluralize(run.failed_urls.length, "page", "pages")} could not be read`}
                           </DisclosureSummary>
                           <ul className="space-y-1 pb-2">

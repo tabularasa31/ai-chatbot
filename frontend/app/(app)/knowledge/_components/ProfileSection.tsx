@@ -156,7 +156,7 @@ function Glossary({ glossary }: { glossary: KnowledgeProfile["glossary"] }) {
   return (
     <section className="space-y-2">
       <h2 className="text-h2 text-fg">Glossary</h2>
-      <details className="group">
+      <details className="group/disclosure">
         <DisclosureSummary className="text-ui font-medium text-fg">
           {`${glossary.length} ${pluralize(glossary.length, "term", "terms")}`}
         </DisclosureSummary>

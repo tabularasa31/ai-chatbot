@@ -16,8 +16,8 @@ export function QuestionList({ questions }: { questions: string[] }) {
         ))}
       </ul>
       {rest.length > 0 && (
-        <details className="group">
-          <DisclosureSummary className="text-ui text-brand">
+        <details className="group/disclosure">
+          <DisclosureSummary className="text-ui text-brand focus-visible:ring-offset-surface">
             Show {rest.length} more {pluralize(rest.length, "question", "questions")}
           </DisclosureSummary>
           <ul className="list-disc space-y-1 pl-5">

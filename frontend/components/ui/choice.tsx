@@ -2,7 +2,7 @@ import { useId, type InputHTMLAttributes } from "react";
 import { cn } from "./utils";
 
 const ROW_CLASS =
-  "flex min-h-11 cursor-pointer items-start gap-3 rounded-control px-3 py-2.5 transition-colors hover:bg-surface-alt active:bg-line " +
+  "-mx-3 flex min-h-11 cursor-pointer items-start gap-3 rounded-control px-3 py-2.5 transition-colors hover:bg-surface-alt active:bg-line " +
   "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-focus has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-canvas";
 
 const CONTROL_CLASS = "mt-0.5 h-5 w-5 shrink-0 cursor-pointer accent-brand focus:outline-none";

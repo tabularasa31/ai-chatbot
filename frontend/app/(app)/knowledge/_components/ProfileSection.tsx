@@ -374,13 +374,15 @@ export function ProfileSection({ onGoToDocuments }: { onGoToDocuments: () => voi
       <div className="space-y-3">
         {saveFailed && <InlineNotice tone="danger">Couldn&apos;t save the profile. Your changes are still here, try again.</InlineNotice>}
         <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <FlashMessage message={savedMessage} />
+          </div>
+          <Button variant="secondary" disabled={!dirty || saving} onClick={() => update(editable(profile))}>
+            Discard changes
+          </Button>
           <Button variant="primary" busy={saving} disabled={!dirty} onClick={() => void save()}>
             Save changes
           </Button>
-          <Button variant="ghost" disabled={!dirty || saving} onClick={() => update(editable(profile))}>
-            Discard changes
-          </Button>
-          <FlashMessage message={savedMessage} />
         </div>
       </div>
 

@@ -40,7 +40,7 @@ export function Drawer({
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-4">
           <div className="min-w-0">
-            <h2 id={titleId} className="break-words text-body font-semibold text-fg">
+            <h2 id={titleId} className="flex min-h-11 items-center break-words text-h2 text-fg">
               {title}
             </h2>
             {meta}

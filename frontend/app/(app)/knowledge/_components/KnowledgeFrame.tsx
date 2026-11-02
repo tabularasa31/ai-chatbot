@@ -16,7 +16,7 @@ export function KnowledgeFrame({
   children: ReactNode;
 }) {
   return (
-    <div className="max-w-7xl space-y-6">
+    <div className="max-w-6xl space-y-6">
       <h1 className="text-h1 text-fg">Knowledge</h1>
       <SectionTabs
         label="Knowledge"

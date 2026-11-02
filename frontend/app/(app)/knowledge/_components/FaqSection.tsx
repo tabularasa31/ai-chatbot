@@ -153,7 +153,7 @@ export function FaqSection({ onGoToDocuments }: { onGoToDocuments: () => void })
   const showReviewState = filter === "all" || filter === "docs";
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-2xl space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <Select
           label="Show"

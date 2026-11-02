@@ -46,10 +46,10 @@ export function MembersSection() {
               </li>
             ))}
           </ul>
+          {onlyOwner && <p className="text-ui text-fg-muted">Just you so far. Invite a colleague above.</p>}
           <p className="text-caption text-fg-muted">
             The owner can&apos;t be removed. To close the tenant, delete it on the Bot tab.
           </p>
-          {onlyOwner && <p className="text-ui text-fg-muted">Just you so far. Invite a colleague above.</p>}
         </>
       ) : error ? (
         <LoadError message="Couldn't load the team." onRetry={() => mutate()} />

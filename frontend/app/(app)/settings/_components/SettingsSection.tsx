@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useId, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { FOCUS_RING } from "@/components/ui/button";
+import { FlashMessage, useFlash, type FlashState } from "@/components/ui/flash";
 import { LoadError } from "@/components/ui/load-error";
 import { Skeleton, SkeletonRegion } from "@/components/ui/skeleton";
 import { cn } from "@/components/ui/utils";
-
-const SAVED_VISIBLE_MS = 4000;
 
 export const linkClasses = cn(
   "rounded-tag text-brand underline underline-offset-2 hover:text-brand-hover",
@@ -70,14 +69,10 @@ export function SectionFallback({
   return <FormSkeleton fields={fields} />;
 }
 
-export function useSavedMessage() {
-  const [message, setMessage] = useState<string | null>(null);
-  useEffect(() => {
-    if (!message) return;
-    const timer = setTimeout(() => setMessage(null), SAVED_VISIBLE_MS);
-    return () => clearTimeout(timer);
-  }, [message]);
-  return [message, setMessage] as const;
+export function useSavedMessage(): [FlashState, (message: string | null) => void] {
+  const [message, flash] = useFlash();
+  const setMessage = useCallback((text: string | null) => flash(text ?? ""), [flash]);
+  return [message, setMessage];
 }
 
 export function StatusLine({ children }: { children: ReactNode }) {
@@ -90,11 +85,11 @@ export function StatusLine({ children }: { children: ReactNode }) {
 }
 
 /** Status text on the left, actions on the right (secondary first, primary last). */
-export function SaveRow({ saved, children }: { saved: string | null; children: ReactNode }) {
+export function SaveRow({ saved, children }: { saved: FlashState; children: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div aria-live="polite" className="min-w-0 flex-1">
-        {saved && <StatusLine>{saved}</StatusLine>}
+      <div className="min-w-0 flex-1">
+        <FlashMessage message={saved} />
       </div>
       {children}
     </div>

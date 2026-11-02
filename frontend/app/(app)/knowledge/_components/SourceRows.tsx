@@ -7,7 +7,7 @@ import { formatDateTime, pluralize } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FileStatus, UrlStatus } from "./HealthPanel";
 import { SourceErrorDetails } from "./SourceError";
-import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, PAGES_COLUMN_CLASS, isIndexing, scheduleCaption } from "./shared";
+import { DETAIL_ID_PREFIX, NAME_BUTTON_CLASS, PAGES_COLUMN_CLASS, displayUrl, isIndexing, scheduleCaption } from "./shared";
 
 const CELL_CLASS = "px-4 py-3 align-top";
 const SOURCE_CELL_CLASS = "px-4 pb-3 align-top";
@@ -48,10 +48,6 @@ function Actions({ children }: { children: ReactNode }) {
       <div className="flex justify-end">{children}</div>
     </td>
   );
-}
-
-function displayUrl(url: string): string {
-  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
 export function FileRow({
